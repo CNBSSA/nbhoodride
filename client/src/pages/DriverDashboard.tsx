@@ -8,6 +8,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useGeolocationWatcher } from "@/hooks/useGeolocation";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import IncomingRideRequest from "@/components/IncomingRideRequest";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
@@ -17,7 +18,7 @@ export default function DriverDashboard() {
   
   // Real-time GPS tracking for drivers
   const { location, error: locationError, isWatching, startWatching, stopWatching } = useGeolocationWatcher();
-  const { sendMessage, isConnected } = useWebSocket();
+  const { sendMessage, isConnected, lastMessage } = useWebSocket();
 
   // Get driver earnings and trips
   const { data: todayEarnings } = useQuery({
@@ -33,6 +34,13 @@ export default function DriverDashboard() {
   const { data: todayTrips = [] } = useQuery({
     queryKey: ["/api/driver/rides/today"],
     enabled: !!user?.isDriver,
+  });
+
+  // Get pending ride requests
+  const { data: pendingRides = [], refetch: refetchPendingRides } = useQuery({
+    queryKey: ["/api/driver/pending-rides"],
+    enabled: !!user?.isDriver && isOnline,
+    refetchInterval: 5000, // Poll every 5 seconds when online
   });
 
   // Toggle driver status
@@ -100,6 +108,21 @@ export default function DriverDashboard() {
     }
   }, [user?.driverProfile?.isOnline, startWatching]);
 
+  // Handle real-time ride status updates via WebSocket
+  useEffect(() => {
+    if (lastMessage?.type === 'new_ride_request' && lastMessage.driverId === user?.id) {
+      // Refresh pending rides when a new ride is assigned to this driver
+      refetchPendingRides();
+      toast({
+        title: "New Ride Request!",
+        description: "You have a new ride request waiting.",
+      });
+    } else if (lastMessage?.type === 'ride_accepted' || lastMessage?.type === 'ride_declined') {
+      // Refresh pending rides when any ride status changes
+      refetchPendingRides();
+    }
+  }, [lastMessage, user?.id, refetchPendingRides, toast]);
+
   // Transform ride data for display
   const transformedTrips = todayTrips.map((ride: any) => ({
     id: ride.id,
@@ -157,6 +180,35 @@ export default function DriverDashboard() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Incoming Ride Requests */}
+        {isOnline && pendingRides.length > 0 && (
+          <div className="space-y-3">
+            <h3 className="text-lg font-semibold text-primary">
+              <i className="fas fa-bell mr-2" />
+              Incoming Ride Requests ({pendingRides.length})
+            </h3>
+            {pendingRides.map((ride: any) => (
+              <IncomingRideRequest
+                key={ride.id}
+                ride={{
+                  ...ride,
+                  rider: {
+                    firstName: ride.rider?.firstName || "Unknown",
+                    lastName: ride.rider?.lastName || "",
+                    rating: parseFloat(ride.rider?.rating || "5.0")
+                  }
+                }}
+                onAccept={(rideId) => {
+                  refetchPendingRides();
+                }}
+                onDecline={(rideId) => {
+                  refetchPendingRides();
+                }}
+              />
+            ))}
+          </div>
+        )}
 
         {/* Earnings Dashboard */}
         <div className="grid grid-cols-2 gap-4">

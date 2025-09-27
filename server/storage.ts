@@ -62,6 +62,11 @@ export interface IStorage {
   // Earnings operations
   getDriverEarnings(driverId: string, period: 'today' | 'week' | 'month'): Promise<{fare: number, tips: number, total: number, rideCount: number}>;
   getDriverRides(driverId: string, period: 'today' | 'week' | 'month'): Promise<Ride[]>;
+  
+  // Driver ride management operations
+  getPendingRidesForDriver(driverId: string): Promise<Ride[]>;
+  acceptRide(rideId: string, driverId: string): Promise<Ride>;
+  declineRide(rideId: string, driverId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -388,6 +393,103 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(rides.completedAt));
+  }
+
+  // Driver ride management operations
+  async getPendingRidesForDriver(driverId: string): Promise<Ride[]> {
+    return await db
+      .select({
+        id: rides.id,
+        riderId: rides.riderId,
+        driverId: rides.driverId,
+        pickupLocation: rides.pickupLocation,
+        destinationLocation: rides.destinationLocation,
+        pickupInstructions: rides.pickupInstructions,
+        status: rides.status,
+        estimatedFare: rides.estimatedFare,
+        actualFare: rides.actualFare,
+        distance: rides.distance,
+        duration: rides.duration,
+        tipAmount: rides.tipAmount,
+        riderRating: rides.riderRating,
+        driverRating: rides.driverRating,
+        riderReview: rides.riderReview,
+        driverReview: rides.driverReview,
+        scheduledAt: rides.scheduledAt,
+        acceptedAt: rides.acceptedAt,
+        startedAt: rides.startedAt,
+        completedAt: rides.completedAt,
+        createdAt: rides.createdAt,
+        updatedAt: rides.updatedAt,
+        // Include rider details
+        rider: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          rating: users.rating,
+          profileImageUrl: users.profileImageUrl
+        }
+      })
+      .from(rides)
+      .leftJoin(users, eq(rides.riderId, users.id))
+      .where(
+        and(
+          eq(rides.driverId, driverId),
+          eq(rides.status, "pending")
+        )
+      )
+      .orderBy(desc(rides.createdAt));
+  }
+
+  async acceptRide(rideId: string, driverId: string): Promise<Ride> {
+    // Verify the ride belongs to this driver and is still pending
+    const ride = await this.getRide(rideId);
+    if (!ride) {
+      throw new Error("Ride not found");
+    }
+    if (ride.driverId !== driverId) {
+      throw new Error("Unauthorized to accept this ride");
+    }
+    if (ride.status !== "pending") {
+      throw new Error("Ride is no longer available");
+    }
+
+    // Update ride status to accepted
+    const [updatedRide] = await db
+      .update(rides)
+      .set({ 
+        status: "accepted",
+        acceptedAt: new Date(),
+        updatedAt: new Date()
+      })
+      .where(eq(rides.id, rideId))
+      .returning();
+    
+    return updatedRide;
+  }
+
+  async declineRide(rideId: string, driverId: string): Promise<void> {
+    // Verify the ride belongs to this driver and is still pending
+    const ride = await this.getRide(rideId);
+    if (!ride) {
+      throw new Error("Ride not found");
+    }
+    if (ride.driverId !== driverId) {
+      throw new Error("Unauthorized to decline this ride");
+    }
+    if (ride.status !== "pending") {
+      throw new Error("Ride is no longer available");
+    }
+
+    // For now, we'll just mark as cancelled. In production, you might want to 
+    // reassign to another driver or set status to "declined" and find another driver
+    await db
+      .update(rides)
+      .set({ 
+        status: "cancelled",
+        updatedAt: new Date()
+      })
+      .where(eq(rides.id, rideId));
   }
 }
 

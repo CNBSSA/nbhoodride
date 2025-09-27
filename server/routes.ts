@@ -129,6 +129,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Driver ride management endpoints
+  app.get('/api/driver/pending-rides', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const rides = await storage.getPendingRidesForDriver(userId);
+      res.json(rides);
+    } catch (error) {
+      console.error("Error fetching pending rides:", error);
+      res.status(500).json({ message: "Failed to fetch pending rides" });
+    }
+  });
+
+  app.post('/api/driver/rides/:rideId/accept', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { rideId } = req.params;
+      
+      const ride = await storage.acceptRide(rideId, userId);
+      
+      // Broadcast ride accepted via WebSocket
+      broadcast({
+        type: 'ride_accepted',
+        rideId: ride.id,
+        driverId: userId,
+        riderId: ride.riderId
+      });
+      
+      res.json(ride);
+    } catch (error) {
+      console.error("Error accepting ride:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ message: error.message });
+      } else {
+        res.status(500).json({ message: "Failed to accept ride" });
+      }
+    }
+  });
+
+  app.post('/api/driver/rides/:rideId/decline', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { rideId } = req.params;
+      
+      await storage.declineRide(rideId, userId);
+      
+      // Broadcast ride declined via WebSocket
+      broadcast({
+        type: 'ride_declined',
+        rideId,
+        driverId: userId
+      });
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error declining ride:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ message: error.message });
+      } else {
+        res.status(500).json({ message: "Failed to decline ride" });
+      }
+    }
+  });
+
   // Driver earnings endpoints
   app.get('/api/driver/earnings/:period', isAuthenticated, async (req: any, res) => {
     try {

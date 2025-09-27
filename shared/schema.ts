@@ -100,6 +100,7 @@ export const rides = pgTable("rides", {
   riderReview: text("rider_review"),
   driverReview: text("driver_review"),
   scheduledAt: timestamp("scheduled_at"),
+  acceptedAt: timestamp("accepted_at"),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
   createdAt: timestamp("created_at").defaultNow(),
