@@ -88,13 +88,20 @@ export default function RideBookingModal({
 
   // Mock fare calculation for demo (replace with actual geocoding)
   useEffect(() => {
-    if (destinationAddress.length > 5) {
+    if (destinationAddress.length > 3) {
       // Mock distance and duration calculation
       const mockDistance = 8.2; // miles
       const mockDuration = 18; // minutes
       calculateFareMutation.mutate({ distance: mockDistance, duration: mockDuration });
     }
   }, [destinationAddress]);
+
+  // Sync pickup address with userLocation changes
+  useEffect(() => {
+    if (isOpen && userLocation) {
+      setPickupAddress(userLocation.address);
+    }
+  }, [isOpen, userLocation?.address]);
 
   const handleBookRide = () => {
     if (!destinationAddress || !selectedDriver) {
@@ -183,16 +190,16 @@ export default function RideBookingModal({
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Distance: 8.2 miles</span>
-                    <span>${fareEstimate.distanceCharge}</span>
+                    <span>${fareEstimate.distanceCharge.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Time: 18 minutes</span>
-                    <span>${fareEstimate.timeCharge}</span>
+                    <span>${fareEstimate.timeCharge.toFixed(2)}</span>
                   </div>
                   <Separator />
                   <div className="flex justify-between font-semibold">
                     <span>Total (Cash)</span>
-                    <span data-testid="text-total-fare">${fareEstimate.total}</span>
+                    <span data-testid="text-total-fare">${fareEstimate.total.toFixed(2)}</span>
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
@@ -249,7 +256,7 @@ export default function RideBookingModal({
         <div className="absolute bottom-0 left-0 right-0 p-4 bg-card border-t">
           <Button
             onClick={handleBookRide}
-            disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress}
+            disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress || !fareEstimate}
             className="w-full"
             data-testid="button-confirm-booking"
           >

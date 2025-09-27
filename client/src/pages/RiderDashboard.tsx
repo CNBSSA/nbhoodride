@@ -24,14 +24,7 @@ export default function RiderDashboard() {
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
   const { user } = useAuth();
-  const { location, error: locationError } = useGeolocation();
-
-  // Get nearby drivers
-  const { data: nearbyDrivers = [], isLoading } = useQuery({
-    queryKey: ["/api/rides/nearby-drivers", location?.latitude, location?.longitude],
-    enabled: !!location,
-    refetchInterval: 30000, // Refresh every 30 seconds
-  });
+  const { location, error: locationError, requestLocation } = useGeolocation();
 
   const userLocation = location ? {
     lat: location.latitude,
@@ -42,6 +35,12 @@ export default function RiderDashboard() {
     lng: -76.7781,
     address: "Prince George's County, MD" // Default location when geolocation is unavailable
   };
+
+  // Get nearby drivers - always use userLocation which has fallback
+  const { data: nearbyDrivers = [], isLoading } = useQuery({
+    queryKey: [`/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}`],
+    refetchInterval: 30000, // Refresh every 30 seconds
+  });
 
   const mapCenter = userLocation || { lat: 38.9073, lng: -76.7781 }; // Default to Largo, MD
 
@@ -89,7 +88,13 @@ export default function RiderDashboard() {
                 {locationError ? "Location unavailable" : userLocation?.address || "Loading..."}
               </p>
             </div>
-            <Button variant="ghost" size="sm" className="p-2 rounded-full" data-testid="button-refresh-location">
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              className="p-2 rounded-full" 
+              onClick={requestLocation}
+              data-testid="button-refresh-location"
+            >
               <i className="fas fa-location-arrow" />
             </Button>
           </div>
