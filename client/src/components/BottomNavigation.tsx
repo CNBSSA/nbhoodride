@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/useAuth";
 
 interface BottomNavigationProps {
   activeTab: string;
@@ -7,11 +8,23 @@ interface BottomNavigationProps {
 }
 
 export default function BottomNavigation({ activeTab, onTabChange }: BottomNavigationProps) {
-  const tabs = [
+  const { user } = useAuth();
+  
+  const baseTabs = [
     { id: 'rider-home', label: 'Home', icon: 'fas fa-home' },
     { id: 'driver-dashboard', label: 'Drive', icon: 'fas fa-tachometer-alt' },
     { id: 'ride-history', label: 'History', icon: 'fas fa-history' },
     { id: 'ratings', label: 'Ratings', icon: 'fas fa-star' },
+  ];
+
+  // Add payments tab for drivers
+  const driverTabs = user?.isDriver 
+    ? [{ id: 'payments', label: 'Payments', icon: 'fas fa-dollar-sign' }]
+    : [];
+
+  const tabs = [
+    ...baseTabs,
+    ...driverTabs,
     { id: 'profile', label: 'Profile', icon: 'fas fa-user' },
   ];
 

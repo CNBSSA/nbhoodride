@@ -4,6 +4,7 @@ import RiderDashboard from "@/pages/RiderDashboard";
 import DriverDashboard from "@/pages/DriverDashboard";
 import RideHistory from "@/pages/RideHistory";
 import RatingsPage from "@/pages/RatingsPage";
+import { PaymentsPage } from "@/pages/PaymentsPage";
 import Profile from "@/pages/Profile";
 
 export default function Home() {
@@ -19,6 +20,8 @@ export default function Home() {
         return <RideHistory />;
       case "ratings":
         return <RatingsPage />;
+      case "payments":
+        return <PaymentsPage />;
       case "profile":
         return <Profile />;
       default:

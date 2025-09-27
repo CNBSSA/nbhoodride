@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import Landing from "@/pages/Landing";
 import Home from "@/pages/Home";
 import RatingsPage from "@/pages/RatingsPage";
+import { PaymentsPage } from "@/pages/PaymentsPage";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -20,6 +21,7 @@ function Router() {
         <>
           <Route path="/" component={Home} />
           <Route path="/ratings" component={RatingsPage} />
+          <Route path="/payments" component={PaymentsPage} />
         </>
       )}
       <Route component={NotFound} />

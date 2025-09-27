@@ -52,6 +52,10 @@ export interface IStorage {
   getRidesForRating(userId: string): Promise<Ride[]>;
   updateUserRating(userId: string): Promise<void>;
   
+  // Payment operations
+  confirmCashPayment(rideId: string, confirmerId: string, tipAmount?: number): Promise<Ride>;
+  getRidesAwaitingPayment(userId: string): Promise<Ride[]>;
+  
   // Dispute operations
   createDispute(dispute: InsertDispute): Promise<Dispute>;
   getDisputesByRide(rideId: string): Promise<Dispute[]>;
@@ -426,6 +430,9 @@ export class DatabaseStorage implements IStorage {
         distance: rides.distance,
         duration: rides.duration,
         tipAmount: rides.tipAmount,
+        paymentStatus: rides.paymentStatus,
+        cashReceivedAt: rides.cashReceivedAt,
+        paidBy: rides.paidBy,
         riderRating: rides.riderRating,
         driverRating: rides.driverRating,
         riderReview: rides.riderReview,
@@ -582,6 +589,9 @@ export class DatabaseStorage implements IStorage {
         distance: rides.distance,
         duration: rides.duration,
         tipAmount: rides.tipAmount,
+        paymentStatus: rides.paymentStatus,
+        cashReceivedAt: rides.cashReceivedAt,
+        paidBy: rides.paidBy,
         riderRating: rides.riderRating,
         driverRating: rides.driverRating,
         riderReview: rides.riderReview,
@@ -632,6 +642,9 @@ export class DatabaseStorage implements IStorage {
         distance: rides.distance,
         duration: rides.duration,
         tipAmount: rides.tipAmount,
+        paymentStatus: rides.paymentStatus,
+        cashReceivedAt: rides.cashReceivedAt,
+        paidBy: rides.paidBy,
         riderRating: rides.riderRating,
         driverRating: rides.driverRating,
         riderReview: rides.riderReview,
@@ -721,6 +734,98 @@ export class DatabaseStorage implements IStorage {
         })
         .where(eq(users.id, userId));
     }
+  }
+
+  // Payment operations
+  async confirmCashPayment(rideId: string, confirmerId: string, tipAmount?: number): Promise<Ride> {
+    // Get ride and check authorization
+    const ride = await this.getRide(rideId);
+    if (!ride) {
+      throw new Error("Ride not found");
+    }
+    
+    // Only drivers can confirm cash payment received
+    if (ride.driverId !== confirmerId) {
+      throw new Error("Only the driver can confirm cash payment");
+    }
+    
+    // Ride must be completed to confirm payment
+    if (ride.status !== "completed") {
+      throw new Error("Ride must be completed before confirming payment");
+    }
+    
+    // Check if payment already confirmed
+    if (ride.paymentStatus === "paid_cash") {
+      throw new Error("Payment has already been confirmed");
+    }
+
+    const updateData: any = {
+      paymentStatus: "paid_cash",
+      cashReceivedAt: new Date(),
+      paidBy: confirmerId,
+      updatedAt: new Date()
+    };
+    
+    if (tipAmount !== undefined) {
+      updateData.tipAmount = tipAmount.toString();
+    }
+
+    const [updatedRide] = await db
+      .update(rides)
+      .set(updateData)
+      .where(eq(rides.id, rideId))
+      .returning();
+    
+    return updatedRide;
+  }
+
+  async getRidesAwaitingPayment(userId: string): Promise<Ride[]> {
+    return await db
+      .select({
+        id: rides.id,
+        riderId: rides.riderId,
+        driverId: rides.driverId,
+        pickupLocation: rides.pickupLocation,
+        destinationLocation: rides.destinationLocation,
+        pickupInstructions: rides.pickupInstructions,
+        status: rides.status,
+        estimatedFare: rides.estimatedFare,
+        actualFare: rides.actualFare,
+        distance: rides.distance,
+        duration: rides.duration,
+        tipAmount: rides.tipAmount,
+        paymentStatus: rides.paymentStatus,
+        cashReceivedAt: rides.cashReceivedAt,
+        paidBy: rides.paidBy,
+        riderRating: rides.riderRating,
+        driverRating: rides.driverRating,
+        riderReview: rides.riderReview,
+        driverReview: rides.driverReview,
+        scheduledAt: rides.scheduledAt,
+        acceptedAt: rides.acceptedAt,
+        startedAt: rides.startedAt,
+        completedAt: rides.completedAt,
+        createdAt: rides.createdAt,
+        updatedAt: rides.updatedAt,
+        // Include rider/driver details
+        rider: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          rating: users.rating,
+          profileImageUrl: users.profileImageUrl
+        }
+      })
+      .from(rides)
+      .leftJoin(users, eq(rides.riderId, users.id))
+      .where(
+        and(
+          eq(rides.status, "completed"),
+          eq(rides.paymentStatus, "pending_payment"),
+          eq(rides.driverId, userId)
+        )
+      )
+      .orderBy(desc(rides.completedAt));
   }
 }
 

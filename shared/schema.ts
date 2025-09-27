@@ -81,6 +81,13 @@ export const rideStatusEnum = pgEnum("ride_status", [
   "cancelled"
 ]);
 
+// Payment status enum
+export const paymentStatusEnum = pgEnum("payment_status", [
+  "pending_payment",
+  "paid_cash",
+  "disputed"
+]);
+
 // Rides table
 export const rides = pgTable("rides", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -95,6 +102,9 @@ export const rides = pgTable("rides", {
   distance: decimal("distance", { precision: 8, scale: 2 }),
   duration: integer("duration"), // in minutes
   tipAmount: decimal("tip_amount", { precision: 8, scale: 2 }).default("0.00"),
+  paymentStatus: paymentStatusEnum("payment_status").default("pending_payment"),
+  cashReceivedAt: timestamp("cash_received_at"),
+  paidBy: varchar("paid_by").references(() => users.id),
   riderRating: integer("rider_rating"),
   driverRating: integer("driver_rating"),
   riderReview: text("rider_review"),

@@ -531,7 +531,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Rating routes (must come before parameterized /api/rides/:rideId route)
+  // Rating and Payment routes (must come before parameterized /api/rides/:rideId route)
   app.get('/api/rides/for-rating', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.claims?.sub;
@@ -540,6 +540,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching rides for rating:", error);
       res.status(500).json({ message: "Failed to fetch rides for rating" });
+    }
+  });
+
+  app.get('/api/rides/awaiting-payment', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const rides = await storage.getRidesAwaitingPayment(userId);
+      res.json(rides);
+    } catch (error) {
+      console.error("Error fetching rides awaiting payment:", error);
+      res.status(500).json({ message: "Failed to fetch rides awaiting payment" });
     }
   });
 
@@ -604,6 +615,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(400).json({ message: "Invalid rating data" });
       } else {
         res.status(500).json({ message: "Failed to submit rating" });
+      }
+    }
+  });
+
+  // Payment confirmation route
+  app.post('/api/rides/:rideId/confirm-payment', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { rideId } = req.params;
+      
+      // Validate payment confirmation data
+      const paymentSchema = z.object({
+        tipAmount: z.number().min(0).optional()
+      });
+      
+      const { tipAmount } = paymentSchema.parse(req.body);
+      
+      const updatedRide = await storage.confirmCashPayment(rideId, userId, tipAmount);
+      
+      res.json({ success: true, ride: updatedRide });
+    } catch (error) {
+      console.error("Error confirming payment:", error);
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ message: "Invalid payment data" });
+      } else if (error.message.includes("not found")) {
+        res.status(404).json({ message: error.message });
+      } else if (error.message.includes("Only the driver") || error.message.includes("already been confirmed")) {
+        res.status(400).json({ message: error.message });
+      } else {
+        res.status(500).json({ message: "Failed to confirm payment" });
       }
     }
   });

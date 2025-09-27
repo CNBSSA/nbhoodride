@@ -16,7 +16,7 @@ export default function RideHistory() {
 
   // Fetch ride history
   const { data: rides = [], isLoading } = useQuery({
-    queryKey: ["/api/rides", { limit: 50 }],
+    queryKey: ["/api/rides"],
     enabled: !!user,
   });
 
