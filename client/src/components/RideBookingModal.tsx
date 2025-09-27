@@ -129,8 +129,8 @@ export default function RideBookingModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center max-w-[430px] mx-auto">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <Card className="w-full h-[90vh] rounded-t-xl border-0 shadow-2xl">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <Card className="relative z-10 w-full h-[90vh] rounded-t-xl border-0 shadow-2xl">
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Book a Ride</h2>
           <Button variant="ghost" size="sm" onClick={onClose} data-testid="button-close-booking">

@@ -37,7 +37,11 @@ export default function RiderDashboard() {
     lat: location.latitude,
     lng: location.longitude,
     address: "Largo, MD 20774" // Mock address - in production, use reverse geocoding
-  } : null;
+  } : {
+    lat: 38.9073,
+    lng: -76.7781,
+    address: "Prince George's County, MD" // Default location when geolocation is unavailable
+  };
 
   const mapCenter = userLocation || { lat: 38.9073, lng: -76.7781 }; // Default to Largo, MD
 
@@ -200,14 +204,12 @@ export default function RiderDashboard() {
       </Button>
 
       {/* Modals */}
-      {userLocation && (
-        <RideBookingModal
-          isOpen={isBookingModalOpen}
-          onClose={() => setIsBookingModalOpen(false)}
-          drivers={drivers}
-          userLocation={userLocation}
-        />
-      )}
+      <RideBookingModal
+        isOpen={isBookingModalOpen}
+        onClose={() => setIsBookingModalOpen(false)}
+        drivers={drivers}
+        userLocation={userLocation}
+      />
 
       <SOSModal
         isOpen={isSOSModalOpen}
