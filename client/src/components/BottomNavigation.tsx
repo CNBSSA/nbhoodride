@@ -11,6 +11,7 @@ export default function BottomNavigation({ activeTab, onTabChange }: BottomNavig
     { id: 'rider-home', label: 'Home', icon: 'fas fa-home' },
     { id: 'driver-dashboard', label: 'Drive', icon: 'fas fa-tachometer-alt' },
     { id: 'ride-history', label: 'History', icon: 'fas fa-history' },
+    { id: 'ratings', label: 'Ratings', icon: 'fas fa-star' },
     { id: 'profile', label: 'Profile', icon: 'fas fa-user' },
   ];
 

@@ -20,6 +20,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, sql, or } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 export interface IStorage {
   // User operations (required for Replit Auth)
@@ -48,6 +49,8 @@ export interface IStorage {
   
   // Rating operations
   updateRideRating(rideId: string, raterId: string, rating: number, review?: string): Promise<void>;
+  getRidesForRating(userId: string): Promise<Ride[]>;
+  updateUserRating(userId: string): Promise<void>;
   
   // Dispute operations
   createDispute(dispute: InsertDispute): Promise<Dispute>;
@@ -80,18 +83,27 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
-    const [user] = await db
-      .insert(users)
-      .values(userData)
-      .onConflictDoUpdate({
-        target: users.id,
-        set: {
+    // First check if user already exists by ID
+    const existingUser = await this.getUser(userData.id);
+    if (existingUser) {
+      // Update existing user
+      const [user] = await db
+        .update(users)
+        .set({
           ...userData,
           updatedAt: new Date(),
-        },
-      })
-      .returning();
-    return user;
+        })
+        .where(eq(users.id, userData.id))
+        .returning();
+      return user;
+    } else {
+      // Insert new user
+      const [user] = await db
+        .insert(users)
+        .values(userData)
+        .returning();
+      return user;
+    }
   }
 
   // Driver operations
@@ -601,6 +613,114 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(rides.createdAt));
+  }
+
+  async getRidesForRating(userId: string): Promise<Ride[]> {
+    const driverUsers = alias(users, "driverUsers");
+    
+    return await db
+      .select({
+        id: rides.id,
+        riderId: rides.riderId,
+        driverId: rides.driverId,
+        pickupLocation: rides.pickupLocation,
+        destinationLocation: rides.destinationLocation,
+        pickupInstructions: rides.pickupInstructions,
+        status: rides.status,
+        estimatedFare: rides.estimatedFare,
+        actualFare: rides.actualFare,
+        distance: rides.distance,
+        duration: rides.duration,
+        tipAmount: rides.tipAmount,
+        riderRating: rides.riderRating,
+        driverRating: rides.driverRating,
+        riderReview: rides.riderReview,
+        driverReview: rides.driverReview,
+        scheduledAt: rides.scheduledAt,
+        acceptedAt: rides.acceptedAt,
+        startedAt: rides.startedAt,
+        completedAt: rides.completedAt,
+        createdAt: rides.createdAt,
+        updatedAt: rides.updatedAt,
+        // Include rider/driver details
+        rider: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          rating: users.rating,
+          profileImageUrl: users.profileImageUrl
+        },
+        driver: {
+          id: driverUsers.id,
+          firstName: driverUsers.firstName,
+          lastName: driverUsers.lastName,
+          rating: driverUsers.rating,
+          profileImageUrl: driverUsers.profileImageUrl
+        }
+      })
+      .from(rides)
+      .leftJoin(users, eq(rides.riderId, users.id))
+      .leftJoin(driverUsers, eq(rides.driverId, driverUsers.id))
+      .where(
+        and(
+          eq(rides.status, "completed"),
+          or(
+            // User is rider and hasn't rated driver yet
+            and(
+              eq(rides.riderId, userId),
+              sql`${rides.driverRating} IS NULL`
+            ),
+            // User is driver and hasn't rated rider yet
+            and(
+              eq(rides.driverId, userId),
+              sql`${rides.riderRating} IS NULL`
+            )
+          )
+        )
+      )
+      .orderBy(desc(rides.completedAt));
+  }
+
+  async updateUserRating(userId: string): Promise<void> {
+    // Calculate new average rating based on all completed rides
+    const ridesAsRider = await db
+      .select({ rating: rides.riderRating })
+      .from(rides)
+      .where(
+        and(
+          eq(rides.riderId, userId),
+          eq(rides.status, "completed"),
+          sql`${rides.riderRating} IS NOT NULL`
+        )
+      );
+
+    const ridesAsDriver = await db
+      .select({ rating: rides.driverRating })
+      .from(rides)
+      .where(
+        and(
+          eq(rides.driverId, userId),
+          eq(rides.status, "completed"),
+          sql`${rides.driverRating} IS NOT NULL`
+        )
+      );
+
+    const allRatings = [
+      ...ridesAsRider.map(r => r.rating),
+      ...ridesAsDriver.map(r => r.rating)
+    ].filter(rating => rating !== null);
+
+    if (allRatings.length > 0) {
+      const averageRating = allRatings.reduce((sum, rating) => sum + rating, 0) / allRatings.length;
+      await db
+        .update(users)
+        .set({ 
+          rating: averageRating.toFixed(2),
+          totalRides: allRatings.length,
+          updatedAt: new Date()
+        })
+        .where(eq(users.id, userId));
+    }
   }
 }
 

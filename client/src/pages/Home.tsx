@@ -3,6 +3,7 @@ import BottomNavigation from "@/components/BottomNavigation";
 import RiderDashboard from "@/pages/RiderDashboard";
 import DriverDashboard from "@/pages/DriverDashboard";
 import RideHistory from "@/pages/RideHistory";
+import RatingsPage from "@/pages/RatingsPage";
 import Profile from "@/pages/Profile";
 
 export default function Home() {
@@ -16,6 +17,8 @@ export default function Home() {
         return <DriverDashboard />;
       case "ride-history":
         return <RideHistory />;
+      case "ratings":
+        return <RatingsPage />;
       case "profile":
         return <Profile />;
       default:

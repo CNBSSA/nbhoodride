@@ -463,32 +463,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/rides', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.claims?.sub;
-      const rideData = insertRideSchema.parse({
-        ...req.body,
+      
+      console.log("Ride creation request body:", JSON.stringify(req.body, null, 2));
+      
+      // Convert numeric fare to string for decimal field
+      const bodyData = { ...req.body };
+      if (typeof bodyData.estimatedFare === 'number') {
+        bodyData.estimatedFare = bodyData.estimatedFare.toString();
+      }
+      
+      console.log("Processed body data:", JSON.stringify(bodyData, null, 2));
+      
+      const dataToValidate = {
+        ...bodyData,
         riderId: userId
-      });
+      };
+      
+      console.log("Data to validate:", JSON.stringify(dataToValidate, null, 2));
+      
+      const rideData = insertRideSchema.parse(dataToValidate);
       
       const ride = await storage.createRide(rideData);
       res.json(ride);
     } catch (error) {
       console.error("Error creating ride:", error);
-      res.status(400).json({ message: "Failed to create ride" });
-    }
-  });
-
-  app.get('/api/rides/:rideId', isAuthenticated, async (req: any, res) => {
-    try {
-      const { rideId } = req.params;
-      const ride = await storage.getRide(rideId);
-      
-      if (!ride) {
-        return res.status(404).json({ message: "Ride not found" });
+      if (error instanceof z.ZodError) {
+        console.error("Zod validation errors:", JSON.stringify(error.errors, null, 2));
       }
-      
-      res.json(ride);
-    } catch (error) {
-      console.error("Error fetching ride:", error);
-      res.status(500).json({ message: "Failed to fetch ride" });
+      res.status(400).json({ message: "Failed to create ride" });
     }
   });
 
@@ -529,22 +531,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Rating routes
+  // Rating routes (must come before parameterized /api/rides/:rideId route)
+  app.get('/api/rides/for-rating', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const rides = await storage.getRidesForRating(userId);
+      res.json(rides);
+    } catch (error) {
+      console.error("Error fetching rides for rating:", error);
+      res.status(500).json({ message: "Failed to fetch rides for rating" });
+    }
+  });
+
+  app.get('/api/rides/:rideId', isAuthenticated, async (req: any, res) => {
+    try {
+      const { rideId } = req.params;
+      const ride = await storage.getRide(rideId);
+      
+      if (!ride) {
+        return res.status(404).json({ message: "Ride not found" });
+      }
+      
+      res.json(ride);
+    } catch (error) {
+      console.error("Error fetching ride:", error);
+      res.status(500).json({ message: "Failed to fetch ride" });
+    }
+  });
+
   app.post('/api/rides/:rideId/rating', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.claims?.sub;
       const { rideId } = req.params;
-      const { rating, review } = req.body;
       
-      if (!rating || rating < 1 || rating > 5) {
-        return res.status(400).json({ message: "Rating must be between 1 and 5" });
+      // Validate rating data
+      const ratingSchema = z.object({
+        rating: z.number().min(1).max(5),
+        review: z.string().optional()
+      });
+      
+      const { rating, review } = ratingSchema.parse(req.body);
+      
+      // Get ride and check authorization
+      const ride = await storage.getRide(rideId);
+      if (!ride) {
+        return res.status(404).json({ message: "Ride not found" });
+      }
+      
+      // Check if user is authorized to rate this ride
+      if (ride.riderId !== userId && ride.driverId !== userId) {
+        return res.status(403).json({ message: "Unauthorized to rate this ride" });
+      }
+      
+      // Check if rating already exists to prevent double-rating
+      const isRider = ride.riderId === userId;
+      const existingRating = isRider ? ride.driverRating : ride.riderRating;
+      
+      if (existingRating !== null) {
+        return res.status(409).json({ message: "You have already rated this ride" });
       }
       
       await storage.updateRideRating(rideId, userId, rating, review);
+      
+      // Update the OTHER party's overall rating (not the rater's rating)
+      const ratedUserId = isRider ? ride.driverId : ride.riderId;
+      await storage.updateUserRating(ratedUserId);
+      
       res.json({ success: true });
     } catch (error) {
       console.error("Error submitting rating:", error);
-      res.status(400).json({ message: "Failed to submit rating" });
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ message: "Invalid rating data" });
+      } else {
+        res.status(500).json({ message: "Failed to submit rating" });
+      }
     }
   });
 
