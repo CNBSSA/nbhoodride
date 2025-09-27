@@ -1,0 +1,370 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: hsl(0, 0%, 98%);
+  --foreground: hsl(240, 10%, 4%);
+  --card: hsl(0, 0%, 100%);
+  --card-foreground: hsl(240, 10%, 4%);
+  --popover: hsl(0, 0%, 100%);
+  --popover-foreground: hsl(240, 10%, 4%);
+  --primary: hsl(207, 90%, 54%);
+  --primary-foreground: hsl(0, 0%, 98%);
+  --secondary: hsl(125, 46%, 34%);
+  --secondary-foreground: hsl(0, 0%, 98%);
+  --muted: hsl(210, 40%, 96%);
+  --muted-foreground: hsl(215, 16%, 47%);
+  --accent: hsl(36, 100%, 50%);
+  --accent-foreground: hsl(0, 0%, 98%);
+  --destructive: hsl(0, 84%, 60%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --border: hsl(214, 32%, 91%);
+  --input: hsl(214, 32%, 91%);
+  --ring: hsl(207, 90%, 54%);
+  --chart-1: hsl(207, 90%, 54%);
+  --chart-2: hsl(125, 46%, 34%);
+  --chart-3: hsl(36, 100%, 50%);
+  --chart-4: hsl(147, 79%, 42%);
+  --chart-5: hsl(341, 75%, 51%);
+  --sidebar: hsl(180, 7%, 97%);
+  --sidebar-foreground: hsl(240, 10%, 4%);
+  --sidebar-primary: hsl(207, 90%, 54%);
+  --sidebar-primary-foreground: hsl(0, 0%, 98%);
+  --sidebar-accent: hsl(211, 51%, 93%);
+  --sidebar-accent-foreground: hsl(207, 90%, 54%);
+  --sidebar-border: hsl(205, 25%, 91%);
+  --sidebar-ring: hsl(207, 90%, 54%);
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-serif: Georgia, serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --radius: 0.5rem;
+  --shadow-2xs: 0px 1px 2px 0px hsl(0, 0%, 0%, 0.05);
+  --shadow-xs: 0px 1px 2px 0px hsl(0, 0%, 0%, 0.05), 0px 1px 3px 0px hsl(0, 0%, 0%, 0.1);
+  --shadow-sm: 0px 1px 2px 0px hsl(0, 0%, 0%, 0.05), 0px 1px 3px 0px hsl(0, 0%, 0%, 0.1), 0px 1px 2px 0px hsl(0, 0%, 0%, 0.06);
+  --shadow: 0px 1px 3px 0px hsl(0, 0%, 0%, 0.1), 0px 1px 2px 0px hsl(0, 0%, 0%, 0.06);
+  --shadow-md: 0px 4px 6px -1px hsl(0, 0%, 0%, 0.1), 0px 2px 4px -1px hsl(0, 0%, 0%, 0.06);
+  --shadow-lg: 0px 10px 15px -3px hsl(0, 0%, 0%, 0.1), 0px 4px 6px -2px hsl(0, 0%, 0%, 0.05);
+  --shadow-xl: 0px 20px 25px -5px hsl(0, 0%, 0%, 0.1), 0px 10px 10px -5px hsl(0, 0%, 0%, 0.04);
+  --shadow-2xl: 0px 25px 50px -12px hsl(0, 0%, 0%, 0.25);
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
+}
+
+.dark {
+  --background: hsl(224, 71%, 4%);
+  --foreground: hsl(213, 31%, 91%);
+  --card: hsl(224, 71%, 4%);
+  --card-foreground: hsl(213, 31%, 91%);
+  --popover: hsl(224, 71%, 4%);
+  --popover-foreground: hsl(213, 31%, 91%);
+  --primary: hsl(207, 90%, 54%);
+  --primary-foreground: hsl(222, 84%, 5%);
+  --secondary: hsl(125, 46%, 34%);
+  --secondary-foreground: hsl(213, 31%, 91%);
+  --muted: hsl(223, 47%, 11%);
+  --muted-foreground: hsl(215, 16%, 57%);
+  --accent: hsl(36, 100%, 50%);
+  --accent-foreground: hsl(222, 84%, 5%);
+  --destructive: hsl(0, 63%, 31%);
+  --destructive-foreground: hsl(213, 31%, 91%);
+  --border: hsl(216, 34%, 17%);
+  --input: hsl(216, 34%, 17%);
+  --ring: hsl(207, 90%, 54%);
+  --chart-1: hsl(207, 90%, 54%);
+  --chart-2: hsl(125, 46%, 34%);
+  --chart-3: hsl(36, 100%, 50%);
+  --chart-4: hsl(147, 79%, 42%);
+  --chart-5: hsl(341, 75%, 51%);
+  --sidebar: hsl(224, 71%, 4%);
+  --sidebar-foreground: hsl(213, 31%, 91%);
+  --sidebar-primary: hsl(207, 90%, 54%);
+  --sidebar-primary-foreground: hsl(0, 0%, 98%);
+  --sidebar-accent: hsl(216, 34%, 17%);
+  --sidebar-accent-foreground: hsl(207, 90%, 54%);
+  --sidebar-border: hsl(216, 34%, 17%);
+  --sidebar-ring: hsl(207, 90%, 54%);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  /* Mobile-first responsive design */
+  .mobile-container {
+    max-width: 430px;
+    margin: 0 auto;
+    min-height: 100vh;
+    background: var(--background);
+    box-shadow: 0 0 20px rgba(0,0,0,0.1);
+  }
+
+  /* Map styling */
+  .leaflet-container {
+    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+    border-radius: var(--radius);
+  }
+
+  /* Driver marker animations */
+  .driver-marker {
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0% { 
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3), 0 0 0 0 rgba(46, 125, 50, 0.7); 
+    }
+    70% { 
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3), 0 0 0 20px rgba(46, 125, 50, 0); 
+    }
+    100% { 
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3), 0 0 0 0 rgba(46, 125, 50, 0); 
+    }
+  }
+
+  /* User location marker */
+  .user-location-marker {
+    background: var(--primary);
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+  }
+
+  /* Rating stars styling */
+  .rating-stars {
+    color: #fbbf24;
+  }
+
+  /* Smooth transitions for modals */
+  .modal-enter {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+
+  .modal-enter-active {
+    opacity: 1;
+    transform: translateY(0);
+    transition: all 0.3s ease-out;
+  }
+
+  .modal-exit {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .modal-exit-active {
+    opacity: 0;
+    transform: translateY(100%);
+    transition: all 0.3s ease-out;
+  }
+
+  /* Bottom navigation styling */
+  .bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 430px;
+    width: 100%;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    z-index: 50;
+  }
+
+  /* Loading states */
+  .loading-spinner {
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  /* Enhanced button hover states */
+  button:not(:disabled):hover {
+    transform: translateY(-1px);
+    transition: transform 0.2s ease;
+  }
+
+  button:not(:disabled):active {
+    transform: translateY(0);
+  }
+
+  /* Uppy file uploader customization */
+  .uppy-Dashboard-inner {
+    border-radius: var(--radius) !important;
+  }
+
+  .uppy-Dashboard-AddFiles {
+    border: 2px dashed var(--border) !important;
+    border-radius: var(--radius) !important;
+  }
+
+  /* Progress indicators */
+  .progress-bar {
+    background: linear-gradient(90deg, var(--primary) 0%, var(--secondary) 100%);
+    height: 4px;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+
+  /* Status badges */
+  .status-badge {
+    @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium;
+  }
+
+  .status-online {
+    @apply bg-secondary/10 text-secondary;
+  }
+
+  .status-offline {
+    @apply bg-destructive/10 text-destructive;
+  }
+
+  .status-verified {
+    @apply bg-primary/10 text-primary;
+  }
+
+  /* Emergency button styling */
+  .sos-button {
+    background: var(--destructive);
+    color: var(--destructive-foreground);
+    border-radius: 50%;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+    transition: all 0.2s ease;
+  }
+
+  .sos-button:hover {
+    box-shadow: 0 6px 16px rgba(220, 38, 38, 0.6);
+    transform: translateY(-2px);
+  }
+
+  /* Gradient backgrounds for special cards */
+  .gradient-bg-primary {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+  }
+
+  .gradient-bg-accent {
+    background: linear-gradient(135deg, var(--accent) 0%, var(--primary) 100%);
+  }
+
+  /* Glassmorphism effect for overlays */
+  .glass-effect {
+    backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .dark .glass-effect {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--muted);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--muted-foreground);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--primary);
+  }
+}
+
+@layer components {
+  /* Custom utility classes for the ride-sharing app */
+  .ride-card {
+    @apply bg-card border border-border rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow;
+  }
+
+  .driver-card {
+    @apply ride-card hover:bg-muted/50 cursor-pointer;
+  }
+
+  .fare-display {
+    @apply text-lg font-bold text-primary;
+  }
+
+  .rating-display {
+    @apply flex items-center space-x-1 text-sm;
+  }
+
+  .status-indicator {
+    @apply inline-block w-2 h-2 rounded-full;
+  }
+
+  .location-input {
+    @apply flex items-center space-x-2 p-3 border border-border rounded-lg;
+  }
+
+  .pickup-indicator {
+    @apply w-3 h-3 bg-secondary rounded-full;
+  }
+
+  .destination-indicator {
+    @apply w-3 h-3 bg-destructive rounded-full;
+  }
+}
+
+@layer utilities {
+  /* Utility classes for specific use cases */
+  .text-fare {
+    color: var(--primary);
+    font-weight: 700;
+  }
+
+  .text-tip {
+    color: var(--secondary);
+    font-weight: 600;
+  }
+
+  .border-pickup {
+    border-color: var(--secondary);
+  }
+
+  .border-destination {
+    border-color: var(--destructive);
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-in-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    from { 
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to { 
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
