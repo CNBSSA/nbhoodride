@@ -73,9 +73,10 @@ export default function RiderDashboard() {
       vehicle: driver.vehicles[0] ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}` : "Vehicle",
       estimatedFare: "$12-15", // Mock fare - calculate based on distance
       estimatedTime: "2-5 min",
-    isVerifiedNeighbor: driver.isVerifiedNeighbor,
-    profileImage: driver.user.profileImageUrl,
-  }));
+      isVerifiedNeighbor: driver.isVerifiedNeighbor,
+      profileImage: driver.user.profileImageUrl,
+    };
+  });
 
   return (
     <>

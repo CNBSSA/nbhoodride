@@ -58,6 +58,10 @@ export interface IStorage {
   createEmergencyIncident(incident: InsertEmergencyIncident): Promise<EmergencyIncident>;
   getActiveEmergencyIncidents(): Promise<EmergencyIncident[]>;
   updateEmergencyIncident(incidentId: string, updates: Partial<InsertEmergencyIncident>): Promise<EmergencyIncident>;
+  
+  // Earnings operations
+  getDriverEarnings(driverId: string, period: 'today' | 'week' | 'month'): Promise<{fare: number, tips: number, total: number, rideCount: number}>;
+  getDriverRides(driverId: string, period: 'today' | 'week' | 'month'): Promise<Ride[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -178,7 +182,7 @@ export class DatabaseStorage implements IStorage {
       .set({ 
         ...updates,
         updatedAt: new Date(),
-        photos: updates.photos || []
+        photos: updates.photos as string[] || []
       })
       .where(eq(vehicles.id, vehicleId))
       .returning();
@@ -314,6 +318,76 @@ export class DatabaseStorage implements IStorage {
       .where(eq(emergencyIncidents.id, incidentId))
       .returning();
     return incident;
+  }
+
+  // Earnings operations
+  async getDriverEarnings(driverId: string, period: 'today' | 'week' | 'month'): Promise<{fare: number, tips: number, total: number, rideCount: number}> {
+    const now = new Date();
+    let startDate: Date;
+    
+    switch (period) {
+      case 'today':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        break;
+      case 'week':
+        const weekStart = now.getDate() - now.getDay();
+        startDate = new Date(now.getFullYear(), now.getMonth(), weekStart);
+        break;
+      case 'month':
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        break;
+    }
+
+    const completedRides = await db
+      .select()
+      .from(rides)
+      .where(
+        and(
+          eq(rides.driverId, driverId),
+          eq(rides.status, "completed"),
+          sql`${rides.completedAt} >= ${startDate.toISOString()}`
+        )
+      );
+
+    const fare = completedRides.reduce((sum, ride) => sum + parseFloat(ride.actualFare?.toString() || '0'), 0);
+    const tips = completedRides.reduce((sum, ride) => sum + parseFloat(ride.tipAmount?.toString() || '0'), 0);
+
+    return {
+      fare,
+      tips,
+      total: fare + tips,
+      rideCount: completedRides.length
+    };
+  }
+
+  async getDriverRides(driverId: string, period: 'today' | 'week' | 'month'): Promise<Ride[]> {
+    const now = new Date();
+    let startDate: Date;
+    
+    switch (period) {
+      case 'today':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        break;
+      case 'week':
+        const weekStart = now.getDate() - now.getDay();
+        startDate = new Date(now.getFullYear(), now.getMonth(), weekStart);
+        break;
+      case 'month':
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        break;
+    }
+
+    return await db
+      .select()
+      .from(rides)
+      .where(
+        and(
+          eq(rides.driverId, driverId),
+          eq(rides.status, "completed"),
+          sql`${rides.completedAt} >= ${startDate.toISOString()}`
+        )
+      )
+      .orderBy(desc(rides.completedAt));
   }
 }
 

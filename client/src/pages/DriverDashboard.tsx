@@ -20,8 +20,18 @@ export default function DriverDashboard() {
   const { sendMessage, isConnected } = useWebSocket();
 
   // Get driver earnings and trips
+  const { data: todayEarnings } = useQuery({
+    queryKey: ["/api/driver/earnings/today"],
+    enabled: !!user?.isDriver,
+  });
+
+  const { data: weekEarnings } = useQuery({
+    queryKey: ["/api/driver/earnings/week"],
+    enabled: !!user?.isDriver,
+  });
+
   const { data: todayTrips = [] } = useQuery({
-    queryKey: ["/api/rides", "driver", "today"],
+    queryKey: ["/api/driver/rides/today"],
     enabled: !!user?.isDriver,
   });
 
@@ -90,37 +100,18 @@ export default function DriverDashboard() {
     }
   }, [user?.driverProfile?.isOnline, startWatching]);
 
-  // Mock earnings data (replace with real data from backend)
-  const todayEarnings = {
-    fare: 87.50,
-    tips: 12.50,
-    total: 100.00
-  };
-
-  const weekEarnings = {
-    fare: 456.75,
-    tips: 68.25,
-    total: 525.00
-  };
-
-  const mockTrips = [
-    {
-      id: 1,
-      route: "Largo Metro → Woodmore",
-      time: "2:30 PM",
-      distance: "8.2 miles",
-      fare: 18.50,
-      tip: 3.00
-    },
-    {
-      id: 2,
-      route: "FedEx Field → Bowie",
-      time: "4:15 PM", 
-      distance: "12.1 miles",
-      fare: 24.75,
-      tip: 5.00
-    }
-  ];
+  // Transform ride data for display
+  const transformedTrips = todayTrips.map((ride: any) => ({
+    id: ride.id,
+    route: `${ride.pickupLocation?.address || 'Unknown'} → ${ride.destinationLocation?.address || 'Unknown'}`,
+    time: new Date(ride.completedAt || ride.createdAt).toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit' 
+    }),
+    distance: `${ride.distance || '0'} miles`,
+    fare: parseFloat(ride.actualFare || '0'),
+    tip: parseFloat(ride.tipAmount || '0')
+  }));
 
   return (
     <>
@@ -173,18 +164,18 @@ export default function DriverDashboard() {
             <CardContent className="p-4">
               <h3 className="text-sm font-medium text-muted-foreground">Today's Earnings</h3>
               <p className="text-2xl font-bold" data-testid="text-today-earnings">
-                ${todayEarnings.total.toFixed(2)}
+                ${(todayEarnings?.total || 0).toFixed(2)}
               </p>
-              <p className="text-sm text-secondary">+${todayEarnings.tips.toFixed(2)} tips</p>
+              <p className="text-sm text-secondary">+${(todayEarnings?.tips || 0).toFixed(2)} tips</p>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="p-4">
               <h3 className="text-sm font-medium text-muted-foreground">This Week</h3>
               <p className="text-2xl font-bold" data-testid="text-week-earnings">
-                ${weekEarnings.total.toFixed(2)}
+                ${(weekEarnings?.total || 0).toFixed(2)}
               </p>
-              <p className="text-sm text-secondary">+${weekEarnings.tips.toFixed(2)} tips</p>
+              <p className="text-sm text-secondary">+${(weekEarnings?.tips || 0).toFixed(2)} tips</p>
             </CardContent>
           </Card>
         </div>
@@ -193,7 +184,7 @@ export default function DriverDashboard() {
         <Card>
           <CardContent className="p-4">
             <h3 className="text-sm font-medium text-muted-foreground mb-3">Today's Trips</h3>
-            {mockTrips.length === 0 ? (
+            {transformedTrips.length === 0 ? (
               <div className="text-center py-6 text-muted-foreground">
                 <i className="fas fa-route text-3xl mb-2" />
                 <p>No trips completed today</p>
@@ -201,7 +192,7 @@ export default function DriverDashboard() {
               </div>
             ) : (
               <div className="space-y-3">
-                {mockTrips.map((trip) => (
+                {transformedTrips.map((trip) => (
                   <div key={trip.id} className="flex items-center justify-between" data-testid={`trip-${trip.id}`}>
                     <div>
                       <p className="font-medium">{trip.route}</p>

@@ -129,6 +129,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Driver earnings endpoints
+  app.get('/api/driver/earnings/:period', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { period } = req.params;
+      
+      if (!['today', 'week', 'month'].includes(period)) {
+        return res.status(400).json({ message: "Invalid period. Use 'today', 'week', or 'month'" });
+      }
+      
+      const earnings = await storage.getDriverEarnings(userId, period as 'today' | 'week' | 'month');
+      res.json(earnings);
+    } catch (error) {
+      console.error("Error fetching driver earnings:", error);
+      res.status(500).json({ message: "Failed to fetch earnings" });
+    }
+  });
+
+  app.get('/api/driver/rides/:period', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { period } = req.params;
+      
+      if (!['today', 'week', 'month'].includes(period)) {
+        return res.status(400).json({ message: "Invalid period. Use 'today', 'week', or 'month'" });
+      }
+      
+      const rides = await storage.getDriverRides(userId, period as 'today' | 'week' | 'month');
+      res.json(rides);
+    } catch (error) {
+      console.error("Error fetching driver rides:", error);
+      res.status(500).json({ message: "Failed to fetch rides" });
+    }
+  });
+
   // Vehicle routes
   app.post('/api/vehicles', isAuthenticated, async (req: any, res) => {
     try {
