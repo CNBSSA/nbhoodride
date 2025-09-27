@@ -1,0 +1,113 @@
+Of course. This is the perfect time to consolidate everything into a single, comprehensive project brief. This document will serve as your blueprint for building the prototype on Replit. It contains every decision, feature, and strategic angle we've discussed.
+
+---
+
+### **Project Brief: The PG County Community Ride-Share Platform**
+
+* **Document Version:** 1.0
+* **Date:** September 20, 2025
+* **Project Lead:** (Your Name/Company)
+
+### **1. Executive Summary**
+
+This document outlines the plan for a hyper-local, community-focused ride-sharing application designed specifically for the residents of Prince George's County, Maryland. The service will connect local car owners with nearby riders, emphasizing trust, transparency, and simplicity. The initial prototype will be a mobile-first web application built on Replit, launching with a cash-based payment system to validate the core concept and build an initial user base within a targeted pilot zone.
+
+### **2. Core Mission & Vision**
+
+To build a trusted, reliable, and fair mobility network *for* PG County, *by* PG County. Our vision is to supplement public transit and compete with incumbent ride-share giants not on scale, but on community trust and a superior local experience. We are the "ride from your neighbor" service.
+
+### **3. Target Market & Launch Area**
+
+* **Initial Launch Area:** A geo-fenced pilot zone within Prince George's County, MD (e.g., the Largo-Mitchellville-Woodmore corridor).
+* **Target Users:**
+    * **Riders:** PG County residents seeking reliable, safe, and transparently-priced rides for commuting, errands, and local travel.
+    * **Car Owners (Drivers):** Vetted local residents who want to earn money flexibly by providing a valuable service to their community.
+
+### **4. Key Differentiators**
+
+* **Hyper-Local Focus:** All operations, marketing, and support are tailored to PG County.
+* **Transparent Pricing:** A simple, easy-to-understand formula with no surge pricing.
+* **Driver Empowerment:** Drivers can offer discounts to compete, and driver-friendly features (like the 2-minute buffer) are built-in.
+* **Tangible Trust Signals:** Features like the compulsory car photo with visible tag and the "Verified Neighbor" badge build immediate trust.
+
+### **5. Phased Feature Roadmap**
+
+#### **Phase 1: Core MVP (The Replit Prototype)**
+*The goal is a functional, safe, and simple service to launch quickly.*
+
+* **User Systems:**
+    * Rider & Driver sign-up, login, and profile management.
+    * Driver document uploads (license, insurance) and car profile (up to 4 photos, one with tag).
+* **Core Ride Loop:**
+    * Driver can toggle `online`/`offline` status.
+    * Rider sees nearby online drivers on a map.
+    * Booking flow with pickup/destination points and fare estimate.
+    * Real-time GPS tracking of the driver's approach.
+* **Pricing & Payments:**
+    * **Formula:** `Fee = (Time Rate × Hours) + (Mile Rate × Miles)`
+    * **Pro-Rata Calculation:** Accurately calculates fees for fractional time/distance.
+    * **Driver-Adjusted Pricing:** Drivers can set a downward discount on their rate.
+    * **Cash-Only Payments:** All transactions are handled manually between rider and driver.
+* **Trust, Safety & UX:**
+    * Two-way 1-5 star ratings and short reviews.
+    * SOS Emergency Button.
+    * **"Verified Neighbor" Badge:** Displays if a driver lives nearby.
+    * **In-App Tipping Prompt:** A screen that reminds riders to tip in cash.
+    * **Precise Pickup Instructions:** Optional text field for riders.
+    * **Detailed Ride Receipts** in user history.
+    * **Essential Push Notifications** (Driver accepted, arriving, etc.).
+    * **Driver Earnings Dashboard** (summary of cash collected).
+    * **Dispute Resolution System** ("Report an Issue" button on rides).
+
+#### **Phase 2: Beta Polish & Reliability**
+*Refine the experience based on feedback from the first users.*
+
+* **New Features:**
+    * **Multi-Stop Trips:** Allow riders to add one extra stop.
+    * **In-App Chat:** With canned messages for safe, easy communication.
+    * **Lost & Found Workflow:** A system to connect riders and drivers for lost items.
+* **Refinements:**
+    * Admin console for user management and dispute resolution.
+    * Riders can "favorite" drivers.
+
+#### **Phase 3: Growth & Monetization**
+*Scale the user base and introduce platform revenue.*
+
+* **Digital Payments:** Integrate a payment processor (e.g., Stripe) to accept cards.
+* **Platform Commission:** Introduce a transparent commission on digital fares.
+* **Driver "Pro" Tiers:** Award badges to top-performing drivers.
+* **Referral Bonuses:** Incentivize user growth.
+
+#### **Phase 4: Differentiators & Scale**
+*Add unique features that solidify the community focus.*
+
+* **"Ride for a Friend":** Book and monitor a trip for another person.
+* **"Community Routes" & Scheduled Rides:** Advance booking for popular, recurring local routes.
+* **Vehicle Type Selection** (e.g., SUV, Sedan).
+
+### **6. Technical Stack & Prototyping on Replit**
+
+Given the goal of prototyping on Replit, a **mobile-first web application** is the most effective approach. This can be built to feel almost identical to a native app on a phone (a Progressive Web App, or PWA).
+
+* **Frontend (Client-Side):**
+    * **Framework:** **React** (using Vite for a fast development environment on Replit).
+    * **Mapping Library:** **Leaflet.js** (free and open-source) or **Mapbox** (has a generous free tier).
+    * **Styling:** CSS or a framework like Tailwind CSS.
+* **Backend (Server-Side):**
+    * **Framework:** **Node.js** with **Express.js**. It's fast, JavaScript-based, and integrates perfectly with Replit.
+    * **Real-time Communication:** **Socket.IO** or WebSockets for live GPS location updates.
+* **Database:**
+    * **MongoDB Atlas**. The free tier is perfect for a prototype, and it's easily managed outside of Replit while connecting seamlessly.
+* **Key APIs & Services:**
+    * **Geolocation API:** Use the browser's built-in APIs for GPS.
+    * **Communication:** **Twilio** for masked calls/texts (can be added post-MVP).
+
+### **7. Go-to-Market & Launch Strategy**
+
+* **Phase 1 (Pre-Launch):** Recruit and personally onboard the first 20 drivers from the local PG County community.
+* **Phase 2 (Launch):** Focus all marketing on the pilot zone to attract the first 100-200 riders. Use grassroots methods: flyers at Metro stations, community centers, and posts in local online groups.
+* **Phase 3 (Growth):** Initiate **Local Business Partnerships** for mutual promotion. Expand the service area gradually as driver supply increases.
+
+---
+
+This single document is your blueprint. The next logical step is to set up your Replit environment, choose your stack (the suggested MERN-like stack is a great start), and begin building the Phase 1 features, starting with user registration and profiles.
