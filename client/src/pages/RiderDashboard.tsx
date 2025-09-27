@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useGeolocation } from "@/hooks/useGeolocation";
+import { useWebSocket } from "@/hooks/useWebSocket";
 import MapComponent from "@/components/MapComponent";
 import RideBookingModal from "@/components/RideBookingModal";
 import SOSModal from "@/components/SOSModal";
@@ -23,8 +24,10 @@ interface Driver {
 export default function RiderDashboard() {
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
+  const [realtimeDrivers, setRealtimeDrivers] = useState<Record<string, {lat: number, lng: number}>>({});
   const { user } = useAuth();
   const { location, error: locationError, requestLocation } = useGeolocation();
+  const { lastMessage } = useWebSocket();
 
   const userLocation = location ? {
     lat: location.latitude,
@@ -44,15 +47,32 @@ export default function RiderDashboard() {
 
   const mapCenter = userLocation || { lat: 38.9073, lng: -76.7781 }; // Default to Largo, MD
 
-  // Transform driver data for components
-  const drivers: Driver[] = nearbyDrivers.map((driver: any) => ({
-    id: driver.id,
-    name: `${driver.user.firstName} ${driver.user.lastName?.[0] || ''}.`,
-    location: driver.currentLocation || { lat: mapCenter.lat + (Math.random() - 0.5) * 0.01, lng: mapCenter.lng + (Math.random() - 0.5) * 0.01 },
-    rating: parseFloat(driver.user.rating) || 5.0,
-    vehicle: driver.vehicles[0] ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}` : "Vehicle",
-    estimatedFare: "$12-15", // Mock fare - calculate based on distance
-    estimatedTime: "2-5 min",
+  // Handle real-time driver location updates via WebSocket
+  useEffect(() => {
+    if (lastMessage?.type === 'driver_location') {
+      setRealtimeDrivers(prev => ({
+        ...prev,
+        [lastMessage.driverId]: lastMessage.location
+      }));
+    }
+  }, [lastMessage]);
+
+  // Transform driver data for components with real-time locations
+  const drivers: Driver[] = nearbyDrivers.map((driver: any) => {
+    const realtimeLocation = realtimeDrivers[driver.id];
+    const location = realtimeLocation || driver.currentLocation || { 
+      lat: mapCenter.lat + (Math.random() - 0.5) * 0.01, 
+      lng: mapCenter.lng + (Math.random() - 0.5) * 0.01 
+    };
+    
+    return {
+      id: driver.id,
+      name: `${driver.user.firstName} ${driver.user.lastName?.[0] || ''}.`,
+      location,
+      rating: parseFloat(driver.user.rating) || 5.0,
+      vehicle: driver.vehicles[0] ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}` : "Vehicle",
+      estimatedFare: "$12-15", // Mock fare - calculate based on distance
+      estimatedTime: "2-5 min",
     isVerifiedNeighbor: driver.isVerifiedNeighbor,
     profileImage: driver.user.profileImageUrl,
   }));

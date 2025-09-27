@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -6,12 +6,18 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { useGeolocationWatcher } from "@/hooks/useGeolocation";
+import { useWebSocket } from "@/hooks/useWebSocket";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  
+  // Real-time GPS tracking for drivers
+  const { location, error: locationError, isWatching, startWatching, stopWatching } = useGeolocationWatcher();
+  const { sendMessage, isConnected } = useWebSocket();
 
   // Get driver earnings and trips
   const { data: todayTrips = [] } = useQuery({
@@ -45,7 +51,44 @@ export default function DriverDashboard() {
   const handleToggleStatus = (checked: boolean) => {
     setIsOnline(checked);
     toggleStatusMutation.mutate(checked);
+    
+    // Start/stop GPS tracking when going online/offline
+    if (checked) {
+      startWatching();
+    } else {
+      stopWatching();
+    }
   };
+
+  // Send location updates via WebSocket when location changes and driver is online
+  useEffect(() => {
+    if (location && isOnline && isConnected && user?.id) {
+      sendMessage({
+        type: 'location_update',
+        userId: user.id,
+        location: {
+          lat: location.latitude,
+          lng: location.longitude
+        }
+      });
+      
+      // Also update location in database
+      apiRequest('POST', '/api/driver/location', {
+        lat: location.latitude,
+        lng: location.longitude
+      }).catch(console.error);
+    }
+  }, [location, isOnline, isConnected, user?.id, sendMessage]);
+
+  // Sync online status from user data
+  useEffect(() => {
+    if (user?.driverProfile?.isOnline !== undefined) {
+      setIsOnline(user.driverProfile.isOnline);
+      if (user.driverProfile.isOnline) {
+        startWatching();
+      }
+    }
+  }, [user?.driverProfile?.isOnline, startWatching]);
 
   // Mock earnings data (replace with real data from backend)
   const todayEarnings = {

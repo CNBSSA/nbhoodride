@@ -160,7 +160,7 @@ export class DatabaseStorage implements IStorage {
   async createVehicle(vehicle: InsertVehicle): Promise<Vehicle> {
     const [newVehicle] = await db
       .insert(vehicles)
-      .values([vehicle])
+      .values(vehicle)
       .returning();
     return newVehicle;
   }
@@ -178,7 +178,7 @@ export class DatabaseStorage implements IStorage {
       .set({ 
         ...updates,
         updatedAt: new Date(),
-        photos: updates.photos as string[] || []
+        photos: updates.photos || []
       })
       .where(eq(vehicles.id, vehicleId))
       .returning();
