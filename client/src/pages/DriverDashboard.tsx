@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useGeolocationWatcher } from "@/hooks/useGeolocation";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import IncomingRideRequest from "@/components/IncomingRideRequest";
+import { ActiveRideCard } from "@/components/ActiveRideCard";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
@@ -36,11 +37,18 @@ export default function DriverDashboard() {
     enabled: !!user?.isDriver,
   });
 
-  // Get pending ride requests
+  // Get pending ride requests (reduced polling, relies primarily on WebSocket)
   const { data: pendingRides = [], refetch: refetchPendingRides } = useQuery({
     queryKey: ["/api/driver/pending-rides"],
     enabled: !!user?.isDriver && isOnline,
-    refetchInterval: 5000, // Poll every 5 seconds when online
+    refetchInterval: 30000, // Reduced to 30 seconds, rely on WebSocket updates
+  });
+
+  // Get active rides for this driver (reduced polling, relies primarily on WebSocket)
+  const { data: activeRides = [], refetch: refetchActiveRides } = useQuery({
+    queryKey: ["/api/driver/active-rides"],
+    enabled: !!user?.isDriver,
+    refetchInterval: 30000, // Reduced to 30 seconds, rely on WebSocket updates
   });
 
   // Toggle driver status
@@ -108,20 +116,28 @@ export default function DriverDashboard() {
     }
   }, [user?.driverProfile?.isOnline, startWatching]);
 
-  // Handle real-time ride status updates via WebSocket
+  // Handle real-time ride status updates via WebSocket (scoped to current driver)
   useEffect(() => {
-    if (lastMessage?.type === 'new_ride_request' && lastMessage.driverId === user?.id) {
-      // Refresh pending rides when a new ride is assigned to this driver
+    if (!lastMessage || !user?.id) return;
+
+    // Only process events for this driver
+    if (lastMessage.type === 'new_ride_request' && lastMessage.driverId === user.id) {
       refetchPendingRides();
       toast({
         title: "New Ride Request!",
         description: "You have a new ride request waiting.",
       });
-    } else if (lastMessage?.type === 'ride_accepted' || lastMessage?.type === 'ride_declined') {
-      // Refresh pending rides when any ride status changes
+    } else if ((lastMessage.type === 'ride_accepted' || lastMessage.type === 'ride_declined') && lastMessage.driverId === user.id) {
       refetchPendingRides();
+      refetchActiveRides();
+    } else if ((lastMessage.type === 'ride_started' || lastMessage.type === 'ride_completed') && lastMessage.driverId === user.id) {
+      refetchActiveRides();
+      // Also refresh earnings when ride is completed
+      if (lastMessage.type === 'ride_completed') {
+        queryClient.invalidateQueries({ queryKey: ["/api/driver/earnings/today"] });
+      }
     }
-  }, [lastMessage, user?.id, refetchPendingRides, toast]);
+  }, [lastMessage, user?.id, refetchPendingRides, refetchActiveRides, queryClient, toast]);
 
   // Transform ride data for display
   const transformedTrips = todayTrips.map((ride: any) => ({
@@ -181,11 +197,22 @@ export default function DriverDashboard() {
           </CardContent>
         </Card>
 
+        {/* Active Rides */}
+        {activeRides.length > 0 && (
+          <div className="space-y-3">
+            <h3 className="text-lg font-semibold text-primary">
+              Active Rides ({activeRides.length})
+            </h3>
+            {activeRides.map((ride: any) => (
+              <ActiveRideCard key={ride.id} ride={ride} />
+            ))}
+          </div>
+        )}
+
         {/* Incoming Ride Requests */}
         {isOnline && pendingRides.length > 0 && (
           <div className="space-y-3">
             <h3 className="text-lg font-semibold text-primary">
-              <i className="fas fa-bell mr-2" />
               Incoming Ride Requests ({pendingRides.length})
             </h3>
             {pendingRides.map((ride: any) => (

@@ -67,6 +67,9 @@ export interface IStorage {
   getPendingRidesForDriver(driverId: string): Promise<Ride[]>;
   acceptRide(rideId: string, driverId: string): Promise<Ride>;
   declineRide(rideId: string, driverId: string): Promise<void>;
+  startRide(rideId: string, driverId: string): Promise<Ride>;
+  completeRide(rideId: string, driverId: string, actualFare?: number): Promise<Ride>;
+  getActiveRidesForDriver(driverId: string): Promise<Ride[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -490,6 +493,114 @@ export class DatabaseStorage implements IStorage {
         updatedAt: new Date()
       })
       .where(eq(rides.id, rideId));
+  }
+
+  async startRide(rideId: string, driverId: string): Promise<Ride> {
+    // Verify the ride belongs to this driver and is accepted
+    const ride = await this.getRide(rideId);
+    if (!ride) {
+      throw new Error("Ride not found");
+    }
+    if (ride.driverId !== driverId) {
+      throw new Error("Unauthorized to start this ride");
+    }
+    if (ride.status !== "accepted") {
+      throw new Error("Ride cannot be started. Current status: " + ride.status);
+    }
+
+    // Update ride status to in_progress
+    const [updatedRide] = await db
+      .update(rides)
+      .set({ 
+        status: "in_progress",
+        startedAt: new Date(),
+        updatedAt: new Date()
+      })
+      .where(eq(rides.id, rideId))
+      .returning();
+    
+    return updatedRide;
+  }
+
+  async completeRide(rideId: string, driverId: string, actualFare?: number): Promise<Ride> {
+    // Verify the ride belongs to this driver and is in progress
+    const ride = await this.getRide(rideId);
+    if (!ride) {
+      throw new Error("Ride not found");
+    }
+    if (ride.driverId !== driverId) {
+      throw new Error("Unauthorized to complete this ride");
+    }
+    if (ride.status !== "in_progress") {
+      throw new Error("Ride cannot be completed. Current status: " + ride.status);
+    }
+
+    const updateData: any = { 
+      status: "completed",
+      completedAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    if (actualFare !== undefined) {
+      updateData.actualFare = actualFare.toString();
+    }
+
+    // Update ride status to completed
+    const [updatedRide] = await db
+      .update(rides)
+      .set(updateData)
+      .where(eq(rides.id, rideId))
+      .returning();
+    
+    return updatedRide;
+  }
+
+  async getActiveRidesForDriver(driverId: string): Promise<Ride[]> {
+    return await db
+      .select({
+        id: rides.id,
+        riderId: rides.riderId,
+        driverId: rides.driverId,
+        pickupLocation: rides.pickupLocation,
+        destinationLocation: rides.destinationLocation,
+        pickupInstructions: rides.pickupInstructions,
+        status: rides.status,
+        estimatedFare: rides.estimatedFare,
+        actualFare: rides.actualFare,
+        distance: rides.distance,
+        duration: rides.duration,
+        tipAmount: rides.tipAmount,
+        riderRating: rides.riderRating,
+        driverRating: rides.driverRating,
+        riderReview: rides.riderReview,
+        driverReview: rides.driverReview,
+        scheduledAt: rides.scheduledAt,
+        acceptedAt: rides.acceptedAt,
+        startedAt: rides.startedAt,
+        completedAt: rides.completedAt,
+        createdAt: rides.createdAt,
+        updatedAt: rides.updatedAt,
+        // Include rider details
+        rider: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          rating: users.rating,
+          profileImageUrl: users.profileImageUrl
+        }
+      })
+      .from(rides)
+      .leftJoin(users, eq(rides.riderId, users.id))
+      .where(
+        and(
+          eq(rides.driverId, driverId),
+          or(
+            eq(rides.status, "accepted"),
+            eq(rides.status, "in_progress")
+          )
+        )
+      )
+      .orderBy(desc(rides.createdAt));
   }
 }
 

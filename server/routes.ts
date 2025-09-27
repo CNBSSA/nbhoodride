@@ -5,6 +5,7 @@ import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
+import { z } from "zod";
 import {
   insertDriverProfileSchema,
   insertVehicleSchema,
@@ -148,13 +149,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const ride = await storage.acceptRide(rideId, userId);
       
-      // Broadcast ride accepted via WebSocket
-      broadcast({
+      // Send targeted WebSocket messages to driver and rider only  
+      const rideAcceptedMessage = {
         type: 'ride_accepted',
         rideId: ride.id,
         driverId: userId,
         riderId: ride.riderId
-      });
+      };
+      
+      // Send to driver
+      if (activeConnections.has(userId)) {
+        const driverWs = activeConnections.get(userId);
+        if (driverWs && driverWs.readyState === WebSocket.OPEN) {
+          driverWs.send(JSON.stringify(rideAcceptedMessage));
+        }
+      }
+      
+      // Send to rider
+      if (activeConnections.has(ride.riderId)) {
+        const riderWs = activeConnections.get(ride.riderId);
+        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+          riderWs.send(JSON.stringify(rideAcceptedMessage));
+        }
+      }
       
       res.json(ride);
     } catch (error) {
@@ -174,12 +191,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.declineRide(rideId, userId);
       
-      // Broadcast ride declined via WebSocket
-      broadcast({
-        type: 'ride_declined',
-        rideId,
-        driverId: userId
-      });
+      // Get the ride to access riderId for targeted messaging
+      const ride = await storage.getRide(rideId);
+      if (ride) {
+        // Send targeted WebSocket messages to driver and rider only
+        const rideDeclinedMessage = {
+          type: 'ride_declined',
+          rideId,
+          driverId: userId,
+          riderId: ride.riderId
+        };
+        
+        // Send to driver
+        if (activeConnections.has(userId)) {
+          const driverWs = activeConnections.get(userId);
+          if (driverWs && driverWs.readyState === WebSocket.OPEN) {
+            driverWs.send(JSON.stringify(rideDeclinedMessage));
+          }
+        }
+        
+        // Send to rider
+        if (activeConnections.has(ride.riderId)) {
+          const riderWs = activeConnections.get(ride.riderId);
+          if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+            riderWs.send(JSON.stringify(rideDeclinedMessage));
+          }
+        }
+      }
       
       res.json({ success: true });
     } catch (error) {
@@ -189,6 +227,111 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         res.status(500).json({ message: "Failed to decline ride" });
       }
+    }
+  });
+
+  // Driver ride status update endpoints
+  app.post('/api/driver/rides/:rideId/start', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { rideId } = req.params;
+      
+      const ride = await storage.startRide(rideId, userId);
+      
+      // Send targeted WebSocket messages to driver and rider only
+      const rideStartedMessage = {
+        type: 'ride_started',
+        rideId: ride.id,
+        driverId: userId,
+        riderId: ride.riderId,
+        status: 'in_progress'
+      };
+      
+      // Send to driver
+      if (activeConnections.has(userId)) {
+        const driverWs = activeConnections.get(userId);
+        if (driverWs && driverWs.readyState === WebSocket.OPEN) {
+          driverWs.send(JSON.stringify(rideStartedMessage));
+        }
+      }
+      
+      // Send to rider
+      if (activeConnections.has(ride.riderId)) {
+        const riderWs = activeConnections.get(ride.riderId);
+        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+          riderWs.send(JSON.stringify(rideStartedMessage));
+        }
+      }
+      
+      res.json(ride);
+    } catch (error) {
+      console.error("Error starting ride:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ message: error.message });
+      } else {
+        res.status(500).json({ message: "Failed to start ride" });
+      }
+    }
+  });
+
+  app.post('/api/driver/rides/:rideId/complete', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { rideId } = req.params;
+      
+      // Validate request body
+      const completeRideSchema = z.object({
+        actualFare: z.number().positive("Actual fare must be a positive number")
+      });
+      
+      const { actualFare } = completeRideSchema.parse(req.body);
+      
+      const ride = await storage.completeRide(rideId, userId, actualFare);
+      
+      // Send targeted WebSocket messages to driver and rider only
+      const rideCompletedMessage = {
+        type: 'ride_completed',
+        rideId: ride.id,
+        driverId: userId,
+        riderId: ride.riderId,
+        status: 'completed'
+      };
+      
+      // Send to driver
+      if (activeConnections.has(userId)) {
+        const driverWs = activeConnections.get(userId);
+        if (driverWs && driverWs.readyState === WebSocket.OPEN) {
+          driverWs.send(JSON.stringify(rideCompletedMessage));
+        }
+      }
+      
+      // Send to rider
+      if (activeConnections.has(ride.riderId)) {
+        const riderWs = activeConnections.get(ride.riderId);
+        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+          riderWs.send(JSON.stringify(rideCompletedMessage));
+        }
+      }
+      
+      res.json(ride);
+    } catch (error) {
+      console.error("Error completing ride:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ message: error.message });
+      } else {
+        res.status(500).json({ message: "Failed to complete ride" });
+      }
+    }
+  });
+
+  app.get('/api/driver/active-rides', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const rides = await storage.getActiveRidesForDriver(userId);
+      res.json(rides);
+    } catch (error) {
+      console.error("Error fetching active rides:", error);
+      res.status(500).json({ message: "Failed to fetch active rides" });
     }
   });
 
@@ -504,12 +647,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             break;
             
           case 'location_update':
-            // Driver location update - broadcast to nearby riders
-            broadcast({
-              type: 'driver_location',
-              driverId: message.userId,
-              location: message.location
-            });
+            // Driver location update - only send to riders in active rides with this driver
+            // For now, we'll store the location but not broadcast globally for privacy
+            // In production, implement targeted delivery to assigned riders only
+            // TODO: Send location only to rider(s) currently on a ride with this driver
             break;
             
           case 'ride_status':
