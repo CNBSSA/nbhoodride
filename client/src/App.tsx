@@ -8,6 +8,7 @@ import Landing from "@/pages/Landing";
 import Home from "@/pages/Home";
 import RatingsPage from "@/pages/RatingsPage";
 import { PaymentsPage } from "@/pages/PaymentsPage";
+import EmergencyTracking from "@/pages/EmergencyTracking";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -15,6 +16,9 @@ function Router() {
 
   return (
     <Switch>
+      {/* Public emergency tracking route (no auth required) */}
+      <Route path="/emergency/:token" component={EmergencyTracking} />
+      
       {isLoading || !isAuthenticated ? (
         <Route path="/" component={Landing} />
       ) : (

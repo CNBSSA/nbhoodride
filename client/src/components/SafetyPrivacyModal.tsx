@@ -20,7 +20,7 @@ export default function SafetyPrivacyModal({ isOpen, onClose }: SafetyPrivacyMod
   const queryClient = useQueryClient();
 
   // Load current emergency contact
-  const userQuery = useQuery({
+  const userQuery = useQuery<{ emergencyContact?: string }>({
     queryKey: ["/api/auth/user"],
     enabled: isOpen && !!user?.id,
   });
@@ -57,8 +57,7 @@ export default function SafetyPrivacyModal({ isOpen, onClose }: SafetyPrivacyMod
   const testEmergencyContactMutation = useMutation({
     mutationFn: async (type: 'sms' | 'call') => {
       const response = await apiRequest('POST', '/api/emergency/test', {
-        type,
-        phoneNumber: emergencyContact
+        type
       });
       return response.json();
     },

@@ -63,8 +63,11 @@ export interface IStorage {
   
   // Emergency operations
   createEmergencyIncident(incident: InsertEmergencyIncident): Promise<EmergencyIncident>;
+  createEmergencyIncidentWithSharing(incident: InsertEmergencyIncident): Promise<EmergencyIncident>;
   getActiveEmergencyIncidents(): Promise<EmergencyIncident[]>;
+  getEmergencyIncidentByToken(token: string): Promise<EmergencyIncident | null>;
   updateEmergencyIncident(incidentId: string, updates: Partial<InsertEmergencyIncident>): Promise<EmergencyIncident>;
+  updateUserEmergencyContact(userId: string, phone: string): Promise<User>;
   
   // Earnings operations
   getDriverEarnings(driverId: string, period: 'today' | 'week' | 'month'): Promise<{fare: number, tips: number, total: number, rideCount: number}>;
@@ -88,26 +91,28 @@ export class DatabaseStorage implements IStorage {
 
   async upsertUser(userData: UpsertUser): Promise<User> {
     // First check if user already exists by ID
-    const existingUser = await this.getUser(userData.id);
-    if (existingUser) {
-      // Update existing user
-      const [user] = await db
-        .update(users)
-        .set({
-          ...userData,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, userData.id))
-        .returning();
-      return user;
-    } else {
-      // Insert new user
-      const [user] = await db
-        .insert(users)
-        .values(userData)
-        .returning();
-      return user;
+    if (userData.id) {
+      const existingUser = await this.getUser(userData.id);
+      if (existingUser) {
+        // Update existing user
+        const [user] = await db
+          .update(users)
+          .set({
+            ...userData,
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, userData.id))
+          .returning();
+        return user;
+      }
     }
+    
+    // Insert new user
+    const [user] = await db
+      .insert(users)
+      .values(userData)
+      .returning();
+    return user;
   }
 
   // Driver operations
@@ -188,7 +193,7 @@ export class DatabaseStorage implements IStorage {
   async createVehicle(vehicle: InsertVehicle): Promise<Vehicle> {
     const [newVehicle] = await db
       .insert(vehicles)
-      .values(vehicle)
+      .values([vehicle])
       .returning();
     return newVehicle;
   }

@@ -6,6 +6,8 @@ import { setupAuth, isAuthenticated } from "./replitAuth";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
 import { z } from "zod";
+import { nanoid } from "nanoid";
+import twilio from "twilio";
 import {
   insertDriverProfileSchema,
   insertVehicleSchema,
@@ -677,7 +679,176 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Emergency routes
+  // Emergency contact management routes
+  app.put('/api/user/emergency-contact', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { emergencyContact } = req.body;
+      
+      if (!emergencyContact || typeof emergencyContact !== 'string') {
+        return res.status(400).json({ message: "Valid emergency contact phone number required" });
+      }
+      
+      const updatedUser = await storage.updateUserEmergencyContact(userId, emergencyContact);
+      res.json({ success: true, user: updatedUser });
+    } catch (error) {
+      console.error("Error updating emergency contact:", error);
+      res.status(500).json({ message: "Failed to update emergency contact" });
+    }
+  });
+
+  app.post('/api/emergency/test', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { type } = req.body;
+      
+      if (!type || !['sms', 'call'].includes(type)) {
+        return res.status(400).json({ message: "Type (sms/call) required" });
+      }
+
+      // Security: Only allow testing with user's own emergency contact
+      const user = await storage.getUser(userId);
+      if (!user?.emergencyContact) {
+        return res.status(400).json({ message: "Please set an emergency contact first" });
+      }
+      
+      const phoneNumber = user.emergencyContact;
+
+      // Initialize Twilio (check if secrets are available)
+      const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
+      const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+      const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
+
+      if (!twilioAccountSid || !twilioAuthToken || !twilioPhoneNumber) {
+        return res.status(500).json({ message: "Twilio credentials not configured" });
+      }
+
+      const client = twilio(twilioAccountSid, twilioAuthToken);
+
+      if (type === 'sms') {
+        await client.messages.create({
+          body: "Test message from PG Ride: Your emergency contact is set up correctly! 🚗",
+          from: twilioPhoneNumber,
+          to: phoneNumber
+        });
+      } else if (type === 'call') {
+        await client.calls.create({
+          twiml: '<Response><Say>Hello! This is a test call from PG Ride. Your emergency contact is set up correctly. Thank you!</Say></Response>',
+          from: twilioPhoneNumber,
+          to: phoneNumber
+        });
+      }
+
+      res.json({ success: true, message: `Test ${type} sent successfully` });
+    } catch (error) {
+      console.error(`Error sending test ${req.body.type}:`, error);
+      res.status(500).json({ message: `Failed to send test ${req.body.type}` });
+    }
+  });
+
+  // Enhanced emergency routes
+  app.post('/api/emergency/start', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { incidentType, rideId, location, description } = req.body;
+      
+      // Generate a unique share token for live location sharing
+      const shareToken = nanoid(12);
+      
+      const incidentData = {
+        userId,
+        rideId,
+        incidentType,
+        location,
+        description: description || `Emergency incident: ${incidentType}`,
+        shareToken,
+        emergencyContactAlerted: false
+      };
+      
+      const incident = await storage.createEmergencyIncidentWithSharing(incidentData);
+      
+      let smsDeliveryStatus = "skipped";
+      
+      // Send SMS alert to emergency contact if available
+      const user = await storage.getUser(userId);
+      if (user?.emergencyContact) {
+        try {
+          const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
+          const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+          const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
+
+          if (twilioAccountSid && twilioAuthToken && twilioPhoneNumber) {
+            const client = twilio(twilioAccountSid, twilioAuthToken);
+            
+            const locationText = location 
+              ? `Location: https://maps.google.com/?q=${location.lat},${location.lng}`
+              : "Location: Not available";
+            
+            const shareUrl = `${req.protocol}://${req.get('host')}/emergency/${shareToken}`;
+            
+            await client.messages.create({
+              body: `🚨 EMERGENCY ALERT from ${user.firstName || 'PG Ride user'}\n\n${description}\n\n${locationText}\n\nLive tracking: ${shareUrl}\n\nReply STOP to opt out.`,
+              from: twilioPhoneNumber,
+              to: user.emergencyContact
+            });
+            
+            // Update incident to mark emergency contact as alerted
+            await storage.updateEmergencyIncident(incident.id, { emergencyContactAlerted: true });
+            smsDeliveryStatus = "sent";
+          } else {
+            console.log("Twilio credentials not configured - emergency alert logged without SMS delivery");
+            smsDeliveryStatus = "credentials_missing";
+          }
+        } catch (twilioError) {
+          console.error("Failed to send emergency SMS:", twilioError);
+          smsDeliveryStatus = "failed";
+        }
+      }
+      
+      // Broadcast emergency alert via WebSocket
+      broadcast({
+        type: 'emergency_alert',
+        incident,
+        userId
+      });
+      
+      res.json({ 
+        success: true, 
+        incident,
+        shareUrl: `/emergency/${shareToken}`
+      });
+    } catch (error) {
+      console.error("Error starting emergency incident:", error);
+      res.status(500).json({ message: "Failed to start emergency incident" });
+    }
+  });
+
+  app.put('/api/emergency/:incidentId/location', isAuthenticated, async (req: any, res) => {
+    try {
+      const { incidentId } = req.params;
+      const { location } = req.body;
+      
+      if (!location || !location.lat || !location.lng) {
+        return res.status(400).json({ message: "Valid location coordinates required" });
+      }
+      
+      const updatedIncident = await storage.updateEmergencyIncidentLocation(incidentId, location);
+      
+      // Broadcast location update via WebSocket
+      broadcast({
+        type: 'emergency_location_update',
+        incidentId,
+        location
+      });
+      
+      res.json({ success: true, incident: updatedIncident });
+    } catch (error) {
+      console.error("Error updating emergency location:", error);
+      res.status(500).json({ message: "Failed to update emergency location" });
+    }
+  });
+
+  // Legacy emergency route for backward compatibility
   app.post('/api/emergency', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.claims?.sub;
@@ -724,6 +895,134 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error calculating fare:", error);
       res.status(500).json({ message: "Failed to calculate fare" });
+    }
+  });
+
+  // JSON API endpoint for emergency incident data (no auth required)
+  app.get('/api/emergency/incident/:token', async (req: any, res) => {
+    try {
+      const { token } = req.params;
+      const incident = await storage.getEmergencyIncidentByToken(token);
+      
+      if (!incident) {
+        return res.status(404).json({ message: "Emergency incident not found" });
+      }
+      
+      res.json(incident);
+    } catch (error) {
+      console.error("Error fetching emergency incident:", error);
+      res.status(500).json({ message: "Failed to fetch emergency incident" });
+    }
+  });
+
+  // Update emergency incident location (authenticated)
+  app.post('/api/emergency/update-location', async (req: any, res) => {
+    try {
+      const { lat, lng, incidentId } = req.body;
+      const userId = req.session?.user?.id;
+
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      if (!lat || !lng) {
+        return res.status(400).json({ message: "Location coordinates required" });
+      }
+
+      // Get active emergency incident for user
+      const activeIncidents = await storage.getActiveEmergencyIncidents();
+      const userIncident = activeIncidents.find(incident => incident.userId === userId);
+      
+      if (!userIncident) {
+        return res.status(404).json({ message: "No active emergency incident found" });
+      }
+
+      // Update incident location
+      const updatedIncident = await storage.updateEmergencyIncidentLocation(userIncident.id, { lat, lng });
+      
+      // Broadcast location update via WebSocket
+      broadcast({
+        type: 'emergency_location_update',
+        incidentId: userIncident.id,
+        location: { lat, lng }
+      });
+
+      res.json({ success: true, incident: updatedIncident });
+    } catch (error) {
+      console.error("Error updating emergency location:", error);
+      res.status(500).json({ message: "Failed to update emergency location" });
+    }
+  });
+
+  // Public emergency tracking page (no auth required)
+  app.get('/emergency/:token', async (req: any, res) => {
+    try {
+      const { token } = req.params;
+      const incident = await storage.getEmergencyIncidentByToken(token);
+      
+      if (!incident) {
+        return res.status(404).json({ message: "Emergency incident not found" });
+      }
+      
+      // Return basic HTML page for live tracking
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Emergency Tracking - PG Ride</title>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+          <style>
+            body { margin: 0; font-family: system-ui, sans-serif; }
+            #map { height: 100vh; }
+            .info-panel { position: absolute; top: 10px; left: 10px; z-index: 1000; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); max-width: 300px; }
+            .emergency-badge { background: #dc2626; color: white; padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; margin-bottom: 10px; display: inline-block; }
+          </style>
+        </head>
+        <body>
+          <div class="info-panel">
+            <div class="emergency-badge">🚨 EMERGENCY TRACKING</div>
+            <div><strong>Incident:</strong> ${incident.description || incident.incidentType}</div>
+            <div><strong>Time:</strong> ${new Date(incident.createdAt).toLocaleString()}</div>
+            <div><strong>Status:</strong> ${incident.status}</div>
+            ${incident.lastLocationUpdate ? `<div><strong>Last Update:</strong> ${new Date(incident.lastLocationUpdate).toLocaleTimeString()}</div>` : ''}
+          </div>
+          <div id="map"></div>
+          <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+          <script>
+            const incident = ${JSON.stringify(incident)};
+            const map = L.map('map');
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+            
+            if (incident.location) {
+              const marker = L.marker([incident.location.lat, incident.location.lng]).addTo(map);
+              marker.bindPopup('Emergency Location').openPopup();
+              map.setView([incident.location.lat, incident.location.lng], 15);
+            } else {
+              map.setView([38.9897, -76.9378], 11); // PG County center
+            }
+            
+            // WebSocket for live updates
+            const ws = new WebSocket('${req.protocol === 'https' ? 'wss' : 'ws'}://${req.get('host')}/ws');
+            ws.onmessage = function(event) {
+              const data = JSON.parse(event.data);
+              if (data.type === 'emergency_location_update' && data.incidentId === incident.id) {
+                marker.setLatLng([data.location.lat, data.location.lng]);
+                map.setView([data.location.lat, data.location.lng], 15);
+                document.querySelector('.info-panel').innerHTML += '<div style="color: green; font-size: 12px; margin-top: 5px;">📍 Location updated</div>';
+              }
+            };
+          </script>
+        </body>
+        </html>
+      `;
+      
+      res.setHeader('Content-Type', 'text/html');
+      res.send(html);
+    } catch (error) {
+      console.error("Error serving emergency tracking page:", error);
+      res.status(500).json({ message: "Failed to load emergency tracking" });
     }
   });
 
