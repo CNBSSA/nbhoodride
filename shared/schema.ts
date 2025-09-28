@@ -139,6 +139,9 @@ export const emergencyIncidents = pgTable("emergency_incidents", {
   location: jsonb("location").$type<{lat: number, lng: number}>(),
   description: text("description"),
   status: varchar("status").default("active"), // active, resolved
+  shareToken: varchar("share_token").unique(), // for public location sharing
+  emergencyContactAlerted: boolean("emergency_contact_alerted").default(false),
+  lastLocationUpdate: timestamp("last_location_update"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

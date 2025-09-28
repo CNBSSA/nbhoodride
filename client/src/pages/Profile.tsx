@@ -7,10 +7,12 @@ import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import DocumentUploadModal from "@/components/DocumentUploadModal";
+import SafetyPrivacyModal from "@/components/SafetyPrivacyModal";
 import { isUnauthorizedError } from "@/lib/authUtils";
 
 export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
+  const [isSafetyPrivacyModalOpen, setIsSafetyPrivacyModalOpen] = useState(false);
   const { user, isLoading } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -195,6 +197,7 @@ export default function Profile() {
           <Button
             variant="outline"
             className="w-full justify-between p-4"
+            onClick={() => setIsSafetyPrivacyModalOpen(true)}
             data-testid="button-safety-privacy"
           >
             <div className="flex items-center space-x-3">
@@ -279,6 +282,12 @@ export default function Profile() {
       <DocumentUploadModal
         isOpen={isDocumentModalOpen}
         onClose={() => setIsDocumentModalOpen(false)}
+      />
+
+      {/* Safety & Privacy Modal */}
+      <SafetyPrivacyModal
+        isOpen={isSafetyPrivacyModalOpen}
+        onClose={() => setIsSafetyPrivacyModalOpen(false)}
       />
     </>
   );

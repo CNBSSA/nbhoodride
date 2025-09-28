@@ -344,6 +344,47 @@ export class DatabaseStorage implements IStorage {
     return incident;
   }
 
+  // Emergency contact management
+  async updateUserEmergencyContact(userId: string, emergencyContact: string): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ emergencyContact, updatedAt: new Date() })
+      .where(eq(users.id, userId))
+      .returning();
+    return user;
+  }
+
+  // Enhanced emergency incident with location sharing
+  async createEmergencyIncidentWithSharing(incident: InsertEmergencyIncident & { shareToken: string }): Promise<EmergencyIncident> {
+    const [newIncident] = await db
+      .insert(emergencyIncidents)
+      .values(incident)
+      .returning();
+    return newIncident;
+  }
+
+  async getEmergencyIncidentByToken(shareToken: string): Promise<EmergencyIncident | null> {
+    const [incident] = await db
+      .select()
+      .from(emergencyIncidents)
+      .where(eq(emergencyIncidents.shareToken, shareToken))
+      .limit(1);
+    return incident || null;
+  }
+
+  async updateEmergencyIncidentLocation(incidentId: string, location: { lat: number, lng: number }): Promise<EmergencyIncident> {
+    const [incident] = await db
+      .update(emergencyIncidents)
+      .set({ 
+        location, 
+        lastLocationUpdate: new Date(),
+        updatedAt: new Date() 
+      })
+      .where(eq(emergencyIncidents.id, incidentId))
+      .returning();
+    return incident;
+  }
+
   // Earnings operations
   async getDriverEarnings(driverId: string, period: 'today' | 'week' | 'month'): Promise<{fare: number, tips: number, total: number, rideCount: number}> {
     const now = new Date();
