@@ -55,6 +55,10 @@ export interface IStorage {
   // Payment operations
   confirmCashPayment(rideId: string, confirmerId: string, tipAmount?: number): Promise<Ride>;
   getRidesAwaitingPayment(userId: string): Promise<Ride[]>;
+  updateUserStripeInfo(userId: string, stripeCustomerId?: string, stripePaymentMethodId?: string): Promise<User>;
+  setRidePaymentAuthorization(rideId: string, paymentIntentId: string): Promise<Ride>;
+  captureRidePayment(rideId: string, capturedAmount?: number, tipAmount?: number): Promise<Ride>;
+  cancelRideWithFee(rideId: string, cancellationFee: number, reason: string, traveledDistance?: number, traveledTime?: number): Promise<Ride>;
   
   // Dispute operations
   createDispute(dispute: InsertDispute): Promise<Dispute>;
@@ -853,6 +857,13 @@ export class DatabaseStorage implements IStorage {
         completedAt: rides.completedAt,
         createdAt: rides.createdAt,
         updatedAt: rides.updatedAt,
+        stripePaymentIntentId: rides.stripePaymentIntentId,
+        cancellationFee: rides.cancellationFee,
+        cancellationReason: rides.cancellationReason,
+        driverTraveledDistance: rides.driverTraveledDistance,
+        driverTraveledTime: rides.driverTraveledTime,
+        paymentMethod: rides.paymentMethod,
+        refundedAmount: rides.refundedAmount,
         // Include rider/driver details
         rider: {
           id: users.id,
@@ -872,6 +883,86 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(rides.completedAt));
+  }
+
+  async updateUserStripeInfo(userId: string, stripeCustomerId?: string, stripePaymentMethodId?: string): Promise<User> {
+    const updates: any = { updatedAt: new Date() };
+    
+    if (stripeCustomerId !== undefined) {
+      updates.stripeCustomerId = stripeCustomerId;
+    }
+    if (stripePaymentMethodId !== undefined) {
+      updates.stripePaymentMethodId = stripePaymentMethodId;
+    }
+
+    const [user] = await db
+      .update(users)
+      .set(updates)
+      .where(eq(users.id, userId))
+      .returning();
+    
+    return user;
+  }
+
+  async setRidePaymentAuthorization(rideId: string, paymentIntentId: string): Promise<Ride> {
+    const [ride] = await db
+      .update(rides)
+      .set({
+        stripePaymentIntentId: paymentIntentId,
+        paymentStatus: "authorized",
+        updatedAt: new Date()
+      })
+      .where(eq(rides.id, rideId))
+      .returning();
+    
+    return ride;
+  }
+
+  async captureRidePayment(rideId: string, capturedAmount?: number, tipAmount?: number): Promise<Ride> {
+    const updates: any = {
+      paymentStatus: "paid_card",
+      updatedAt: new Date()
+    };
+    
+    if (capturedAmount !== undefined) {
+      updates.actualFare = capturedAmount.toString();
+    }
+    if (tipAmount !== undefined) {
+      updates.tipAmount = tipAmount.toString();
+    }
+
+    const [ride] = await db
+      .update(rides)
+      .set(updates)
+      .where(eq(rides.id, rideId))
+      .returning();
+    
+    return ride;
+  }
+
+  async cancelRideWithFee(rideId: string, cancellationFee: number, reason: string, traveledDistance?: number, traveledTime?: number): Promise<Ride> {
+    const updates: any = {
+      status: "cancelled",
+      paymentStatus: "cancelled_with_fee",
+      cancellationFee: cancellationFee.toString(),
+      cancellationReason: reason,
+      updatedAt: new Date()
+    };
+    
+    if (traveledDistance !== undefined) {
+      updates.driverTraveledDistance = traveledDistance.toString();
+    }
+    if (traveledTime !== undefined) {
+      updates.driverTraveledTime = traveledTime;
+    }
+
+    const [ride] = await db
+      .update(rides)
+      .set(updates)
+      .where(eq(rides.id, rideId))
+      .returning();
+    
+    return ride;
   }
 }
 

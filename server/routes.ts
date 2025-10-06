@@ -8,6 +8,7 @@ import { ObjectPermission } from "./objectAcl";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import twilio from "twilio";
+import { stripeService } from "./stripeService";
 import {
   insertDriverProfileSchema,
   insertVehicleSchema,
@@ -151,6 +152,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const ride = await storage.acceptRide(rideId, userId);
       
+      // If ride uses card payment, create authorization hold
+      if (ride.paymentMethod === 'card') {
+        const rider = await storage.getUser(ride.riderId);
+        
+        if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
+          throw new Error("Rider has no payment method configured");
+        }
+
+        const estimatedFare = parseFloat(ride.estimatedFare || "0");
+        
+        const paymentIntent = await stripeService.createPaymentIntent({
+          amount: estimatedFare,
+          customerId: rider.stripeCustomerId,
+          paymentMethodId: rider.stripePaymentMethodId,
+          metadata: {
+            rideId: ride.id,
+            riderId: ride.riderId,
+            driverId: userId
+          }
+        });
+
+        await storage.setRidePaymentAuthorization(rideId, paymentIntent.id);
+      }
+      
       // Send targeted WebSocket messages to driver and rider only  
       const rideAcceptedMessage = {
         type: 'ride_accepted',
@@ -283,12 +308,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Validate request body
       const completeRideSchema = z.object({
-        actualFare: z.number().positive("Actual fare must be a positive number")
+        actualFare: z.number().positive("Actual fare must be a positive number"),
+        tipAmount: z.number().min(0).optional()
       });
       
-      const { actualFare } = completeRideSchema.parse(req.body);
+      const { actualFare, tipAmount } = completeRideSchema.parse(req.body);
       
       const ride = await storage.completeRide(rideId, userId, actualFare);
+      
+      // If ride uses card payment, capture the payment
+      if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
+        const totalAmount = actualFare + (tipAmount || 0);
+        
+        await stripeService.capturePaymentIntent(
+          ride.stripePaymentIntentId,
+          totalAmount
+        );
+        
+        await storage.captureRidePayment(rideId, actualFare, tipAmount);
+      }
       
       // Send targeted WebSocket messages to driver and rider only
       const rideCompletedMessage = {
@@ -509,6 +547,101 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post('/api/rides/:rideId/cancel', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const { reason, driverTraveledDistance, driverTraveledTime } = req.body;
+      
+      const ride = await storage.getRide(rideId);
+      
+      if (!ride) {
+        return res.status(404).json({ message: "Ride not found" });
+      }
+
+      // Verify user is authorized to cancel (rider or driver)
+      if (ride.riderId !== userId && ride.driverId !== userId) {
+        return res.status(403).json({ message: "Unauthorized to cancel this ride" });
+      }
+
+      // Calculate cancellation fee for card payments
+      let cancellationFee = 0;
+      
+      if (ride.paymentMethod === 'card' && ride.status === 'accepted' && ride.stripePaymentIntentId) {
+        // Smart cancellation fee logic: BOTH conditions must be met
+        const distance = driverTraveledDistance || 0;
+        const time = driverTraveledTime || 0;
+        
+        // $5.00 fee if driver traveled >= 3mi AND >= 5min
+        if (distance >= 3 && time >= 5) {
+          cancellationFee = 5.00;
+        }
+        // $3.50 fee if driver traveled >= 1.5mi AND >= 3min
+        else if (distance >= 1.5 && time >= 3) {
+          cancellationFee = 3.50;
+        }
+
+        // Apply cancellation fee if applicable
+        if (cancellationFee > 0) {
+          await stripeService.captureCancellationFee({
+            paymentIntentId: ride.stripePaymentIntentId,
+            cancellationFee
+          });
+          
+          await storage.cancelRideWithFee(
+            rideId, 
+            cancellationFee, 
+            reason || "Ride cancelled", 
+            driverTraveledDistance,
+            driverTraveledTime
+          );
+        } else {
+          // No fee - just cancel the payment intent
+          await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId);
+          await storage.updateRide(rideId, { 
+            status: "cancelled",
+            cancellationReason: reason || "Ride cancelled",
+            paymentStatus: "cancelled"
+          });
+        }
+      } else {
+        // No card payment or not applicable for fee
+        await storage.updateRide(rideId, { 
+          status: "cancelled",
+          cancellationReason: reason || "Ride cancelled"
+        });
+      }
+
+      const updatedRide = await storage.getRide(rideId);
+      
+      // Send WebSocket notification
+      const cancelMessage = {
+        type: 'ride_cancelled',
+        rideId: ride.id,
+        cancellationFee
+      };
+      
+      if (activeConnections.has(ride.riderId)) {
+        const riderWs = activeConnections.get(ride.riderId);
+        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+          riderWs.send(JSON.stringify(cancelMessage));
+        }
+      }
+      
+      if (ride.driverId && activeConnections.has(ride.driverId)) {
+        const driverWs = activeConnections.get(ride.driverId);
+        if (driverWs && driverWs.readyState === WebSocket.OPEN) {
+          driverWs.send(JSON.stringify(cancelMessage));
+        }
+      }
+
+      res.json({ success: true, ride: updatedRide, cancellationFee });
+    } catch (error: any) {
+      console.error("Error cancelling ride:", error);
+      res.status(500).json({ message: error.message || "Failed to cancel ride" });
+    }
+  });
+
   app.get('/api/rides', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.claims?.sub;
@@ -648,6 +781,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         res.status(500).json({ message: "Failed to confirm payment" });
       }
+    }
+  });
+
+  // Stripe card payment routes
+  app.post('/api/payment/setup-card', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const user = await storage.getUser(userId);
+      
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const { paymentMethodId } = req.body;
+      
+      if (!paymentMethodId) {
+        return res.status(400).json({ message: "Payment method ID required" });
+      }
+
+      let customerId = user.stripeCustomerId;
+      
+      if (!customerId) {
+        customerId = await stripeService.createOrGetCustomer(
+          userId,
+          user.email,
+          `${user.firstName} ${user.lastName}`
+        );
+        await storage.updateUserStripeInfo(userId, customerId);
+      }
+
+      await stripeService.attachPaymentMethod(paymentMethodId, customerId);
+      await stripeService.setDefaultPaymentMethod(customerId, paymentMethodId);
+      await storage.updateUserStripeInfo(userId, customerId, paymentMethodId);
+
+      res.json({ success: true, customerId, paymentMethodId });
+    } catch (error: any) {
+      console.error("Error setting up card:", error);
+      res.status(500).json({ message: error.message || "Failed to set up payment method" });
+    }
+  });
+
+  app.get('/api/payment/methods', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const user = await storage.getUser(userId);
+      
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      res.json({
+        hasPaymentMethod: !!user.stripePaymentMethodId,
+        stripeCustomerId: user.stripeCustomerId,
+        stripePaymentMethodId: user.stripePaymentMethodId
+      });
+    } catch (error: any) {
+      console.error("Error fetching payment methods:", error);
+      res.status(500).json({ message: "Failed to fetch payment methods" });
     }
   });
 
