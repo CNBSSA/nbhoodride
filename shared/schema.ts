@@ -90,7 +90,14 @@ export const paymentStatusEnum = pgEnum("payment_status", [
   "paid_card",
   "paid_cash",
   "cancelled_with_fee",
+  "cancelled",
   "disputed"
+]);
+
+// Payment method enum
+export const paymentMethodEnum = pgEnum("payment_method", [
+  "cash",
+  "card"
 ]);
 
 // Rides table
@@ -102,6 +109,7 @@ export const rides = pgTable("rides", {
   destinationLocation: jsonb("destination_location").$type<{lat: number, lng: number, address: string}>().notNull(),
   pickupInstructions: text("pickup_instructions"),
   status: rideStatusEnum("status").default("pending"),
+  paymentMethod: paymentMethodEnum("payment_method").default("cash"),
   estimatedFare: decimal("estimated_fare", { precision: 8, scale: 2 }),
   actualFare: decimal("actual_fare", { precision: 8, scale: 2 }),
   distance: decimal("distance", { precision: 8, scale: 2 }),
@@ -109,6 +117,7 @@ export const rides = pgTable("rides", {
   tipAmount: decimal("tip_amount", { precision: 8, scale: 2 }).default("0.00"),
   paymentStatus: paymentStatusEnum("payment_status").default("pending_payment"),
   stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+  refundedAmount: decimal("refunded_amount", { precision: 8, scale: 2 }),
   cancellationFee: decimal("cancellation_fee", { precision: 8, scale: 2 }),
   cancellationReason: text("cancellation_reason"),
   driverTraveledDistance: decimal("driver_traveled_distance", { precision: 8, scale: 2 }),

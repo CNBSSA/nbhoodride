@@ -8,6 +8,7 @@ import Landing from "@/pages/Landing";
 import Home from "@/pages/Home";
 import RatingsPage from "@/pages/RatingsPage";
 import { PaymentsPage } from "@/pages/PaymentsPage";
+import { CardSetupPage } from "@/pages/CardSetupPage";
 import EmergencyTracking from "@/pages/EmergencyTracking";
 import NotFound from "@/pages/not-found";
 
@@ -26,6 +27,7 @@ function Router() {
           <Route path="/" component={Home} />
           <Route path="/ratings" component={RatingsPage} />
           <Route path="/payments" component={PaymentsPage} />
+          <Route path="/card-setup" component={CardSetupPage} />
         </>
       )}
       <Route component={NotFound} />
