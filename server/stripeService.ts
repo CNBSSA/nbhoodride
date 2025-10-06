@@ -54,6 +54,8 @@ export class StripeService {
       customer: customerId,
       payment_method: paymentMethodId,
       capture_method: 'manual',
+      confirm: true,
+      confirmation_method: 'automatic',
       metadata: metadata || {},
     });
 

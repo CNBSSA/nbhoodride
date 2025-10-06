@@ -154,26 +154,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // If ride uses card payment, create authorization hold
       if (ride.paymentMethod === 'card') {
-        const rider = await storage.getUser(ride.riderId);
-        
-        if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
-          throw new Error("Rider has no payment method configured");
-        }
-
-        const estimatedFare = parseFloat(ride.estimatedFare || "0");
-        
-        const paymentIntent = await stripeService.createPaymentIntent({
-          amount: estimatedFare,
-          customerId: rider.stripeCustomerId,
-          paymentMethodId: rider.stripePaymentMethodId,
-          metadata: {
-            rideId: ride.id,
-            riderId: ride.riderId,
-            driverId: userId
+        try {
+          const rider = await storage.getUser(ride.riderId);
+          
+          if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
+            throw new Error("Rider has no payment method configured");
           }
-        });
 
-        await storage.setRidePaymentAuthorization(rideId, paymentIntent.id);
+          const estimatedFare = parseFloat(ride.estimatedFare || "0");
+          
+          console.log(`Creating payment intent for ride ${rideId}: $${estimatedFare}`);
+          
+          const paymentIntent = await stripeService.createPaymentIntent({
+            amount: estimatedFare,
+            customerId: rider.stripeCustomerId,
+            paymentMethodId: rider.stripePaymentMethodId,
+            metadata: {
+              rideId: ride.id,
+              riderId: ride.riderId,
+              driverId: userId
+            }
+          });
+
+          console.log(`Payment intent ${paymentIntent.id} created with status: ${paymentIntent.status}`);
+
+          await storage.setRidePaymentAuthorization(rideId, paymentIntent.id);
+        } catch (error: any) {
+          console.error("Failed to authorize payment:", error);
+          throw new Error(`Payment authorization failed: ${error.message}`);
+        }
       }
       
       // Send targeted WebSocket messages to driver and rider only  
@@ -318,14 +327,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // If ride uses card payment, capture the payment
       if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
-        const totalAmount = actualFare + (tipAmount || 0);
-        
-        await stripeService.capturePaymentIntent(
-          ride.stripePaymentIntentId,
-          totalAmount
-        );
-        
-        await storage.captureRidePayment(rideId, actualFare, tipAmount);
+        try {
+          const totalAmount = actualFare + (tipAmount || 0);
+          
+          console.log(`Capturing payment for ride ${rideId}: $${totalAmount} (fare: $${actualFare}, tip: $${tipAmount || 0})`);
+          
+          await stripeService.capturePaymentIntent(
+            ride.stripePaymentIntentId,
+            totalAmount
+          );
+          
+          await storage.captureRidePayment(rideId, actualFare, tipAmount);
+          
+          console.log(`Payment captured successfully for ride ${rideId}`);
+        } catch (error: any) {
+          console.error("Failed to capture payment:", error);
+          throw new Error(`Payment capture failed: ${error.message}`);
+        }
       }
       
       // Send targeted WebSocket messages to driver and rider only
