@@ -38,6 +38,8 @@ export const users = pgTable("users", {
   rating: decimal("rating", { precision: 3, scale: 2 }).default("5.00"),
   totalRides: integer("total_rides").default(0),
   emergencyContact: varchar("emergency_contact"),
+  stripeCustomerId: varchar("stripe_customer_id"),
+  stripePaymentMethodId: varchar("stripe_payment_method_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -84,7 +86,10 @@ export const rideStatusEnum = pgEnum("ride_status", [
 // Payment status enum
 export const paymentStatusEnum = pgEnum("payment_status", [
   "pending_payment",
+  "authorized",
+  "paid_card",
   "paid_cash",
+  "cancelled_with_fee",
   "disputed"
 ]);
 
@@ -103,6 +108,11 @@ export const rides = pgTable("rides", {
   duration: integer("duration"), // in minutes
   tipAmount: decimal("tip_amount", { precision: 8, scale: 2 }).default("0.00"),
   paymentStatus: paymentStatusEnum("payment_status").default("pending_payment"),
+  stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+  cancellationFee: decimal("cancellation_fee", { precision: 8, scale: 2 }),
+  cancellationReason: text("cancellation_reason"),
+  driverTraveledDistance: decimal("driver_traveled_distance", { precision: 8, scale: 2 }),
+  driverTraveledTime: integer("driver_traveled_time"),
   cashReceivedAt: timestamp("cash_received_at"),
   paidBy: varchar("paid_by").references(() => users.id),
   riderRating: integer("rider_rating"),
