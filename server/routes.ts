@@ -21,10 +21,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
 
-  // Auth routes
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
+  // Test authentication route for test riders
+  const TEST_PASSWORD = "Fes5036tus@3";
+  const TEST_RIDERS = [
+    { id: 'test-rider-1', email: 'magdelineakingba@gmail.com' },
+    { id: 'test-rider-2', email: 'wunmiakingba@gmail.com' },
+    { id: 'test-rider-3', email: 'bolaakingba@gmail.com' },
+  ];
+
+  app.post('/api/auth/test-login', async (req, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const { email, password } = req.body;
+      
+      const testRider = TEST_RIDERS.find(r => r.email === email);
+      if (!testRider || password !== TEST_PASSWORD) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      const user = await storage.getUser(testRider.id);
+      if (!user) {
+        return res.status(404).json({ message: "Test user not found in database" });
+      }
+
+      req.session.testUserId = testRider.id;
+      
+      res.json({ 
+        message: "Login successful",
+        user: {
+          ...user,
+          driverProfile: null
+        }
+      });
+    } catch (error) {
+      console.error("Test login error:", error);
+      res.status(500).json({ message: "Login failed" });
+    }
+  });
+
+  // Auth routes
+  app.get('/api/auth/user', async (req: any, res) => {
+    try {
+      // Check for test user session first
+      const testUserId = req.session?.testUserId;
+      let userId: string;
+      
+      if (testUserId) {
+        userId = testUserId;
+      } else if (req.isAuthenticated() && req.user?.claims?.sub) {
+        userId = req.user.claims.sub;
+      } else {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       const user = await storage.getUser(userId);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
