@@ -92,3 +92,62 @@ The application uses PostgreSQL as the primary database with the following key e
 - **Uppy**: File upload handling with progress tracking and dashboard UI
 - **Wouter**: Minimalist client-side routing library
 - **React Query**: Server state management, caching, and synchronization
+
+## Payment System: Virtual PG Card
+
+The application uses a **Virtual PG Card** system for testing ride payments. Each user (rider and driver) has a virtual card balance that starts at $1000.
+
+### How Virtual Card Payments Work
+
+1. **Ride Acceptance**: When a driver accepts a ride with card payment, the estimated fare is immediately deducted from the rider's virtual card balance
+2. **Ride Completion**: 
+   - If actual fare < estimated: The difference is refunded to the rider
+   - If actual fare > estimated: The difference is deducted from the rider
+   - Tips are deducted from rider and added to driver
+   - The total amount (fare + tip) is added to the driver's virtual card balance
+3. **Ride Cancellation**:
+   - If cancelled before driver starts traveling: Full estimated fare is refunded to rider
+   - If cancelled after driver starts traveling: Smart cancellation fee applies:
+     - $3.50 if driver traveled ≥1.5mi AND ≥3min
+     - $5.00 if driver traveled ≥3mi AND ≥5min
+     - Rider gets refund of (estimated fare - cancellation fee)
+     - Driver receives the cancellation fee
+
+### Test Rider Accounts
+
+Three test rider accounts are pre-configured in the database for testing:
+
+1. **Magdeline Akingba**
+   - Email: magdelineakingba@gmail.com
+   - Phone: (202) 381-6766
+   - Virtual Card Balance: $1000.00
+
+2. **Wunmi Akingba**
+   - Email: wunmiakingba@gmail.com
+   - Phone: (202) 731-1949
+   - Virtual Card Balance: $1000.00
+
+3. **Bola Akingba**
+   - Email: bolaakingba@gmail.com
+   - Phone: (240) 532-9500
+   - Virtual Card Balance: $1000.00
+
+### Enabling Test Login (Development Only)
+
+The test login endpoint is **disabled by default** for security. To enable it for local testing:
+
+1. Add the following environment variable in the Replit Secrets tab:
+   ```
+   ENABLE_TEST_LOGIN=true
+   ```
+
+2. Optionally, set a custom test password (defaults to "Fes5036tus@3"):
+   ```
+   TEST_PASSWORD=your_custom_password
+   ```
+
+3. Restart the application workflow
+
+4. The test login page will be accessible at `/test-login` with a link on the landing page
+
+**IMPORTANT**: Never enable `ENABLE_TEST_LOGIN` in production deployments as it bypasses normal authentication.

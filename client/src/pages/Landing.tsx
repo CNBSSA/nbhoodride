@@ -73,14 +73,16 @@ export default function Landing() {
               By continuing, you agree to our community guidelines and terms of service.
             </p>
 
-            {/* Test Login Link */}
-            <div className="pt-4 border-t">
-              <Link href="/test-login">
-                <Button variant="ghost" size="sm" className="w-full text-xs" data-testid="link-test-login">
-                  Test Login (Development)
-                </Button>
-              </Link>
-            </div>
+            {/* Test Login Link - Development Only */}
+            {import.meta.env.DEV && (
+              <div className="pt-4 border-t">
+                <Link href="/test-login">
+                  <Button variant="ghost" size="sm" className="w-full text-xs" data-testid="link-test-login">
+                    Test Login (Development)
+                  </Button>
+                </Link>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

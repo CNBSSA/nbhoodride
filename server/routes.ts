@@ -21,42 +21,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
 
-  // Test authentication route for test riders
-  const TEST_PASSWORD = "Fes5036tus@3";
-  const TEST_RIDERS = [
-    { id: 'test-rider-1', email: 'magdelineakingba@gmail.com' },
-    { id: 'test-rider-2', email: 'wunmiakingba@gmail.com' },
-    { id: 'test-rider-3', email: 'bolaakingba@gmail.com' },
-  ];
+  // Test authentication route for test riders - EXPLICITLY DISABLED BY DEFAULT
+  // Only enable when ENABLE_TEST_LOGIN environment variable is explicitly set to 'true'
+  // This ensures the endpoint is NEVER available in production unless explicitly configured
+  if (process.env.ENABLE_TEST_LOGIN === 'true') {
+    const TEST_PASSWORD = process.env.TEST_PASSWORD || "Fes5036tus@3";
+    const TEST_RIDERS = [
+      { id: 'test-rider-1', email: 'magdelineakingba@gmail.com' },
+      { id: 'test-rider-2', email: 'wunmiakingba@gmail.com' },
+      { id: 'test-rider-3', email: 'bolaakingba@gmail.com' },
+    ];
 
-  app.post('/api/auth/test-login', async (req, res) => {
-    try {
-      const { email, password } = req.body;
-      
-      const testRider = TEST_RIDERS.find(r => r.email === email);
-      if (!testRider || password !== TEST_PASSWORD) {
-        return res.status(401).json({ message: "Invalid credentials" });
-      }
+    console.log('⚠️  WARNING: Test login endpoint is ENABLED. This should ONLY be used in local development!');
 
-      const user = await storage.getUser(testRider.id);
-      if (!user) {
-        return res.status(404).json({ message: "Test user not found in database" });
-      }
-
-      req.session.testUserId = testRider.id;
-      
-      res.json({ 
-        message: "Login successful",
-        user: {
-          ...user,
-          driverProfile: null
+    app.post('/api/auth/test-login', async (req, res) => {
+      try {
+        const { email, password } = req.body;
+        
+        const testRider = TEST_RIDERS.find(r => r.email === email);
+        if (!testRider || password !== TEST_PASSWORD) {
+          return res.status(401).json({ message: "Invalid credentials" });
         }
-      });
-    } catch (error) {
-      console.error("Test login error:", error);
-      res.status(500).json({ message: "Login failed" });
-    }
-  });
+
+        const user = await storage.getUser(testRider.id);
+        if (!user) {
+          return res.status(404).json({ message: "Test user not found in database" });
+        }
+
+        req.session.testUserId = testRider.id;
+        
+        res.json({ 
+          message: "Login successful",
+          user: {
+            ...user,
+            driverProfile: null
+          }
+        });
+      } catch (error) {
+        console.error("Test login error:", error);
+        res.status(500).json({ message: "Login failed" });
+      }
+    });
+  } else {
+    console.log('✅ Test login endpoint is DISABLED (production safe)');
+  }
 
   // Auth routes
   app.get('/api/auth/user', async (req: any, res) => {
