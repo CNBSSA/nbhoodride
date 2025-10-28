@@ -17,6 +17,13 @@ import {
   insertEmergencyIncidentSchema,
 } from "@shared/schema";
 
+// Extend Express session type to include testUserId
+declare module "express-session" {
+  interface SessionData {
+    testUserId?: string;
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
@@ -100,7 +107,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Object storage routes for driver documents
-  app.get("/objects/:objectPath(*)", isAuthenticated, async (req, res) => {
+  app.get("/objects/:objectPath(*)", isAuthenticated, async (req: any, res) => {
     const userId = req.user?.claims?.sub;
     const objectStorageService = new ObjectStorageService();
     try {
@@ -528,7 +535,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Handle vehicle photo uploads
-  app.put("/api/vehicles/photos", isAuthenticated, async (req, res) => {
+  app.put("/api/vehicles/photos", isAuthenticated, async (req: any, res) => {
     if (!req.body.photoURL || !req.body.vehicleId) {
       return res.status(400).json({ error: "photoURL and vehicleId are required" });
     }
@@ -836,7 +843,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Update the OTHER party's overall rating (not the rater's rating)
       const ratedUserId = isRider ? ride.driverId : ride.riderId;
-      await storage.updateUserRating(ratedUserId);
+      if (ratedUserId) {
+        await storage.updateUserRating(ratedUserId);
+      }
       
       res.json({ success: true });
     } catch (error) {
@@ -869,9 +878,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Error confirming payment:", error);
       if (error instanceof z.ZodError) {
         res.status(400).json({ message: "Invalid payment data" });
-      } else if (error.message.includes("not found")) {
+      } else if (error instanceof Error && error.message.includes("not found")) {
         res.status(404).json({ message: error.message });
-      } else if (error.message.includes("Only the driver") || error.message.includes("already been confirmed")) {
+      } else if (error instanceof Error && (error.message.includes("Only the driver") || error.message.includes("already been confirmed"))) {
         res.status(400).json({ message: error.message });
       } else {
         res.status(500).json({ message: "Failed to confirm payment" });
@@ -900,8 +909,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!customerId) {
         customerId = await stripeService.createOrGetCustomer(
           userId,
-          user.email,
-          `${user.firstName} ${user.lastName}`
+          user.email || '',
+          `${user.firstName || ''} ${user.lastName || ''}`
         );
         await storage.updateUserStripeInfo(userId, customerId);
       }
@@ -1270,7 +1279,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           <div class="info-panel">
             <div class="emergency-badge">🚨 EMERGENCY TRACKING</div>
             <div><strong>Incident:</strong> ${incident.description || incident.incidentType}</div>
-            <div><strong>Time:</strong> ${new Date(incident.createdAt).toLocaleString()}</div>
+            <div><strong>Time:</strong> ${incident.createdAt ? new Date(incident.createdAt).toLocaleString() : 'Unknown'}</div>
             <div><strong>Status:</strong> ${incident.status}</div>
             ${incident.lastLocationUpdate ? `<div><strong>Last Update:</strong> ${new Date(incident.lastLocationUpdate).toLocaleTimeString()}</div>` : ''}
           </div>
