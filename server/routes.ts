@@ -200,35 +200,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const ride = await storage.acceptRide(rideId, userId);
       
-      // If ride uses card payment, create authorization hold
+      // If ride uses card payment, deduct from virtual card balance
       if (ride.paymentMethod === 'card') {
         try {
-          const rider = await storage.getUser(ride.riderId);
-          
-          if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
-            throw new Error("Rider has no payment method configured");
-          }
-
           const estimatedFare = parseFloat(ride.estimatedFare || "0");
           
-          console.log(`Creating payment intent for ride ${rideId}: $${estimatedFare}`);
+          console.log(`Deducting virtual card balance for ride ${rideId}: $${estimatedFare}`);
           
-          const paymentIntent = await stripeService.createPaymentIntent({
-            amount: estimatedFare,
-            customerId: rider.stripeCustomerId,
-            paymentMethodId: rider.stripePaymentMethodId,
-            metadata: {
-              rideId: ride.id,
-              riderId: ride.riderId,
-              driverId: userId
-            }
-          });
-
-          console.log(`Payment intent ${paymentIntent.id} created with status: ${paymentIntent.status}`);
-
-          await storage.setRidePaymentAuthorization(rideId, paymentIntent.id);
+          // Deduct the estimated fare from rider's virtual card balance
+          await storage.deductVirtualCardBalance(ride.riderId, estimatedFare);
+          
+          // Update ride to show payment is authorized
+          await storage.setRidePaymentAuthorization(rideId, `virtual-${rideId}`);
+          
+          console.log(`Virtual card balance deducted successfully for ride ${rideId}`);
         } catch (error: any) {
-          console.error("Failed to authorize payment:", error);
+          console.error("Failed to authorize virtual card payment:", error);
           throw new Error(`Payment authorization failed: ${error.message}`);
         }
       }
@@ -373,24 +360,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const ride = await storage.completeRide(rideId, userId, actualFare);
       
-      // If ride uses card payment, capture the payment
+      // If ride uses card payment, process virtual card payment
       if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
         try {
+          const estimatedFare = parseFloat(ride.estimatedFare || "0");
           const totalAmount = actualFare + (tipAmount || 0);
+          const priceDifference = actualFare - estimatedFare;
           
-          console.log(`Capturing payment for ride ${rideId}: $${totalAmount} (fare: $${actualFare}, tip: $${tipAmount || 0})`);
+          console.log(`Processing virtual card payment for ride ${rideId}: Estimated: $${estimatedFare}, Actual: $${actualFare}, Tip: $${tipAmount || 0}`);
           
-          await stripeService.capturePaymentIntent(
-            ride.stripePaymentIntentId,
-            totalAmount
-          );
+          // If actual fare is less than estimated, refund the difference
+          if (priceDifference < 0) {
+            await storage.addVirtualCardBalance(ride.riderId, Math.abs(priceDifference));
+            console.log(`Refunded $${Math.abs(priceDifference)} to rider`);
+          }
+          // If actual fare is more than estimated, deduct the difference
+          else if (priceDifference > 0) {
+            await storage.deductVirtualCardBalance(ride.riderId, priceDifference);
+            console.log(`Deducted additional $${priceDifference} from rider`);
+          }
+          
+          // If there's a tip, deduct it from rider
+          if (tipAmount && tipAmount > 0) {
+            await storage.deductVirtualCardBalance(ride.riderId, tipAmount);
+            console.log(`Deducted tip $${tipAmount} from rider`);
+          }
+          
+          // Add the total amount to driver's virtual card balance
+          if (ride.driverId) {
+            await storage.addVirtualCardBalance(ride.driverId, totalAmount);
+            console.log(`Added $${totalAmount} to driver's balance`);
+          }
           
           await storage.captureRidePayment(rideId, actualFare, tipAmount);
           
-          console.log(`Payment captured successfully for ride ${rideId}`);
+          console.log(`Virtual card payment processed successfully for ride ${rideId}`);
         } catch (error: any) {
-          console.error("Failed to capture payment:", error);
-          throw new Error(`Payment capture failed: ${error.message}`);
+          console.error("Failed to process virtual card payment:", error);
+          throw new Error(`Payment processing failed: ${error.message}`);
         }
       }
       
@@ -647,12 +654,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
           cancellationFee = 3.50;
         }
 
+        const estimatedFare = parseFloat(ride.estimatedFare || "0");
+        
+        console.log(`Processing cancellation for ride ${rideId}: Est. fare: $${estimatedFare}, Fee: $${cancellationFee}`);
+
         // Apply cancellation fee if applicable
         if (cancellationFee > 0) {
-          await stripeService.captureCancellationFee({
-            paymentIntentId: ride.stripePaymentIntentId,
-            cancellationFee
-          });
+          // Refund the estimated fare minus the cancellation fee to the rider
+          const refundAmount = estimatedFare - cancellationFee;
+          if (refundAmount > 0) {
+            await storage.addVirtualCardBalance(ride.riderId, refundAmount);
+            console.log(`Refunded $${refundAmount} to rider after $${cancellationFee} cancellation fee`);
+          }
+          
+          // Add the cancellation fee to the driver's balance
+          if (ride.driverId) {
+            await storage.addVirtualCardBalance(ride.driverId, cancellationFee);
+            console.log(`Added $${cancellationFee} cancellation fee to driver's balance`);
+          }
           
           await storage.cancelRideWithFee(
             rideId, 
@@ -662,8 +681,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             driverTraveledTime
           );
         } else {
-          // No fee - just cancel the payment intent
-          await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId);
+          // No fee - refund the full estimated fare to the rider
+          await storage.addVirtualCardBalance(ride.riderId, estimatedFare);
+          console.log(`Refunded full $${estimatedFare} to rider (no cancellation fee)`);
+          
           await storage.updateRide(rideId, { 
             status: "cancelled",
             cancellationReason: reason || "Ride cancelled",
