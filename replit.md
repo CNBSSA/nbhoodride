@@ -113,7 +113,9 @@ The application uses a **Virtual PG Card** system for testing ride payments. Eac
      - Rider gets refund of (estimated fare - cancellation fee)
      - Driver receives the cancellation fee
 
-### Test Rider Accounts
+### Test Accounts
+
+**Test Rider Accounts**
 
 Three test rider accounts are pre-configured in the database for testing:
 
@@ -131,6 +133,19 @@ Three test rider accounts are pre-configured in the database for testing:
    - Email: bolaakingba@gmail.com
    - Phone: (240) 532-9500
    - Virtual Card Balance: $1000.00
+
+**Test Driver Account**
+
+One permanent test driver account is configured:
+
+**Festus Akingba** (Driver)
+- Email: kokobilo@gmail.com
+- Phone: (202) 440-3954
+- Virtual Card Balance: $1000.00
+- Vehicle: 2018 Tesla Model 3 (Red)
+  - License Plate: 5GRQ697 (Maryland)
+  - VIN: 5YJ3E1EA3JF024429
+- Status: Verified Neighbor Driver
 
 ### Enabling Test Login (Development Only)
 
