@@ -134,6 +134,33 @@ export default function Profile() {
           </CardContent>
         </Card>
 
+        {/* Virtual PG Card Balance */}
+        <Card className="border-green-200 dark:border-green-900 bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-950 dark:to-emerald-950">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="w-12 h-12 bg-green-600 dark:bg-green-700 rounded-full flex items-center justify-center">
+                  <i className="fas fa-credit-card text-white text-xl" />
+                </div>
+                <div>
+                  <p className="text-xs text-green-800 dark:text-green-300 font-medium">PG Virtual Card</p>
+                  <h3 className="text-2xl font-bold text-green-900 dark:text-green-100" data-testid="text-virtual-balance">
+                    ${parseFloat(user?.virtualCardBalance || "0").toFixed(2)}
+                  </h3>
+                  <p className="text-xs text-green-700 dark:text-green-400">Available Balance</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-green-800 dark:text-green-300 mb-1">Payment Method</div>
+                <div className="inline-flex items-center space-x-1 bg-green-100 dark:bg-green-900 px-2 py-1 rounded">
+                  <i className="fas fa-check-circle text-green-600 dark:text-green-400 text-xs" />
+                  <span className="text-xs font-medium text-green-900 dark:text-green-100">Active</span>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Driver Section */}
         {!user?.isDriver ? (
           <Card className="border-primary/20 bg-primary/5">
