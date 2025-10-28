@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Link } from "wouter";
 
 export default function Landing() {
   const handleLogin = () => {
@@ -71,6 +72,15 @@ export default function Landing() {
             <p className="text-xs text-muted-foreground">
               By continuing, you agree to our community guidelines and terms of service.
             </p>
+
+            {/* Test Login Link */}
+            <div className="pt-4 border-t">
+              <Link href="/test-login">
+                <Button variant="ghost" size="sm" className="w-full text-xs" data-testid="link-test-login">
+                  Test Login (Development)
+                </Button>
+              </Link>
+            </div>
           </CardContent>
         </Card>
       </div>

@@ -9,6 +9,7 @@ import Home from "@/pages/Home";
 import RatingsPage from "@/pages/RatingsPage";
 import { PaymentsPage } from "@/pages/PaymentsPage";
 import { CardSetupPage } from "@/pages/CardSetupPage";
+import TestLogin from "@/pages/TestLogin";
 import EmergencyTracking from "@/pages/EmergencyTracking";
 import NotFound from "@/pages/not-found";
 
@@ -19,6 +20,9 @@ function Router() {
     <Switch>
       {/* Public emergency tracking route (no auth required) */}
       <Route path="/emergency/:token" component={EmergencyTracking} />
+      
+      {/* Public test login route (no auth required) */}
+      <Route path="/test-login" component={TestLogin} />
       
       {isLoading || !isAuthenticated ? (
         <Route path="/" component={Landing} />
