@@ -60,6 +60,11 @@ export interface IStorage {
   captureRidePayment(rideId: string, capturedAmount?: number, tipAmount?: number): Promise<Ride>;
   cancelRideWithFee(rideId: string, cancellationFee: number, reason: string, traveledDistance?: number, traveledTime?: number): Promise<Ride>;
   
+  // Virtual card operations
+  deductVirtualCardBalance(userId: string, amount: number): Promise<User>;
+  addVirtualCardBalance(userId: string, amount: number): Promise<User>;
+  getVirtualCardBalance(userId: string): Promise<number>;
+  
   // Dispute operations
   createDispute(dispute: InsertDispute): Promise<Dispute>;
   getDisputesByRide(rideId: string): Promise<Dispute[]>;
@@ -963,6 +968,61 @@ export class DatabaseStorage implements IStorage {
       .returning();
     
     return ride;
+  }
+
+  // Virtual card operations
+  async deductVirtualCardBalance(userId: string, amount: number): Promise<User> {
+    const user = await this.getUser(userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const currentBalance = parseFloat(user.virtualCardBalance || "0");
+    if (currentBalance < amount) {
+      throw new Error("Insufficient virtual card balance");
+    }
+
+    const newBalance = (currentBalance - amount).toFixed(2);
+
+    const [updatedUser] = await db
+      .update(users)
+      .set({
+        virtualCardBalance: newBalance,
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, userId))
+      .returning();
+    
+    return updatedUser;
+  }
+
+  async addVirtualCardBalance(userId: string, amount: number): Promise<User> {
+    const user = await this.getUser(userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const currentBalance = parseFloat(user.virtualCardBalance || "0");
+    const newBalance = (currentBalance + amount).toFixed(2);
+
+    const [updatedUser] = await db
+      .update(users)
+      .set({
+        virtualCardBalance: newBalance,
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, userId))
+      .returning();
+    
+    return updatedUser;
+  }
+
+  async getVirtualCardBalance(userId: string): Promise<number> {
+    const user = await this.getUser(userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+    return parseFloat(user.virtualCardBalance || "0");
   }
 }
 

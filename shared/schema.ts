@@ -40,6 +40,7 @@ export const users = pgTable("users", {
   emergencyContact: varchar("emergency_contact"),
   stripeCustomerId: varchar("stripe_customer_id"),
   stripePaymentMethodId: varchar("stripe_payment_method_id"),
+  virtualCardBalance: decimal("virtual_card_balance", { precision: 10, scale: 2 }).default("1000.00"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
