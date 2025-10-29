@@ -822,6 +822,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Search drivers by phone number
+  app.get('/api/drivers/search', isAuthenticated, async (req: any, res) => {
+    try {
+      const { phone } = req.query;
+      
+      if (!phone) {
+        return res.status(400).json({ message: "Phone number required" });
+      }
+      
+      const drivers = await storage.searchDriversByPhone(phone as string);
+      
+      res.json(drivers);
+    } catch (error) {
+      console.error("Error searching drivers:", error);
+      res.status(500).json({ message: "Failed to search drivers" });
+    }
+  });
+
   app.post('/api/rides', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.claims?.sub;

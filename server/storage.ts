@@ -39,6 +39,7 @@ export interface IStorage {
   updateDriverLocation(userId: string, location: {lat: number, lng: number}): Promise<void>;
   toggleDriverOnlineStatus(userId: string, isOnline: boolean): Promise<void>;
   getNearbyDrivers(location: {lat: number, lng: number}, radiusKm: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
+  searchDriversByPhone(phone: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
   
   // Vehicle operations
   createVehicle(vehicle: InsertVehicle): Promise<Vehicle>;
@@ -237,6 +238,42 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(users, eq(driverProfiles.userId, users.id))
       .leftJoin(vehicles, eq(vehicles.driverProfileId, driverProfiles.id))
       .where(eq(driverProfiles.isOnline, true));
+
+    // Group vehicles by driver
+    const driversMap = new Map();
+    for (const result of results) {
+      const driverId = result.driver_profiles.id;
+      if (!driversMap.has(driverId)) {
+        driversMap.set(driverId, {
+          ...result.driver_profiles,
+          user: result.users,
+          vehicles: []
+        });
+      }
+      if (result.vehicles) {
+        driversMap.get(driverId).vehicles.push(result.vehicles);
+      }
+    }
+
+    return Array.from(driversMap.values());
+  }
+
+  async searchDriversByPhone(phone: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]> {
+    // Normalize phone number by removing all non-numeric characters
+    const normalizedPhone = phone.replace(/\D/g, '');
+    
+    // Search for drivers with matching phone number
+    const results = await db
+      .select()
+      .from(driverProfiles)
+      .innerJoin(users, eq(driverProfiles.userId, users.id))
+      .leftJoin(vehicles, eq(vehicles.driverProfileId, driverProfiles.id))
+      .where(
+        and(
+          eq(users.isDriver, true),
+          sql`REGEXP_REPLACE(${users.phone}, '[^0-9]', '', 'g') = ${normalizedPhone}`
+        )
+      );
 
     // Group vehicles by driver
     const driversMap = new Map();

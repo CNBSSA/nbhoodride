@@ -7,6 +7,7 @@ import { useGeolocation } from "@/hooks/useGeolocation";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import MapComponent from "@/components/MapComponent";
 import RideBookingModal from "@/components/RideBookingModal";
+import ScheduleRideModal from "@/components/ScheduleRideModal";
 import SOSModal from "@/components/SOSModal";
 
 interface Driver {
@@ -23,6 +24,7 @@ interface Driver {
 
 export default function RiderDashboard() {
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
   const [realtimeDrivers, setRealtimeDrivers] = useState<Record<string, {lat: number, lng: number}>>({});
   const { user } = useAuth();
@@ -144,6 +146,7 @@ export default function RiderDashboard() {
             </Button>
             <Button 
               variant="secondary"
+              onClick={() => setIsScheduleModalOpen(true)}
               className="p-4 text-center font-semibold flex flex-col items-center space-y-2"
               data-testid="button-schedule-ride"
             >
@@ -233,6 +236,13 @@ export default function RiderDashboard() {
       <RideBookingModal
         isOpen={isBookingModalOpen}
         onClose={() => setIsBookingModalOpen(false)}
+        drivers={drivers}
+        userLocation={userLocation}
+      />
+
+      <ScheduleRideModal
+        isOpen={isScheduleModalOpen}
+        onClose={() => setIsScheduleModalOpen(false)}
         drivers={drivers}
         userLocation={userLocation}
       />
