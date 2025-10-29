@@ -358,7 +358,7 @@ export default function ScheduleRideModal({
                   </div>
                   <Separator />
                   <div className="flex justify-between font-semibold">
-                    <span>Total (Cash)</span>
+                    <span>Total (Virtual Card)</span>
                     <span data-testid="text-total-fare">${fareEstimate.total.toFixed(2)}</span>
                   </div>
                 </div>

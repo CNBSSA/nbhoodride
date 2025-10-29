@@ -20,10 +20,12 @@ export default function BottomNavigation({ activeTab, onTabChange, currentMode }
   // Additional tabs based on mode and user status
   const additionalTabs = [];
   
-  // Add payments tab only for drivers when in driver mode
-  if (user?.isDriver && currentMode === "driver") {
-    additionalTabs.push({ id: 'payments', label: 'Payments', icon: 'fas fa-dollar-sign' });
-  }
+  // CASH PAYMENT DEACTIVATED - Payment tab hidden from users
+  // Virtual card system is now the only payment method
+  // Uncomment below to re-enable cash payment confirmations page
+  // if (user?.isDriver && currentMode === "driver") {
+  //   additionalTabs.push({ id: 'payments', label: 'Payments', icon: 'fas fa-dollar-sign' });
+  // }
 
   const tabs = [
     ...commonTabs,

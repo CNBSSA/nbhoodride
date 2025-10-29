@@ -140,7 +140,9 @@ The platform uses **GPS-based dynamic pricing** that calculates fares based on a
 
 ## Payment System: Virtual PG Card
 
-The application uses a **Virtual PG Card** system for testing ride payments. Each user (rider and driver) has a virtual card balance that starts at $1000.
+The application uses a **Virtual PG Card** system as the primary and only payment method. Each user (rider and driver) has a virtual card balance that starts at $1000.
+
+**Note:** Cash payment functionality has been deactivated and hidden from all users. The cash payment code remains in the backend for potential future use, but all UI references and navigation options have been removed. Virtual card is now the exclusive payment method.
 
 ### How Virtual Card Payments Work
 
