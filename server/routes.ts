@@ -548,14 +548,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Track GPS waypoint during active ride
+  app.post('/api/driver/rides/:rideId/track-location', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { rideId } = req.params;
+      
+      // Validate waypoint
+      const waypointSchema = z.object({
+        lat: z.number().min(-90).max(90),
+        lng: z.number().min(-180).max(180)
+      });
+      
+      const { lat, lng } = waypointSchema.parse(req.body);
+      
+      await storage.addRouteWaypoint(rideId, userId, { lat, lng });
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error tracking location:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ message: error.message });
+      } else {
+        res.status(500).json({ message: "Failed to track location" });
+      }
+    }
+  });
+
   app.post('/api/driver/rides/:rideId/complete', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.claims?.sub;
       const { rideId } = req.params;
       
-      // Validate request body
+      // Validate request body - actualFare is now optional to allow automatic calculation
       const completeRideSchema = z.object({
-        actualFare: z.number().positive("Actual fare must be a positive number"),
+        actualFare: z.number().positive("Actual fare must be a positive number").optional(),
         tipAmount: z.number().min(0).optional()
       });
       

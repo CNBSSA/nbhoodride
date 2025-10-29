@@ -94,6 +94,10 @@ export interface IStorage {
   startRide(rideId: string, driverId: string): Promise<Ride>;
   completeRide(rideId: string, driverId: string, actualFare?: number): Promise<Ride>;
   getActiveRidesForDriver(driverId: string): Promise<Ride[]>;
+  
+  // GPS tracking operations
+  addRouteWaypoint(rideId: string, driverId: string, waypoint: {lat: number, lng: number}): Promise<void>;
+  calculateActualDistance(routePath: Array<{lat: number, lng: number, timestamp: number}>): number;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -663,14 +667,54 @@ export class DatabaseStorage implements IStorage {
       throw new Error("Ride cannot be completed. Current status: " + ride.status);
     }
 
+    const completedAt = new Date();
     const updateData: any = { 
       status: "completed",
-      completedAt: new Date(),
+      completedAt,
       updatedAt: new Date()
     };
     
-    if (actualFare !== undefined) {
-      updateData.actualFare = actualFare.toString();
+    // Calculate actual distance and time from GPS tracking
+    const routePath = (ride.routePath as Array<{lat: number, lng: number, timestamp: number}>) || [];
+    let calculatedFare = actualFare;
+    
+    if (routePath.length >= 2 && ride.startedAt) {
+      // Calculate actual distance from GPS waypoints
+      const actualDistance = this.calculateActualDistance(routePath);
+      updateData.driverTraveledDistance = actualDistance.toFixed(2);
+      
+      // Calculate actual duration in minutes
+      const startTime = new Date(ride.startedAt).getTime();
+      const endTime = completedAt.getTime();
+      const durationMinutes = Math.round((endTime - startTime) / (1000 * 60));
+      updateData.driverTraveledTime = durationMinutes;
+      
+      // Calculate fare using PG County rates if not manually overridden
+      if (actualFare === undefined) {
+        // PG County rates: $18/hour + $1.50/mile
+        const timeRatePerHour = 18;
+        const mileRate = 1.50;
+        const minimumFare = 5.00;
+        const maximumFare = 100.00;
+        
+        const durationHours = durationMinutes / 60;
+        const timeCharge = timeRatePerHour * durationHours;
+        const distanceCharge = mileRate * actualDistance;
+        let fareAmount = timeCharge + distanceCharge;
+        
+        // Apply min/max limits
+        fareAmount = Math.max(minimumFare, Math.min(maximumFare, fareAmount));
+        
+        calculatedFare = Math.round(fareAmount * 100) / 100; // Round to 2 decimals
+      }
+    }
+    
+    // Use calculated fare or fallback to estimated fare
+    if (calculatedFare !== undefined) {
+      updateData.actualFare = calculatedFare.toString();
+    } else if (!ride.actualFare) {
+      // If no GPS data and no fare provided, use estimated fare
+      updateData.actualFare = ride.estimatedFare;
     }
 
     // Update ride status to completed
@@ -1077,6 +1121,85 @@ export class DatabaseStorage implements IStorage {
       throw new Error("User not found");
     }
     return parseFloat(user.virtualCardBalance || "0");
+  }
+
+  // GPS tracking operations
+  async addRouteWaypoint(rideId: string, driverId: string, waypoint: {lat: number, lng: number}): Promise<void> {
+    // Get current ride
+    const ride = await this.getRide(rideId);
+    if (!ride) {
+      throw new Error("Ride not found");
+    }
+
+    // Verify the ride belongs to this driver
+    if (ride.driverId !== driverId) {
+      throw new Error("Unauthorized to track this ride");
+    }
+
+    // Verify ride is in progress
+    if (ride.status !== "in_progress") {
+      throw new Error("Can only track location during active rides");
+    }
+
+    // Validate waypoint with proper finite number check
+    if (!Number.isFinite(waypoint.lat) || !Number.isFinite(waypoint.lng) ||
+        waypoint.lat < -90 || waypoint.lat > 90 || 
+        waypoint.lng < -180 || waypoint.lng > 180) {
+      throw new Error("Invalid waypoint coordinates");
+    }
+
+    // Get current route path or initialize empty array
+    const currentPath = (ride.routePath as Array<{lat: number, lng: number, timestamp: number}>) || [];
+    
+    // Add new waypoint with timestamp
+    const newWaypoint = {
+      lat: waypoint.lat,
+      lng: waypoint.lng,
+      timestamp: Date.now()
+    };
+    
+    currentPath.push(newWaypoint);
+
+    // Limit to last 1000 waypoints to prevent excessive storage (roughly 30 min at 2 sec intervals)
+    const limitedPath = currentPath.slice(-1000);
+
+    // Update ride with new route path
+    await db
+      .update(rides)
+      .set({ 
+        routePath: limitedPath as any,
+        updatedAt: new Date()
+      })
+      .where(eq(rides.id, rideId));
+  }
+
+  calculateActualDistance(routePath: Array<{lat: number, lng: number, timestamp: number}>): number {
+    if (!routePath || routePath.length < 2) {
+      return 0;
+    }
+
+    // Haversine formula to calculate distance between two GPS coordinates
+    const haversineDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+      const R = 3959; // Earth's radius in miles
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLng = (lng2 - lng1) * Math.PI / 180;
+      const a = 
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+        Math.sin(dLng/2) * Math.sin(dLng/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    };
+
+    // Sum up distances between consecutive waypoints
+    let totalDistance = 0;
+    for (let i = 1; i < routePath.length; i++) {
+      const prev = routePath[i - 1];
+      const curr = routePath[i];
+      totalDistance += haversineDistance(prev.lat, prev.lng, curr.lat, curr.lng);
+    }
+
+    return totalDistance;
   }
 }
 
