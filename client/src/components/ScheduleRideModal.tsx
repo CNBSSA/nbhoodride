@@ -66,8 +66,7 @@ export default function ScheduleRideModal({
   // Search driver by phone number
   const searchDriverMutation = useMutation({
     mutationFn: async (phone: string) => {
-      const response = await apiRequest('GET', `/api/drivers/search?phone=${encodeURIComponent(phone)}`);
-      return response.json();
+      return await apiRequest(`/api/drivers/search?phone=${encodeURIComponent(phone)}`);
     },
     onSuccess: (data) => {
       if (data && data.length > 0) {
@@ -97,11 +96,11 @@ export default function ScheduleRideModal({
   // Calculate fare when destination changes
   const calculateFareMutation = useMutation({
     mutationFn: async ({ distance, duration }: { distance: number; duration: number }) => {
-      const response = await apiRequest('POST', '/api/rides/calculate-fare', {
-        distance,
-        duration
+      return await apiRequest('/api/rides/calculate-fare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ distance, duration })
       });
-      return response.json();
     },
     onSuccess: (data) => {
       setFareEstimate(data);
@@ -111,8 +110,11 @@ export default function ScheduleRideModal({
   // Book ride mutation
   const bookRideMutation = useMutation({
     mutationFn: async (rideData: any) => {
-      const response = await apiRequest('POST', '/api/rides', rideData);
-      return response.json();
+      return await apiRequest('/api/rides', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rideData)
+      });
     },
     onSuccess: (data) => {
       if (bookingType === "schedule") {
@@ -127,6 +129,7 @@ export default function ScheduleRideModal({
         });
       }
       queryClient.invalidateQueries({ queryKey: ["/api/rides"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rides/scheduled"] });
       onClose();
     },
     onError: () => {

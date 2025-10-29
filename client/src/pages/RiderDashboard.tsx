@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useGeolocation } from "@/hooks/useGeolocation";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -9,6 +9,8 @@ import MapComponent from "@/components/MapComponent";
 import RideBookingModal from "@/components/RideBookingModal";
 import ScheduleRideModal from "@/components/ScheduleRideModal";
 import SOSModal from "@/components/SOSModal";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 interface Driver {
   id: string;
@@ -30,6 +32,7 @@ export default function RiderDashboard() {
   const { user } = useAuth();
   const { location, error: locationError, requestLocation } = useGeolocation();
   const { lastMessage } = useWebSocket();
+  const { toast } = useToast();
 
   const userLocation = location ? {
     lat: location.latitude,
@@ -45,6 +48,35 @@ export default function RiderDashboard() {
   const { data: nearbyDrivers = [], isLoading } = useQuery({
     queryKey: [`/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}`],
     refetchInterval: 30000, // Refresh every 30 seconds
+  });
+
+  // Get scheduled rides
+  const { data: scheduledRides = [] } = useQuery({
+    queryKey: ['/api/rides/scheduled'],
+    refetchInterval: 30000, // Refresh every 30 seconds
+  });
+
+  // Cancel scheduled ride mutation
+  const cancelScheduledRide = useMutation({
+    mutationFn: async (rideId: string) => {
+      return await apiRequest(`/api/rides/${rideId}/cancel`, {
+        method: "POST",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
+      toast({
+        title: "Ride Cancelled",
+        description: "Your scheduled ride has been cancelled successfully.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to cancel ride",
+        variant: "destructive",
+      });
+    },
   });
 
   const mapCenter = userLocation || { lat: 38.9073, lng: -76.7781 }; // Default to Largo, MD
@@ -221,6 +253,72 @@ export default function RiderDashboard() {
             </div>
           )}
         </div>
+
+        {/* Scheduled Rides */}
+        {scheduledRides.length > 0 && (
+          <div className="px-4 pb-4">
+            <h3 className="font-semibold mb-3">Upcoming Scheduled Rides</h3>
+            <div className="space-y-3">
+              {scheduledRides.map((ride: any) => (
+                <Card key={ride.id} className="border border-border">
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-2 mb-2">
+                          <i className="fas fa-calendar text-primary" />
+                          <span className="font-semibold" data-testid={`scheduled-ride-time-${ride.id}`}>
+                            {new Date(ride.scheduledAt).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit',
+                              hour12: true
+                            })}
+                          </span>
+                        </div>
+                        <div className="space-y-1 text-sm">
+                          <div className="flex items-start space-x-2">
+                            <i className="fas fa-map-marker-alt text-green-500 mt-1" />
+                            <span className="text-muted-foreground" data-testid={`scheduled-ride-pickup-${ride.id}`}>
+                              {ride.pickupLocation}
+                            </span>
+                          </div>
+                          <div className="flex items-start space-x-2">
+                            <i className="fas fa-flag-checkered text-red-500 mt-1" />
+                            <span className="text-muted-foreground" data-testid={`scheduled-ride-destination-${ride.id}`}>
+                              {ride.destinationLocation}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-2">
+                          <span className="text-sm font-semibold text-primary" data-testid={`scheduled-ride-fare-${ride.id}`}>
+                            Est. ${ride.estimatedFare.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => cancelScheduledRide.mutate(ride.id)}
+                        disabled={cancelScheduledRide.isPending}
+                        data-testid={`button-cancel-scheduled-${ride.id}`}
+                      >
+                        {cancelScheduledRide.isPending ? (
+                          <i className="fas fa-spinner animate-spin" />
+                        ) : (
+                          <>
+                            <i className="fas fa-times mr-1" />
+                            Cancel
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Emergency SOS Button */}
