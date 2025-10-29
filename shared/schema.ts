@@ -126,6 +126,7 @@ export const rides = pgTable("rides", {
   cancellationReason: text("cancellation_reason"),
   driverTraveledDistance: decimal("driver_traveled_distance", { precision: 8, scale: 2 }),
   driverTraveledTime: integer("driver_traveled_time"),
+  routePath: jsonb("route_path").$type<Array<{lat: number, lng: number, timestamp: number}>>(),
   cashReceivedAt: timestamp("cash_received_at"),
   paidBy: varchar("paid_by").references(() => users.id),
   riderRating: integer("rider_rating"),
