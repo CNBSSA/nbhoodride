@@ -93,6 +93,51 @@ The application uses PostgreSQL as the primary database with the following key e
 - **Wouter**: Minimalist client-side routing library
 - **React Query**: Server state management, caching, and synchronization
 
+## Dynamic Pricing System
+
+The platform uses **GPS-based dynamic pricing** that calculates fares based on actual distance traveled and time spent, ensuring fair and transparent pricing for both drivers and riders.
+
+### How Dynamic Pricing Works
+
+1. **GPS Tracking During Rides**:
+   - When a driver starts a ride, the system begins tracking GPS waypoints every 5 seconds
+   - GPS coordinates are stored in the ride's `routePath` field with timestamps
+   - System limits to 1000 waypoints per ride to prevent database bloat
+
+2. **Distance Calculation**:
+   - Uses the Haversine formula to calculate actual miles traveled
+   - Sums distances between consecutive GPS waypoints
+   - Provides accurate distance measurement even for complex routes
+
+3. **Fare Calculation**:
+   - **Time Rate**: $18 per hour of ride duration
+   - **Distance Rate**: $1.50 per mile traveled
+   - **Minimum Fare**: $5.00
+   - **Maximum Fare**: $100.00
+   - Formula: `(duration_hours × $18) + (miles × $1.50)` with min/max applied
+
+4. **Real-Time Display**:
+   - Drivers see live updates every 10 seconds during active rides
+   - Displays current distance traveled, ride duration, and estimated fare
+   - Updates automatically as the ride progresses
+
+5. **Automatic Fare Calculation**:
+   - When completing a ride, the system auto-calculates the final fare from GPS data
+   - No manual fare entry required - fully automatic
+   - Falls back to estimated fare if insufficient GPS data exists
+
+### API Endpoints for Dynamic Pricing
+
+- `POST /api/driver/rides/:rideId/track-location` - Track GPS waypoint during active ride
+- `GET /api/driver/rides/:rideId/stats` - Get real-time ride statistics (distance, duration, fare)
+- `POST /api/driver/rides/:rideId/complete` - Complete ride with auto-calculated fare
+
+### Security and Authorization
+
+- All GPS tracking endpoints verify the driver owns the ride
+- Stats endpoint ensures only the assigned driver or rider can view data
+- GPS tracking only works during "in_progress" rides
+
 ## Payment System: Virtual PG Card
 
 The application uses a **Virtual PG Card** system for testing ride payments. Each user (rider and driver) has a virtual card balance that starts at $1000.
