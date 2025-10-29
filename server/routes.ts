@@ -1020,6 +1020,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get scheduled rides for the current user
+  app.get('/api/rides/scheduled', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const rides = await storage.getScheduledRides(userId);
+      res.json(rides);
+    } catch (error) {
+      console.error("Error fetching scheduled rides:", error);
+      res.status(500).json({ message: "Failed to fetch scheduled rides" });
+    }
+  });
+
   // Rating and Payment routes (must come before parameterized /api/rides/:rideId route)
   app.get('/api/rides/for-rating', isAuthenticated, async (req: any, res) => {
     try {

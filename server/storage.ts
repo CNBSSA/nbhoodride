@@ -19,7 +19,7 @@ import {
   type InsertEmergencyIncident,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc, sql, or } from "drizzle-orm";
+import { eq, and, desc, asc, sql, or, isNotNull, gt, like } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 export interface IStorage {
@@ -52,6 +52,7 @@ export interface IStorage {
   updateRide(rideId: string, updates: Partial<InsertRide>): Promise<Ride>;
   getRidesByUser(userId: string, limit?: number): Promise<Ride[]>;
   getActiveRides(userId: string): Promise<Ride[]>;
+  getScheduledRides(userId: string): Promise<Ride[]>;
   
   // Rating operations
   updateRideRating(rideId: string, raterId: string, rating: number, review?: string): Promise<void>;
@@ -263,6 +264,7 @@ export class DatabaseStorage implements IStorage {
     const normalizedPhone = phone.replace(/\D/g, '');
     
     // Search for drivers with matching phone number
+    // Use LIKE pattern matching which is safe with parameter binding
     const results = await db
       .select()
       .from(driverProfiles)
@@ -271,7 +273,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(users.isDriver, true),
-          sql`REGEXP_REPLACE(${users.phone}, '[^0-9]', '', 'g') = ${normalizedPhone}`
+          like(users.phone, `%${normalizedPhone}%`)
         )
       );
 
@@ -374,6 +376,21 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(rides.createdAt));
+  }
+
+  async getScheduledRides(userId: string): Promise<Ride[]> {
+    return await db
+      .select()
+      .from(rides)
+      .where(
+        and(
+          eq(rides.riderId, userId),
+          eq(rides.status, "pending"),
+          isNotNull(rides.scheduledAt),
+          gt(rides.scheduledAt, sql`now()`)
+        )
+      )
+      .orderBy(asc(rides.scheduledAt));
   }
 
   // Rating operations
