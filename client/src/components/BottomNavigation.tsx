@@ -18,7 +18,7 @@ export default function BottomNavigation({ activeTab, onTabChange, currentMode }
   ];
 
   // Additional tabs based on mode and user status
-  const additionalTabs = [];
+  const additionalTabs: Array<{ id: string; label: string; icon: string }> = [];
   
   // CASH PAYMENT DEACTIVATED - Payment tab hidden from users
   // Virtual card system is now the only payment method

@@ -126,7 +126,8 @@ export default function RideBookingModal({
       },
       pickupInstructions,
       driverId: selectedDriver,
-      estimatedFare: fareEstimate?.total || 0
+      estimatedFare: fareEstimate?.total || 0,
+      paymentMethod: 'card' // Virtual card is the only payment method
     };
 
     bookRideMutation.mutate(rideData);

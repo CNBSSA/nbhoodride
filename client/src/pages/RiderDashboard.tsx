@@ -59,9 +59,8 @@ export default function RiderDashboard() {
   // Cancel scheduled ride mutation
   const cancelScheduledRide = useMutation({
     mutationFn: async (rideId: string) => {
-      return await apiRequest(`/api/rides/${rideId}/cancel`, {
-        method: "POST",
-      });
+      const response = await apiRequest('POST', `/api/rides/${rideId}/cancel`);
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });

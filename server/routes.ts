@@ -846,8 +846,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log("Ride creation request body:", JSON.stringify(req.body, null, 2));
       
+      // SECURITY: Enforce virtual card as the only payment method
+      if (req.body.paymentMethod && req.body.paymentMethod !== 'card') {
+        return res.status(400).json({ message: "Only virtual card payment is supported" });
+      }
+      
       // Convert numeric fare to string for decimal field
-      const bodyData = { ...req.body };
+      const bodyData = { 
+        ...req.body,
+        paymentMethod: 'card' // Force virtual card payment
+      };
       if (typeof bodyData.estimatedFare === 'number') {
         bodyData.estimatedFare = bodyData.estimatedFare.toString();
       }
