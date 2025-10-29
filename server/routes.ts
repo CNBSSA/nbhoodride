@@ -9,6 +9,7 @@ import { z } from "zod";
 import { nanoid } from "nanoid";
 import twilio from "twilio";
 import { stripeService } from "./stripeService";
+import bcrypt from "bcrypt";
 import {
   insertDriverProfileSchema,
   insertVehicleSchema,
@@ -17,16 +18,199 @@ import {
   insertEmergencyIncidentSchema,
 } from "@shared/schema";
 
-// Extend Express session type to include testUserId
+// Extend Express session type to include testUserId and regular userId
 declare module "express-session" {
   interface SessionData {
     testUserId?: string;
+    userId?: string;
   }
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
+
+  // Email/Password Authentication Routes
+  // POST /api/auth/signup - Register new user
+  app.post('/api/auth/signup', async (req, res) => {
+    try {
+      const signupSchema = z.object({
+        email: z.string().email("Invalid email address"),
+        password: z.string().min(8, "Password must be at least 8 characters"),
+        firstName: z.string().min(1, "First name is required"),
+        lastName: z.string().min(1, "Last name is required"),
+        phone: z.string().optional()
+      });
+
+      const { email, password, firstName, lastName, phone } = signupSchema.parse(req.body);
+
+      // Check if user already exists
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(400).json({ message: "Email already registered" });
+      }
+
+      // Hash password
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // Create user
+      const user = await storage.createUser({
+        email,
+        password: hashedPassword,
+        firstName,
+        lastName,
+        phone
+      });
+
+      // Set session
+      req.session.userId = user.id;
+      
+      res.json({ 
+        message: "Signup successful",
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          virtualCardBalance: user.virtualCardBalance,
+          isDriver: user.isDriver
+        }
+      });
+    } catch (error) {
+      console.error("Signup error:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      res.status(500).json({ message: "Signup failed" });
+    }
+  });
+
+  // POST /api/auth/email-login - Login with email and password
+  app.post('/api/auth/email-login', async (req, res) => {
+    try {
+      const loginSchema = z.object({
+        email: z.string().email("Invalid email address"),
+        password: z.string().min(1, "Password is required")
+      });
+
+      const { email, password } = loginSchema.parse(req.body);
+
+      // Find user by email
+      const user = await storage.getUserByEmail(email);
+      if (!user || !user.password) {
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      // Verify password
+      const isValidPassword = await bcrypt.compare(password, user.password);
+      if (!isValidPassword) {
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      // Set session
+      req.session.userId = user.id;
+      
+      res.json({ 
+        message: "Login successful",
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          virtualCardBalance: user.virtualCardBalance,
+          isDriver: user.isDriver
+        }
+      });
+    } catch (error) {
+      console.error("Login error:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      res.status(500).json({ message: "Login failed" });
+    }
+  });
+
+  // POST /api/auth/forgot-password - Request password reset
+  app.post('/api/auth/forgot-password', async (req, res) => {
+    try {
+      const forgotPasswordSchema = z.object({
+        email: z.string().email("Invalid email address")
+      });
+
+      const { email } = forgotPasswordSchema.parse(req.body);
+
+      // Find user by email
+      const user = await storage.getUserByEmail(email);
+      if (!user) {
+        // Don't reveal that user doesn't exist for security
+        return res.json({ message: "If the email exists, a password reset link will be sent" });
+      }
+
+      // Generate reset token
+      const resetToken = nanoid(32);
+      const resetExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+
+      // Save reset token
+      await storage.setPasswordResetToken(email, resetToken, resetExpiry);
+
+      // In production, you would send an email here
+      // For now, we'll just return the token (development only)
+      console.log(`Password reset token for ${email}: ${resetToken}`);
+      
+      res.json({ 
+        message: "If the email exists, a password reset link will be sent",
+        resetToken: process.env.NODE_ENV === 'development' ? resetToken : undefined
+      });
+    } catch (error) {
+      console.error("Forgot password error:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      res.status(500).json({ message: "Password reset request failed" });
+    }
+  });
+
+  // POST /api/auth/reset-password - Reset password with token
+  app.post('/api/auth/reset-password', async (req, res) => {
+    try {
+      const resetPasswordSchema = z.object({
+        token: z.string().min(1, "Reset token is required"),
+        newPassword: z.string().min(8, "Password must be at least 8 characters")
+      });
+
+      const { token, newPassword } = resetPasswordSchema.parse(req.body);
+
+      // Find user by reset token
+      const user = await storage.getUserByResetToken(token);
+      if (!user) {
+        return res.status(400).json({ message: "Invalid or expired reset token" });
+      }
+
+      // Hash new password
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+      // Update password and clear reset token
+      await storage.updatePassword(user.id, hashedPassword);
+
+      res.json({ message: "Password reset successful" });
+    } catch (error) {
+      console.error("Reset password error:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      res.status(500).json({ message: "Password reset failed" });
+    }
+  });
+
+  // POST /api/auth/logout - Logout user
+  app.post('/api/auth/logout', (req, res) => {
+    req.session.destroy((err) => {
+      if (err) {
+        return res.status(500).json({ message: "Logout failed" });
+      }
+      res.json({ message: "Logout successful" });
+    });
+  });
 
   // Test authentication route for test riders - EXPLICITLY DISABLED BY DEFAULT
   // Only enable when ENABLE_TEST_LOGIN environment variable is explicitly set to 'true'
@@ -76,11 +260,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Auth routes
   app.get('/api/auth/user', async (req: any, res) => {
     try {
-      // Check for test user session first
+      // Check for session-based userId first (email/password auth)
+      const sessionUserId = req.session?.userId;
+      // Then check for test user session
       const testUserId = req.session?.testUserId;
       let userId: string;
       
-      if (testUserId) {
+      if (sessionUserId) {
+        userId = sessionUserId;
+      } else if (testUserId) {
         userId = testUserId;
       } else if (req.isAuthenticated() && req.user?.claims?.sub) {
         userId = req.user.claims.sub;

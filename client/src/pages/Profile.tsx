@@ -53,8 +53,24 @@ export default function Profile() {
     }
   });
 
-  const handleLogout = () => {
-    window.location.href = "/api/logout";
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include'
+      });
+      
+      // Invalidate auth cache to clear user state
+      await queryClient.invalidateQueries({ queryKey: ['/api/auth/user'] });
+      
+      // Redirect to landing page
+      window.location.href = "/";
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Even if logout fails, clear the cache and redirect
+      await queryClient.invalidateQueries({ queryKey: ['/api/auth/user'] });
+      window.location.href = "/";
+    }
   };
 
   const renderStars = (rating: number) => {

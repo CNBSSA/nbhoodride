@@ -60,14 +60,26 @@ export default function Landing() {
               </div>
             </div>
 
-            {/* Login Button */}
-            <Button 
-              onClick={handleLogin}
-              className="w-full text-lg py-6"
-              data-testid="button-login"
-            >
-              Get Started
-            </Button>
+            {/* Login/Signup Buttons */}
+            <div className="space-y-3">
+              <Link href="/signup">
+                <Button 
+                  className="w-full text-lg py-6"
+                  data-testid="button-signup"
+                >
+                  Sign Up
+                </Button>
+              </Link>
+              <Link href="/login">
+                <Button 
+                  variant="outline"
+                  className="w-full text-lg py-6"
+                  data-testid="button-login"
+                >
+                  Login
+                </Button>
+              </Link>
+            </div>
 
             <p className="text-xs text-muted-foreground">
               By continuing, you agree to our community guidelines and terms of service.

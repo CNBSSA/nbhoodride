@@ -25,7 +25,12 @@ import { alias } from "drizzle-orm/pg-core";
 export interface IStorage {
   // User operations (required for Replit Auth)
   getUser(id: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  createUser(user: UpsertUser): Promise<User>;
   upsertUser(user: UpsertUser): Promise<User>;
+  updatePassword(userId: string, hashedPassword: string): Promise<void>;
+  setPasswordResetToken(email: string, token: string, expiry: Date): Promise<void>;
+  getUserByResetToken(token: string): Promise<User | undefined>;
   
   // Driver operations
   createDriverProfile(profile: InsertDriverProfile): Promise<DriverProfile>;
@@ -98,6 +103,19 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user;
+  }
+
+  async createUser(userData: UpsertUser): Promise<User> {
+    const [user] = await db
+      .insert(users)
+      .values(userData)
+      .returning();
+    return user;
+  }
+
   async upsertUser(userData: UpsertUser): Promise<User> {
     // First check if user already exists by ID
     if (userData.id) {
@@ -121,6 +139,42 @@ export class DatabaseStorage implements IStorage {
       .insert(users)
       .values(userData)
       .returning();
+    return user;
+  }
+
+  async updatePassword(userId: string, hashedPassword: string): Promise<void> {
+    await db
+      .update(users)
+      .set({ 
+        password: hashedPassword,
+        passwordResetToken: null,
+        passwordResetExpiry: null,
+        updatedAt: new Date() 
+      })
+      .where(eq(users.id, userId));
+  }
+
+  async setPasswordResetToken(email: string, token: string, expiry: Date): Promise<void> {
+    await db
+      .update(users)
+      .set({ 
+        passwordResetToken: token,
+        passwordResetExpiry: expiry,
+        updatedAt: new Date() 
+      })
+      .where(eq(users.email, email));
+  }
+
+  async getUserByResetToken(token: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(
+        and(
+          eq(users.passwordResetToken, token),
+          sql`${users.passwordResetExpiry} > NOW()`
+        )
+      );
     return user;
   }
 

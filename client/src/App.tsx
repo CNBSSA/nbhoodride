@@ -11,6 +11,10 @@ import { PaymentsPage } from "@/pages/PaymentsPage";
 import { CardSetupPage } from "@/pages/CardSetupPage";
 import TestLogin from "@/pages/TestLogin";
 import EmergencyTracking from "@/pages/EmergencyTracking";
+import Login from "@/pages/Login";
+import Signup from "@/pages/Signup";
+import ForgotPassword from "@/pages/ForgotPassword";
+import ResetPassword from "@/pages/ResetPassword";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -21,7 +25,11 @@ function Router() {
       {/* Public emergency tracking route (no auth required) */}
       <Route path="/emergency/:token" component={EmergencyTracking} />
       
-      {/* Public test login route (no auth required) */}
+      {/* Public authentication routes (no auth required) */}
+      <Route path="/login" component={Login} />
+      <Route path="/signup" component={Signup} />
+      <Route path="/forgot-password" component={ForgotPassword} />
+      <Route path="/reset-password" component={ResetPassword} />
       <Route path="/test-login" component={TestLogin} />
       
       {isLoading || !isAuthenticated ? (
