@@ -29,6 +29,7 @@ export const sessions = pgTable(
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: varchar("email").unique(),
+  password: varchar("password"),
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
@@ -41,6 +42,8 @@ export const users = pgTable("users", {
   stripeCustomerId: varchar("stripe_customer_id"),
   stripePaymentMethodId: varchar("stripe_payment_method_id"),
   virtualCardBalance: decimal("virtual_card_balance", { precision: 10, scale: 2 }).default("1000.00"),
+  passwordResetToken: varchar("password_reset_token"),
+  passwordResetExpiry: timestamp("password_reset_expiry"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
