@@ -3,6 +3,13 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
+
+// CRITICAL: Health check endpoint MUST be first for deployment health checks
+// This endpoint responds immediately with 200 before any expensive initialization
+app.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
