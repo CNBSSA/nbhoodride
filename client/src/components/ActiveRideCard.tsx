@@ -2,12 +2,10 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest } from '@/lib/queryClient';
-import { MapPin, Clock, User, DollarSign, Navigation, CheckCircle } from 'lucide-react';
+import { MapPin, Clock, User, DollarSign, Navigation, CheckCircle, Route } from 'lucide-react';
 import { RideHelpers } from '@/services/rideService';
 
 interface ActiveRideCardProps {
@@ -38,10 +36,16 @@ interface ActiveRideCardProps {
 }
 
 export function ActiveRideCard({ ride }: ActiveRideCardProps) {
-  const [actualFare, setActualFare] = useState(ride.actualFare || ride.estimatedFare || '');
   const [isUpdating, setIsUpdating] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  // Get real-time ride stats for in-progress rides
+  const { data: rideStats, isLoading: isLoadingStats, isError: isErrorStats } = useQuery({
+    queryKey: [`/api/driver/rides/${ride.id}/stats`],
+    enabled: ride.status === 'in_progress',
+    refetchInterval: 10000, // Refresh every 10 seconds
+  });
 
   const startRideMutation = useMutation({
     mutationFn: async (rideId: string) => {
@@ -68,10 +72,8 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
   });
 
   const completeRideMutation = useMutation({
-    mutationFn: async ({ rideId, fare }: { rideId: string; fare: number }) => {
-      const response = await apiRequest('POST', `/api/driver/rides/${rideId}/complete`, {
-        actualFare: fare
-      });
+    mutationFn: async (rideId: string) => {
+      const response = await apiRequest('POST', `/api/driver/rides/${rideId}/complete`, {});
       return response.json();
     },
     onSuccess: () => {
@@ -100,17 +102,8 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
   };
 
   const handleCompleteRide = () => {
-    const fare = parseFloat(actualFare);
-    if (isNaN(fare) || fare <= 0) {
-      toast({
-        title: "Invalid Fare",
-        description: "Please enter a valid fare amount.",
-        variant: "destructive",
-      });
-      return;
-    }
     setIsUpdating(true);
-    completeRideMutation.mutate({ rideId: ride.id, fare });
+    completeRideMutation.mutate(ride.id);
   };
 
   const getStatusDisplay = () => {
@@ -143,22 +136,59 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
               <Clock className="w-3 h-3 mr-1" />
               In Progress
             </Badge>
-            <p className="text-sm text-muted-foreground">
-              Trip is in progress. Drive to destination safely.
-            </p>
-            <div className="space-y-2">
-              <Label htmlFor={`fare-${ride.id}`}>Final Fare Amount</Label>
-              <Input
-                id={`fare-${ride.id}`}
-                type="number"
-                step="0.01"
-                min="0"
-                value={actualFare}
-                onChange={(e) => setActualFare(e.target.value)}
-                placeholder="Enter final fare"
-                data-testid={`input-fare-${ride.id}`}
-              />
+            
+            {/* GPS Tracking Info Banner */}
+            <div className="bg-blue-50 dark:bg-blue-950 p-3 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="flex items-center text-sm text-blue-900 dark:text-blue-100">
+                <Route className="w-4 h-4 mr-2 flex-shrink-0" />
+                <span>GPS tracking active - Real-time distance and fare calculation</span>
+              </div>
             </div>
+
+            {/* Real-time Stats */}
+            <div className="grid grid-cols-3 gap-2">
+              <div className="bg-muted p-3 rounded-lg text-center">
+                <p className="text-xs text-muted-foreground mb-1">Distance</p>
+                {isLoadingStats ? (
+                  <p className="text-lg font-bold">...</p>
+                ) : isErrorStats ? (
+                  <p className="text-lg font-bold text-destructive">Error</p>
+                ) : (
+                  <p className="text-lg font-bold" data-testid={`text-distance-${ride.id}`}>
+                    {rideStats?.distance.toFixed(2) || '0.00'} mi
+                  </p>
+                )}
+              </div>
+              <div className="bg-muted p-3 rounded-lg text-center">
+                <p className="text-xs text-muted-foreground mb-1">Duration</p>
+                {isLoadingStats ? (
+                  <p className="text-lg font-bold">...</p>
+                ) : isErrorStats ? (
+                  <p className="text-lg font-bold text-destructive">Error</p>
+                ) : (
+                  <p className="text-lg font-bold" data-testid={`text-duration-${ride.id}`}>
+                    {rideStats?.duration || 0} min
+                  </p>
+                )}
+              </div>
+              <div className="bg-muted p-3 rounded-lg text-center">
+                <p className="text-xs text-muted-foreground mb-1">Current Fare</p>
+                {isLoadingStats ? (
+                  <p className="text-lg font-bold">...</p>
+                ) : isErrorStats ? (
+                  <p className="text-lg font-bold text-destructive">Error</p>
+                ) : (
+                  <p className="text-lg font-bold text-green-600" data-testid={`text-current-fare-${ride.id}`}>
+                    ${rideStats?.estimatedFare.toFixed(2) || '5.00'}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground text-center">
+              PG County rates: $18/hour + $1.50/mile ($5 min, $100 max)
+            </p>
+            
             <Button 
               onClick={handleCompleteRide}
               disabled={isUpdating}

@@ -98,6 +98,7 @@ export interface IStorage {
   // GPS tracking operations
   addRouteWaypoint(rideId: string, driverId: string, waypoint: {lat: number, lng: number}): Promise<void>;
   calculateActualDistance(routePath: Array<{lat: number, lng: number, timestamp: number}>): number;
+  getRideStats(rideId: string, userId?: string): Promise<{distance: number, duration: number, estimatedFare: number}>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1200,6 +1201,51 @@ export class DatabaseStorage implements IStorage {
     }
 
     return totalDistance;
+  }
+
+  async getRideStats(rideId: string, userId?: string): Promise<{distance: number, duration: number, estimatedFare: number}> {
+    const ride = await this.getRide(rideId);
+    if (!ride) {
+      throw new Error("Ride not found");
+    }
+
+    // Verify authorization if userId provided
+    if (userId && ride.driverId !== userId && ride.riderId !== userId) {
+      throw new Error("Unauthorized to view this ride's stats");
+    }
+
+    // Calculate current distance from GPS waypoints
+    const routePath = (ride.routePath as Array<{lat: number, lng: number, timestamp: number}>) || [];
+    const distance = this.calculateActualDistance(routePath);
+
+    // Calculate current duration in minutes
+    let duration = 0;
+    if (ride.startedAt) {
+      const startTime = new Date(ride.startedAt).getTime();
+      const now = Date.now();
+      duration = Math.round((now - startTime) / (1000 * 60));
+    }
+
+    // Calculate estimated fare based on current distance/time
+    const timeRatePerHour = 18;
+    const mileRate = 1.50;
+    const minimumFare = 5.00;
+    const maximumFare = 100.00;
+    
+    const durationHours = duration / 60;
+    const timeCharge = timeRatePerHour * durationHours;
+    const distanceCharge = mileRate * distance;
+    let estimatedFare = timeCharge + distanceCharge;
+    
+    // Apply min/max limits
+    estimatedFare = Math.max(minimumFare, Math.min(maximumFare, estimatedFare));
+    estimatedFare = Math.round(estimatedFare * 100) / 100; // Round to 2 decimals
+
+    return {
+      distance,
+      duration,
+      estimatedFare
+    };
   }
 }
 

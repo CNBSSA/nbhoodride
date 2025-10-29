@@ -575,6 +575,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get real-time ride stats (distance, duration, estimated fare)
+  app.get('/api/driver/rides/:rideId/stats', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      const { rideId } = req.params;
+      
+      const stats = await storage.getRideStats(rideId, userId);
+      
+      res.json(stats);
+    } catch (error) {
+      console.error("Error getting ride stats:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ message: error.message });
+      } else {
+        res.status(500).json({ message: "Failed to get ride stats" });
+      }
+    }
+  });
+
   app.post('/api/driver/rides/:rideId/complete', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.claims?.sub;
