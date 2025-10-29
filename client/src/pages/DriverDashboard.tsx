@@ -23,6 +23,7 @@ export default function DriverDashboard() {
   
   // Use ref to store latest location for GPS tracking
   const locationRef = useRef(location);
+  const lastLocationUpdateRef = useRef<number>(0);
 
   // Get driver earnings and trips
   const { data: todayEarnings } = useQuery({
@@ -84,6 +85,8 @@ export default function DriverDashboard() {
     // Start/stop GPS tracking when going online/offline
     if (checked) {
       startWatching();
+      // Reset throttle timer when going online to ensure immediate location update
+      lastLocationUpdateRef.current = 0;
     } else {
       stopWatching();
     }
@@ -95,22 +98,34 @@ export default function DriverDashboard() {
   }, [location]);
 
   // Send location updates via WebSocket when location changes and driver is online
+  // SECURITY/PERFORMANCE: Throttled to once every 5 seconds to prevent server flooding
   useEffect(() => {
     if (location && isOnline && isConnected && user?.id) {
-      sendMessage({
-        type: 'location_update',
-        userId: user.id,
-        location: {
+      const now = Date.now();
+      const timeSinceLastUpdate = now - lastLocationUpdateRef.current;
+      
+      // Only send update if at least 5 seconds have passed since last update
+      if (timeSinceLastUpdate >= 5000) {
+        lastLocationUpdateRef.current = now;
+        
+        sendMessage({
+          type: 'location_update',
+          userId: user.id,
+          location: {
+            lat: location.latitude,
+            lng: location.longitude
+          }
+        });
+        
+        // Also update location in database
+        apiRequest('POST', '/api/driver/location', {
           lat: location.latitude,
           lng: location.longitude
-        }
-      });
-      
-      // Also update location in database
-      apiRequest('POST', '/api/driver/location', {
-        lat: location.latitude,
-        lng: location.longitude
-      }).catch(console.error);
+        }).catch((error) => {
+          console.error('Failed to update driver location:', error);
+          // Retry logic could be added here
+        });
+      }
     }
   }, [location, isOnline, isConnected, user?.id, sendMessage]);
 
