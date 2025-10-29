@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -20,6 +20,9 @@ export default function DriverDashboard() {
   // Real-time GPS tracking for drivers
   const { location, error: locationError, isWatching, startWatching, stopWatching } = useGeolocationWatcher();
   const { sendMessage, isConnected, lastMessage } = useWebSocket();
+  
+  // Use ref to store latest location for GPS tracking
+  const locationRef = useRef(location);
 
   // Get driver earnings and trips
   const { data: todayEarnings } = useQuery({
@@ -86,6 +89,11 @@ export default function DriverDashboard() {
     }
   };
 
+  // Update location ref whenever location changes
+  useEffect(() => {
+    locationRef.current = location;
+  }, [location]);
+
   // Send location updates via WebSocket when location changes and driver is online
   useEffect(() => {
     if (location && isOnline && isConnected && user?.id) {
@@ -105,6 +113,40 @@ export default function DriverDashboard() {
       }).catch(console.error);
     }
   }, [location, isOnline, isConnected, user?.id, sendMessage]);
+
+  // Track GPS waypoints for active rides - interval decoupled from location changes
+  useEffect(() => {
+    // Find active "in_progress" ride
+    const activeRide = activeRides.find((ride: any) => ride.status === 'in_progress');
+    
+    if (!activeRide || !isWatching) {
+      return;
+    }
+
+    // Send initial waypoint immediately
+    const currentLocation = locationRef.current;
+    if (currentLocation && activeRide?.id) {
+      apiRequest('POST', `/api/driver/rides/${activeRide.id}/track-location`, {
+        lat: currentLocation.latitude,
+        lng: currentLocation.longitude
+      }).catch(console.error);
+    }
+
+    // Send GPS waypoint every 5 seconds during active ride
+    const intervalId = setInterval(() => {
+      const currentLocation = locationRef.current;
+      if (currentLocation && activeRide?.id) {
+        apiRequest('POST', `/api/driver/rides/${activeRide.id}/track-location`, {
+          lat: currentLocation.latitude,
+          lng: currentLocation.longitude
+        }).catch((error) => {
+          console.error('Failed to track location:', error);
+        });
+      }
+    }, 5000); // Track every 5 seconds
+
+    return () => clearInterval(intervalId);
+  }, [activeRides, isWatching]);
 
   // Sync online status from user data
   useEffect(() => {
