@@ -5,17 +5,23 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { Send, Plus, Trash2, MessageSquare, Bot, User, Loader2, ArrowLeft } from "lucide-react";
-import type { Conversation, ChatMessage } from "@shared/schema";
+import { Send, Plus, Trash2, MessageSquare, Bot, User, Loader2, ArrowLeft, ThumbsUp, ThumbsDown, HelpCircle } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { useAnalytics } from "@/hooks/useAnalytics";
+import type { Conversation, ChatMessage, FaqEntry } from "@shared/schema";
 
 export default function AIAssistant() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [feedbackGiven, setFeedbackGiven] = useState<Record<string, string>>({});
+  const [showFaq, setShowFaq] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { trackAiChat, trackFeatureUsed } = useAnalytics();
 
   const { data: conversations = [], isLoading: loadingConversations } = useQuery<Conversation[]>({
     queryKey: ["/api/ai/conversations"],
@@ -26,6 +32,10 @@ export default function AIAssistant() {
     enabled: !!activeConversationId,
   });
 
+  const { data: faqEntries = [] } = useQuery<FaqEntry[]>({
+    queryKey: ["/api/faq"],
+  });
+
   const createConversation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/ai/conversations", { title: "New Chat" });
@@ -34,6 +44,7 @@ export default function AIAssistant() {
     onSuccess: (data: Conversation) => {
       queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations"] });
       setActiveConversationId(data.id);
+      trackFeatureUsed("ai_new_conversation");
     },
   });
 
@@ -44,6 +55,21 @@ export default function AIAssistant() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations"] });
       setActiveConversationId(null);
+    },
+  });
+
+  const submitFeedback = useMutation({
+    mutationFn: async (data: { messageId: string; conversationId: string; rating: string }) => {
+      const res = await apiRequest("POST", "/api/ai/feedback", data);
+      return res.json();
+    },
+    onSuccess: (_, variables) => {
+      setFeedbackGiven((prev) => ({ ...prev, [variables.messageId]: variables.rating }));
+      toast({
+        title: variables.rating === "positive" ? "Thanks for the feedback!" : "We'll improve",
+        description: variables.rating === "positive" ? "Glad the response was helpful." : "We'll use this to get better.",
+      });
+      trackFeatureUsed("ai_feedback", { rating: variables.rating });
     },
   });
 
@@ -64,6 +90,7 @@ export default function AIAssistant() {
     setMessage("");
     setIsStreaming(true);
     setStreamingContent("");
+    trackAiChat({ action: "send_message" });
 
     queryClient.setQueryData<ChatMessage[]>(
       ["/api/ai/conversations", activeConversationId, "messages"],
@@ -129,6 +156,22 @@ export default function AIAssistant() {
     }
   };
 
+  const handleFaqClick = async (question: string) => {
+    setShowFaq(false);
+    if (!activeConversationId) {
+      const res = await apiRequest("POST", "/api/ai/conversations", { title: question.slice(0, 50) });
+      const convo = await res.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations"] });
+      setActiveConversationId(convo.id);
+      setTimeout(() => {
+        setMessage(question);
+      }, 300);
+    } else {
+      setMessage(question);
+    }
+    trackFeatureUsed("faq_clicked", { question });
+  };
+
   if (!activeConversationId) {
     return (
       <div className="flex flex-col h-[calc(100vh-140px)]">
@@ -138,20 +181,54 @@ export default function AIAssistant() {
               <Bot className="w-5 h-5 text-primary" />
               <h2 className="text-lg font-semibold" data-testid="text-ai-title">PG Ride Assistant</h2>
             </div>
-            <Button
-              size="sm"
-              onClick={() => createConversation.mutate()}
-              disabled={createConversation.isPending}
-              data-testid="btn-new-chat"
-            >
-              <Plus className="w-4 h-4 mr-1" />
-              New Chat
-            </Button>
+            <div className="flex items-center gap-2">
+              {faqEntries.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowFaq(!showFaq)}
+                  data-testid="btn-toggle-faq"
+                >
+                  <HelpCircle className="w-4 h-4 mr-1" />
+                  FAQ
+                </Button>
+              )}
+              <Button
+                size="sm"
+                onClick={() => createConversation.mutate()}
+                disabled={createConversation.isPending}
+                data-testid="btn-new-chat"
+              >
+                <Plus className="w-4 h-4 mr-1" />
+                New Chat
+              </Button>
+            </div>
           </div>
           <p className="text-sm text-muted-foreground mt-1">Ask questions about rides, payments, safety, and more</p>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
+          {showFaq && faqEntries.length > 0 && (
+            <div className="mb-4" data-testid="faq-section">
+              <h3 className="text-sm font-semibold mb-2 text-muted-foreground">Frequently Asked Questions</h3>
+              <div className="space-y-2">
+                {faqEntries.map((faq) => (
+                  <Card
+                    key={faq.id}
+                    className="cursor-pointer hover:bg-accent/50 transition-colors"
+                    onClick={() => handleFaqClick(faq.question)}
+                    data-testid={`faq-card-${faq.id}`}
+                  >
+                    <CardContent className="p-3">
+                      <p className="text-sm font-medium">{faq.question}</p>
+                      <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{faq.answer}</p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
+
           {loadingConversations ? (
             <div className="flex items-center justify-center py-8" data-testid="loading-conversations">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -228,36 +305,100 @@ export default function AIAssistant() {
             <p className="text-sm text-muted-foreground">
               Hi! I'm your PG Ride Assistant. Ask me anything about rides, payments, safety features, or the platform.
             </p>
+            {faqEntries.length > 0 && (
+              <div className="mt-4 w-full max-w-xs space-y-2">
+                <p className="text-xs text-muted-foreground font-medium">Quick questions:</p>
+                {faqEntries.slice(0, 3).map((faq) => (
+                  <Button
+                    key={faq.id}
+                    variant="outline"
+                    size="sm"
+                    className="w-full text-xs text-left justify-start h-auto py-2 whitespace-normal"
+                    onClick={() => handleFaqClick(faq.question)}
+                    data-testid={`quick-faq-${faq.id}`}
+                  >
+                    {faq.question}
+                  </Button>
+                ))}
+              </div>
+            )}
           </div>
         ) : (
           <>
             {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={cn(
-                  "flex gap-2",
-                  msg.role === "user" ? "justify-end" : "justify-start"
-                )}
-                data-testid={`message-${msg.role}-${msg.id}`}
-              >
-                {msg.role === "assistant" && (
-                  <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <Bot className="w-4 h-4 text-primary" />
-                  </div>
-                )}
+              <div key={msg.id}>
                 <div
                   className={cn(
-                    "max-w-[80%] rounded-2xl px-3 py-2 text-sm",
-                    msg.role === "user"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted"
+                    "flex gap-2",
+                    msg.role === "user" ? "justify-end" : "justify-start"
                   )}
+                  data-testid={`message-${msg.role}-${msg.id}`}
                 >
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                  {msg.role === "assistant" && (
+                    <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Bot className="w-4 h-4 text-primary" />
+                    </div>
+                  )}
+                  <div
+                    className={cn(
+                      "max-w-[80%] rounded-2xl px-3 py-2 text-sm",
+                      msg.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted"
+                    )}
+                  >
+                    <p className="whitespace-pre-wrap">{msg.content}</p>
+                  </div>
+                  {msg.role === "user" && (
+                    <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <User className="w-4 h-4 text-primary-foreground" />
+                    </div>
+                  )}
                 </div>
-                {msg.role === "user" && (
-                  <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <User className="w-4 h-4 text-primary-foreground" />
+                {msg.role === "assistant" && msg.id !== "temp-user" && (
+                  <div className="flex items-center gap-1 ml-9 mt-1" data-testid={`feedback-buttons-${msg.id}`}>
+                    {feedbackGiven[msg.id] ? (
+                      <span className="text-xs text-muted-foreground">
+                        {feedbackGiven[msg.id] === "positive" ? "👍 Helpful" : "👎 Noted"}
+                      </span>
+                    ) : (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs text-muted-foreground hover:text-green-600"
+                          onClick={() =>
+                            submitFeedback.mutate({
+                              messageId: msg.id,
+                              conversationId: activeConversationId!,
+                              rating: "positive",
+                            })
+                          }
+                          disabled={submitFeedback.isPending}
+                          data-testid={`btn-feedback-positive-${msg.id}`}
+                        >
+                          <ThumbsUp className="w-3 h-3 mr-1" />
+                          Helpful
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs text-muted-foreground hover:text-red-600"
+                          onClick={() =>
+                            submitFeedback.mutate({
+                              messageId: msg.id,
+                              conversationId: activeConversationId!,
+                              rating: "negative",
+                            })
+                          }
+                          disabled={submitFeedback.isPending}
+                          data-testid={`btn-feedback-negative-${msg.id}`}
+                        >
+                          <ThumbsDown className="w-3 h-3 mr-1" />
+                          Not helpful
+                        </Button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>

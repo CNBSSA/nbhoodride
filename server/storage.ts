@@ -14,6 +14,13 @@ import {
   adminActivityLog,
   conversations,
   chatMessages,
+  eventTracking,
+  aiFeedback,
+  platformInsights,
+  faqEntries,
+  demandHeatmap,
+  driverScorecard,
+  safetyAlerts,
   type User,
   type UpsertUser,
   type DriverProfile,
@@ -29,6 +36,13 @@ import {
   type AdminActivityLog,
   type Conversation,
   type ChatMessage,
+  type EventTracking,
+  type AiFeedback,
+  type PlatformInsight,
+  type FaqEntry,
+  type DemandHeatmapEntry,
+  type DriverScorecardEntry,
+  type SafetyAlert,
   type InsertDriverProfile,
   type InsertVehicle,
   type InsertRide,
@@ -138,6 +152,9 @@ export interface IStorage {
   getNearbyDrivers(location: {lat: number, lng: number}, radiusKm: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
   searchDriversByPhone(phone: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
   
+  getAllDriverProfiles(): Promise<DriverProfile[]>;
+  getAllCompletedRides(): Promise<Ride[]>;
+  
   // Vehicle operations
   createVehicle(vehicle: InsertVehicle): Promise<Vehicle>;
   getVehiclesByDriverId(driverProfileId: string): Promise<Vehicle[]>;
@@ -206,6 +223,30 @@ export interface IStorage {
   deleteConversation(id: string, userId: string): Promise<void>;
   getChatMessages(conversationId: string): Promise<ChatMessage[]>;
   createChatMessage(conversationId: string, role: string, content: string): Promise<ChatMessage>;
+
+  // Analytics & Self-Learning operations
+  trackEvent(data: { userId?: string; eventType: string; eventCategory: string; eventData?: Record<string, any>; sessionId?: string }): Promise<EventTracking>;
+  getEventsByType(eventType: string, limit?: number): Promise<EventTracking[]>;
+  getEventStats(startDate: Date, endDate: Date): Promise<{ eventType: string; count: number }[]>;
+  submitAiFeedback(data: { messageId: string; conversationId: string; userId: string; rating: string; reason?: string }): Promise<AiFeedback>;
+  getAiFeedbackStats(): Promise<{ positive: number; negative: number; total: number }>;
+  createPlatformInsight(data: { insightType: string; category: string; title: string; description?: string; data?: Record<string, any>; severity?: string; isActionable?: boolean }): Promise<PlatformInsight>;
+  getPlatformInsights(limit?: number): Promise<PlatformInsight[]>;
+  getUnreadInsights(): Promise<PlatformInsight[]>;
+  markInsightRead(id: string): Promise<void>;
+  createFaqEntry(data: { question: string; answer: string; category: string }): Promise<FaqEntry>;
+  getFaqEntries(publishedOnly?: boolean): Promise<FaqEntry[]>;
+  updateFaqEntry(id: string, updates: Partial<{ question: string; answer: string; category: string; isPublished: boolean }>): Promise<FaqEntry>;
+  upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry>;
+  getDemandHeatmap(hourOfDay?: number, dayOfWeek?: number): Promise<DemandHeatmapEntry[]>;
+  upsertDriverScorecard(driverId: string): Promise<DriverScorecardEntry>;
+  getDriverScorecard(driverId: string): Promise<DriverScorecardEntry | undefined>;
+  getAllDriverScorecards(): Promise<DriverScorecardEntry[]>;
+  createSafetyAlert(data: { alertType: string; severity: string; targetUserId?: string; title: string; description?: string; data?: Record<string, any> }): Promise<SafetyAlert>;
+  getActiveSafetyAlerts(): Promise<SafetyAlert[]>;
+  resolveSafetyAlert(id: string, resolvedBy: string): Promise<SafetyAlert>;
+  getConversionMetrics(startDate: Date, endDate: Date): Promise<{ searches: number; bookings: number; completions: number; conversionRate: number }>;
+  getDriverOptimalHours(driverId: string): Promise<{ hour: number; dayOfWeek: number; avgRides: number; avgEarnings: number }[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -362,6 +403,14 @@ export class DatabaseStorage implements IStorage {
     const allDrivers = Array.from(driversMap.values());
 
     return filterAvailableDrivers(allDrivers, (d) => d.userId);
+  }
+
+  async getAllDriverProfiles(): Promise<DriverProfile[]> {
+    return db.select().from(driverProfiles);
+  }
+
+  async getAllCompletedRides(): Promise<Ride[]> {
+    return db.select().from(rides).where(eq(rides.status, "completed")).orderBy(desc(rides.completedAt));
   }
 
   async searchDriversByPhone(phone: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]> {
@@ -1978,6 +2027,216 @@ export class DatabaseStorage implements IStorage {
   async createChatMessage(conversationId: string, role: string, content: string): Promise<ChatMessage> {
     const [message] = await db.insert(chatMessages).values({ conversationId, role, content }).returning();
     return message;
+  }
+
+  // ============================================================
+  // ANALYTICS & SELF-LEARNING
+  // ============================================================
+
+  async trackEvent(data: { userId?: string; eventType: string; eventCategory: string; eventData?: Record<string, any>; sessionId?: string }): Promise<EventTracking> {
+    const [event] = await db.insert(eventTracking).values(data).returning();
+    return event;
+  }
+
+  async getEventsByType(eventType: string, limit = 100): Promise<EventTracking[]> {
+    return db.select().from(eventTracking).where(eq(eventTracking.eventType, eventType)).orderBy(desc(eventTracking.createdAt)).limit(limit);
+  }
+
+  async getEventStats(startDate: Date, endDate: Date): Promise<{ eventType: string; count: number }[]> {
+    const results = await db.select({
+      eventType: eventTracking.eventType,
+      count: count(),
+    }).from(eventTracking).where(
+      and(gte(eventTracking.createdAt, startDate), lte(eventTracking.createdAt, endDate))
+    ).groupBy(eventTracking.eventType).orderBy(desc(count()));
+    return results.map(r => ({ eventType: r.eventType, count: Number(r.count) }));
+  }
+
+  async submitAiFeedback(data: { messageId: string; conversationId: string; userId: string; rating: string; reason?: string }): Promise<AiFeedback> {
+    const [feedback] = await db.insert(aiFeedback).values(data).returning();
+    return feedback;
+  }
+
+  async getAiFeedbackStats(): Promise<{ positive: number; negative: number; total: number }> {
+    const allFeedback = await db.select({ rating: aiFeedback.rating }).from(aiFeedback);
+    const positive = allFeedback.filter(f => f.rating === 'positive').length;
+    const negative = allFeedback.filter(f => f.rating === 'negative').length;
+    return { positive, negative, total: allFeedback.length };
+  }
+
+  async createPlatformInsight(data: { insightType: string; category: string; title: string; description?: string; data?: Record<string, any>; severity?: string; isActionable?: boolean }): Promise<PlatformInsight> {
+    const [insight] = await db.insert(platformInsights).values(data).returning();
+    return insight;
+  }
+
+  async getPlatformInsights(limit = 50): Promise<PlatformInsight[]> {
+    return db.select().from(platformInsights).orderBy(desc(platformInsights.createdAt)).limit(limit);
+  }
+
+  async getUnreadInsights(): Promise<PlatformInsight[]> {
+    return db.select().from(platformInsights).where(eq(platformInsights.isRead, false)).orderBy(desc(platformInsights.createdAt));
+  }
+
+  async markInsightRead(id: string): Promise<void> {
+    await db.update(platformInsights).set({ isRead: true }).where(eq(platformInsights.id, id));
+  }
+
+  async createFaqEntry(data: { question: string; answer: string; category: string }): Promise<FaqEntry> {
+    const [entry] = await db.insert(faqEntries).values(data).returning();
+    return entry;
+  }
+
+  async getFaqEntries(publishedOnly = false): Promise<FaqEntry[]> {
+    if (publishedOnly) {
+      return db.select().from(faqEntries).where(eq(faqEntries.isPublished, true)).orderBy(desc(faqEntries.sourceCount));
+    }
+    return db.select().from(faqEntries).orderBy(desc(faqEntries.sourceCount));
+  }
+
+  async updateFaqEntry(id: string, updates: Partial<{ question: string; answer: string; category: string; isPublished: boolean }>): Promise<FaqEntry> {
+    const [entry] = await db.update(faqEntries).set({ ...updates, updatedAt: new Date() }).where(eq(faqEntries.id, id)).returning();
+    return entry;
+  }
+
+  async upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry> {
+    const existing = await db.select().from(demandHeatmap).where(
+      and(
+        eq(demandHeatmap.gridLat, data.gridLat),
+        eq(demandHeatmap.gridLng, data.gridLng),
+        eq(demandHeatmap.hourOfDay, data.hourOfDay),
+        eq(demandHeatmap.dayOfWeek, data.dayOfWeek)
+      )
+    );
+    if (existing.length > 0) {
+      const [updated] = await db.update(demandHeatmap).set({
+        rideCount: (existing[0].rideCount || 0) + data.rideCount,
+        avgFare: data.avgFare || existing[0].avgFare,
+        avgWaitTime: data.avgWaitTime || existing[0].avgWaitTime,
+        lastUpdated: new Date(),
+      }).where(eq(demandHeatmap.id, existing[0].id)).returning();
+      return updated;
+    }
+    const [entry] = await db.insert(demandHeatmap).values(data).returning();
+    return entry;
+  }
+
+  async getDemandHeatmap(hourOfDay?: number, dayOfWeek?: number): Promise<DemandHeatmapEntry[]> {
+    const conditions = [];
+    if (hourOfDay !== undefined) conditions.push(eq(demandHeatmap.hourOfDay, hourOfDay));
+    if (dayOfWeek !== undefined) conditions.push(eq(demandHeatmap.dayOfWeek, dayOfWeek));
+    if (conditions.length > 0) {
+      return db.select().from(demandHeatmap).where(and(...conditions)).orderBy(desc(demandHeatmap.rideCount));
+    }
+    return db.select().from(demandHeatmap).orderBy(desc(demandHeatmap.rideCount));
+  }
+
+  async upsertDriverScorecard(driverId: string): Promise<DriverScorecardEntry> {
+    const completedRides = await db.select().from(rides).where(and(eq(rides.driverId, driverId), eq(rides.status, "completed")));
+    const cancelledRides = await db.select().from(rides).where(and(eq(rides.driverId, driverId), eq(rides.status, "cancelled")));
+    const allDriverRides = await db.select().from(rides).where(eq(rides.driverId, driverId));
+    const driverDisputes = await db.select().from(disputes).where(eq(disputes.reporterId, driverId));
+    const sosIncidents = await db.select().from(emergencyIncidents).where(eq(emergencyIncidents.userId, driverId));
+
+    const totalCompleted = completedRides.length;
+    const totalCancelled = cancelledRides.length;
+    const totalAll = allDriverRides.length;
+    const acceptanceRate = totalAll > 0 ? ((totalAll - totalCancelled) / totalAll * 100).toFixed(2) : "0.00";
+    const completionRate = totalAll > 0 ? (totalCompleted / totalAll * 100).toFixed(2) : "0.00";
+
+    const ratings = completedRides.map(r => r.driverRating).filter(Boolean) as number[];
+    const avgRating = ratings.length > 0 ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(2) : "5.00";
+
+    const totalEarnings = completedRides.reduce((sum, r) => sum + parseFloat(r.actualFare?.toString() || '0'), 0).toFixed(2);
+
+    const peakHours: Record<string, number> = {};
+    for (const ride of completedRides) {
+      if (ride.startedAt) {
+        const hour = new Date(ride.startedAt).getHours();
+        peakHours[hour] = (peakHours[hour] || 0) + 1;
+      }
+    }
+
+    const existing = await db.select().from(driverScorecard).where(eq(driverScorecard.driverId, driverId));
+    const scorecardData = {
+      totalRidesCompleted: totalCompleted,
+      totalRidesCancelled: totalCancelled,
+      acceptanceRate,
+      completionRate,
+      avgRating,
+      totalEarnings,
+      peakHoursWorked: peakHours,
+      disputeCount: driverDisputes.length,
+      sosCount: sosIncidents.length,
+      lastUpdated: new Date(),
+    };
+
+    if (existing.length > 0) {
+      const [updated] = await db.update(driverScorecard).set(scorecardData).where(eq(driverScorecard.driverId, driverId)).returning();
+      return updated;
+    }
+    const [created] = await db.insert(driverScorecard).values({ driverId, ...scorecardData }).returning();
+    return created;
+  }
+
+  async getDriverScorecard(driverId: string): Promise<DriverScorecardEntry | undefined> {
+    const [scorecard] = await db.select().from(driverScorecard).where(eq(driverScorecard.driverId, driverId));
+    return scorecard;
+  }
+
+  async getAllDriverScorecards(): Promise<DriverScorecardEntry[]> {
+    return db.select().from(driverScorecard).orderBy(desc(driverScorecard.avgRating));
+  }
+
+  async createSafetyAlert(data: { alertType: string; severity: string; targetUserId?: string; title: string; description?: string; data?: Record<string, any> }): Promise<SafetyAlert> {
+    const [alert] = await db.insert(safetyAlerts).values(data).returning();
+    return alert;
+  }
+
+  async getActiveSafetyAlerts(): Promise<SafetyAlert[]> {
+    return db.select().from(safetyAlerts).where(eq(safetyAlerts.isResolved, false)).orderBy(desc(safetyAlerts.createdAt));
+  }
+
+  async resolveSafetyAlert(id: string, resolvedBy: string): Promise<SafetyAlert> {
+    const [alert] = await db.update(safetyAlerts).set({ isResolved: true, resolvedBy, resolvedAt: new Date() }).where(eq(safetyAlerts.id, id)).returning();
+    return alert;
+  }
+
+  async getConversionMetrics(startDate: Date, endDate: Date): Promise<{ searches: number; bookings: number; completions: number; conversionRate: number }> {
+    const searchEvents = await db.select({ count: count() }).from(eventTracking).where(
+      and(eq(eventTracking.eventType, "ride_search"), gte(eventTracking.createdAt, startDate), lte(eventTracking.createdAt, endDate))
+    );
+    const bookingEvents = await db.select({ count: count() }).from(eventTracking).where(
+      and(eq(eventTracking.eventType, "ride_booked"), gte(eventTracking.createdAt, startDate), lte(eventTracking.createdAt, endDate))
+    );
+    const completionEvents = await db.select({ count: count() }).from(eventTracking).where(
+      and(eq(eventTracking.eventType, "ride_completed"), gte(eventTracking.createdAt, startDate), lte(eventTracking.createdAt, endDate))
+    );
+    const searches = Number(searchEvents[0]?.count || 0);
+    const bookings = Number(bookingEvents[0]?.count || 0);
+    const completions = Number(completionEvents[0]?.count || 0);
+    return { searches, bookings, completions, conversionRate: searches > 0 ? (completions / searches * 100) : 0 };
+  }
+
+  async getDriverOptimalHours(driverId: string): Promise<{ hour: number; dayOfWeek: number; avgRides: number; avgEarnings: number }[]> {
+    const completedRides = await db.select().from(rides).where(and(eq(rides.driverId, driverId), eq(rides.status, "completed")));
+    const hourlyData: Record<string, { rides: number; earnings: number; weeks: Set<string> }> = {};
+
+    for (const ride of completedRides) {
+      if (!ride.startedAt) continue;
+      const d = new Date(ride.startedAt);
+      const key = `${d.getDay()}-${d.getHours()}`;
+      const weekKey = `${d.getFullYear()}-W${Math.ceil(d.getDate() / 7)}`;
+      if (!hourlyData[key]) hourlyData[key] = { rides: 0, earnings: 0, weeks: new Set() };
+      hourlyData[key].rides += 1;
+      hourlyData[key].earnings += parseFloat(ride.actualFare?.toString() || '0');
+      hourlyData[key].weeks.add(weekKey);
+    }
+
+    return Object.entries(hourlyData).map(([key, data]) => {
+      const [dayOfWeek, hour] = key.split('-').map(Number);
+      const numWeeks = Math.max(data.weeks.size, 1);
+      return { hour, dayOfWeek, avgRides: data.rides / numWeeks, avgEarnings: data.earnings / numWeeks };
+    }).sort((a, b) => b.avgEarnings - a.avgEarnings);
   }
 }
 

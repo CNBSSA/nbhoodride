@@ -7,6 +7,7 @@ import { useToast } from '@/hooks/use-toast';
 import { apiRequest } from '@/lib/queryClient';
 import { MapPin, Clock, User, DollarSign, Navigation, CheckCircle, Route } from 'lucide-react';
 import { RideHelpers } from '@/services/rideService';
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 interface ActiveRideCardProps {
   ride: {
@@ -39,9 +40,10 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
   const [isUpdating, setIsUpdating] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { trackRideCompleted } = useAnalytics();
 
   // Get real-time ride stats for in-progress rides
-  const { data: rideStats, isLoading: isLoadingStats, isError: isErrorStats } = useQuery({
+  const { data: rideStats, isLoading: isLoadingStats, isError: isErrorStats } = useQuery<{ distance: number; duration: number; estimatedFare: number }>({
     queryKey: [`/api/driver/rides/${ride.id}/stats`],
     enabled: ride.status === 'in_progress',
     refetchInterval: 10000, // Refresh every 10 seconds
@@ -77,6 +79,7 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
       return response.json();
     },
     onSuccess: () => {
+      trackRideCompleted();
       queryClient.invalidateQueries({ queryKey: ["/api/driver/active-rides"] });
       queryClient.invalidateQueries({ queryKey: ["/api/driver/earnings/today"] });
       toast({

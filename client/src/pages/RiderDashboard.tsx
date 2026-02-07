@@ -11,6 +11,7 @@ import ScheduleRideModal from "@/components/ScheduleRideModal";
 import SOSModal from "@/components/SOSModal";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 interface Driver {
   id: string;
@@ -33,6 +34,11 @@ export default function RiderDashboard() {
   const { location, error: locationError, requestLocation } = useGeolocation();
   const { lastMessage } = useWebSocket();
   const { toast } = useToast();
+  const { trackPageView, trackFeatureUsed } = useAnalytics();
+
+  useEffect(() => {
+    trackPageView("rider_dashboard");
+  }, [trackPageView]);
 
   const userLocation = location ? {
     lat: location.latitude,
@@ -322,7 +328,7 @@ export default function RiderDashboard() {
 
       {/* Emergency SOS Button */}
       <Button
-        onClick={() => setIsSOSModalOpen(true)}
+        onClick={() => { trackFeatureUsed("sos_activated"); setIsSOSModalOpen(true); }}
         className="fixed bottom-24 right-4 w-14 h-14 rounded-full bg-destructive text-destructive-foreground shadow-lg text-xl font-bold z-40"
         data-testid="button-sos"
       >

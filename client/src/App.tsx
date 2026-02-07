@@ -16,6 +16,7 @@ import Signup from "@/pages/Signup";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
 import AdminDashboard from "@/pages/AdminDashboard";
+import DriverInsights from "@/pages/DriverInsights";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -42,6 +43,7 @@ function Router() {
           <Route path="/payments" component={PaymentsPage} />
           <Route path="/card-setup" component={CardSetupPage} />
           <Route path="/admin" component={AdminDashboard} />
+          <Route path="/driver/insights" component={DriverInsights} />
         </>
       )}
       <Route component={NotFound} />

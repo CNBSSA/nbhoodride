@@ -40,3 +40,8 @@ author = "agent"
 task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
+
+[userenv]
+
+[userenv.development]
+ENABLE_TEST_LOGIN = "true"

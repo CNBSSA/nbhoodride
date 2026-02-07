@@ -12,6 +12,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Calendar as CalendarIcon, Clock, Search, X } from "lucide-react";
 import { format, addDays } from "date-fns";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 interface Driver {
   id: string;
@@ -62,6 +63,13 @@ export default function ScheduleRideModal({
   
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { trackRideSearch, trackRideBooked } = useAnalytics();
+
+  useEffect(() => {
+    if (isOpen) {
+      trackRideSearch();
+    }
+  }, [isOpen, trackRideSearch]);
 
   // Search driver by phone number
   const searchDriverMutation = useMutation({
@@ -112,6 +120,7 @@ export default function ScheduleRideModal({
       return response.json();
     },
     onSuccess: (data) => {
+      trackRideBooked();
       if (bookingType === "schedule") {
         toast({
           title: "Ride Scheduled!",

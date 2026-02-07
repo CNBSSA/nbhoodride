@@ -10,12 +10,16 @@ import { useGeolocationWatcher } from "@/hooks/useGeolocation";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import IncomingRideRequest from "@/components/IncomingRideRequest";
 import { ActiveRideCard } from "@/components/ActiveRideCard";
+import { useAnalytics } from "@/hooks/useAnalytics";
+import { Link } from "wouter";
+import { BarChart3 } from "lucide-react";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { trackPageView, trackFeatureUsed } = useAnalytics();
   
   // Real-time GPS tracking for drivers
   const { location, error: locationError, isWatching, startWatching, stopWatching } = useGeolocationWatcher();
@@ -86,6 +90,7 @@ export default function DriverDashboard() {
 
   const handleToggleStatus = (checked: boolean) => {
     setIsOnline(checked);
+    trackFeatureUsed("driver_toggle_online");
     toggleStatusMutation.mutate(checked);
     
     // Start/stop GPS tracking when going online/offline
@@ -168,6 +173,10 @@ export default function DriverDashboard() {
 
     return () => clearInterval(intervalId);
   }, [activeRides, isWatching]);
+
+  useEffect(() => {
+    trackPageView("driver_dashboard");
+  }, [trackPageView]);
 
   // Sync online status from user data
   useEffect(() => {
@@ -321,6 +330,24 @@ export default function DriverDashboard() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Performance Insights Link */}
+        <Link href="/driver/insights">
+          <Card className="cursor-pointer hover:border-primary transition-colors" data-testid="card-performance-insights">
+            <CardContent className="p-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                  <BarChart3 className="h-5 w-5 text-primary" />
+                </div>
+                <div>
+                  <p className="font-semibold">View Performance Insights</p>
+                  <p className="text-xs text-muted-foreground">Scorecard, optimal hours & demand areas</p>
+                </div>
+              </div>
+              <i className="fas fa-chevron-right text-muted-foreground" />
+            </CardContent>
+          </Card>
+        </Link>
 
         {/* Today's Trips */}
         <Card>

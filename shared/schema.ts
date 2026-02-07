@@ -459,6 +459,137 @@ export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
 }));
 
 // ============================================================
+// ANALYTICS & SELF-LEARNING TABLES
+// ============================================================
+
+export const eventTracking = pgTable("event_tracking", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id),
+  eventType: varchar("event_type").notNull(),
+  eventCategory: varchar("event_category").notNull(),
+  eventData: jsonb("event_data").$type<Record<string, any>>(),
+  sessionId: varchar("session_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_event_type").on(table.eventType),
+  index("idx_event_category").on(table.eventCategory),
+  index("idx_event_created").on(table.createdAt),
+]);
+
+export const aiFeedback = pgTable("ai_feedback", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  messageId: varchar("message_id").notNull().references(() => chatMessages.id, { onDelete: "cascade" }),
+  conversationId: varchar("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  rating: varchar("rating").notNull(),
+  reason: text("reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const platformInsights = pgTable("platform_insights", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  insightType: varchar("insight_type").notNull(),
+  category: varchar("category").notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  data: jsonb("data").$type<Record<string, any>>(),
+  severity: varchar("severity").default("info"),
+  isRead: boolean("is_read").default(false),
+  isActionable: boolean("is_actionable").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const faqEntries = pgTable("faq_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  question: text("question").notNull(),
+  answer: text("answer").notNull(),
+  category: varchar("category").notNull(),
+  sourceCount: integer("source_count").default(1),
+  isPublished: boolean("is_published").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const demandHeatmap = pgTable("demand_heatmap", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  gridLat: decimal("grid_lat", { precision: 10, scale: 6 }).notNull(),
+  gridLng: decimal("grid_lng", { precision: 10, scale: 6 }).notNull(),
+  hourOfDay: integer("hour_of_day").notNull(),
+  dayOfWeek: integer("day_of_week").notNull(),
+  rideCount: integer("ride_count").default(0),
+  avgFare: decimal("avg_fare", { precision: 8, scale: 2 }),
+  avgWaitTime: integer("avg_wait_time"),
+  lastUpdated: timestamp("last_updated").defaultNow(),
+});
+
+export const driverScorecard = pgTable("driver_scorecard", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  driverId: varchar("driver_id").notNull().references(() => users.id).unique(),
+  totalRidesCompleted: integer("total_rides_completed").default(0),
+  totalRidesCancelled: integer("total_rides_cancelled").default(0),
+  acceptanceRate: decimal("acceptance_rate", { precision: 5, scale: 2 }).default("0.00"),
+  completionRate: decimal("completion_rate", { precision: 5, scale: 2 }).default("0.00"),
+  avgRating: decimal("avg_rating", { precision: 3, scale: 2 }).default("5.00"),
+  avgResponseTime: integer("avg_response_time"),
+  totalEarnings: decimal("total_earnings", { precision: 12, scale: 2 }).default("0.00"),
+  peakHoursWorked: jsonb("peak_hours_worked").$type<Record<string, number>>(),
+  bestZones: jsonb("best_zones").$type<Array<{lat: number, lng: number, count: number}>>(),
+  disputeCount: integer("dispute_count").default(0),
+  sosCount: integer("sos_count").default(0),
+  lastUpdated: timestamp("last_updated").defaultNow(),
+});
+
+export const safetyAlerts = pgTable("safety_alerts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  alertType: varchar("alert_type").notNull(),
+  severity: varchar("severity").notNull(),
+  targetUserId: varchar("target_user_id").references(() => users.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  data: jsonb("data").$type<Record<string, any>>(),
+  isResolved: boolean("is_resolved").default(false),
+  resolvedBy: varchar("resolved_by").references(() => users.id),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const eventTrackingRelations = relations(eventTracking, ({ one }) => ({
+  user: one(users, {
+    fields: [eventTracking.userId],
+    references: [users.id],
+  }),
+}));
+
+export const aiFeedbackRelations = relations(aiFeedback, ({ one }) => ({
+  message: one(chatMessages, {
+    fields: [aiFeedback.messageId],
+    references: [chatMessages.id],
+  }),
+  conversation: one(conversations, {
+    fields: [aiFeedback.conversationId],
+    references: [conversations.id],
+  }),
+  user: one(users, {
+    fields: [aiFeedback.userId],
+    references: [users.id],
+  }),
+}));
+
+export const driverScorecardRelations = relations(driverScorecard, ({ one }) => ({
+  driver: one(users, {
+    fields: [driverScorecard.driverId],
+    references: [users.id],
+  }),
+}));
+
+export const safetyAlertsRelations = relations(safetyAlerts, ({ one }) => ({
+  targetUser: one(users, {
+    fields: [safetyAlerts.targetUserId],
+    references: [users.id],
+  }),
+}));
+
+// ============================================================
 // ZOD SCHEMAS
 // ============================================================
 
@@ -531,6 +662,32 @@ export const insertAdminActivityLogSchema = createInsertSchema(adminActivityLog)
   createdAt: true,
 });
 
+export const insertEventTrackingSchema = createInsertSchema(eventTracking).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertAiFeedbackSchema = createInsertSchema(aiFeedback).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertPlatformInsightSchema = createInsertSchema(platformInsights).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertFaqEntrySchema = createInsertSchema(faqEntries).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertSafetyAlertSchema = createInsertSchema(safetyAlerts).omit({
+  id: true,
+  createdAt: true,
+});
+
 // ============================================================
 // TYPES
 // ============================================================
@@ -564,3 +721,16 @@ export type InsertAdminActivityLog = z.infer<typeof insertAdminActivityLogSchema
 
 export type Conversation = typeof conversations.$inferSelect;
 export type ChatMessage = typeof chatMessages.$inferSelect;
+export type EventTracking = typeof eventTracking.$inferSelect;
+export type AiFeedback = typeof aiFeedback.$inferSelect;
+export type PlatformInsight = typeof platformInsights.$inferSelect;
+export type FaqEntry = typeof faqEntries.$inferSelect;
+export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
+export type DriverScorecardEntry = typeof driverScorecard.$inferSelect;
+export type SafetyAlert = typeof safetyAlerts.$inferSelect;
+
+export type InsertEventTracking = z.infer<typeof insertEventTrackingSchema>;
+export type InsertAiFeedback = z.infer<typeof insertAiFeedbackSchema>;
+export type InsertPlatformInsight = z.infer<typeof insertPlatformInsightSchema>;
+export type InsertFaqEntry = z.infer<typeof insertFaqEntrySchema>;
+export type InsertSafetyAlert = z.infer<typeof insertSafetyAlertSchema>;

@@ -27,8 +27,20 @@ Replit Auth provides OIDC-based user authentication. Server-side sessions are st
 ### Geographic and Location Services
 Browser-based geolocation, Leaflet maps with OpenStreetMap tiles, and real-time GPS tracking provide location functionality. Proximity search identifies nearby drivers, filtering by availability and estimated ride completion time.
 
-### AI Assistant
-An AI-powered chat assistant ("PG Ride Assistant") is accessible via the bottom navigation "Assistant" tab. It uses OpenAI (via Replit AI Integrations) with streaming responses. Users can create multiple conversations, get help with rides, payments, safety features, and platform questions. Conversations and messages are stored in PostgreSQL (`conversations` and `chat_messages` tables). API routes are under `/api/ai/conversations`.
+### AI Assistant (Self-Learning)
+An AI-powered chat assistant ("PG Ride Assistant") is accessible via the bottom navigation "Assistant" tab. It uses OpenAI (via Replit AI Integrations) with streaming responses and personalized context. The system dynamically builds prompts with user-specific data (ride history, balance, rating, driver status, recent activity) for tailored responses. Users can provide feedback (thumbs up/down) on AI responses, which feeds into satisfaction analytics. Conversations and messages are stored in PostgreSQL (`conversations` and `chat_messages` tables). API routes are under `/api/ai/conversations`.
+
+### Analytics & Self-Learning System
+The platform includes a comprehensive analytics and self-learning layer:
+- **Event Tracking**: Non-blocking, fire-and-forget analytics capturing ride searches, bookings, completions, feature usage, page views, and errors via the `useAnalytics` hook (frontend) and `/api/analytics/track` (backend). Stored in `event_tracking` table.
+- **AI Feedback**: Thumbs up/down on AI responses stored in `ai_feedback` table, with satisfaction rate metrics.
+- **Driver Scorecards**: Automated KPI computation (completion rate, acceptance rate, avg rating, earnings, disputes) stored in `driver_scorecard` table, refreshable via admin action.
+- **Demand Heatmap**: Ride data aggregated by location grid and time into `demand_heatmap` table for demand prediction.
+- **Safety Pattern Detection**: Automated detection of low completion rates, high disputes, multiple SOS incidents, and low driver ratings, generating alerts in `safety_alerts` table.
+- **FAQ Auto-Generation**: Uses OpenAI to summarize common AI chat topics into FAQ entries stored in `faq_entries` table.
+- **Platform Insights**: Actionable insights generated and stored in `platform_insights` table with priority levels and suggested actions.
+- **Driver Insights Page**: `/driver/insights` shows performance scorecards, optimal driving hours, and demand heatmap summaries.
+- **Admin Analytics Panel**: Admin dashboard's "Analytics" tab shows event stats, conversion funnel, AI satisfaction rates, safety alerts, platform insights, and admin action buttons for batch operations.
 
 ### Real-time Features
 WebSocket integration enables live ride updates, push notifications, and in-app messaging between drivers and riders.

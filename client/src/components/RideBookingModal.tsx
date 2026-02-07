@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 interface Driver {
   id: string;
@@ -48,6 +49,13 @@ export default function RideBookingModal({
   const [fareEstimate, setFareEstimate] = useState<FareEstimate | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { trackRideSearch, trackRideBooked } = useAnalytics();
+
+  useEffect(() => {
+    if (isOpen) {
+      trackRideSearch();
+    }
+  }, [isOpen, trackRideSearch]);
 
   // Calculate fare when destination changes
   const calculateFareMutation = useMutation({
@@ -70,6 +78,7 @@ export default function RideBookingModal({
       return response.json();
     },
     onSuccess: () => {
+      trackRideBooked();
       toast({
         title: "Ride Booked!",
         description: "Your driver is on the way. You'll receive updates shortly.",

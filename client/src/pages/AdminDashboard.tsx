@@ -16,11 +16,12 @@ import {
   LayoutDashboard, Users, Car, MapPin, AlertTriangle,
   DollarSign, Award, TrendingUp, Shield, Activity,
   CheckCircle, XCircle, Eye, Ban, UserCheck, Clock,
-  ChevronLeft
+  ChevronLeft, BarChart3, Brain, AlertCircle, BookOpen,
+  RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap
 } from "lucide-react";
 import { useLocation } from "wouter";
 
-type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "disputes" | "finances" | "ownership" | "profits" | "activity";
+type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "disputes" | "finances" | "ownership" | "profits" | "activity" | "analytics";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -52,6 +53,7 @@ export default function AdminDashboard() {
     { id: "ownership", label: "Ownership", icon: Award },
     { id: "profits", label: "Profits", icon: TrendingUp },
     { id: "activity", label: "Activity Log", icon: Activity },
+    { id: "analytics", label: "Analytics", icon: BarChart3 },
   ];
 
   return (
@@ -111,6 +113,7 @@ export default function AdminDashboard() {
           {activeTab === "ownership" && <OwnershipPanel />}
           {activeTab === "profits" && <ProfitsPanel />}
           {activeTab === "activity" && <ActivityPanel />}
+          {activeTab === "analytics" && <AnalyticsPanel />}
         </main>
       </div>
     </div>
@@ -775,6 +778,356 @@ function ActivityPanel() {
         ))}
         {activityLog.length === 0 && <p className="text-muted-foreground text-center py-8">No activity recorded yet.</p>}
       </div>
+    </div>
+  );
+}
+
+function AnalyticsPanel() {
+  const { toast } = useToast();
+
+  const { data: eventStats, isLoading: loadingEvents } = useQuery<{
+    totalEvents: number;
+    uniqueUsers: number;
+    topEvents: { eventType: string; count: number }[];
+    last24h: number;
+  }>({ queryKey: ["/api/admin/analytics/events"] });
+
+  const { data: aiFeedback, isLoading: loadingFeedback } = useQuery<{
+    totalFeedback: number;
+    helpful: number;
+    notHelpful: number;
+    helpfulRate: number;
+  }>({ queryKey: ["/api/admin/analytics/ai-feedback"] });
+
+  const { data: conversion, isLoading: loadingConversion } = useQuery<{
+    searches: number;
+    bookings: number;
+    completions: number;
+    searchToBookRate: number;
+    bookToCompleteRate: number;
+  }>({ queryKey: ["/api/admin/analytics/conversion"] });
+
+  const { data: insights = [], isLoading: loadingInsights } = useQuery<any[]>({
+    queryKey: ["/api/admin/analytics/insights"],
+  });
+
+  const { data: safetyAlerts = [], isLoading: loadingSafety } = useQuery<any[]>({
+    queryKey: ["/api/admin/analytics/safety-alerts"],
+  });
+
+  const refreshScoreCards = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/admin/analytics/refresh-scorecards");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics/scorecards"] });
+      toast({ title: "Scorecards refreshed" });
+    },
+    onError: () => {
+      toast({ title: "Error refreshing scorecards", variant: "destructive" });
+    },
+  });
+
+  const detectSafety = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/admin/analytics/detect-safety-patterns");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics/safety-alerts"] });
+      toast({ title: "Safety patterns analyzed" });
+    },
+    onError: () => {
+      toast({ title: "Error detecting safety patterns", variant: "destructive" });
+    },
+  });
+
+  const generateHeatmap = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/admin/analytics/generate-demand-heatmap");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/demand-heatmap"] });
+      toast({ title: "Demand heatmap generated" });
+    },
+    onError: () => {
+      toast({ title: "Error generating heatmap", variant: "destructive" });
+    },
+  });
+
+  const generateFaq = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/admin/analytics/generate-faq");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/faq"] });
+      toast({ title: "FAQ entries generated from AI conversations" });
+    },
+    onError: () => {
+      toast({ title: "Error generating FAQ", variant: "destructive" });
+    },
+  });
+
+  const resolveAlert = useMutation({
+    mutationFn: async (alertId: number) => {
+      await apiRequest("POST", `/api/admin/analytics/safety-alerts/${alertId}/resolve`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics/safety-alerts"] });
+      toast({ title: "Alert resolved" });
+    },
+  });
+
+  const markInsightRead = useMutation({
+    mutationFn: async (insightId: number) => {
+      await apiRequest("POST", `/api/admin/analytics/insights/${insightId}/read`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics/insights"] });
+    },
+  });
+
+  const isLoading = loadingEvents || loadingFeedback || loadingConversion;
+
+  return (
+    <div data-testid="panel-analytics">
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-bold">Platform Analytics</h2>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <Card data-testid="stat-total-events">
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Total Events</p>
+                <p className="text-2xl font-bold mt-1">{isLoading ? '...' : eventStats?.totalEvents || 0}</p>
+                <p className="text-xs text-muted-foreground">{eventStats?.last24h || 0} in last 24h</p>
+              </div>
+              <BarChart3 className="w-8 h-8 text-blue-600" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card data-testid="stat-unique-users">
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Unique Users Tracked</p>
+                <p className="text-2xl font-bold mt-1">{isLoading ? '...' : eventStats?.uniqueUsers || 0}</p>
+              </div>
+              <Users className="w-8 h-8 text-green-600" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card data-testid="stat-ai-satisfaction">
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">AI Satisfaction</p>
+                <p className="text-2xl font-bold mt-1">
+                  {isLoading ? '...' : `${(aiFeedback?.helpfulRate || 0).toFixed(0)}%`}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {aiFeedback?.helpful || 0} <ThumbsUp className="w-3 h-3 inline" /> / {aiFeedback?.notHelpful || 0} <ThumbsDown className="w-3 h-3 inline" />
+                </p>
+              </div>
+              <Brain className="w-8 h-8 text-purple-600" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card data-testid="stat-conversion">
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Search → Book Rate</p>
+                <p className="text-2xl font-bold mt-1">
+                  {isLoading ? '...' : `${(conversion?.searchToBookRate || 0).toFixed(1)}%`}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Book → Complete: {(conversion?.bookToCompleteRate || 0).toFixed(1)}%
+                </p>
+              </div>
+              <TrendingUp className="w-8 h-8 text-orange-600" />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <Card data-testid="card-conversion-funnel">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <TrendingUp className="w-5 h-5" /> Conversion Funnel
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div>
+                <div className="flex justify-between text-sm mb-1">
+                  <span>Ride Searches</span>
+                  <span className="font-medium">{conversion?.searches || 0}</span>
+                </div>
+                <Progress value={100} className="h-3" />
+              </div>
+              <div>
+                <div className="flex justify-between text-sm mb-1">
+                  <span>Bookings</span>
+                  <span className="font-medium">{conversion?.bookings || 0}</span>
+                </div>
+                <Progress value={conversion?.searchToBookRate || 0} className="h-3" />
+              </div>
+              <div>
+                <div className="flex justify-between text-sm mb-1">
+                  <span>Completions</span>
+                  <span className="font-medium">{conversion?.completions || 0}</span>
+                </div>
+                <Progress value={conversion?.bookToCompleteRate || 0} className="h-3" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card data-testid="card-top-events">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Zap className="w-5 h-5" /> Top Events
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {eventStats?.topEvents?.slice(0, 8).map((evt) => (
+                <div key={evt.eventType} className="flex justify-between items-center py-1 border-b border-border last:border-0">
+                  <span className="text-sm">{evt.eventType.replace(/_/g, ' ')}</span>
+                  <Badge variant="secondary">{evt.count}</Badge>
+                </div>
+              ))}
+              {(!eventStats?.topEvents || eventStats.topEvents.length === 0) && (
+                <p className="text-muted-foreground text-sm text-center py-4">No events tracked yet</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="mb-6" data-testid="card-admin-actions">
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <RefreshCw className="w-5 h-5" /> Analytics Actions
+          </CardTitle>
+          <CardDescription>Generate insights, refresh data, and detect patterns</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <Button
+              variant="outline"
+              onClick={() => refreshScoreCards.mutate()}
+              disabled={refreshScoreCards.isPending}
+              data-testid="btn-refresh-scorecards"
+            >
+              {refreshScoreCards.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+              Scorecards
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => detectSafety.mutate()}
+              disabled={detectSafety.isPending}
+              data-testid="btn-detect-safety"
+            >
+              {detectSafety.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <AlertCircle className="w-4 h-4 mr-2" />}
+              Safety Scan
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => generateHeatmap.mutate()}
+              disabled={generateHeatmap.isPending}
+              data-testid="btn-generate-heatmap"
+            >
+              {generateHeatmap.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <MapPin className="w-4 h-4 mr-2" />}
+              Heatmap
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => generateFaq.mutate()}
+              disabled={generateFaq.isPending}
+              data-testid="btn-generate-faq"
+            >
+              {generateFaq.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <BookOpen className="w-4 h-4 mr-2" />}
+              Auto FAQ
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {safetyAlerts.length > 0 && (
+        <Card className="mb-6 border-red-200" data-testid="card-safety-alerts">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2 text-red-600">
+              <AlertTriangle className="w-5 h-5" /> Safety Alerts ({safetyAlerts.filter((a: any) => !a.resolved).length} active)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {safetyAlerts.filter((a: any) => !a.resolved).slice(0, 10).map((alert: any) => (
+                <div key={alert.id} className="flex items-start justify-between p-3 bg-red-50 rounded-lg border border-red-100" data-testid={`safety-alert-${alert.id}`}>
+                  <div>
+                    <p className="text-sm font-medium text-red-900">{alert.alertType?.replace(/_/g, ' ')}</p>
+                    <p className="text-xs text-red-700 mt-1">{alert.description}</p>
+                    <Badge variant="outline" className="mt-1 text-xs">
+                      Severity: {alert.severity}
+                    </Badge>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => resolveAlert.mutate(alert.id)}
+                    data-testid={`btn-resolve-alert-${alert.id}`}
+                  >
+                    <CheckCircle className="w-4 h-4 text-green-600" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {insights.length > 0 && (
+        <Card data-testid="card-insights">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Brain className="w-5 h-5" /> Platform Insights
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {insights.filter((i: any) => !i.isRead).slice(0, 10).map((insight: any) => (
+                <div key={insight.id} className="flex items-start justify-between p-3 bg-blue-50 rounded-lg border border-blue-100" data-testid={`insight-${insight.id}`}>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary" className="text-xs">{insight.insightType?.replace(/_/g, ' ')}</Badge>
+                      <Badge variant="outline" className="text-xs">Priority: {insight.priority}</Badge>
+                    </div>
+                    <p className="text-sm mt-2">{insight.description}</p>
+                    {insight.suggestedAction && (
+                      <p className="text-xs text-blue-700 mt-1">Suggested: {insight.suggestedAction}</p>
+                    )}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => markInsightRead.mutate(insight.id)}
+                    data-testid={`btn-read-insight-${insight.id}`}
+                  >
+                    <Eye className="w-4 h-4" />
+                  </Button>
+                </div>
+              ))}
+              {insights.filter((i: any) => !i.isRead).length === 0 && (
+                <p className="text-muted-foreground text-sm text-center py-4">All insights reviewed</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

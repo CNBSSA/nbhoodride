@@ -1907,7 +1907,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // AI ASSISTANT CHAT ROUTES
   // ============================================================
 
-  const SYSTEM_PROMPT = `You are PG Ride Assistant, a helpful AI assistant for the PG County Community Ride-Share Platform. You help riders and drivers with questions about:
+  const BASE_SYSTEM_PROMPT = `You are PG Ride Assistant, a helpful AI assistant for the PG County Community Ride-Share Platform. You help riders and drivers with questions about:
 - How to book rides, schedule rides, and find drivers
 - Payment information (Virtual PG Card system, fare estimation)
 - Driver registration and verification
@@ -1916,7 +1916,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
 - The cooperative ownership model for drivers
 - General questions about the platform
 
-Be friendly, concise, and helpful. If you don't know something specific about the user's account, suggest they check the relevant section of the app. Keep responses brief but informative.`;
+Be friendly, concise, and helpful. Keep responses brief but informative.`;
+
+  async function buildPersonalizedPrompt(userId: string): Promise<string> {
+    try {
+      const user = await storage.getUser(userId);
+      if (!user) return BASE_SYSTEM_PROMPT;
+
+      const recentRides = await storage.getRidesByUser(userId, 5);
+      const completedRides = recentRides.filter(r => r.status === 'completed');
+      const activeRides = recentRides.filter(r => ['pending', 'accepted', 'driver_arriving', 'in_progress'].includes(r.status || ''));
+
+      let context = BASE_SYSTEM_PROMPT + `\n\n--- USER CONTEXT (use this to personalize your responses) ---`;
+      context += `\nUser: ${user.firstName || 'Unknown'} ${user.lastName || ''}`;
+      context += `\nRole: ${user.isDriver ? 'Driver' : 'Rider'}`;
+      context += `\nRating: ${user.rating || '5.00'}/5`;
+      context += `\nTotal Rides: ${user.totalRides || 0}`;
+      context += `\nVirtual Card Balance: $${user.virtualCardBalance || '0.00'}`;
+
+      if (activeRides.length > 0) {
+        context += `\nActive Rides: ${activeRides.length} (statuses: ${activeRides.map(r => r.status).join(', ')})`;
+      }
+
+      if (completedRides.length > 0) {
+        const avgFare = completedRides.reduce((sum, r) => sum + parseFloat(r.actualFare?.toString() || '0'), 0) / completedRides.length;
+        context += `\nRecent Completed Rides: ${completedRides.length}`;
+        context += `\nAvg Fare: $${avgFare.toFixed(2)}`;
+      }
+
+      if (user.isDriver) {
+        const profile = await storage.getDriverProfile(userId);
+        if (profile) {
+          context += `\nDriver Status: ${profile.isOnline ? 'Online' : 'Offline'}`;
+          context += `\nVerified Neighbor: ${profile.isVerifiedNeighbor ? 'Yes' : 'No'}`;
+          context += `\nApproval: ${profile.approvalStatus}`;
+        }
+      }
+
+      context += `\n--- END USER CONTEXT ---`;
+      context += `\nUse this context to give personalized, relevant answers. Reference their actual data when helpful (e.g., balance, ride count). Don't repeat this context back verbatim.`;
+
+      return context;
+    } catch {
+      return BASE_SYSTEM_PROMPT;
+    }
+  }
 
   app.get('/api/ai/conversations', sessionOrOidcAuth, async (req: any, res) => {
     try {
@@ -1987,8 +2031,9 @@ Be friendly, concise, and helpful. If you don't know something specific about th
       await storage.createChatMessage(id, "user", content);
 
       const existingMessages = await storage.getChatMessages(id);
+      const personalizedPrompt = await buildPersonalizedPrompt(userId);
       const chatHistory: Array<{role: "system" | "user" | "assistant", content: string}> = [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: personalizedPrompt },
         ...existingMessages.map((m) => ({
           role: m.role as "user" | "assistant",
           content: m.content,
@@ -2028,6 +2073,340 @@ Be friendly, concise, and helpful. If you don't know something specific about th
       } else {
         res.status(500).json({ message: "Failed to send message" });
       }
+    }
+  });
+
+  // ============================================================
+  // ANALYTICS & SELF-LEARNING ROUTES
+  // ============================================================
+
+  app.post('/api/analytics/events', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { eventType, eventCategory, eventData, sessionId } = req.body;
+      if (!eventType || !eventCategory) {
+        return res.status(400).json({ message: "eventType and eventCategory are required" });
+      }
+      const event = await storage.trackEvent({ userId, eventType, eventCategory, eventData, sessionId });
+      res.json(event);
+    } catch (error) {
+      console.error("Error tracking event:", error);
+      res.status(500).json({ message: "Failed to track event" });
+    }
+  });
+
+  app.post('/api/ai/feedback', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { messageId, conversationId, rating, reason } = req.body;
+      if (!messageId || !conversationId || !rating) {
+        return res.status(400).json({ message: "messageId, conversationId, and rating are required" });
+      }
+      const feedback = await storage.submitAiFeedback({ messageId, conversationId, userId, rating, reason });
+      res.json(feedback);
+    } catch (error) {
+      console.error("Error submitting feedback:", error);
+      res.status(500).json({ message: "Failed to submit feedback" });
+    }
+  });
+
+  app.get('/api/faq', async (req, res) => {
+    try {
+      const entries = await storage.getFaqEntries(true);
+      res.json(entries);
+    } catch (error) {
+      console.error("Error fetching FAQs:", error);
+      res.status(500).json({ message: "Failed to fetch FAQs" });
+    }
+  });
+
+  app.get('/api/driver/scorecard', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const scorecard = await storage.upsertDriverScorecard(userId);
+      res.json(scorecard);
+    } catch (error) {
+      console.error("Error fetching scorecard:", error);
+      res.status(500).json({ message: "Failed to fetch scorecard" });
+    }
+  });
+
+  app.get('/api/driver/optimal-hours', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const hours = await storage.getDriverOptimalHours(userId);
+      res.json(hours);
+    } catch (error) {
+      console.error("Error fetching optimal hours:", error);
+      res.status(500).json({ message: "Failed to fetch optimal hours" });
+    }
+  });
+
+  app.get('/api/demand-heatmap', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const hourOfDay = req.query.hour ? parseInt(req.query.hour) : undefined;
+      const dayOfWeek = req.query.day ? parseInt(req.query.day) : undefined;
+      const data = await storage.getDemandHeatmap(hourOfDay, dayOfWeek);
+      res.json(data);
+    } catch (error) {
+      console.error("Error fetching demand heatmap:", error);
+      res.status(500).json({ message: "Failed to fetch demand data" });
+    }
+  });
+
+  // Admin analytics routes
+  app.get('/api/admin/analytics/events', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const days = parseInt(req.query.days || '7');
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+      const stats = await storage.getEventStats(startDate, new Date());
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching event stats:", error);
+      res.status(500).json({ message: "Failed to fetch event stats" });
+    }
+  });
+
+  app.get('/api/admin/analytics/ai-feedback', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const stats = await storage.getAiFeedbackStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching AI feedback stats:", error);
+      res.status(500).json({ message: "Failed to fetch AI feedback stats" });
+    }
+  });
+
+  app.get('/api/admin/analytics/conversion', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const days = parseInt(req.query.days || '30');
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+      const metrics = await storage.getConversionMetrics(startDate, new Date());
+      res.json(metrics);
+    } catch (error) {
+      console.error("Error fetching conversion metrics:", error);
+      res.status(500).json({ message: "Failed to fetch conversion metrics" });
+    }
+  });
+
+  app.get('/api/admin/analytics/insights', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const insights = await storage.getPlatformInsights();
+      res.json(insights);
+    } catch (error) {
+      console.error("Error fetching insights:", error);
+      res.status(500).json({ message: "Failed to fetch insights" });
+    }
+  });
+
+  app.post('/api/admin/analytics/insights/:id/read', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      await storage.markInsightRead(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking insight read:", error);
+      res.status(500).json({ message: "Failed to mark insight" });
+    }
+  });
+
+  app.get('/api/admin/analytics/safety-alerts', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const alerts = await storage.getActiveSafetyAlerts();
+      res.json(alerts);
+    } catch (error) {
+      console.error("Error fetching safety alerts:", error);
+      res.status(500).json({ message: "Failed to fetch safety alerts" });
+    }
+  });
+
+  app.post('/api/admin/analytics/safety-alerts/:id/resolve', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const alert = await storage.resolveSafetyAlert(req.params.id, userId);
+      res.json(alert);
+    } catch (error) {
+      console.error("Error resolving safety alert:", error);
+      res.status(500).json({ message: "Failed to resolve alert" });
+    }
+  });
+
+  app.get('/api/admin/analytics/scorecards', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const scorecards = await storage.getAllDriverScorecards();
+      res.json(scorecards);
+    } catch (error) {
+      console.error("Error fetching scorecards:", error);
+      res.status(500).json({ message: "Failed to fetch scorecards" });
+    }
+  });
+
+  app.get('/api/admin/faq', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const entries = await storage.getFaqEntries(false);
+      res.json(entries);
+    } catch (error) {
+      console.error("Error fetching FAQs:", error);
+      res.status(500).json({ message: "Failed to fetch FAQs" });
+    }
+  });
+
+  app.post('/api/admin/faq', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { question, answer, category } = req.body;
+      const entry = await storage.createFaqEntry({ question, answer, category });
+      res.json(entry);
+    } catch (error) {
+      console.error("Error creating FAQ:", error);
+      res.status(500).json({ message: "Failed to create FAQ" });
+    }
+  });
+
+  app.patch('/api/admin/faq/:id', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const entry = await storage.updateFaqEntry(req.params.id, req.body);
+      res.json(entry);
+    } catch (error) {
+      console.error("Error updating FAQ:", error);
+      res.status(500).json({ message: "Failed to update FAQ" });
+    }
+  });
+
+  app.post('/api/admin/analytics/generate-demand-heatmap', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const allRides = await storage.getAllCompletedRides();
+      const completedRides = allRides.filter(r => r.pickupLocation);
+      let processed = 0;
+      for (const ride of completedRides) {
+        const pickup = ride.pickupLocation as any;
+        if (!pickup?.lat || !pickup?.lng) continue;
+        const gridLat = (Math.round(pickup.lat * 100) / 100).toFixed(6);
+        const gridLng = (Math.round(pickup.lng * 100) / 100).toFixed(6);
+        const d = new Date(ride.createdAt || new Date());
+        await storage.upsertDemandHeatmap({
+          gridLat, gridLng,
+          hourOfDay: d.getHours(),
+          dayOfWeek: d.getDay(),
+          rideCount: 1,
+          avgFare: ride.actualFare?.toString(),
+        });
+        processed++;
+      }
+      res.json({ processed, message: `Generated heatmap from ${processed} rides` });
+    } catch (error) {
+      console.error("Error generating heatmap:", error);
+      res.status(500).json({ message: "Failed to generate heatmap" });
+    }
+  });
+
+  app.post('/api/admin/analytics/refresh-scorecards', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const allDrivers = await storage.getAllDriverProfiles();
+      const scorecards = [];
+      for (const driver of allDrivers) {
+        const scorecard = await storage.upsertDriverScorecard(driver.userId);
+        scorecards.push(scorecard);
+      }
+      res.json({ count: scorecards.length, scorecards });
+    } catch (error) {
+      console.error("Error refreshing scorecards:", error);
+      res.status(500).json({ message: "Failed to refresh scorecards" });
+    }
+  });
+
+  app.post('/api/admin/analytics/detect-safety-patterns', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const alerts: any[] = [];
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+      const allDriverProfiles = await storage.getAllDriverProfiles();
+      for (const driver of allDriverProfiles) {
+        const scorecard = await storage.getDriverScorecard(driver.userId);
+        if (scorecard) {
+          if (parseFloat(scorecard.completionRate?.toString() || '100') < 50 && (scorecard.totalRidesCompleted || 0) + (scorecard.totalRidesCancelled || 0) >= 5) {
+            const alert = await storage.createSafetyAlert({
+              alertType: 'low_completion_rate',
+              severity: 'warning',
+              targetUserId: driver.userId,
+              title: `Low completion rate: ${scorecard.completionRate}%`,
+              description: `Driver has completed only ${scorecard.totalRidesCompleted} of ${(scorecard.totalRidesCompleted || 0) + (scorecard.totalRidesCancelled || 0)} rides`,
+              data: { completionRate: scorecard.completionRate, totalRides: (scorecard.totalRidesCompleted || 0) + (scorecard.totalRidesCancelled || 0) },
+            });
+            alerts.push(alert);
+          }
+          if ((scorecard.disputeCount || 0) >= 3) {
+            const alert = await storage.createSafetyAlert({
+              alertType: 'high_dispute_count',
+              severity: 'critical',
+              targetUserId: driver.userId,
+              title: `High dispute count: ${scorecard.disputeCount} disputes`,
+              description: `Driver has ${scorecard.disputeCount} reported disputes`,
+              data: { disputeCount: scorecard.disputeCount },
+            });
+            alerts.push(alert);
+          }
+          if ((scorecard.sosCount || 0) >= 2) {
+            const alert = await storage.createSafetyAlert({
+              alertType: 'multiple_sos',
+              severity: 'critical',
+              targetUserId: driver.userId,
+              title: `Multiple SOS incidents: ${scorecard.sosCount}`,
+              description: `Driver involved in ${scorecard.sosCount} SOS/emergency incidents`,
+              data: { sosCount: scorecard.sosCount },
+            });
+            alerts.push(alert);
+          }
+          if (parseFloat(scorecard.avgRating?.toString() || '5') < 3.0 && (scorecard.totalRidesCompleted || 0) >= 5) {
+            const alert = await storage.createSafetyAlert({
+              alertType: 'low_rating',
+              severity: 'warning',
+              targetUserId: driver.userId,
+              title: `Low driver rating: ${scorecard.avgRating}`,
+              description: `Driver average rating is below 3.0 with ${scorecard.totalRidesCompleted} completed rides`,
+              data: { avgRating: scorecard.avgRating, totalRides: scorecard.totalRidesCompleted },
+            });
+            alerts.push(alert);
+          }
+        }
+      }
+      res.json({ alertsGenerated: alerts.length, alerts });
+    } catch (error) {
+      console.error("Error detecting safety patterns:", error);
+      res.status(500).json({ message: "Failed to detect safety patterns" });
+    }
+  });
+
+  app.post('/api/admin/analytics/generate-faq', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const recentMessages = await storage.getEventsByType('ai_chat_message', 200);
+      const allConvos = await storage.getPlatformInsights(0);
+      
+      const faqPrompt = `Based on a ride-share platform's AI assistant conversations, generate 5-8 frequently asked questions with clear, helpful answers. Focus on common user questions about rides, payments, safety, and the platform. Format as JSON array: [{"question": "...", "answer": "...", "category": "rides|payments|safety|platform|drivers"}]`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-5.2",
+        messages: [{ role: "system", content: faqPrompt }],
+        max_completion_tokens: 2048,
+        response_format: { type: "json_object" },
+      });
+
+      const content = response.choices[0]?.message?.content || '{"faqs":[]}';
+      const parsed = JSON.parse(content);
+      const faqs = parsed.faqs || parsed;
+
+      const created = [];
+      for (const faq of (Array.isArray(faqs) ? faqs : [])) {
+        if (faq.question && faq.answer && faq.category) {
+          const entry = await storage.createFaqEntry({ question: faq.question, answer: faq.answer, category: faq.category });
+          created.push(entry);
+        }
+      }
+      res.json({ generated: created.length, faqs: created });
+    } catch (error) {
+      console.error("Error generating FAQs:", error);
+      res.status(500).json({ message: "Failed to generate FAQs" });
     }
   });
 
