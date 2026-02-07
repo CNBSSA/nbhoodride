@@ -296,7 +296,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Object storage routes for driver documents
   app.get("/objects/:objectPath(*)", isAuthenticated, async (req: any, res) => {
-    const userId = req.user?.claims?.sub;
+    const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
     const objectStorageService = new ObjectStorageService();
     try {
       const objectFile = await objectStorageService.getObjectEntityFile(req.path);
@@ -327,7 +327,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Driver profile routes
   app.post('/api/driver/profile', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const profileData = insertDriverProfileSchema.parse({
         ...req.body,
         userId
@@ -347,7 +347,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put('/api/driver/profile', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const updates = req.body;
       
       const profile = await storage.updateDriverProfile(userId, updates);
@@ -360,7 +360,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/driver/toggle-status', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { isOnline } = req.body;
       
       await storage.toggleDriverOnlineStatus(userId, isOnline);
@@ -373,7 +373,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/driver/location', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { lat, lng } = req.body;
       
       await storage.updateDriverLocation(userId, { lat, lng });
@@ -387,7 +387,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Driver ride management endpoints
   app.get('/api/driver/pending-rides', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const rides = await storage.getPendingRidesForDriver(userId);
       res.json(rides);
     } catch (error) {
@@ -398,7 +398,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/driver/rides/:rideId/accept', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       
       const ride = await storage.acceptRide(rideId, userId);
@@ -460,7 +460,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/driver/rides/:rideId/decline', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       
       await storage.declineRide(rideId, userId);
@@ -507,7 +507,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Driver ride status update endpoints
   app.post('/api/driver/rides/:rideId/start', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       
       const ride = await storage.startRide(rideId, userId);
@@ -551,7 +551,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Track GPS waypoint during active ride
   app.post('/api/driver/rides/:rideId/track-location', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       
       // Validate waypoint
@@ -578,7 +578,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get real-time ride stats (distance, duration, estimated fare)
   app.get('/api/driver/rides/:rideId/stats', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       
       const stats = await storage.getRideStats(rideId, userId);
@@ -596,7 +596,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/driver/rides/:rideId/complete', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       
       // Validate request body - actualFare is now optional to allow automatic calculation
@@ -613,8 +613,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
         try {
           const estimatedFare = parseFloat(ride.estimatedFare || "0");
-          const totalAmount = actualFare + (tipAmount || 0);
-          const priceDifference = actualFare - estimatedFare;
+          const finalFare = actualFare ?? parseFloat(ride.actualFare || "0");
+          const totalAmount = finalFare + (tipAmount || 0);
+          const priceDifference = finalFare - estimatedFare;
           
           console.log(`Processing virtual card payment for ride ${rideId}: Estimated: $${estimatedFare}, Actual: $${actualFare}, Tip: $${tipAmount || 0}`);
           
@@ -702,7 +703,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/driver/active-rides', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const rides = await storage.getActiveRidesForDriver(userId);
       res.json(rides);
     } catch (error) {
@@ -714,7 +715,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Driver earnings endpoints
   app.get('/api/driver/earnings/:period', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { period } = req.params;
       
       if (!['today', 'week', 'month'].includes(period)) {
@@ -731,7 +732,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/driver/rides/:period', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { period } = req.params;
       
       if (!['today', 'week', 'month'].includes(period)) {
@@ -747,9 +748,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Vehicle routes
+  app.get('/api/vehicles', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const driverProfile = await storage.getDriverProfile(userId);
+      if (!driverProfile) {
+        return res.json([]);
+      }
+      const vehicleList = await storage.getVehiclesByDriverId(driverProfile.id);
+      res.json(vehicleList);
+    } catch (error) {
+      console.error("Error getting vehicles:", error);
+      res.status(500).json({ message: "Failed to get vehicles" });
+    }
+  });
+
   app.post('/api/vehicles', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const driverProfile = await storage.getDriverProfile(userId);
       
       if (!driverProfile) {
@@ -788,7 +804,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(400).json({ error: "photoURL and vehicleId are required" });
     }
 
-    const userId = req.user?.claims?.sub;
+    const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
     try {
       const objectStorageService = new ObjectStorageService();
@@ -856,7 +872,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/rides', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       
       console.log("Ride creation request body:", JSON.stringify(req.body, null, 2));
       
@@ -911,7 +927,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/rides/:rideId/cancel', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       const { reason, driverTraveledDistance, driverTraveledTime } = req.body;
       
@@ -1020,7 +1036,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/rides', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { limit } = req.query;
       
       const rides = await storage.getRidesByUser(userId, limit ? parseInt(limit) : undefined);
@@ -1033,7 +1049,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/rides/active', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const rides = await storage.getActiveRides(userId);
       res.json(rides);
     } catch (error) {
@@ -1045,7 +1061,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get scheduled rides for the current user
   app.get('/api/rides/scheduled', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const rides = await storage.getScheduledRides(userId);
       res.json(rides);
     } catch (error) {
@@ -1057,7 +1073,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Rating and Payment routes (must come before parameterized /api/rides/:rideId route)
   app.get('/api/rides/for-rating', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const rides = await storage.getRidesForRating(userId);
       res.json(rides);
     } catch (error) {
@@ -1068,7 +1084,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/rides/awaiting-payment', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const rides = await storage.getRidesAwaitingPayment(userId);
       res.json(rides);
     } catch (error) {
@@ -1095,7 +1111,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/rides/:rideId/rating', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       
       // Validate rating data
@@ -1147,7 +1163,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Payment confirmation route
   app.post('/api/rides/:rideId/confirm-payment', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       
       // Validate payment confirmation data
@@ -1177,7 +1193,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Stripe card payment routes
   app.post('/api/payment/setup-card', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const user = await storage.getUser(userId);
       
       if (!user) {
@@ -1214,7 +1230,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/payment/methods', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const user = await storage.getUser(userId);
       
       if (!user) {
@@ -1235,7 +1251,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Dispute routes
   app.post('/api/disputes', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const disputeData = insertDisputeSchema.parse({
         ...req.body,
         reporterId: userId
@@ -1263,7 +1279,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Emergency contact management routes
   app.put('/api/user/emergency-contact', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { emergencyContact } = req.body;
       
       if (!emergencyContact || typeof emergencyContact !== 'string') {
@@ -1280,7 +1296,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/emergency/test', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { type } = req.body;
       
       if (!type || !['sms', 'call'].includes(type)) {
@@ -1330,7 +1346,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Enhanced emergency routes
   app.post('/api/emergency/start', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { incidentType, rideId, location, description } = req.body;
       
       // Generate a unique share token for live location sharing
@@ -1432,7 +1448,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Legacy emergency route for backward compatibility
   app.post('/api/emergency', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user?.claims?.sub;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const incidentData = insertEmergencyIncidentSchema.parse({
         ...req.body,
         userId

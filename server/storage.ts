@@ -149,12 +149,12 @@ export interface IStorage {
   
   // Rating operations
   updateRideRating(rideId: string, raterId: string, rating: number, review?: string): Promise<void>;
-  getRidesForRating(userId: string): Promise<Ride[]>;
+  getRidesForRating(userId: string): Promise<any[]>;
   updateUserRating(userId: string): Promise<void>;
   
   // Payment operations
   confirmCashPayment(rideId: string, confirmerId: string, tipAmount?: number): Promise<Ride>;
-  getRidesAwaitingPayment(userId: string): Promise<Ride[]>;
+  getRidesAwaitingPayment(userId: string): Promise<any[]>;
   updateUserStripeInfo(userId: string, stripeCustomerId?: string, stripePaymentMethodId?: string): Promise<User>;
   setRidePaymentAuthorization(rideId: string, paymentIntentId: string): Promise<Ride>;
   captureRidePayment(rideId: string, capturedAmount?: number, tipAmount?: number): Promise<Ride>;
@@ -183,12 +183,12 @@ export interface IStorage {
   getDriverRides(driverId: string, period: 'today' | 'week' | 'month'): Promise<Ride[]>;
   
   // Driver ride management operations
-  getPendingRidesForDriver(driverId: string): Promise<Ride[]>;
+  getPendingRidesForDriver(driverId: string): Promise<any[]>;
   acceptRide(rideId: string, driverId: string): Promise<Ride>;
   declineRide(rideId: string, driverId: string): Promise<void>;
   startRide(rideId: string, driverId: string): Promise<Ride>;
   completeRide(rideId: string, driverId: string, actualFare?: number): Promise<Ride>;
-  getActiveRidesForDriver(driverId: string): Promise<Ride[]>;
+  getActiveRidesForDriver(driverId: string): Promise<any[]>;
   
   // GPS tracking operations
   addRouteWaypoint(rideId: string, driverId: string, waypoint: {lat: number, lng: number}): Promise<void>;
@@ -394,7 +394,7 @@ export class DatabaseStorage implements IStorage {
   async createVehicle(vehicle: InsertVehicle): Promise<Vehicle> {
     const [newVehicle] = await db
       .insert(vehicles)
-      .values([vehicle])
+      .values([vehicle as any])
       .returning();
     return newVehicle;
   }
@@ -423,7 +423,7 @@ export class DatabaseStorage implements IStorage {
   async createRide(ride: InsertRide): Promise<Ride> {
     const [newRide] = await db
       .insert(rides)
-      .values(ride)
+      .values(ride as any)
       .returning();
     return newRide;
   }
@@ -439,7 +439,7 @@ export class DatabaseStorage implements IStorage {
   async updateRide(rideId: string, updates: Partial<InsertRide>): Promise<Ride> {
     const [ride] = await db
       .update(rides)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...updates, updatedAt: new Date() } as any)
       .where(eq(rides.id, rideId))
       .returning();
     return ride;
@@ -677,7 +677,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Driver ride management operations
-  async getPendingRidesForDriver(driverId: string): Promise<Ride[]> {
+  async getPendingRidesForDriver(driverId: string): Promise<any[]> {
     return await db
       .select({
         id: rides.id,
@@ -687,12 +687,20 @@ export class DatabaseStorage implements IStorage {
         destinationLocation: rides.destinationLocation,
         pickupInstructions: rides.pickupInstructions,
         status: rides.status,
+        paymentMethod: rides.paymentMethod,
         estimatedFare: rides.estimatedFare,
         actualFare: rides.actualFare,
         distance: rides.distance,
         duration: rides.duration,
         tipAmount: rides.tipAmount,
         paymentStatus: rides.paymentStatus,
+        stripePaymentIntentId: rides.stripePaymentIntentId,
+        refundedAmount: rides.refundedAmount,
+        cancellationFee: rides.cancellationFee,
+        cancellationReason: rides.cancellationReason,
+        driverTraveledDistance: rides.driverTraveledDistance,
+        driverTraveledTime: rides.driverTraveledTime,
+        routePath: rides.routePath,
         cashReceivedAt: rides.cashReceivedAt,
         paidBy: rides.paidBy,
         riderRating: rides.riderRating,
@@ -705,7 +713,6 @@ export class DatabaseStorage implements IStorage {
         completedAt: rides.completedAt,
         createdAt: rides.createdAt,
         updatedAt: rides.updatedAt,
-        // Include rider details
         rider: {
           id: users.id,
           firstName: users.firstName,
@@ -876,7 +883,7 @@ export class DatabaseStorage implements IStorage {
     return updatedRide;
   }
 
-  async getActiveRidesForDriver(driverId: string): Promise<Ride[]> {
+  async getActiveRidesForDriver(driverId: string): Promise<any[]> {
     return await db
       .select({
         id: rides.id,
@@ -886,12 +893,20 @@ export class DatabaseStorage implements IStorage {
         destinationLocation: rides.destinationLocation,
         pickupInstructions: rides.pickupInstructions,
         status: rides.status,
+        paymentMethod: rides.paymentMethod,
         estimatedFare: rides.estimatedFare,
         actualFare: rides.actualFare,
         distance: rides.distance,
         duration: rides.duration,
         tipAmount: rides.tipAmount,
         paymentStatus: rides.paymentStatus,
+        stripePaymentIntentId: rides.stripePaymentIntentId,
+        refundedAmount: rides.refundedAmount,
+        cancellationFee: rides.cancellationFee,
+        cancellationReason: rides.cancellationReason,
+        driverTraveledDistance: rides.driverTraveledDistance,
+        driverTraveledTime: rides.driverTraveledTime,
+        routePath: rides.routePath,
         cashReceivedAt: rides.cashReceivedAt,
         paidBy: rides.paidBy,
         riderRating: rides.riderRating,
@@ -904,7 +919,6 @@ export class DatabaseStorage implements IStorage {
         completedAt: rides.completedAt,
         createdAt: rides.createdAt,
         updatedAt: rides.updatedAt,
-        // Include rider details
         rider: {
           id: users.id,
           firstName: users.firstName,
@@ -927,7 +941,7 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(rides.createdAt));
   }
 
-  async getRidesForRating(userId: string): Promise<Ride[]> {
+  async getRidesForRating(userId: string): Promise<any[]> {
     const driverUsers = alias(users, "driverUsers");
     
     return await db
@@ -939,12 +953,20 @@ export class DatabaseStorage implements IStorage {
         destinationLocation: rides.destinationLocation,
         pickupInstructions: rides.pickupInstructions,
         status: rides.status,
+        paymentMethod: rides.paymentMethod,
         estimatedFare: rides.estimatedFare,
         actualFare: rides.actualFare,
         distance: rides.distance,
         duration: rides.duration,
         tipAmount: rides.tipAmount,
         paymentStatus: rides.paymentStatus,
+        stripePaymentIntentId: rides.stripePaymentIntentId,
+        refundedAmount: rides.refundedAmount,
+        cancellationFee: rides.cancellationFee,
+        cancellationReason: rides.cancellationReason,
+        driverTraveledDistance: rides.driverTraveledDistance,
+        driverTraveledTime: rides.driverTraveledTime,
+        routePath: rides.routePath,
         cashReceivedAt: rides.cashReceivedAt,
         paidBy: rides.paidBy,
         riderRating: rides.riderRating,
@@ -957,7 +979,6 @@ export class DatabaseStorage implements IStorage {
         completedAt: rides.completedAt,
         createdAt: rides.createdAt,
         updatedAt: rides.updatedAt,
-        // Include rider/driver details
         rider: {
           id: users.id,
           firstName: users.firstName,
@@ -1081,7 +1102,7 @@ export class DatabaseStorage implements IStorage {
     return updatedRide;
   }
 
-  async getRidesAwaitingPayment(userId: string): Promise<Ride[]> {
+  async getRidesAwaitingPayment(userId: string): Promise<any[]> {
     return await db
       .select({
         id: rides.id,
@@ -1091,12 +1112,20 @@ export class DatabaseStorage implements IStorage {
         destinationLocation: rides.destinationLocation,
         pickupInstructions: rides.pickupInstructions,
         status: rides.status,
+        paymentMethod: rides.paymentMethod,
         estimatedFare: rides.estimatedFare,
         actualFare: rides.actualFare,
         distance: rides.distance,
         duration: rides.duration,
         tipAmount: rides.tipAmount,
         paymentStatus: rides.paymentStatus,
+        stripePaymentIntentId: rides.stripePaymentIntentId,
+        refundedAmount: rides.refundedAmount,
+        cancellationFee: rides.cancellationFee,
+        cancellationReason: rides.cancellationReason,
+        driverTraveledDistance: rides.driverTraveledDistance,
+        driverTraveledTime: rides.driverTraveledTime,
+        routePath: rides.routePath,
         cashReceivedAt: rides.cashReceivedAt,
         paidBy: rides.paidBy,
         riderRating: rides.riderRating,
@@ -1109,14 +1138,6 @@ export class DatabaseStorage implements IStorage {
         completedAt: rides.completedAt,
         createdAt: rides.createdAt,
         updatedAt: rides.updatedAt,
-        stripePaymentIntentId: rides.stripePaymentIntentId,
-        cancellationFee: rides.cancellationFee,
-        cancellationReason: rides.cancellationReason,
-        driverTraveledDistance: rides.driverTraveledDistance,
-        driverTraveledTime: rides.driverTraveledTime,
-        paymentMethod: rides.paymentMethod,
-        refundedAmount: rides.refundedAmount,
-        // Include rider/driver details
         rider: {
           id: users.id,
           firstName: users.firstName,

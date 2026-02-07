@@ -45,15 +45,15 @@ export default function RiderDashboard() {
   };
 
   // Get nearby drivers - always use userLocation which has fallback
-  const { data: nearbyDrivers = [], isLoading } = useQuery({
+  const { data: nearbyDrivers = [], isLoading } = useQuery<any[]>({
     queryKey: [`/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}`],
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: 30000,
   });
 
   // Get scheduled rides
-  const { data: scheduledRides = [] } = useQuery({
+  const { data: scheduledRides = [] } = useQuery<any[]>({
     queryKey: ['/api/rides/scheduled'],
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: 30000,
   });
 
   // Cancel scheduled ride mutation
@@ -279,19 +279,19 @@ export default function RiderDashboard() {
                           <div className="flex items-start space-x-2">
                             <i className="fas fa-map-marker-alt text-green-500 mt-1" />
                             <span className="text-muted-foreground" data-testid={`scheduled-ride-pickup-${ride.id}`}>
-                              {ride.pickupLocation}
+                              {ride.pickupLocation?.address || 'Pickup location'}
                             </span>
                           </div>
                           <div className="flex items-start space-x-2">
                             <i className="fas fa-flag-checkered text-red-500 mt-1" />
                             <span className="text-muted-foreground" data-testid={`scheduled-ride-destination-${ride.id}`}>
-                              {ride.destinationLocation}
+                              {ride.destinationLocation?.address || 'Destination'}
                             </span>
                           </div>
                         </div>
                         <div className="mt-2">
                           <span className="text-sm font-semibold text-primary" data-testid={`scheduled-ride-fare-${ride.id}`}>
-                            Est. ${ride.estimatedFare.toFixed(2)}
+                            Est. ${parseFloat(ride.estimatedFare || '0').toFixed(2)}
                           </span>
                         </div>
                       </div>

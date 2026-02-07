@@ -25,34 +25,40 @@ export default function DriverDashboard() {
   const locationRef = useRef(location);
   const lastLocationUpdateRef = useRef<number>(0);
 
+  // Get driver's vehicles
+  const { data: driverVehicles = [] } = useQuery<any[]>({
+    queryKey: ["/api/vehicles"],
+    enabled: !!user?.isDriver,
+  });
+
   // Get driver earnings and trips
-  const { data: todayEarnings } = useQuery({
+  const { data: todayEarnings } = useQuery<{fare: number, tips: number, total: number, rideCount: number}>({
     queryKey: ["/api/driver/earnings/today"],
     enabled: !!user?.isDriver,
   });
 
-  const { data: weekEarnings } = useQuery({
+  const { data: weekEarnings } = useQuery<{fare: number, tips: number, total: number, rideCount: number}>({
     queryKey: ["/api/driver/earnings/week"],
     enabled: !!user?.isDriver,
   });
 
-  const { data: todayTrips = [] } = useQuery({
+  const { data: todayTrips = [] } = useQuery<any[]>({
     queryKey: ["/api/driver/rides/today"],
     enabled: !!user?.isDriver,
   });
 
   // Get pending ride requests (reduced polling, relies primarily on WebSocket)
-  const { data: pendingRides = [], refetch: refetchPendingRides } = useQuery({
+  const { data: pendingRides = [], refetch: refetchPendingRides } = useQuery<any[]>({
     queryKey: ["/api/driver/pending-rides"],
     enabled: !!user?.isDriver && isOnline,
-    refetchInterval: 30000, // Reduced to 30 seconds, rely on WebSocket updates
+    refetchInterval: 30000,
   });
 
   // Get active rides for this driver (reduced polling, relies primarily on WebSocket)
-  const { data: activeRides = [], refetch: refetchActiveRides } = useQuery({
+  const { data: activeRides = [], refetch: refetchActiveRides } = useQuery<any[]>({
     queryKey: ["/api/driver/active-rides"],
     enabled: !!user?.isDriver,
-    refetchInterval: 30000, // Reduced to 30 seconds, rely on WebSocket updates
+    refetchInterval: 30000,
   });
 
   // Toggle driver status
@@ -356,18 +362,29 @@ export default function DriverDashboard() {
                 Edit
               </Button>
             </div>
-            <div className="flex items-center space-x-3">
-              <img
-                src="https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?w=64&h=48&fit=crop"
-                alt="Driver's vehicle"
-                className="w-16 h-12 rounded object-cover"
-              />
-              <div>
-                <p className="font-medium" data-testid="text-vehicle-info">2022 Honda Accord</p>
-                <p className="text-sm text-muted-foreground" data-testid="text-vehicle-plate">MD ABC-1234</p>
-                <p className="text-sm text-muted-foreground" data-testid="text-vehicle-color">Blue</p>
+            {driverVehicles.length > 0 ? (
+              <div className="flex items-center space-x-3">
+                <div className="w-16 h-12 rounded bg-muted flex items-center justify-center">
+                  <i className="fas fa-car text-muted-foreground" />
+                </div>
+                <div>
+                  <p className="font-medium" data-testid="text-vehicle-info">
+                    {driverVehicles[0].year} {driverVehicles[0].make} {driverVehicles[0].model}
+                  </p>
+                  <p className="text-sm text-muted-foreground" data-testid="text-vehicle-plate">
+                    {driverVehicles[0].licensePlate || 'No plate'}
+                  </p>
+                  <p className="text-sm text-muted-foreground" data-testid="text-vehicle-color">
+                    {driverVehicles[0].color || 'Unknown color'}
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="text-center py-4 text-muted-foreground">
+                <i className="fas fa-car text-2xl mb-2" />
+                <p className="text-sm">No vehicle registered yet</p>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -375,18 +392,18 @@ export default function DriverDashboard() {
         <Card>
           <CardContent className="p-4">
             <h3 className="font-semibold mb-3">Driver Stats</h3>
-            <div className="grid grid-cols-3 gap-4 text-center">
+            <div className="grid grid-cols-2 gap-4 text-center">
               <div>
-                <p className="text-2xl font-bold text-primary" data-testid="text-total-trips">127</p>
+                <p className="text-2xl font-bold text-primary" data-testid="text-total-trips">
+                  {user?.totalRides || 0}
+                </p>
                 <p className="text-sm text-muted-foreground">Total Trips</p>
               </div>
               <div>
-                <p className="text-2xl font-bold text-secondary" data-testid="text-driver-rating">4.9</p>
+                <p className="text-2xl font-bold text-secondary" data-testid="text-driver-rating">
+                  {user?.rating ? parseFloat(user.rating).toFixed(1) : 'N/A'}
+                </p>
                 <p className="text-sm text-muted-foreground">Rating</p>
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-accent" data-testid="text-acceptance-rate">96%</p>
-                <p className="text-sm text-muted-foreground">Acceptance</p>
               </div>
             </div>
           </CardContent>
