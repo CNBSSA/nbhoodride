@@ -152,11 +152,9 @@ export const RideHelpers = {
     return R * c;
   },
 
-  // Estimate travel time based on distance
   estimateTravelTime(distanceMiles: number): number {
-    // Assume average speed of 25 mph for city driving
     const averageSpeedMph = 25;
-    return Math.round((distanceMiles / averageSpeedMph) * 60); // Return minutes
+    return Math.round((distanceMiles / averageSpeedMph) * 60);
   },
 
   // Format ride status for display

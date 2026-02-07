@@ -118,9 +118,9 @@ export default function RideBookingModal({
           const dLat = (lat - userLocation.lat) * Math.PI / 180;
           const dLng = (lng - userLocation.lng) * Math.PI / 180;
           const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-          const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-          const distance = Math.round(dist * 10) / 10;
-          const duration = Math.round((dist / 30) * 60);
+          const straightLineDist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const distance = Math.round(straightLineDist * 1.3 * 10) / 10;
+          const duration = Math.round((distance / 25) * 60);
           setEstimatedDistance(distance);
           setEstimatedDuration(duration);
           calculateFareMutation.mutate({ distance, duration, driverId: selectedDriver || undefined });

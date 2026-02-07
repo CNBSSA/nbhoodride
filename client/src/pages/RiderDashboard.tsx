@@ -37,10 +37,11 @@ function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
 }
 
 function estimateFare(miles: number): string {
-  const durationMinutes = Math.round((miles / 25) * 60);
+  const roadMiles = miles * 1.3;
+  const durationMinutes = Math.round((roadMiles / 25) * 60);
   const baseFare = 4.00;
   const timeCharge = 0.29 * durationMinutes;
-  const distanceCharge = 0.90 * miles;
+  const distanceCharge = 0.90 * roadMiles;
   const total = Math.max(7.65, Math.min(100, baseFare + timeCharge + distanceCharge));
   if (total <= 10) {
     return `$${total.toFixed(2)}`;
@@ -51,7 +52,8 @@ function estimateFare(miles: number): string {
 }
 
 function estimateArrival(miles: number): string {
-  const minutes = Math.max(1, Math.round((miles / 30) * 60));
+  const roadMiles = miles * 1.3;
+  const minutes = Math.max(1, Math.round((roadMiles / 25) * 60));
   if (minutes <= 1) return "~1 min";
   if (minutes <= 3) return `~${minutes} min`;
   if (minutes <= 5) return `${minutes - 1}-${minutes} min`;

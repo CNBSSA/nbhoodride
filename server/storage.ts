@@ -70,9 +70,10 @@ function estimateRideDurationMinutes(ride: any): number {
   const pickup = ride.pickupLocation as { lat: number; lng: number } | null;
   const dest = ride.destinationLocation as { lat: number; lng: number } | null;
   if (!pickup || !dest) return 30;
-  const distMiles = haversineDistance(pickup.lat, pickup.lng, dest.lat, dest.lng);
+  const straightLineMiles = haversineDistance(pickup.lat, pickup.lng, dest.lat, dest.lng);
+  const roadMiles = straightLineMiles * 1.3;
   const avgSpeedMph = 25;
-  return Math.max(5, (distMiles / avgSpeedMph) * 60);
+  return Math.max(5, (roadMiles / avgSpeedMph) * 60);
 }
 
 async function filterAvailableDrivers(
@@ -151,7 +152,7 @@ export interface IStorage {
   updateDriverProfile(userId: string, updates: Partial<InsertDriverProfile>): Promise<DriverProfile>;
   updateDriverLocation(userId: string, location: {lat: number, lng: number}): Promise<void>;
   toggleDriverOnlineStatus(userId: string, isOnline: boolean): Promise<void>;
-  getNearbyDrivers(location: {lat: number, lng: number}, radiusKm: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
+  getNearbyDrivers(location: {lat: number, lng: number}, radiusMiles: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
   searchDriversByPhone(phone: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
   
   getAllDriverProfiles(): Promise<DriverProfile[]>;
@@ -383,7 +384,7 @@ export class DatabaseStorage implements IStorage {
       .where(eq(driverProfiles.userId, userId));
   }
 
-  async getNearbyDrivers(location: {lat: number, lng: number}, radiusKm: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]> {
+  async getNearbyDrivers(location: {lat: number, lng: number}, radiusMiles: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]> {
     const results = await db
       .select()
       .from(driverProfiles)
@@ -408,7 +409,16 @@ export class DatabaseStorage implements IStorage {
 
     const allDrivers = Array.from(driversMap.values());
 
-    return filterAvailableDrivers(allDrivers, (d) => d.userId);
+    const nearbyDrivers = allDrivers.filter(driver => {
+      const driverLocation = driver.currentLocation as { lat: number; lng: number } | null;
+      if (!driverLocation || !Number.isFinite(driverLocation.lat) || !Number.isFinite(driverLocation.lng)) {
+        return false;
+      }
+      const distance = haversineDistance(location.lat, location.lng, driverLocation.lat, driverLocation.lng);
+      return distance <= radiusMiles;
+    });
+
+    return filterAvailableDrivers(nearbyDrivers, (d) => d.userId);
   }
 
   async getAllDriverProfiles(): Promise<DriverProfile[]> {
@@ -1408,25 +1418,36 @@ export class DatabaseStorage implements IStorage {
       return 0;
     }
 
-    // Haversine formula to calculate distance between two GPS coordinates
-    const haversineDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
-      const R = 3959; // Earth's radius in miles
-      const dLat = (lat2 - lat1) * Math.PI / 180;
-      const dLng = (lng2 - lng1) * Math.PI / 180;
-      const a = 
-        Math.sin(dLat/2) * Math.sin(dLat/2) +
-        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-        Math.sin(dLng/2) * Math.sin(dLng/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      return R * c;
-    };
+    const GPS_NOISE_THRESHOLD_MILES = 0.005;
+    const MAX_SPEED_MPH = 90;
 
-    // Sum up distances between consecutive waypoints
     let totalDistance = 0;
     for (let i = 1; i < routePath.length; i++) {
       const prev = routePath[i - 1];
       const curr = routePath[i];
-      totalDistance += haversineDistance(prev.lat, prev.lng, curr.lat, curr.lng);
+
+      if (!Number.isFinite(curr.lat) || !Number.isFinite(curr.lng) ||
+          !Number.isFinite(prev.lat) || !Number.isFinite(prev.lng)) {
+        continue;
+      }
+
+      const segmentDistance = haversineDistance(prev.lat, prev.lng, curr.lat, curr.lng);
+
+      if (segmentDistance < GPS_NOISE_THRESHOLD_MILES) {
+        continue;
+      }
+
+      if (prev.timestamp && curr.timestamp) {
+        const timeDiffHours = (curr.timestamp - prev.timestamp) / (1000 * 3600);
+        if (timeDiffHours > 0) {
+          const speed = segmentDistance / timeDiffHours;
+          if (speed > MAX_SPEED_MPH) {
+            continue;
+          }
+        }
+      }
+
+      totalDistance += segmentDistance;
     }
 
     return totalDistance;
