@@ -189,7 +189,7 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
             </div>
 
             <p className="text-xs text-muted-foreground text-center">
-              PG County rates: $18/hour + $1.50/mile ($5 min, $100 max)
+              Base $4.00 + $0.29/min + $0.90/mi ($7.65 min, $100 max)
             </p>
             
             <Button 

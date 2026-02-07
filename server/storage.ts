@@ -48,6 +48,8 @@ import {
   type InsertRide,
   type InsertDispute,
   type InsertEmergencyIncident,
+  driverRateCards,
+  type DriverRateCard,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, sql, or, isNotNull, gt, like, inArray, count, sum, gte, lte } from "drizzle-orm";
@@ -215,6 +217,10 @@ export interface IStorage {
   addRouteWaypoint(rideId: string, driverId: string, waypoint: {lat: number, lng: number}): Promise<void>;
   calculateActualDistance(routePath: Array<{lat: number, lng: number, timestamp: number}>): number;
   getRideStats(rideId: string, userId?: string): Promise<{distance: number, duration: number, estimatedFare: number}>;
+
+  // Rate card operations
+  getDriverRateCard(driverId: string): Promise<DriverRateCard | undefined>;
+  upsertDriverRateCard(driverId: string, data: Partial<DriverRateCard>): Promise<DriverRateCard>;
 
   // AI Chat operations
   getConversationsByUser(userId: string): Promise<Conversation[]>;
@@ -906,23 +912,16 @@ export class DatabaseStorage implements IStorage {
       const durationMinutes = Math.round((endTime - startTime) / (1000 * 60));
       updateData.driverTraveledTime = durationMinutes;
       
-      // Calculate fare using PG County rates if not manually overridden
       if (actualFare === undefined) {
-        // PG County rates: $18/hour + $1.50/mile
-        const timeRatePerHour = 18;
-        const mileRate = 1.50;
-        const minimumFare = 5.00;
-        const maximumFare = 100.00;
-        
-        const durationHours = durationMinutes / 60;
-        const timeCharge = timeRatePerHour * durationHours;
-        const distanceCharge = mileRate * actualDistance;
-        let fareAmount = timeCharge + distanceCharge;
-        
-        // Apply min/max limits
-        fareAmount = Math.max(minimumFare, Math.min(maximumFare, fareAmount));
-        
-        calculatedFare = Math.round(fareAmount * 100) / 100; // Round to 2 decimals
+        const rateCard = ride.driverId ? await this.getDriverRateCard(ride.driverId) : undefined;
+        const rates = this.getRates(rateCard);
+
+        const baseFare = rates.baseFare;
+        const timeCharge = rates.perMinuteRate * durationMinutes;
+        const distanceCharge = rates.perMileRate * actualDistance;
+        let fareAmount = baseFare + timeCharge + distanceCharge + rates.surgeAdjustment;
+        fareAmount = Math.max(rates.minimumFare, Math.min(100, fareAmount));
+        calculatedFare = Math.round(fareAmount * 100) / 100;
       }
     }
     
@@ -1456,26 +1455,56 @@ export class DatabaseStorage implements IStorage {
       duration = Math.round((now - startTime) / (1000 * 60));
     }
 
-    // Calculate estimated fare based on current distance/time
-    const timeRatePerHour = 18;
-    const mileRate = 1.50;
-    const minimumFare = 5.00;
-    const maximumFare = 100.00;
-    
-    const durationHours = duration / 60;
-    const timeCharge = timeRatePerHour * durationHours;
-    const distanceCharge = mileRate * distance;
-    let estimatedFare = timeCharge + distanceCharge;
-    
-    // Apply min/max limits
-    estimatedFare = Math.max(minimumFare, Math.min(maximumFare, estimatedFare));
-    estimatedFare = Math.round(estimatedFare * 100) / 100; // Round to 2 decimals
+    // Get driver rate card for fare calculation
+    const rateCard = ride.driverId ? await this.getDriverRateCard(ride.driverId) : undefined;
+    const rates = this.getRates(rateCard);
+
+    const baseFare = rates.baseFare;
+    const timeCharge = rates.perMinuteRate * duration;
+    const distanceCharge = rates.perMileRate * distance;
+    let estimatedFare = baseFare + timeCharge + distanceCharge + rates.surgeAdjustment;
+
+    estimatedFare = Math.max(rates.minimumFare, Math.min(100, estimatedFare));
+    estimatedFare = Math.round(estimatedFare * 100) / 100;
 
     return {
       distance,
       duration,
       estimatedFare
     };
+  }
+
+  private getRates(rateCard?: DriverRateCard) {
+    const SUGGESTED = { minimumFare: 7.65, baseFare: 4.00, perMinuteRate: 0.29, perMileRate: 0.90, surgeAdjustment: 0 };
+    if (!rateCard || rateCard.useSuggested) return SUGGESTED;
+    return {
+      minimumFare: parseFloat(rateCard.minimumFare || "7.65"),
+      baseFare: parseFloat(rateCard.baseFare || "4.00"),
+      perMinuteRate: parseFloat(rateCard.perMinuteRate || "0.2900"),
+      perMileRate: parseFloat(rateCard.perMileRate || "0.9000"),
+      surgeAdjustment: parseFloat(rateCard.surgeAdjustment || "0.00"),
+    };
+  }
+
+  // Rate card operations
+  async getDriverRateCard(driverId: string): Promise<DriverRateCard | undefined> {
+    const [card] = await db.select().from(driverRateCards).where(eq(driverRateCards.driverId, driverId));
+    return card;
+  }
+
+  async upsertDriverRateCard(driverId: string, data: Partial<DriverRateCard>): Promise<DriverRateCard> {
+    const existing = await this.getDriverRateCard(driverId);
+    if (existing) {
+      const [updated] = await db.update(driverRateCards)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(driverRateCards.driverId, driverId))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(driverRateCards)
+      .values({ driverId, ...data })
+      .returning();
+    return created;
   }
 
   // ============================================================

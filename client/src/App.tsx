@@ -17,6 +17,7 @@ import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
 import AdminDashboard from "@/pages/AdminDashboard";
 import DriverInsights from "@/pages/DriverInsights";
+import DriverRateCard from "@/pages/DriverRateCard";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -44,6 +45,7 @@ function Router() {
           <Route path="/card-setup" component={CardSetupPage} />
           <Route path="/admin" component={AdminDashboard} />
           <Route path="/driver/insights" component={DriverInsights} />
+          <Route path="/driver/rate-card" component={DriverRateCard} />
         </>
       )}
       <Route component={NotFound} />

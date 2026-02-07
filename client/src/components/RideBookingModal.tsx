@@ -21,10 +21,11 @@ interface Driver {
 }
 
 interface FareEstimate {
+  baseFare: number;
   timeCharge: number;
   distanceCharge: number;
+  surgeAdjustment: number;
   subtotal: number;
-  discount: number;
   total: number;
   formula: string;
 }
@@ -59,10 +60,11 @@ export default function RideBookingModal({
 
   // Calculate fare when destination changes
   const calculateFareMutation = useMutation({
-    mutationFn: async ({ distance, duration }: { distance: number; duration: number }) => {
+    mutationFn: async ({ distance, duration, driverId }: { distance: number; duration: number; driverId?: string }) => {
       const response = await apiRequest('POST', '/api/rides/calculate-fare', {
         distance,
-        duration
+        duration,
+        driverId,
       });
       return response.json();
     },
@@ -121,14 +123,23 @@ export default function RideBookingModal({
           const duration = Math.round((dist / 30) * 60);
           setEstimatedDistance(distance);
           setEstimatedDuration(duration);
-          calculateFareMutation.mutate({ distance, duration });
+          calculateFareMutation.mutate({ distance, duration, driverId: selectedDriver || undefined });
         }
       } catch {
-        calculateFareMutation.mutate({ distance: 5, duration: 12 });
+        setDestCoords(null);
+        setEstimatedDistance(null);
+        setEstimatedDuration(null);
+        setFareEstimate(null);
       }
     }, 800);
     return () => clearTimeout(timer);
   }, [destinationAddress, userLocation.lat, userLocation.lng]);
+
+  useEffect(() => {
+    if (selectedDriver && estimatedDistance && estimatedDuration) {
+      calculateFareMutation.mutate({ distance: estimatedDistance, duration: estimatedDuration, driverId: selectedDriver });
+    }
+  }, [selectedDriver]);
 
   useEffect(() => {
     if (isOpen && userLocation) {
@@ -232,13 +243,25 @@ export default function RideBookingModal({
                 <h3 className="font-semibold mb-2">Fare Estimate</h3>
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Distance: {estimatedDistance ?? '...'} miles</span>
-                    <span>${fareEstimate.distanceCharge.toFixed(2)}</span>
+                    <span className="text-muted-foreground">Base fare</span>
+                    <span>${fareEstimate.baseFare.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Time: {estimatedDuration ?? '...'} minutes</span>
+                    <span className="text-muted-foreground">Time ({estimatedDuration ?? '...'} min)</span>
                     <span>${fareEstimate.timeCharge.toFixed(2)}</span>
                   </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Distance ({estimatedDistance ?? '...'} mi)</span>
+                    <span>${fareEstimate.distanceCharge.toFixed(2)}</span>
+                  </div>
+                  {fareEstimate.surgeAdjustment !== 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Surge</span>
+                      <span className={fareEstimate.surgeAdjustment < 0 ? "text-green-600" : "text-red-600"}>
+                        {fareEstimate.surgeAdjustment < 0 ? "-" : "+"}${Math.abs(fareEstimate.surgeAdjustment).toFixed(2)}
+                      </span>
+                    </div>
+                  )}
                   <Separator />
                   <div className="flex justify-between font-semibold">
                     <span>Total (Virtual Card)</span>

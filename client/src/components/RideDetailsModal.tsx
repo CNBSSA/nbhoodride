@@ -150,16 +150,16 @@ export default function RideDetailsModal({
             <Card className="bg-muted">
               <CardContent className="p-3 space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Base Fare ({ride.duration} min)</span>
-                  <span>${((ride.duration / 60) * 18).toFixed(2)}</span>
+                  <span className="text-muted-foreground">Base fare</span>
+                  <span>$4.00</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Distance ({ride.distance} miles × $1.50)</span>
-                  <span>${(ride.distance * 1.50).toFixed(2)}</span>
+                  <span className="text-muted-foreground">Time ({ride.duration} min × $0.29)</span>
+                  <span>${(ride.duration * 0.29).toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Driver Discount</span>
-                  <span className="text-secondary">-$0.00</span>
+                  <span className="text-muted-foreground">Distance ({ride.distance} mi × $0.90)</span>
+                  <span>${(ride.distance * 0.90).toFixed(2)}</span>
                 </div>
                 <Separator />
                 <div className="flex justify-between font-semibold">

@@ -1510,33 +1510,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Fare calculation endpoint
   app.post('/api/rides/calculate-fare', async (req, res) => {
     try {
-      const { distance, duration, driverDiscount = 0 } = req.body;
+      const { distance, duration, driverId } = req.body;
       
       if (!distance || !duration) {
         return res.status(400).json({ message: "Distance and duration required" });
       }
-      
-      // PG County rates: $18/hour + $1.50/mile
-      const timeRate = 18; // per hour
-      const mileRate = 1.50; // per mile
-      
-      const timeCharge = (duration / 60) * timeRate; // duration in minutes to hours
-      const distanceCharge = distance * mileRate;
-      const subtotal = timeCharge + distanceCharge;
-      const discount = subtotal * (driverDiscount / 100);
-      const total = subtotal - discount;
+
+      const SUGGESTED = { minimumFare: 7.65, baseFare: 4.00, perMinuteRate: 0.29, perMileRate: 0.90, surgeAdjustment: 0 };
+      let rates = SUGGESTED;
+
+      if (driverId) {
+        const rateCard = await storage.getDriverRateCard(driverId);
+        if (rateCard && !rateCard.useSuggested) {
+          rates = {
+            minimumFare: parseFloat(rateCard.minimumFare || "7.65"),
+            baseFare: parseFloat(rateCard.baseFare || "4.00"),
+            perMinuteRate: parseFloat(rateCard.perMinuteRate || "0.2900"),
+            perMileRate: parseFloat(rateCard.perMileRate || "0.9000"),
+            surgeAdjustment: parseFloat(rateCard.surgeAdjustment || "0.00"),
+          };
+        }
+      }
+
+      const baseFare = rates.baseFare;
+      const timeCharge = rates.perMinuteRate * duration;
+      const distanceCharge = rates.perMileRate * distance;
+      const surgeAdjustment = rates.surgeAdjustment;
+      const subtotal = baseFare + timeCharge + distanceCharge + surgeAdjustment;
+      const total = Math.max(rates.minimumFare, Math.min(100, subtotal));
       
       res.json({
+        baseFare: parseFloat(baseFare.toFixed(2)),
         timeCharge: parseFloat(timeCharge.toFixed(2)),
         distanceCharge: parseFloat(distanceCharge.toFixed(2)),
+        surgeAdjustment: parseFloat(surgeAdjustment.toFixed(2)),
         subtotal: parseFloat(subtotal.toFixed(2)),
-        discount: parseFloat(discount.toFixed(2)),
         total: parseFloat(total.toFixed(2)),
-        formula: `($${timeRate}/hour × ${(duration/60).toFixed(2)} hours) + ($${mileRate}/mile × ${distance} miles)`
+        rates: {
+          minimumFare: rates.minimumFare,
+          baseFare: rates.baseFare,
+          perMinuteRate: rates.perMinuteRate,
+          perMileRate: rates.perMileRate,
+          surgeAdjustment: rates.surgeAdjustment,
+        },
+        formula: `Base $${rates.baseFare.toFixed(2)} + ($${rates.perMinuteRate}/min × ${duration} min) + ($${rates.perMileRate}/mi × ${distance} mi)`
       });
     } catch (error) {
       console.error("Error calculating fare:", error);
       res.status(500).json({ message: "Failed to calculate fare" });
+    }
+  });
+
+  // Driver rate card endpoints
+  app.get('/api/driver/rate-card', async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const card = await storage.getDriverRateCard(userId);
+      if (!card) {
+        return res.json({
+          driverId: userId,
+          minimumFare: "7.65",
+          baseFare: "4.00",
+          perMinuteRate: "0.2900",
+          perMileRate: "0.9000",
+          surgeAdjustment: "0.00",
+          useSuggested: true,
+        });
+      }
+      res.json(card);
+    } catch (error) {
+      console.error("Error fetching rate card:", error);
+      res.status(500).json({ message: "Failed to fetch rate card" });
+    }
+  });
+
+  app.put('/api/driver/rate-card', async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+      const { minimumFare, baseFare, perMinuteRate, perMileRate, surgeAdjustment, useSuggested } = req.body;
+
+      const updateData: any = {};
+      if (minimumFare !== undefined) updateData.minimumFare = String(minimumFare);
+      if (baseFare !== undefined) updateData.baseFare = String(baseFare);
+      if (perMinuteRate !== undefined) updateData.perMinuteRate = String(perMinuteRate);
+      if (perMileRate !== undefined) updateData.perMileRate = String(perMileRate);
+      if (surgeAdjustment !== undefined) updateData.surgeAdjustment = String(surgeAdjustment);
+      if (useSuggested !== undefined) updateData.useSuggested = useSuggested;
+
+      const card = await storage.upsertDriverRateCard(userId, updateData);
+      res.json(card);
+    } catch (error) {
+      console.error("Error updating rate card:", error);
+      res.status(500).json({ message: "Failed to update rate card" });
+    }
+  });
+
+  // Get a specific driver's rate card (public, used for fare estimation)
+  app.get('/api/driver/:driverId/rate-card', async (req: any, res) => {
+    try {
+      const { driverId } = req.params;
+      const card = await storage.getDriverRateCard(driverId);
+      const SUGGESTED = { minimumFare: "7.65", baseFare: "4.00", perMinuteRate: "0.2900", perMileRate: "0.9000", surgeAdjustment: "0.00", useSuggested: true };
+      res.json(card || { driverId, ...SUGGESTED });
+    } catch (error) {
+      console.error("Error fetching driver rate card:", error);
+      res.status(500).json({ message: "Failed to fetch driver rate card" });
     }
   });
 

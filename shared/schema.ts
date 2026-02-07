@@ -459,6 +459,30 @@ export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
 }));
 
 // ============================================================
+// DRIVER RATE CARDS
+// ============================================================
+
+export const driverRateCards = pgTable("driver_rate_cards", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  driverId: varchar("driver_id").notNull().references(() => users.id).unique(),
+  minimumFare: decimal("minimum_fare", { precision: 8, scale: 2 }).default("7.65"),
+  baseFare: decimal("base_fare", { precision: 8, scale: 2 }).default("4.00"),
+  perMinuteRate: decimal("per_minute_rate", { precision: 8, scale: 4 }).default("0.2900"),
+  perMileRate: decimal("per_mile_rate", { precision: 8, scale: 4 }).default("0.9000"),
+  surgeAdjustment: decimal("surge_adjustment", { precision: 8, scale: 2 }).default("0.00"),
+  useSuggested: boolean("use_suggested").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const driverRateCardsRelations = relations(driverRateCards, ({ one }) => ({
+  driver: one(users, {
+    fields: [driverRateCards.driverId],
+    references: [users.id],
+  }),
+}));
+
+// ============================================================
 // ANALYTICS & SELF-LEARNING TABLES
 // ============================================================
 
@@ -688,6 +712,12 @@ export const insertSafetyAlertSchema = createInsertSchema(safetyAlerts).omit({
   createdAt: true,
 });
 
+export const insertDriverRateCardSchema = createInsertSchema(driverRateCards).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 // ============================================================
 // TYPES
 // ============================================================
@@ -734,3 +764,6 @@ export type InsertAiFeedback = z.infer<typeof insertAiFeedbackSchema>;
 export type InsertPlatformInsight = z.infer<typeof insertPlatformInsightSchema>;
 export type InsertFaqEntry = z.infer<typeof insertFaqEntrySchema>;
 export type InsertSafetyAlert = z.infer<typeof insertSafetyAlertSchema>;
+
+export type DriverRateCard = typeof driverRateCards.$inferSelect;
+export type InsertDriverRateCard = z.infer<typeof insertDriverRateCardSchema>;

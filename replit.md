@@ -45,8 +45,8 @@ The platform includes a comprehensive analytics and self-learning layer:
 ### Real-time Features
 WebSocket integration enables live ride updates, push notifications, and in-app messaging between drivers and riders.
 
-### Dynamic Pricing System
-Fares are calculated dynamically based on GPS-tracked distance and time using a formula: `(duration_hours × $18) + (miles × $1.50)`, with a minimum fare of $5.00 and a maximum of $100.00. GPS waypoints are tracked every 5 seconds, and real-time estimated fares are displayed. Final fares are automatically calculated upon ride completion.
+### Dynamic Pricing System (Rate Card Model)
+Fares use a rate card model inspired by rideshare platforms. Default (suggested) rates: Base fare $4.00 + $0.29/min + $0.90/mi, with a minimum fare of $7.65 and maximum of $100.00. Drivers can customize their rates via `/driver/rate-card` page or toggle back to suggested rates. Rate cards are stored in `driver_rate_cards` table with per-driver values for minimumFare, baseFare, perMinuteRate, perMileRate, surgeAdjustment, and useSuggested toggle. The fare calculation API (`/api/rides/calculate-fare`) accepts an optional `driverId` to compute fare using that driver's custom rate card. GPS waypoints are tracked every 5 seconds during rides, and final fares are automatically calculated upon completion using the driver's active rate card.
 
 ### Payment System: Virtual PG Card
 All transactions occur via a Virtual PG Card system, where each user has a virtual balance starting at $1000. Estimated fares are deducted upon ride acceptance, and adjustments are made upon completion. Cancellation fees are applied for rider cancellations after a driver has started traveling.
