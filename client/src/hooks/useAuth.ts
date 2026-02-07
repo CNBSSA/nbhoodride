@@ -9,6 +9,7 @@ interface User {
   phone?: string;
   isDriver: boolean;
   isVerified: boolean;
+  isAdmin: boolean;
   rating: string;
   totalRides: number;
   emergencyContact?: string;

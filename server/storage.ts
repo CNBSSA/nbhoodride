@@ -5,6 +5,13 @@ import {
   rides,
   disputes,
   emergencyIncidents,
+  driverWeeklyHours,
+  driverOwnership,
+  shareCertificates,
+  ownershipRebalanceLog,
+  profitDeclarations,
+  profitDistributions,
+  adminActivityLog,
   type User,
   type UpsertUser,
   type DriverProfile,
@@ -12,6 +19,12 @@ import {
   type Ride,
   type Dispute,
   type EmergencyIncident,
+  type DriverWeeklyHours,
+  type DriverOwnership,
+  type ShareCertificate,
+  type ProfitDeclaration,
+  type ProfitDistribution,
+  type AdminActivityLog,
   type InsertDriverProfile,
   type InsertVehicle,
   type InsertRide,
@@ -19,7 +32,7 @@ import {
   type InsertEmergencyIncident,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc, sql, or, isNotNull, gt, like, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, sql, or, isNotNull, gt, like, inArray, count, sum, gte, lte } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -1380,6 +1393,524 @@ export class DatabaseStorage implements IStorage {
       distance,
       duration,
       estimatedFare
+    };
+  }
+
+  // ============================================================
+  // ADMIN DASHBOARD OPERATIONS
+  // ============================================================
+
+  async getDashboardStats(): Promise<{
+    totalUsers: number;
+    totalDrivers: number;
+    onlineDrivers: number;
+    activeRides: number;
+    completedRidesToday: number;
+    revenueToday: number;
+    revenueThisMonth: number;
+    pendingDisputes: number;
+    totalOwners: number;
+  }> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+
+    const [userCount] = await db.select({ count: count() }).from(users);
+    const [driverCount] = await db.select({ count: count() }).from(users).where(eq(users.isDriver, true));
+    const [onlineCount] = await db.select({ count: count() }).from(driverProfiles).where(eq(driverProfiles.isOnline, true));
+    const [activeRideCount] = await db.select({ count: count() }).from(rides).where(
+      or(eq(rides.status, "pending"), eq(rides.status, "accepted"), eq(rides.status, "driver_arriving"), eq(rides.status, "in_progress"))
+    );
+    const [completedToday] = await db.select({ count: count() }).from(rides).where(
+      and(eq(rides.status, "completed"), gte(rides.completedAt, today))
+    );
+
+    const todayRevenue = await db.select({ total: sum(rides.actualFare) }).from(rides).where(
+      and(eq(rides.status, "completed"), gte(rides.completedAt, today))
+    );
+    const monthRevenue = await db.select({ total: sum(rides.actualFare) }).from(rides).where(
+      and(eq(rides.status, "completed"), gte(rides.completedAt, monthStart))
+    );
+
+    const [pendingDisputeCount] = await db.select({ count: count() }).from(disputes).where(eq(disputes.status, "pending"));
+    const [ownerCount] = await db.select({ count: count() }).from(driverOwnership).where(
+      or(eq(driverOwnership.status, "ad_hoc"), eq(driverOwnership.status, "lifetime"))
+    );
+
+    return {
+      totalUsers: userCount.count,
+      totalDrivers: driverCount.count,
+      onlineDrivers: onlineCount.count,
+      activeRides: activeRideCount.count,
+      completedRidesToday: completedToday.count,
+      revenueToday: parseFloat(todayRevenue[0]?.total || "0"),
+      revenueThisMonth: parseFloat(monthRevenue[0]?.total || "0"),
+      pendingDisputes: pendingDisputeCount.count,
+      totalOwners: ownerCount.count,
+    };
+  }
+
+  // ============================================================
+  // ADMIN USER & DRIVER MANAGEMENT
+  // ============================================================
+
+  async getAllUsers(limit = 100, offset = 0): Promise<User[]> {
+    return await db.select().from(users).orderBy(desc(users.createdAt)).limit(limit).offset(offset);
+  }
+
+  async getAllDrivers(): Promise<(DriverProfile & { user: User; vehicles: Vehicle[] })[]> {
+    const results = await db
+      .select()
+      .from(driverProfiles)
+      .innerJoin(users, eq(driverProfiles.userId, users.id))
+      .leftJoin(vehicles, eq(vehicles.driverProfileId, driverProfiles.id))
+      .orderBy(desc(driverProfiles.createdAt));
+
+    const driversMap = new Map<string, DriverProfile & { user: User; vehicles: Vehicle[] }>();
+    for (const result of results) {
+      const driverId = result.driver_profiles.id;
+      if (!driversMap.has(driverId)) {
+        driversMap.set(driverId, {
+          ...result.driver_profiles,
+          user: result.users,
+          vehicles: []
+        });
+      }
+      if (result.vehicles) {
+        driversMap.get(driverId)!.vehicles.push(result.vehicles);
+      }
+    }
+    return Array.from(driversMap.values());
+  }
+
+  async adminUpdateUser(userId: string, updates: Partial<{ isAdmin: boolean; isSuspended: boolean; isVerified: boolean; isDriver: boolean }>): Promise<User> {
+    const [user] = await db.update(users).set({ ...updates, updatedAt: new Date() }).where(eq(users.id, userId)).returning();
+    return user;
+  }
+
+  async adminUpdateDriverProfile(userId: string, updates: Partial<{ isVerifiedNeighbor: boolean; isSuspended: boolean; approvalStatus: string }>): Promise<DriverProfile> {
+    const [profile] = await db.update(driverProfiles).set({ ...updates, updatedAt: new Date() }).where(eq(driverProfiles.userId, userId)).returning();
+    return profile;
+  }
+
+  async getAllRides(limit = 100, offset = 0): Promise<Ride[]> {
+    return await db.select().from(rides).orderBy(desc(rides.createdAt)).limit(limit).offset(offset);
+  }
+
+  async getAllDisputes(): Promise<Dispute[]> {
+    return await db.select().from(disputes).orderBy(desc(disputes.createdAt));
+  }
+
+  async adminResolveDispute(disputeId: string, resolution: string, resolvedBy: string): Promise<Dispute> {
+    const [dispute] = await db.update(disputes).set({
+      status: "resolved",
+      resolution,
+      resolvedBy,
+      updatedAt: new Date()
+    }).where(eq(disputes.id, disputeId)).returning();
+    return dispute;
+  }
+
+  // ============================================================
+  // ADMIN ACTIVITY LOG
+  // ============================================================
+
+  async logAdminAction(adminId: string, action: string, targetType?: string, targetId?: string, details?: Record<string, any>): Promise<void> {
+    await db.insert(adminActivityLog).values({ adminId, action, targetType, targetId, details });
+  }
+
+  async getAdminActivityLog(limit = 50): Promise<AdminActivityLog[]> {
+    return await db.select().from(adminActivityLog).orderBy(desc(adminActivityLog.createdAt)).limit(limit);
+  }
+
+  // ============================================================
+  // DRIVER HOURS TRACKING
+  // ============================================================
+
+  async getOrCreateWeeklyHours(driverId: string, weekStart: string): Promise<DriverWeeklyHours> {
+    const [existing] = await db.select().from(driverWeeklyHours)
+      .where(and(eq(driverWeeklyHours.driverId, driverId), eq(driverWeeklyHours.weekStart, weekStart)));
+
+    if (existing) return existing;
+
+    const [created] = await db.insert(driverWeeklyHours)
+      .values({ driverId, weekStart, totalMinutes: 0, rideCount: 0, qualifiesWeek: false })
+      .returning();
+    return created;
+  }
+
+  async addDriverMinutes(driverId: string, minutes: number): Promise<void> {
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + mondayOffset);
+    const weekStart = monday.toISOString().split('T')[0];
+
+    const weekly = await this.getOrCreateWeeklyHours(driverId, weekStart);
+
+    const newMinutes = (weekly.totalMinutes || 0) + minutes;
+    const newRideCount = (weekly.rideCount || 0) + 1;
+    const qualifies = newMinutes >= 2400; // 40 hours = 2400 minutes
+
+    await db.update(driverWeeklyHours).set({
+      totalMinutes: newMinutes,
+      rideCount: newRideCount,
+      qualifiesWeek: qualifies
+    }).where(eq(driverWeeklyHours.id, weekly.id));
+  }
+
+  async getDriverWeeklyHoursHistory(driverId: string, limit = 52): Promise<DriverWeeklyHours[]> {
+    return await db.select().from(driverWeeklyHours)
+      .where(eq(driverWeeklyHours.driverId, driverId))
+      .orderBy(desc(driverWeeklyHours.weekStart))
+      .limit(limit);
+  }
+
+  // ============================================================
+  // OWNERSHIP ENGINE
+  // ============================================================
+
+  async getOrCreateOwnership(driverId: string): Promise<DriverOwnership> {
+    const [existing] = await db.select().from(driverOwnership)
+      .where(eq(driverOwnership.driverId, driverId));
+
+    if (existing) return existing;
+
+    const [created] = await db.insert(driverOwnership)
+      .values({ driverId, status: "none", totalQualifyingWeeks: 0, totalLifetimeMinutes: 0 })
+      .returning();
+    return created;
+  }
+
+  async getDriverOwnershipStatus(driverId: string): Promise<DriverOwnership | undefined> {
+    const [ownership] = await db.select().from(driverOwnership)
+      .where(eq(driverOwnership.driverId, driverId));
+    return ownership;
+  }
+
+  async getAllOwners(): Promise<(DriverOwnership & { driver: User })[]> {
+    const results = await db.select()
+      .from(driverOwnership)
+      .innerJoin(users, eq(driverOwnership.driverId, users.id))
+      .where(or(eq(driverOwnership.status, "ad_hoc"), eq(driverOwnership.status, "lifetime")))
+      .orderBy(desc(driverOwnership.adHocQualificationDate));
+
+    return results.map(r => ({ ...r.driver_ownership, driver: r.users }));
+  }
+
+  async getAllOwnershipRecords(): Promise<(DriverOwnership & { driver: User })[]> {
+    const results = await db.select()
+      .from(driverOwnership)
+      .innerJoin(users, eq(driverOwnership.driverId, users.id))
+      .orderBy(desc(driverOwnership.createdAt));
+
+    return results.map(r => ({ ...r.driver_ownership, driver: r.users }));
+  }
+
+  async recalculateOwnership(): Promise<{ qualified: string[]; disqualified: string[]; redistributed: boolean }> {
+    const qualified: string[] = [];
+    const disqualified: string[] = [];
+
+    const allDriverOwnership = await db.select()
+      .from(driverOwnership)
+      .innerJoin(users, eq(driverOwnership.driverId, users.id));
+
+    for (const record of allDriverOwnership) {
+      const ownership = record.driver_ownership;
+      const driver = record.users;
+      const driverRating = parseFloat(driver.rating || "5.00");
+
+      // Count qualifying weeks
+      const qualifyingWeeks = await db.select({ count: count() })
+        .from(driverWeeklyHours)
+        .where(and(
+          eq(driverWeeklyHours.driverId, ownership.driverId),
+          eq(driverWeeklyHours.qualifiesWeek, true)
+        ));
+
+      const totalQualWeeks = qualifyingWeeks[0].count;
+
+      // Calculate total lifetime minutes
+      const totalMinutesResult = await db.select({ total: sum(driverWeeklyHours.totalMinutes) })
+        .from(driverWeeklyHours)
+        .where(eq(driverWeeklyHours.driverId, ownership.driverId));
+
+      const totalMinutes = parseInt(totalMinutesResult[0]?.total || "0");
+
+      // Update totals
+      await db.update(driverOwnership).set({
+        totalQualifyingWeeks: totalQualWeeks,
+        totalLifetimeMinutes: totalMinutes,
+        updatedAt: new Date()
+      }).where(eq(driverOwnership.id, ownership.id));
+
+      // Check ad-hoc qualification: 12 qualifying weeks + 4.85 rating + no adverse record
+      if (ownership.status === "none") {
+        if (totalQualWeeks >= 12 && driverRating >= 4.85 && !ownership.hasAdverseRecord) {
+          await db.update(driverOwnership).set({
+            status: "ad_hoc",
+            adHocQualificationDate: new Date(),
+            ratingAtQualification: driverRating.toFixed(2),
+            trackingStartDate: ownership.trackingStartDate || new Date(),
+            updatedAt: new Date()
+          }).where(eq(driverOwnership.id, ownership.id));
+          qualified.push(ownership.driverId);
+        }
+      }
+
+      // Check if ad-hoc should be disqualified (rating drop or adverse record)
+      if (ownership.status === "ad_hoc") {
+        if (driverRating < 4.85 || ownership.hasAdverseRecord) {
+          await db.update(driverOwnership).set({
+            status: "none",
+            adHocQualificationDate: null,
+            updatedAt: new Date()
+          }).where(eq(driverOwnership.id, ownership.id));
+          disqualified.push(ownership.driverId);
+        }
+
+        // Check lifetime qualification: 5640 total minutes (1880 hours * 3) within tracking window
+        const lifetimeHoursNeeded = 1880 * 60 * 3; // 5640 hours in minutes = 338400 minutes
+        if (totalMinutes >= lifetimeHoursNeeded && driverRating >= 4.85 && !ownership.hasAdverseRecord) {
+          await db.update(driverOwnership).set({
+            status: "lifetime",
+            lifetimeQualificationDate: new Date(),
+            updatedAt: new Date()
+          }).where(eq(driverOwnership.id, ownership.id));
+        }
+      }
+
+      // Lifetime owners with violations: remove from driving but keep shares
+      if (ownership.status === "lifetime" && ownership.hasAdverseRecord) {
+        if (!ownership.removedFromDriving) {
+          await db.update(driverOwnership).set({
+            removedFromDriving: true,
+            removalReason: "Adverse record detected",
+            updatedAt: new Date()
+          }).where(eq(driverOwnership.id, ownership.id));
+        }
+      }
+    }
+
+    // Redistribute shares if any changes
+    let redistributed = false;
+    if (qualified.length > 0 || disqualified.length > 0) {
+      await this.redistributeShares();
+      redistributed = true;
+    }
+
+    return { qualified, disqualified, redistributed };
+  }
+
+  async redistributeShares(): Promise<void> {
+    const activeOwners = await this.getAllOwners();
+    if (activeOwners.length === 0) return;
+
+    const driverPoolPct = 49.0;
+    const sharePerOwner = driverPoolPct / activeOwners.length;
+
+    const previousSnapshot: Record<string, number> = {};
+    const newSnapshot: Record<string, number> = {};
+
+    // Revoke existing active certificates
+    const existingCerts = await db.select().from(shareCertificates).where(eq(shareCertificates.status, "active"));
+    for (const cert of existingCerts) {
+      previousSnapshot[cert.ownerId] = parseFloat(cert.sharePercentage || "0");
+      await db.update(shareCertificates).set({
+        status: "revoked",
+        revokedAt: new Date(),
+        revokeReason: "Share redistribution",
+        updatedAt: new Date()
+      }).where(eq(shareCertificates.id, cert.id));
+    }
+
+    // Issue new certificates
+    for (const owner of activeOwners) {
+      const certNumber = `PGR-${Date.now()}-${owner.driverId.slice(-6)}`;
+      await db.insert(shareCertificates).values({
+        ownerId: owner.driverId,
+        ownershipId: owner.id,
+        certificateNumber: certNumber,
+        sharePercentage: sharePerOwner.toFixed(4),
+        status: "active",
+      });
+      newSnapshot[owner.driverId] = sharePerOwner;
+    }
+
+    // Log the rebalance
+    await db.insert(ownershipRebalanceLog).values({
+      eventType: "redistribution",
+      previousSnapshot,
+      newSnapshot,
+      totalActiveOwners: activeOwners.length,
+      driverPoolPercentage: driverPoolPct.toFixed(2),
+    });
+  }
+
+  async getShareCertificates(ownerId?: string): Promise<ShareCertificate[]> {
+    if (ownerId) {
+      return await db.select().from(shareCertificates)
+        .where(and(eq(shareCertificates.ownerId, ownerId), eq(shareCertificates.status, "active")))
+        .orderBy(desc(shareCertificates.issuedAt));
+    }
+    return await db.select().from(shareCertificates)
+      .where(eq(shareCertificates.status, "active"))
+      .orderBy(desc(shareCertificates.issuedAt));
+  }
+
+  async getRebalanceLog(limit = 20): Promise<any[]> {
+    return await db.select().from(ownershipRebalanceLog).orderBy(desc(ownershipRebalanceLog.createdAt)).limit(limit);
+  }
+
+  // ============================================================
+  // PROFIT DECLARATION & DISTRIBUTION
+  // ============================================================
+
+  async createProfitDeclaration(data: {
+    fiscalYear: number;
+    totalRevenue: string;
+    totalExpenses: string;
+    netProfit: string;
+    distributableProfit: string;
+    declaredBy: string;
+    boardNotes?: string;
+  }): Promise<ProfitDeclaration> {
+    const [declaration] = await db.insert(profitDeclarations).values({
+      ...data,
+      status: "draft",
+    }).returning();
+    return declaration;
+  }
+
+  async getProfitDeclarations(): Promise<ProfitDeclaration[]> {
+    return await db.select().from(profitDeclarations).orderBy(desc(profitDeclarations.fiscalYear));
+  }
+
+  async declareProfitDistribution(declarationId: string): Promise<ProfitDeclaration> {
+    const [declaration] = await db.select().from(profitDeclarations).where(eq(profitDeclarations.id, declarationId));
+    if (!declaration) throw new Error("Declaration not found");
+    if (declaration.status !== "draft") throw new Error("Can only declare draft declarations");
+
+    // Update status to declared
+    const [updated] = await db.update(profitDeclarations).set({
+      status: "declared",
+      declaredAt: new Date(),
+      updatedAt: new Date()
+    }).where(eq(profitDeclarations.id, declarationId)).returning();
+
+    return updated;
+  }
+
+  async distributeProfits(declarationId: string): Promise<ProfitDistribution[]> {
+    const [declaration] = await db.select().from(profitDeclarations).where(eq(profitDeclarations.id, declarationId));
+    if (!declaration) throw new Error("Declaration not found");
+    if (declaration.status !== "declared") throw new Error("Must be declared before distributing");
+
+    const distributableProfit = parseFloat(declaration.distributableProfit || "0");
+    const activeOwners = await this.getAllOwners();
+    const activeCerts = await this.getShareCertificates();
+
+    const distributions: ProfitDistribution[] = [];
+
+    // Owner (platform) gets 51%
+    const platformShare = distributableProfit * 0.51;
+
+    // Driver pool (49%) distributed according to share certificates
+    for (const cert of activeCerts) {
+      const sharePercent = parseFloat(cert.sharePercentage || "0");
+      const amount = (distributableProfit * sharePercent / 100).toFixed(2);
+
+      const owner = activeOwners.find(o => o.driverId === cert.ownerId);
+
+      const [dist] = await db.insert(profitDistributions).values({
+        declarationId,
+        ownerId: cert.ownerId,
+        sharePercentage: cert.sharePercentage,
+        ownershipType: owner?.status || "ad_hoc",
+        amount,
+        status: "pending",
+      }).returning();
+      distributions.push(dist);
+    }
+
+    // Update declaration status
+    await db.update(profitDeclarations).set({
+      status: "distributed",
+      distributedAt: new Date(),
+      updatedAt: new Date()
+    }).where(eq(profitDeclarations.id, declarationId));
+
+    return distributions;
+  }
+
+  async getProfitDistributions(declarationId: string): Promise<ProfitDistribution[]> {
+    return await db.select().from(profitDistributions)
+      .where(eq(profitDistributions.declarationId, declarationId))
+      .orderBy(desc(profitDistributions.amount));
+  }
+
+  async getDriverProfitDistributions(driverId: string): Promise<(ProfitDistribution & { declaration: ProfitDeclaration })[]> {
+    const results = await db.select()
+      .from(profitDistributions)
+      .innerJoin(profitDeclarations, eq(profitDistributions.declarationId, profitDeclarations.id))
+      .where(eq(profitDistributions.ownerId, driverId))
+      .orderBy(desc(profitDeclarations.fiscalYear));
+
+    return results.map(r => ({ ...r.profit_distributions, declaration: r.profit_declarations }));
+  }
+
+  // ============================================================
+  // FINANCIAL SUMMARY
+  // ============================================================
+
+  async getFinancialSummary(year?: number): Promise<{
+    totalRevenue: number;
+    totalFares: number;
+    totalTips: number;
+    totalCancellationFees: number;
+    rideCount: number;
+  }> {
+    const yearStart = new Date(year || new Date().getFullYear(), 0, 1);
+    const yearEnd = new Date((year || new Date().getFullYear()) + 1, 0, 1);
+
+    const completedRides = await db.select({
+      fare: rides.actualFare,
+      tip: rides.tipAmount,
+      cancelFee: rides.cancellationFee,
+    }).from(rides).where(
+      and(
+        eq(rides.status, "completed"),
+        gte(rides.completedAt, yearStart),
+        lte(rides.completedAt, yearEnd)
+      )
+    );
+
+    const cancelledWithFeeRides = await db.select({
+      cancelFee: rides.cancellationFee,
+    }).from(rides).where(
+      and(
+        eq(rides.paymentStatus, "cancelled_with_fee"),
+        gte(rides.createdAt, yearStart),
+        lte(rides.createdAt, yearEnd)
+      )
+    );
+
+    let totalFares = 0, totalTips = 0, totalCancelFees = 0;
+    for (const r of completedRides) {
+      totalFares += parseFloat(r.fare || "0");
+      totalTips += parseFloat(r.tip || "0");
+    }
+    for (const r of cancelledWithFeeRides) {
+      totalCancelFees += parseFloat(r.cancelFee || "0");
+    }
+
+    return {
+      totalRevenue: totalFares + totalTips + totalCancelFees,
+      totalFares,
+      totalTips,
+      totalCancellationFees: totalCancelFees,
+      rideCount: completedRides.length,
     };
   }
 }

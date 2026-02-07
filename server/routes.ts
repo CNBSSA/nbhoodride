@@ -650,6 +650,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
+      // Track driver hours for ownership qualification
+      if (ride.startedAt && ride.driverId) {
+        try {
+          const startTime = new Date(ride.startedAt).getTime();
+          const endTime = new Date().getTime();
+          const rideDurationMinutes = Math.round((endTime - startTime) / (1000 * 60));
+          if (rideDurationMinutes > 0) {
+            await storage.addDriverMinutes(ride.driverId, rideDurationMinutes);
+          }
+        } catch (err) {
+          console.error("Failed to track driver hours:", err);
+        }
+      }
+
       // Send targeted WebSocket messages to driver and rider only
       const rideCompletedMessage = {
         type: 'ride_completed',
@@ -1590,6 +1604,280 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error serving emergency tracking page:", error);
       res.status(500).json({ message: "Failed to load emergency tracking" });
+    }
+  });
+
+  // ============================================================
+  // ADMIN ROUTES
+  // ============================================================
+
+  const isAdminOrSessionAuth = async (req: any, res: any, next: any) => {
+    const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    const user = await storage.getUser(userId);
+    if (!user?.isAdmin) return res.status(403).json({ message: "Admin access required" });
+    next();
+  };
+
+  const sessionOrOidcAuth = async (req: any, res: any, next: any) => {
+    const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    next();
+  };
+
+  // Dashboard stats
+  app.get('/api/admin/dashboard', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const stats = await storage.getDashboardStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching dashboard stats:", error);
+      res.status(500).json({ message: "Failed to fetch dashboard stats" });
+    }
+  });
+
+  // All users
+  app.get('/api/admin/users', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { limit = 100, offset = 0 } = req.query;
+      const allUsers = await storage.getAllUsers(parseInt(limit), parseInt(offset));
+      res.json(allUsers);
+    } catch (error) {
+      console.error("Error fetching users:", error);
+      res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  // Update user (admin actions)
+  app.patch('/api/admin/users/:userId', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { userId } = req.params;
+      const updates = req.body;
+      const user = await storage.adminUpdateUser(userId, updates);
+      await storage.logAdminAction(adminId, 'update_user', 'user', userId, updates);
+      res.json(user);
+    } catch (error) {
+      console.error("Error updating user:", error);
+      res.status(500).json({ message: "Failed to update user" });
+    }
+  });
+
+  // All drivers
+  app.get('/api/admin/drivers', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const drivers = await storage.getAllDrivers();
+      res.json(drivers);
+    } catch (error) {
+      console.error("Error fetching drivers:", error);
+      res.status(500).json({ message: "Failed to fetch drivers" });
+    }
+  });
+
+  // Update driver profile (approve, suspend, verify)
+  app.patch('/api/admin/drivers/:userId', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { userId } = req.params;
+      const updates = req.body;
+      const profile = await storage.adminUpdateDriverProfile(userId, updates);
+      await storage.logAdminAction(adminId, 'update_driver', 'driver_profile', userId, updates);
+      res.json(profile);
+    } catch (error) {
+      console.error("Error updating driver:", error);
+      res.status(500).json({ message: "Failed to update driver" });
+    }
+  });
+
+  // All rides
+  app.get('/api/admin/rides', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { limit = 100, offset = 0 } = req.query;
+      const allRides = await storage.getAllRides(parseInt(limit), parseInt(offset));
+      res.json(allRides);
+    } catch (error) {
+      console.error("Error fetching rides:", error);
+      res.status(500).json({ message: "Failed to fetch rides" });
+    }
+  });
+
+  // All disputes
+  app.get('/api/admin/disputes', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const allDisputes = await storage.getAllDisputes();
+      res.json(allDisputes);
+    } catch (error) {
+      console.error("Error fetching disputes:", error);
+      res.status(500).json({ message: "Failed to fetch disputes" });
+    }
+  });
+
+  // Resolve dispute
+  app.patch('/api/admin/disputes/:disputeId', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { disputeId } = req.params;
+      const { resolution } = req.body;
+      const dispute = await storage.adminResolveDispute(disputeId, resolution, adminId);
+      await storage.logAdminAction(adminId, 'resolve_dispute', 'dispute', disputeId, { resolution });
+      res.json(dispute);
+    } catch (error) {
+      console.error("Error resolving dispute:", error);
+      res.status(500).json({ message: "Failed to resolve dispute" });
+    }
+  });
+
+  // Financial summary
+  app.get('/api/admin/finances', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { year } = req.query;
+      const summary = await storage.getFinancialSummary(year ? parseInt(year) : undefined);
+      res.json(summary);
+    } catch (error) {
+      console.error("Error fetching financial summary:", error);
+      res.status(500).json({ message: "Failed to fetch financial summary" });
+    }
+  });
+
+  // Ownership management
+  app.get('/api/admin/ownership', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const owners = await storage.getAllOwners();
+      const allRecords = await storage.getAllOwnershipRecords();
+      const certificates = await storage.getShareCertificates();
+      const rebalanceLog = await storage.getRebalanceLog();
+      res.json({ owners, allRecords, certificates, rebalanceLog });
+    } catch (error) {
+      console.error("Error fetching ownership data:", error);
+      res.status(500).json({ message: "Failed to fetch ownership data" });
+    }
+  });
+
+  // Recalculate ownership
+  app.post('/api/admin/ownership/recalculate', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const result = await storage.recalculateOwnership();
+      await storage.logAdminAction(adminId, 'recalculate_ownership', 'ownership', undefined, result);
+      res.json(result);
+    } catch (error) {
+      console.error("Error recalculating ownership:", error);
+      res.status(500).json({ message: "Failed to recalculate ownership" });
+    }
+  });
+
+  // Update driver ownership record (background check, adverse record)
+  app.patch('/api/admin/ownership/:driverId', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { driverId } = req.params;
+      const updates = req.body;
+
+      const ownership = await storage.getOrCreateOwnership(driverId);
+      const updatedFields: any = { updatedAt: new Date() };
+      if (updates.backgroundCheckStatus !== undefined) updatedFields.backgroundCheckStatus = updates.backgroundCheckStatus;
+      if (updates.hasAdverseRecord !== undefined) updatedFields.hasAdverseRecord = updates.hasAdverseRecord;
+      if (updates.violationNotes !== undefined) updatedFields.violationNotes = updates.violationNotes;
+      if (updates.backgroundCheckDate !== undefined) updatedFields.backgroundCheckDate = new Date(updates.backgroundCheckDate);
+
+      const { db: dbInstance } = await import("./db");
+      const { driverOwnership } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+      await dbInstance.update(driverOwnership).set(updatedFields).where(eq(driverOwnership.id, ownership.id));
+
+      await storage.logAdminAction(adminId, 'update_ownership', 'ownership', driverId, updates);
+      const updated = await storage.getDriverOwnershipStatus(driverId);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating ownership:", error);
+      res.status(500).json({ message: "Failed to update ownership" });
+    }
+  });
+
+  // Profit declarations
+  app.get('/api/admin/profits', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const declarations = await storage.getProfitDeclarations();
+      res.json(declarations);
+    } catch (error) {
+      console.error("Error fetching profit declarations:", error);
+      res.status(500).json({ message: "Failed to fetch profit declarations" });
+    }
+  });
+
+  app.post('/api/admin/profits', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const data = { ...req.body, declaredBy: adminId };
+      const declaration = await storage.createProfitDeclaration(data);
+      await storage.logAdminAction(adminId, 'create_profit_declaration', 'profit_declaration', declaration.id, data);
+      res.json(declaration);
+    } catch (error) {
+      console.error("Error creating profit declaration:", error);
+      res.status(500).json({ message: "Failed to create profit declaration" });
+    }
+  });
+
+  app.post('/api/admin/profits/:id/declare', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const declaration = await storage.declareProfitDistribution(req.params.id);
+      await storage.logAdminAction(adminId, 'declare_profit', 'profit_declaration', req.params.id);
+      res.json(declaration);
+    } catch (error: any) {
+      console.error("Error declaring profit:", error);
+      res.status(400).json({ message: error.message || "Failed to declare profit" });
+    }
+  });
+
+  app.post('/api/admin/profits/:id/distribute', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const distributions = await storage.distributeProfits(req.params.id);
+      await storage.logAdminAction(adminId, 'distribute_profit', 'profit_declaration', req.params.id);
+      res.json(distributions);
+    } catch (error: any) {
+      console.error("Error distributing profit:", error);
+      res.status(400).json({ message: error.message || "Failed to distribute profit" });
+    }
+  });
+
+  app.get('/api/admin/profits/:id/distributions', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const distributions = await storage.getProfitDistributions(req.params.id);
+      res.json(distributions);
+    } catch (error) {
+      console.error("Error fetching distributions:", error);
+      res.status(500).json({ message: "Failed to fetch distributions" });
+    }
+  });
+
+  // Admin activity log
+  app.get('/api/admin/activity-log', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const log = await storage.getAdminActivityLog();
+      res.json(log);
+    } catch (error) {
+      console.error("Error fetching activity log:", error);
+      res.status(500).json({ message: "Failed to fetch activity log" });
+    }
+  });
+
+  // ============================================================
+  // DRIVER OWNERSHIP STATUS (for drivers themselves)
+  // ============================================================
+
+  app.get('/api/driver/ownership', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const ownership = await storage.getOrCreateOwnership(userId);
+      const weeklyHours = await storage.getDriverWeeklyHoursHistory(userId, 52);
+      const certificates = await storage.getShareCertificates(userId);
+      const profitHistory = await storage.getDriverProfitDistributions(userId);
+      res.json({ ownership, weeklyHours, certificates, profitHistory });
+    } catch (error) {
+      console.error("Error fetching ownership status:", error);
+      res.status(500).json({ message: "Failed to fetch ownership status" });
     }
   });
 

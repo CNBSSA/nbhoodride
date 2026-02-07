@@ -10,6 +10,7 @@ import {
   boolean,
   integer,
   pgEnum,
+  date,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -36,6 +37,8 @@ export const users = pgTable("users", {
   phone: varchar("phone"),
   isDriver: boolean("is_driver").default(false),
   isVerified: boolean("is_verified").default(false),
+  isAdmin: boolean("is_admin").default(false),
+  isSuspended: boolean("is_suspended").default(false),
   rating: decimal("rating", { precision: 3, scale: 2 }).default("5.00"),
   totalRides: integer("total_rides").default(0),
   emergencyContact: varchar("emergency_contact"),
@@ -57,6 +60,8 @@ export const driverProfiles = pgTable("driver_profiles", {
   insuranceImageUrl: varchar("insurance_image_url"),
   isOnline: boolean("is_online").default(false),
   isVerifiedNeighbor: boolean("is_verified_neighbor").default(false),
+  isSuspended: boolean("is_suspended").default(false),
+  approvalStatus: varchar("approval_status").default("pending"),
   discountRate: decimal("discount_rate", { precision: 3, scale: 2 }).default("0.00"),
   currentLocation: jsonb("current_location").$type<{lat: number, lng: number}>(),
   createdAt: timestamp("created_at").defaultNow(),
@@ -104,6 +109,27 @@ export const paymentMethodEnum = pgEnum("payment_method", [
   "card"
 ]);
 
+// Ownership status enum
+export const ownershipStatusEnum = pgEnum("ownership_status", [
+  "none",
+  "ad_hoc",
+  "lifetime"
+]);
+
+// Share certificate status enum
+export const shareCertStatusEnum = pgEnum("share_cert_status", [
+  "active",
+  "revoked",
+  "transferred"
+]);
+
+// Profit declaration status enum
+export const profitDeclStatusEnum = pgEnum("profit_decl_status", [
+  "draft",
+  "declared",
+  "distributed"
+]);
+
 // Rides table
 export const rides = pgTable("rides", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -117,7 +143,7 @@ export const rides = pgTable("rides", {
   estimatedFare: decimal("estimated_fare", { precision: 8, scale: 2 }),
   actualFare: decimal("actual_fare", { precision: 8, scale: 2 }),
   distance: decimal("distance", { precision: 8, scale: 2 }),
-  duration: integer("duration"), // in minutes
+  duration: integer("duration"),
   tipAmount: decimal("tip_amount", { precision: 8, scale: 2 }).default("0.00"),
   paymentStatus: paymentStatusEnum("payment_status").default("pending_payment"),
   stripePaymentIntentId: varchar("stripe_payment_intent_id"),
@@ -146,10 +172,11 @@ export const disputes = pgTable("disputes", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   rideId: varchar("ride_id").notNull().references(() => rides.id),
   reporterId: varchar("reporter_id").notNull().references(() => users.id),
-  issueType: varchar("issue_type").notNull(), // fare-dispute, route-issue, safety-concern, lost-item, other
+  issueType: varchar("issue_type").notNull(),
   description: text("description").notNull(),
-  status: varchar("status").default("pending"), // pending, investigating, resolved, closed
+  status: varchar("status").default("pending"),
   resolution: text("resolution"),
+  resolvedBy: varchar("resolved_by").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -162,15 +189,134 @@ export const emergencyIncidents = pgTable("emergency_incidents", {
   incidentType: varchar("incident_type").notNull(),
   location: jsonb("location").$type<{lat: number, lng: number}>(),
   description: text("description"),
-  status: varchar("status").default("active"), // active, resolved
-  shareToken: varchar("share_token").unique(), // for public location sharing
+  status: varchar("status").default("active"),
+  shareToken: varchar("share_token").unique(),
   emergencyContactAlerted: boolean("emergency_contact_alerted").default(false),
   lastLocationUpdate: timestamp("last_location_update"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Relations
+// ============================================================
+// OWNERSHIP & BACK OFFICE TABLES
+// ============================================================
+
+// Weekly driving hours log - tracks hours per driver per week
+export const driverWeeklyHours = pgTable("driver_weekly_hours", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  driverId: varchar("driver_id").notNull().references(() => users.id),
+  weekStart: date("week_start").notNull(),
+  totalMinutes: integer("total_minutes").default(0),
+  rideCount: integer("ride_count").default(0),
+  qualifiesWeek: boolean("qualifies_week").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Driver ownership status - tracks qualification progress
+export const driverOwnership = pgTable("driver_ownership", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  driverId: varchar("driver_id").notNull().references(() => users.id).unique(),
+  status: ownershipStatusEnum("status").default("none"),
+  totalQualifyingWeeks: integer("total_qualifying_weeks").default(0),
+  totalLifetimeMinutes: integer("total_lifetime_minutes").default(0),
+  year1Minutes: integer("year1_minutes").default(0),
+  year2Minutes: integer("year2_minutes").default(0),
+  year3Minutes: integer("year3_minutes").default(0),
+  year4Minutes: integer("year4_minutes").default(0),
+  year5Minutes: integer("year5_minutes").default(0),
+  trackingStartDate: timestamp("tracking_start_date"),
+  adHocQualificationDate: timestamp("ad_hoc_qualification_date"),
+  lifetimeQualificationDate: timestamp("lifetime_qualification_date"),
+  graceDeadline: timestamp("grace_deadline"),
+  ratingAtQualification: decimal("rating_at_qualification", { precision: 3, scale: 2 }),
+  backgroundCheckStatus: varchar("background_check_status").default("pending"),
+  backgroundCheckDate: timestamp("background_check_date"),
+  hasAdverseRecord: boolean("has_adverse_record").default(false),
+  violationNotes: text("violation_notes"),
+  removedFromDriving: boolean("removed_from_driving").default(false),
+  removalReason: text("removal_reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Share certificates - issued to qualifying drivers
+export const shareCertificates = pgTable("share_certificates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ownerId: varchar("owner_id").notNull().references(() => users.id),
+  ownershipId: varchar("ownership_id").notNull().references(() => driverOwnership.id),
+  certificateNumber: varchar("certificate_number").notNull().unique(),
+  sharePercentage: decimal("share_percentage", { precision: 8, scale: 4 }),
+  status: shareCertStatusEnum("status").default("active"),
+  issuedAt: timestamp("issued_at").defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+  revokeReason: text("revoke_reason"),
+  transferredTo: varchar("transferred_to").references(() => users.id),
+  transferredAt: timestamp("transferred_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Ownership rebalance log - audit trail of share redistributions
+export const ownershipRebalanceLog = pgTable("ownership_rebalance_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventType: varchar("event_type").notNull(),
+  triggeredBy: varchar("triggered_by").references(() => users.id),
+  affectedDriverId: varchar("affected_driver_id").references(() => users.id),
+  previousSnapshot: jsonb("previous_snapshot").$type<Record<string, number>>(),
+  newSnapshot: jsonb("new_snapshot").$type<Record<string, number>>(),
+  totalActiveOwners: integer("total_active_owners").default(0),
+  driverPoolPercentage: decimal("driver_pool_percentage", { precision: 5, scale: 2 }).default("49.00"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Profit declarations - yearly profit declared by admin/board
+export const profitDeclarations = pgTable("profit_declarations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  fiscalYear: integer("fiscal_year").notNull(),
+  totalRevenue: decimal("total_revenue", { precision: 12, scale: 2 }),
+  totalExpenses: decimal("total_expenses", { precision: 12, scale: 2 }),
+  netProfit: decimal("net_profit", { precision: 12, scale: 2 }),
+  distributableProfit: decimal("distributable_profit", { precision: 12, scale: 2 }),
+  status: profitDeclStatusEnum("status").default("draft"),
+  declaredBy: varchar("declared_by").references(() => users.id),
+  declaredAt: timestamp("declared_at"),
+  distributedAt: timestamp("distributed_at"),
+  boardNotes: text("board_notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Profit distributions - individual payouts to owners
+export const profitDistributions = pgTable("profit_distributions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  declarationId: varchar("declaration_id").notNull().references(() => profitDeclarations.id),
+  ownerId: varchar("owner_id").notNull().references(() => users.id),
+  sharePercentage: decimal("share_percentage", { precision: 8, scale: 4 }),
+  ownershipType: ownershipStatusEnum("ownership_type"),
+  amount: decimal("amount", { precision: 12, scale: 2 }),
+  status: varchar("status").default("pending"),
+  paidAt: timestamp("paid_at"),
+  paymentMethod: varchar("payment_method"),
+  paymentReference: varchar("payment_reference"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Admin activity log - audit trail for admin actions
+export const adminActivityLog = pgTable("admin_activity_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  adminId: varchar("admin_id").notNull().references(() => users.id),
+  action: varchar("action").notNull(),
+  targetType: varchar("target_type"),
+  targetId: varchar("target_id"),
+  details: jsonb("details").$type<Record<string, any>>(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ============================================================
+// RELATIONS
+// ============================================================
+
 export const usersRelations = relations(users, ({ one, many }) => ({
   driverProfile: one(driverProfiles, {
     fields: [users.id],
@@ -180,6 +326,12 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   ridesAsDriver: many(rides, { relationName: "driver" }),
   disputes: many(disputes),
   emergencyIncidents: many(emergencyIncidents),
+  ownership: one(driverOwnership, {
+    fields: [users.id],
+    references: [driverOwnership.driverId],
+  }),
+  shareCertificates: many(shareCertificates),
+  profitDistributions: many(profitDistributions),
 }));
 
 export const driverProfilesRelations = relations(driverProfiles, ({ one, many }) => ({
@@ -233,7 +385,51 @@ export const emergencyIncidentsRelations = relations(emergencyIncidents, ({ one 
   }),
 }));
 
-// Zod schemas for validation
+export const driverOwnershipRelations = relations(driverOwnership, ({ one, many }) => ({
+  driver: one(users, {
+    fields: [driverOwnership.driverId],
+    references: [users.id],
+  }),
+  certificates: many(shareCertificates),
+}));
+
+export const shareCertificatesRelations = relations(shareCertificates, ({ one }) => ({
+  owner: one(users, {
+    fields: [shareCertificates.ownerId],
+    references: [users.id],
+  }),
+  ownership: one(driverOwnership, {
+    fields: [shareCertificates.ownershipId],
+    references: [driverOwnership.id],
+  }),
+}));
+
+export const profitDeclarationsRelations = relations(profitDeclarations, ({ many }) => ({
+  distributions: many(profitDistributions),
+}));
+
+export const profitDistributionsRelations = relations(profitDistributions, ({ one }) => ({
+  declaration: one(profitDeclarations, {
+    fields: [profitDistributions.declarationId],
+    references: [profitDeclarations.id],
+  }),
+  owner: one(users, {
+    fields: [profitDistributions.ownerId],
+    references: [users.id],
+  }),
+}));
+
+export const driverWeeklyHoursRelations = relations(driverWeeklyHours, ({ one }) => ({
+  driver: one(users, {
+    fields: [driverWeeklyHours.driverId],
+    references: [users.id],
+  }),
+}));
+
+// ============================================================
+// ZOD SCHEMAS
+// ============================================================
+
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
   createdAt: true,
@@ -270,7 +466,43 @@ export const insertEmergencyIncidentSchema = createInsertSchema(emergencyInciden
   updatedAt: true,
 });
 
-// Types
+export const insertDriverWeeklyHoursSchema = createInsertSchema(driverWeeklyHours).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertDriverOwnershipSchema = createInsertSchema(driverOwnership).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertShareCertificateSchema = createInsertSchema(shareCertificates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertProfitDeclarationSchema = createInsertSchema(profitDeclarations).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertProfitDistributionSchema = createInsertSchema(profitDistributions).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertAdminActivityLogSchema = createInsertSchema(adminActivityLog).omit({
+  id: true,
+  createdAt: true,
+});
+
+// ============================================================
+// TYPES
+// ============================================================
+
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type DriverProfile = typeof driverProfiles.$inferSelect;
@@ -278,9 +510,22 @@ export type Vehicle = typeof vehicles.$inferSelect;
 export type Ride = typeof rides.$inferSelect;
 export type Dispute = typeof disputes.$inferSelect;
 export type EmergencyIncident = typeof emergencyIncidents.$inferSelect;
+export type DriverWeeklyHours = typeof driverWeeklyHours.$inferSelect;
+export type DriverOwnership = typeof driverOwnership.$inferSelect;
+export type ShareCertificate = typeof shareCertificates.$inferSelect;
+export type OwnershipRebalanceLog = typeof ownershipRebalanceLog.$inferSelect;
+export type ProfitDeclaration = typeof profitDeclarations.$inferSelect;
+export type ProfitDistribution = typeof profitDistributions.$inferSelect;
+export type AdminActivityLog = typeof adminActivityLog.$inferSelect;
 
 export type InsertDriverProfile = z.infer<typeof insertDriverProfileSchema>;
 export type InsertVehicle = z.infer<typeof insertVehicleSchema>;
 export type InsertRide = z.infer<typeof insertRideSchema>;
 export type InsertDispute = z.infer<typeof insertDisputeSchema>;
 export type InsertEmergencyIncident = z.infer<typeof insertEmergencyIncidentSchema>;
+export type InsertDriverWeeklyHours = z.infer<typeof insertDriverWeeklyHoursSchema>;
+export type InsertDriverOwnership = z.infer<typeof insertDriverOwnershipSchema>;
+export type InsertShareCertificate = z.infer<typeof insertShareCertificateSchema>;
+export type InsertProfitDeclaration = z.infer<typeof insertProfitDeclarationSchema>;
+export type InsertProfitDistribution = z.infer<typeof insertProfitDistributionSchema>;
+export type InsertAdminActivityLog = z.infer<typeof insertAdminActivityLogSchema>;
