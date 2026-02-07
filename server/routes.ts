@@ -10,6 +10,7 @@ import { nanoid } from "nanoid";
 import twilio from "twilio";
 import { stripeService } from "./stripeService";
 import bcrypt from "bcrypt";
+import OpenAI from "openai";
 import {
   insertDriverProfileSchema,
   insertVehicleSchema,
@@ -17,6 +18,11 @@ import {
   insertDisputeSchema,
   insertEmergencyIncidentSchema,
 } from "@shared/schema";
+
+const openai = new OpenAI({
+  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+});
 
 // Extend Express session type to include testUserId and regular userId
 declare module "express-session" {
@@ -1894,6 +1900,134 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching ownership status:", error);
       res.status(500).json({ message: "Failed to fetch ownership status" });
+    }
+  });
+
+  // ============================================================
+  // AI ASSISTANT CHAT ROUTES
+  // ============================================================
+
+  const SYSTEM_PROMPT = `You are PG Ride Assistant, a helpful AI assistant for the PG County Community Ride-Share Platform. You help riders and drivers with questions about:
+- How to book rides, schedule rides, and find drivers
+- Payment information (Virtual PG Card system, fare estimation)
+- Driver registration and verification
+- Safety features (SOS, emergency contacts, live tracking)
+- Ride history, ratings, and disputes
+- The cooperative ownership model for drivers
+- General questions about the platform
+
+Be friendly, concise, and helpful. If you don't know something specific about the user's account, suggest they check the relevant section of the app. Keep responses brief but informative.`;
+
+  app.get('/api/ai/conversations', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const convos = await storage.getConversationsByUser(userId);
+      res.json(convos);
+    } catch (error) {
+      console.error("Error fetching conversations:", error);
+      res.status(500).json({ message: "Failed to fetch conversations" });
+    }
+  });
+
+  app.post('/api/ai/conversations', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { title } = req.body;
+      const conversation = await storage.createConversation(userId, title || "New Chat");
+      res.json(conversation);
+    } catch (error) {
+      console.error("Error creating conversation:", error);
+      res.status(500).json({ message: "Failed to create conversation" });
+    }
+  });
+
+  app.get('/api/ai/conversations/:id/messages', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { id } = req.params;
+      const convo = await storage.getConversation(id, userId);
+      if (!convo) {
+        return res.status(404).json({ message: "Conversation not found" });
+      }
+      const messages = await storage.getChatMessages(id);
+      res.json(messages);
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      res.status(500).json({ message: "Failed to fetch messages" });
+    }
+  });
+
+  app.delete('/api/ai/conversations/:id', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { id } = req.params;
+      await storage.deleteConversation(id, userId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting conversation:", error);
+      res.status(500).json({ message: "Failed to delete conversation" });
+    }
+  });
+
+  app.post('/api/ai/conversations/:id/messages', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { id } = req.params;
+      const { content } = req.body;
+
+      if (!content || typeof content !== 'string') {
+        return res.status(400).json({ message: "Message content is required" });
+      }
+
+      const convo = await storage.getConversation(id, userId);
+      if (!convo) {
+        return res.status(404).json({ message: "Conversation not found" });
+      }
+
+      await storage.createChatMessage(id, "user", content);
+
+      const existingMessages = await storage.getChatMessages(id);
+      const chatHistory: Array<{role: "system" | "user" | "assistant", content: string}> = [
+        { role: "system", content: SYSTEM_PROMPT },
+        ...existingMessages.map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        })),
+      ];
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const stream = await openai.chat.completions.create({
+        model: "gpt-5.2",
+        messages: chatHistory,
+        stream: true,
+        max_completion_tokens: 1024,
+      });
+
+      let fullResponse = "";
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content || "";
+        if (delta) {
+          fullResponse += delta;
+          res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
+        }
+      }
+
+      await storage.createChatMessage(id, "assistant", fullResponse);
+
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
+    } catch (error) {
+      console.error("Error sending AI message:", error);
+      if (res.headersSent) {
+        res.write(`data: ${JSON.stringify({ error: "Failed to get AI response" })}\n\n`);
+        res.end();
+      } else {
+        res.status(500).json({ message: "Failed to send message" });
+      }
     }
   });
 

@@ -14,6 +14,7 @@ export default function BottomNavigation({ activeTab, onTabChange, currentMode }
   const commonTabs = [
     { id: 'home', label: 'Home', icon: 'fas fa-home' },
     { id: 'history', label: 'History', icon: 'fas fa-history' },
+    { id: 'assistant', label: 'Assistant', icon: 'fas fa-robot' },
     { id: 'ratings', label: 'Ratings', icon: 'fas fa-star' },
   ];
 

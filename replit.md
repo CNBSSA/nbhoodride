@@ -27,6 +27,9 @@ Replit Auth provides OIDC-based user authentication. Server-side sessions are st
 ### Geographic and Location Services
 Browser-based geolocation, Leaflet maps with OpenStreetMap tiles, and real-time GPS tracking provide location functionality. Proximity search identifies nearby drivers, filtering by availability and estimated ride completion time.
 
+### AI Assistant
+An AI-powered chat assistant ("PG Ride Assistant") is accessible via the bottom navigation "Assistant" tab. It uses OpenAI (via Replit AI Integrations) with streaming responses. Users can create multiple conversations, get help with rides, payments, safety features, and platform questions. Conversations and messages are stored in PostgreSQL (`conversations` and `chat_messages` tables). API routes are under `/api/ai/conversations`.
+
 ### Real-time Features
 WebSocket integration enables live ride updates, push notifications, and in-app messaging between drivers and riders.
 

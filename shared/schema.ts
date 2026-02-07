@@ -426,6 +426,38 @@ export const driverWeeklyHoursRelations = relations(driverWeeklyHours, ({ one })
   }),
 }));
 
+// AI Assistant conversations
+export const conversations = pgTable("conversations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  title: text("title").notNull().default("New Chat"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// AI Assistant messages
+export const chatMessages = pgTable("chat_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  conversationId: varchar("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  role: varchar("role").notNull(),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const conversationsRelations = relations(conversations, ({ one, many }) => ({
+  user: one(users, {
+    fields: [conversations.userId],
+    references: [users.id],
+  }),
+  messages: many(chatMessages),
+}));
+
+export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
+  conversation: one(conversations, {
+    fields: [chatMessages.conversationId],
+    references: [conversations.id],
+  }),
+}));
+
 // ============================================================
 // ZOD SCHEMAS
 // ============================================================
@@ -529,3 +561,6 @@ export type InsertShareCertificate = z.infer<typeof insertShareCertificateSchema
 export type InsertProfitDeclaration = z.infer<typeof insertProfitDeclarationSchema>;
 export type InsertProfitDistribution = z.infer<typeof insertProfitDistributionSchema>;
 export type InsertAdminActivityLog = z.infer<typeof insertAdminActivityLogSchema>;
+
+export type Conversation = typeof conversations.$inferSelect;
+export type ChatMessage = typeof chatMessages.$inferSelect;

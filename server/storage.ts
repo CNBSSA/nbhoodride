@@ -12,6 +12,8 @@ import {
   profitDeclarations,
   profitDistributions,
   adminActivityLog,
+  conversations,
+  chatMessages,
   type User,
   type UpsertUser,
   type DriverProfile,
@@ -25,6 +27,8 @@ import {
   type ProfitDeclaration,
   type ProfitDistribution,
   type AdminActivityLog,
+  type Conversation,
+  type ChatMessage,
   type InsertDriverProfile,
   type InsertVehicle,
   type InsertRide,
@@ -194,6 +198,14 @@ export interface IStorage {
   addRouteWaypoint(rideId: string, driverId: string, waypoint: {lat: number, lng: number}): Promise<void>;
   calculateActualDistance(routePath: Array<{lat: number, lng: number, timestamp: number}>): number;
   getRideStats(rideId: string, userId?: string): Promise<{distance: number, duration: number, estimatedFare: number}>;
+
+  // AI Chat operations
+  getConversationsByUser(userId: string): Promise<Conversation[]>;
+  getConversation(id: string, userId?: string): Promise<Conversation | undefined>;
+  createConversation(userId: string, title: string): Promise<Conversation>;
+  deleteConversation(id: string, userId: string): Promise<void>;
+  getChatMessages(conversationId: string): Promise<ChatMessage[]>;
+  createChatMessage(conversationId: string, role: string, content: string): Promise<ChatMessage>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1933,6 +1945,39 @@ export class DatabaseStorage implements IStorage {
       totalCancellationFees: totalCancelFees,
       rideCount: completedRides.length,
     };
+  }
+
+  // AI Chat operations
+  async getConversationsByUser(userId: string): Promise<Conversation[]> {
+    return db.select().from(conversations).where(eq(conversations.userId, userId)).orderBy(desc(conversations.createdAt));
+  }
+
+  async getConversation(id: string, userId?: string): Promise<Conversation | undefined> {
+    const conditions = [eq(conversations.id, id)];
+    if (userId) conditions.push(eq(conversations.userId, userId));
+    const [conversation] = await db.select().from(conversations).where(and(...conditions));
+    return conversation;
+  }
+
+  async createConversation(userId: string, title: string): Promise<Conversation> {
+    const [conversation] = await db.insert(conversations).values({ userId, title }).returning();
+    return conversation;
+  }
+
+  async deleteConversation(id: string, userId: string): Promise<void> {
+    const [convo] = await db.select().from(conversations).where(and(eq(conversations.id, id), eq(conversations.userId, userId)));
+    if (!convo) return;
+    await db.delete(chatMessages).where(eq(chatMessages.conversationId, id));
+    await db.delete(conversations).where(eq(conversations.id, id));
+  }
+
+  async getChatMessages(conversationId: string): Promise<ChatMessage[]> {
+    return db.select().from(chatMessages).where(eq(chatMessages.conversationId, conversationId)).orderBy(asc(chatMessages.createdAt));
+  }
+
+  async createChatMessage(conversationId: string, role: string, content: string): Promise<ChatMessage> {
+    const [message] = await db.insert(chatMessages).values({ conversationId, role, content }).returning();
+    return message;
   }
 }
 

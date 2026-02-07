@@ -10,6 +10,7 @@ import RideHistory from "@/pages/RideHistory";
 import RatingsPage from "@/pages/RatingsPage";
 import { PaymentsPage } from "@/pages/PaymentsPage";
 import Profile from "@/pages/Profile";
+import AIAssistant from "@/pages/AIAssistant";
 import { Shield } from "lucide-react";
 
 export default function Home() {
@@ -41,6 +42,8 @@ export default function Home() {
         return currentMode === "rider" ? <RiderDashboard /> : <DriverDashboard />;
       case "history":
         return <RideHistory />;
+      case "assistant":
+        return <AIAssistant />;
       case "ratings":
         return <RatingsPage />;
       case "payments":
