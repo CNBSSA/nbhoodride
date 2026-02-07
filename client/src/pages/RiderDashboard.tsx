@@ -26,6 +26,35 @@ interface Driver {
   profileImage?: string;
 }
 
+function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 3959;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function estimateFare(miles: number): string {
+  const durationHours = miles / 25;
+  const baseFare = Math.max(5, Math.min(100, (durationHours * 18) + (miles * 1.50)));
+  if (baseFare <= 7) {
+    return `$${baseFare.toFixed(2)}`;
+  }
+  const fareLow = Math.max(5, Math.round(baseFare - 1.5));
+  const fareHigh = Math.min(100, Math.round(baseFare + 2));
+  return `$${fareLow}-${fareHigh}`;
+}
+
+function estimateArrival(miles: number): string {
+  const minutes = Math.max(1, Math.round((miles / 30) * 60));
+  if (minutes <= 1) return "~1 min";
+  if (minutes <= 3) return `~${minutes} min`;
+  if (minutes <= 5) return `${minutes - 1}-${minutes} min`;
+  return `${minutes - 2}-${minutes} min`;
+}
+
 export default function RiderDashboard() {
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
@@ -41,14 +70,24 @@ export default function RiderDashboard() {
     trackPageView("rider_dashboard");
   }, [trackPageView]);
 
-  const userLocation = location ? {
-    lat: location.latitude,
-    lng: location.longitude,
-    address: "Largo, MD 20774"
-  } : {
-    lat: 38.9073,
-    lng: -76.7781,
-    address: "Prince George's County, MD"
+  const currentLat = location ? location.latitude : 38.9073;
+  const currentLng = location ? location.longitude : -76.7781;
+
+  const { data: geocodeData } = useQuery<{ address: string }>({
+    queryKey: ['/api/geocode/reverse', currentLat, currentLng],
+    queryFn: async () => {
+      const res = await fetch(`/api/geocode/reverse?lat=${currentLat}&lng=${currentLng}`, { credentials: 'include' });
+      if (!res.ok) throw new Error('Geocode failed');
+      return res.json();
+    },
+    staleTime: 60000,
+    retry: 1,
+  });
+
+  const userLocation = {
+    lat: currentLat,
+    lng: currentLng,
+    address: geocodeData?.address || (location ? "Getting address..." : "Prince George's County, MD"),
   };
 
   const { data: nearbyDrivers = [], isLoading } = useQuery<any[]>({
@@ -95,10 +134,12 @@ export default function RiderDashboard() {
 
   const drivers: Driver[] = nearbyDrivers.map((driver: any) => {
     const realtimeLocation = realtimeDrivers[driver.id];
-    const driverLocation = realtimeLocation || driver.currentLocation || { 
-      lat: mapCenter.lat + (Math.random() - 0.5) * 0.01, 
-      lng: mapCenter.lng + (Math.random() - 0.5) * 0.01 
+    const driverLocation = realtimeLocation || driver.currentLocation || {
+      lat: mapCenter.lat,
+      lng: mapCenter.lng
     };
+
+    const distMiles = calculateDistance(userLocation.lat, userLocation.lng, driverLocation.lat, driverLocation.lng);
     
     return {
       id: driver.id,
@@ -106,8 +147,8 @@ export default function RiderDashboard() {
       location: driverLocation,
       rating: parseFloat(driver.user.rating) || 5.0,
       vehicle: driver.vehicles[0] ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}` : "Vehicle",
-      estimatedFare: "$12-15",
-      estimatedTime: "2-5 min",
+      estimatedFare: estimateFare(distMiles),
+      estimatedTime: estimateArrival(distMiles),
       isVerifiedNeighbor: driver.isVerifiedNeighbor,
       profileImage: driver.user.profileImageUrl,
     };

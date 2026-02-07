@@ -95,17 +95,41 @@ export default function RideBookingModal({
     }
   });
 
-  // Mock fare calculation for demo (replace with actual geocoding)
-  useEffect(() => {
-    if (destinationAddress.length > 3) {
-      // Mock distance and duration calculation
-      const mockDistance = 8.2; // miles
-      const mockDuration = 18; // minutes
-      calculateFareMutation.mutate({ distance: mockDistance, duration: mockDuration });
-    }
-  }, [destinationAddress]);
+  const [destCoords, setDestCoords] = useState<{lat: number, lng: number} | null>(null);
+  const [estimatedDistance, setEstimatedDistance] = useState<number | null>(null);
+  const [estimatedDuration, setEstimatedDuration] = useState<number | null>(null);
 
-  // Sync pickup address with userLocation changes
+  useEffect(() => {
+    if (destinationAddress.length < 5) return;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationAddress)}&limit=1&countrycodes=us`,
+          { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } }
+        );
+        const results = await res.json();
+        if (results.length > 0) {
+          const lat = parseFloat(results[0].lat);
+          const lng = parseFloat(results[0].lon);
+          setDestCoords({ lat, lng });
+          const R = 3959;
+          const dLat = (lat - userLocation.lat) * Math.PI / 180;
+          const dLng = (lng - userLocation.lng) * Math.PI / 180;
+          const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+          const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const distance = Math.round(dist * 10) / 10;
+          const duration = Math.round((dist / 30) * 60);
+          setEstimatedDistance(distance);
+          setEstimatedDuration(duration);
+          calculateFareMutation.mutate({ distance, duration });
+        }
+      } catch {
+        calculateFareMutation.mutate({ distance: 5, duration: 12 });
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [destinationAddress, userLocation.lat, userLocation.lng]);
+
   useEffect(() => {
     if (isOpen && userLocation) {
       setPickupAddress(userLocation.address);
@@ -122,6 +146,15 @@ export default function RideBookingModal({
       return;
     }
 
+    if (!destCoords) {
+      toast({
+        title: "Address Not Found",
+        description: "We couldn't locate that destination. Please enter a valid address.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const rideData = {
       pickupLocation: {
         lat: userLocation.lat,
@@ -129,14 +162,14 @@ export default function RideBookingModal({
         address: pickupAddress
       },
       destinationLocation: {
-        lat: userLocation.lat + 0.01, // Mock destination coordinates
-        lng: userLocation.lng + 0.01,
+        lat: destCoords.lat,
+        lng: destCoords.lng,
         address: destinationAddress
       },
       pickupInstructions,
       driverId: selectedDriver,
       estimatedFare: fareEstimate?.total || 0,
-      paymentMethod: 'card' // Virtual card is the only payment method
+      paymentMethod: 'card'
     };
 
     bookRideMutation.mutate(rideData);
@@ -199,11 +232,11 @@ export default function RideBookingModal({
                 <h3 className="font-semibold mb-2">Fare Estimate</h3>
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Distance: 8.2 miles</span>
+                    <span className="text-muted-foreground">Distance: {estimatedDistance ?? '...'} miles</span>
                     <span>${fareEstimate.distanceCharge.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Time: 18 minutes</span>
+                    <span className="text-muted-foreground">Time: {estimatedDuration ?? '...'} minutes</span>
                     <span>${fareEstimate.timeCharge.toFixed(2)}</span>
                   </div>
                   <Separator />

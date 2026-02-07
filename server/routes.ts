@@ -837,6 +837,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Reverse geocoding - convert coordinates to address
+  app.get('/api/geocode/reverse', isAuthenticated, async (req: any, res) => {
+    try {
+      const { lat, lng } = req.query;
+      if (!lat || !lng) {
+        return res.status(400).json({ message: "lat and lng required" });
+      }
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=16&addressdetails=1`,
+        { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } }
+      );
+      if (!response.ok) {
+        return res.status(502).json({ message: "Geocoding service unavailable" });
+      }
+      const data = await response.json() as any;
+      const addr = data.address || {};
+      const parts: string[] = [];
+      if (addr.house_number && addr.road) {
+        parts.push(`${addr.house_number} ${addr.road}`);
+      } else if (addr.road) {
+        parts.push(addr.road);
+      }
+      const city = addr.city || addr.town || addr.village || addr.suburb || addr.hamlet || '';
+      const state = addr.state ? (addr.state.length > 2 ? (addr.state === 'Maryland' ? 'MD' : addr.state.substring(0, 2).toUpperCase()) : addr.state) : '';
+      const postcode = addr.postcode || '';
+      if (city) parts.push(city);
+      if (state && postcode) {
+        parts.push(`${state} ${postcode}`);
+      } else if (state) {
+        parts.push(state);
+      }
+      const address = parts.length > 0 ? parts.join(', ') : data.display_name || 'Unknown location';
+      res.json({ address, lat: parseFloat(lat as string), lng: parseFloat(lng as string) });
+    } catch (error) {
+      console.error("Reverse geocoding error:", error);
+      res.status(500).json({ message: "Failed to get address" });
+    }
+  });
+
   // Ride routes
   app.get('/api/rides/nearby-drivers', isAuthenticated, async (req: any, res) => {
     try {
