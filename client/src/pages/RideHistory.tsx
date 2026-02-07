@@ -15,7 +15,7 @@ export default function RideHistory() {
   const { user } = useAuth();
 
   // Fetch ride history
-  const { data: rides = [], isLoading } = useQuery({
+  const { data: rides = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/rides"],
     enabled: !!user,
   });
@@ -129,13 +129,11 @@ export default function RideHistory() {
                         {formatDate(ride.completedAt || ride.createdAt)} • {ride.distance || 0} miles • {ride.duration || 0} min
                       </p>
                       <div className="flex items-center space-x-2 mt-2">
-                        <img
-                          src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=24&h=24&fit=crop&crop=face"
-                          alt="Driver"
-                          className="w-6 h-6 rounded-full"
-                        />
+                        <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-xs font-bold">
+                          <i className="fas fa-user" />
+                        </div>
                         <span className="text-sm text-muted-foreground">
-                          Driver {ride.driverId ? "Marcus T." : "N/A"}
+                          {ride.driver ? `${ride.driver.firstName} ${ride.driver.lastName?.[0] || ''}.` : (ride.driverId ? 'Driver' : 'N/A')}
                         </span>
                         {ride.driverRating && (
                           <div className="flex text-xs">
