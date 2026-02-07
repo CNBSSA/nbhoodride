@@ -3,10 +3,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Link } from "wouter";
 
 export default function Landing() {
-  const handleLogin = () => {
-    window.location.href = "/api/login";
-  };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-secondary/10 flex items-center justify-center p-4">
       <div className="w-full max-w-md mx-auto">
