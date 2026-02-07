@@ -12,6 +12,7 @@ import SOSModal from "@/components/SOSModal";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { MapPin, Plus, Calendar, Navigation, Bell, AlertTriangle, Star, Clock, X, ChevronRight, Shield } from "lucide-react";
 
 interface Driver {
   id: string;
@@ -43,26 +44,23 @@ export default function RiderDashboard() {
   const userLocation = location ? {
     lat: location.latitude,
     lng: location.longitude,
-    address: "Largo, MD 20774" // Mock address - in production, use reverse geocoding
+    address: "Largo, MD 20774"
   } : {
     lat: 38.9073,
     lng: -76.7781,
-    address: "Prince George's County, MD" // Default location when geolocation is unavailable
+    address: "Prince George's County, MD"
   };
 
-  // Get nearby drivers - always use userLocation which has fallback
   const { data: nearbyDrivers = [], isLoading } = useQuery<any[]>({
     queryKey: [`/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}`],
     refetchInterval: 30000,
   });
 
-  // Get scheduled rides
   const { data: scheduledRides = [] } = useQuery<any[]>({
     queryKey: ['/api/rides/scheduled'],
     refetchInterval: 30000,
   });
 
-  // Cancel scheduled ride mutation
   const cancelScheduledRide = useMutation({
     mutationFn: async (rideId: string) => {
       const response = await apiRequest('POST', `/api/rides/${rideId}/cancel`);
@@ -84,9 +82,8 @@ export default function RiderDashboard() {
     },
   });
 
-  const mapCenter = userLocation || { lat: 38.9073, lng: -76.7781 }; // Default to Largo, MD
+  const mapCenter = userLocation || { lat: 38.9073, lng: -76.7781 };
 
-  // Handle real-time driver location updates via WebSocket
   useEffect(() => {
     if (lastMessage?.type === 'driver_location') {
       setRealtimeDrivers(prev => ({
@@ -96,10 +93,9 @@ export default function RiderDashboard() {
     }
   }, [lastMessage]);
 
-  // Transform driver data for components with real-time locations
   const drivers: Driver[] = nearbyDrivers.map((driver: any) => {
     const realtimeLocation = realtimeDrivers[driver.id];
-    const location = realtimeLocation || driver.currentLocation || { 
+    const driverLocation = realtimeLocation || driver.currentLocation || { 
       lat: mapCenter.lat + (Math.random() - 0.5) * 0.01, 
       lng: mapCenter.lng + (Math.random() - 0.5) * 0.01 
     };
@@ -107,10 +103,10 @@ export default function RiderDashboard() {
     return {
       id: driver.id,
       name: `${driver.user.firstName} ${driver.user.lastName?.[0] || ''}.`,
-      location,
+      location: driverLocation,
       rating: parseFloat(driver.user.rating) || 5.0,
       vehicle: driver.vehicles[0] ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}` : "Vehicle",
-      estimatedFare: "$12-15", // Mock fare - calculate based on distance
+      estimatedFare: "$12-15",
       estimatedTime: "2-5 min",
       isVerifiedNeighbor: driver.isVerifiedNeighbor,
       profileImage: driver.user.profileImageUrl,
@@ -119,159 +115,177 @@ export default function RiderDashboard() {
 
   return (
     <>
-      {/* Header */}
-      <header className="bg-card border-b border-border p-4 flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <i className="fas fa-car text-primary text-2xl" />
+      <header className="bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center">
+            <MapPin className="w-5 h-5 text-white" />
+          </div>
           <div>
-            <h1 className="text-lg font-bold">PG Ride</h1>
-            <p className="text-xs text-muted-foreground">Community Rideshare</p>
+            <h1 className="text-lg font-bold text-gray-900">PG Ride</h1>
+            <p className="text-xs text-gray-500">Community Rideshare</p>
           </div>
         </div>
-        <div className="flex items-center space-x-3">
-          <Button variant="ghost" size="sm" className="p-2 rounded-full" data-testid="button-notifications">
-            <i className="fas fa-bell" />
-          </Button>
-          <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-primary-foreground text-sm font-bold">
+        <div className="flex items-center gap-2">
+          <button className="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center" data-testid="button-notifications">
+            <Bell className="w-5 h-5 text-gray-600" />
+          </button>
+          <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white text-sm font-bold">
             {user?.firstName?.[0] || 'U'}{user?.lastName?.[0] || ''}
           </div>
         </div>
       </header>
 
-      <main className="space-y-4">
-        {/* Location Header */}
-        <div className="bg-card p-4 border-b border-border">
+      <main className="bg-gray-50">
+        <div className="bg-white px-4 py-3 border-b border-gray-100">
           <div className="flex items-center justify-between">
-            <div className="flex-1">
-              <p className="text-sm text-muted-foreground">Your Location</p>
-              <p className="font-semibold">
-                {locationError ? "Location unavailable" : userLocation?.address || "Loading..."}
-              </p>
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center">
+                <Navigation className="w-4 h-4 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 font-medium">Your Location</p>
+                <p className="text-sm font-semibold text-gray-900">
+                  {locationError ? "Location unavailable" : userLocation?.address || "Loading..."}
+                </p>
+              </div>
             </div>
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              className="p-2 rounded-full" 
+            <button
               onClick={requestLocation}
+              className="text-xs text-blue-600 font-medium px-3 py-1.5 rounded-full bg-blue-50 hover:bg-blue-100 transition-colors"
               data-testid="button-refresh-location"
             >
-              <i className="fas fa-location-arrow" />
-            </Button>
+              Update
+            </button>
           </div>
         </div>
 
-        {/* Map */}
-        <div className="px-4">
-          <MapComponent
-            center={mapCenter}
-            drivers={drivers}
-            userLocation={userLocation || undefined}
-            height="300px"
-          />
+        <div className="px-4 pt-4">
+          <div className="rounded-2xl overflow-hidden shadow-sm border border-gray-200">
+            <MapComponent
+              center={mapCenter}
+              drivers={drivers}
+              userLocation={userLocation || undefined}
+              height="250px"
+            />
+          </div>
         </div>
 
-        {/* Quick Actions */}
-        <div className="px-4 space-y-4">
+        <div className="px-4 pt-4">
           <div className="grid grid-cols-2 gap-3">
-            <Button 
+            <button
               onClick={() => setIsBookingModalOpen(true)}
-              className="p-4 text-center font-semibold flex flex-col items-center space-y-2"
+              className="flex items-center gap-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl p-4 shadow-md shadow-blue-600/20 transition-all active:scale-[0.98]"
               data-testid="button-book-ride"
             >
-              <i className="fas fa-plus text-xl" />
-              <span>Book a Ride</span>
-            </Button>
-            <Button 
-              variant="secondary"
+              <div className="w-11 h-11 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                <Plus className="w-6 h-6 text-white" />
+              </div>
+              <div className="text-left">
+                <p className="font-bold text-sm leading-tight">Book a Ride</p>
+                <p className="text-[11px] text-blue-100 mt-0.5">Find a driver now</p>
+              </div>
+            </button>
+            <button
               onClick={() => setIsScheduleModalOpen(true)}
-              className="p-4 text-center font-semibold flex flex-col items-center space-y-2"
+              className="flex items-center gap-3 bg-white hover:bg-gray-50 text-gray-900 rounded-2xl p-4 shadow-sm border border-gray-200 transition-all active:scale-[0.98]"
               data-testid="button-schedule-ride"
             >
-              <i className="fas fa-calendar text-xl" />
-              <span>Schedule</span>
-            </Button>
+              <div className="w-11 h-11 bg-orange-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                <Calendar className="w-6 h-6 text-orange-500" />
+              </div>
+              <div className="text-left">
+                <p className="font-bold text-sm leading-tight">Schedule</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">Plan ahead</p>
+              </div>
+            </button>
           </div>
         </div>
 
-        {/* Nearby Drivers */}
-        <div className="px-4 pb-4">
-          <h3 className="font-semibold mb-3">Available Drivers Nearby</h3>
+        <div className="px-4 pt-5 pb-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-gray-900">Available Drivers Nearby</h3>
+            <span className="text-xs text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full">
+              {drivers.length} available
+            </span>
+          </div>
           {isLoading ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <i className="fas fa-spinner animate-spin text-2xl mb-2" />
-              <p>Finding nearby drivers...</p>
+            <div className="text-center py-10">
+              <div className="w-10 h-10 border-3 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+              <p className="text-sm text-gray-500">Finding nearby drivers...</p>
             </div>
           ) : drivers.length === 0 ? (
-            <Card>
-              <CardContent className="p-6 text-center text-muted-foreground">
-                <i className="fas fa-car text-3xl mb-2" />
-                <p>No drivers available nearby</p>
-                <p className="text-sm">Try again in a few minutes</p>
+            <Card className="border border-gray-200 shadow-none bg-white">
+              <CardContent className="py-10 text-center">
+                <div className="w-14 h-14 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                  <MapPin className="w-7 h-7 text-gray-400" />
+                </div>
+                <p className="font-semibold text-gray-700 mb-1">No drivers available</p>
+                <p className="text-sm text-gray-500">Try again in a few minutes</p>
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-3">
-              {drivers.slice(0, 3).map((driver) => (
-                <Card key={driver.id} className="border border-border">
-                  <CardContent className="p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-3">
-                        <img
-                          src={driver.profileImage || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=50&h=50&fit=crop&crop=face"}
-                          alt={`Driver ${driver.name}`}
-                          className="w-12 h-12 rounded-full object-cover"
-                        />
-                        <div>
-                          <div className="flex items-center space-x-2">
-                            <h4 className="font-semibold" data-testid={`driver-name-${driver.id}`}>
-                              {driver.name}
-                            </h4>
-                            {driver.isVerifiedNeighbor && (
-                              <span className="bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full">
-                                Verified Neighbor
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center space-x-1 text-sm">
-                            <div className="text-yellow-500">
-                              {"★".repeat(Math.floor(driver.rating))}
-                            </div>
-                            <span className="text-muted-foreground" data-testid={`driver-rating-${driver.id}`}>
-                              {driver.rating}
-                            </span>
-                          </div>
-                          <p className="text-xs text-muted-foreground" data-testid={`driver-vehicle-${driver.id}`}>
-                            {driver.vehicle}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm text-muted-foreground">{driver.estimatedTime}</p>
-                        <p className="text-lg font-bold text-primary" data-testid={`driver-fare-${driver.id}`}>
-                          {driver.estimatedFare}
-                        </p>
-                      </div>
+            <div className="space-y-2.5">
+              {drivers.slice(0, 5).map((driver) => (
+                <button
+                  key={driver.id}
+                  onClick={() => setIsBookingModalOpen(true)}
+                  className="w-full bg-white border border-gray-200 rounded-2xl p-4 flex items-center gap-3 hover:border-blue-200 hover:bg-blue-50/30 transition-all text-left active:scale-[0.99]"
+                  data-testid={`driver-card-${driver.id}`}
+                >
+                  <img
+                    src={driver.profileImage || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=50&h=50&fit=crop&crop=face"}
+                    alt={driver.name}
+                    className="w-12 h-12 rounded-xl object-cover flex-shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <h4 className="font-semibold text-gray-900 text-sm" data-testid={`driver-name-${driver.id}`}>
+                        {driver.name}
+                      </h4>
+                      {driver.isVerifiedNeighbor && (
+                        <Shield className="w-3.5 h-3.5 text-blue-600 flex-shrink-0" />
+                      )}
                     </div>
-                  </CardContent>
-                </Card>
+                    <div className="flex items-center gap-1 mb-0.5">
+                      <Star className="w-3.5 h-3.5 text-yellow-500 fill-yellow-500" />
+                      <span className="text-xs font-medium text-gray-700" data-testid={`driver-rating-${driver.id}`}>
+                        {driver.rating.toFixed(1)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500 truncate" data-testid={`driver-vehicle-${driver.id}`}>
+                      {driver.vehicle}
+                    </p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="flex items-center gap-1 text-gray-500 mb-1">
+                      <Clock className="w-3 h-3" />
+                      <span className="text-xs">{driver.estimatedTime}</span>
+                    </div>
+                    <p className="text-base font-bold text-blue-600" data-testid={`driver-fare-${driver.id}`}>
+                      {driver.estimatedFare}
+                    </p>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                </button>
               ))}
             </div>
           )}
         </div>
 
-        {/* Scheduled Rides */}
         {scheduledRides.length > 0 && (
           <div className="px-4 pb-4">
-            <h3 className="font-semibold mb-3">Upcoming Scheduled Rides</h3>
-            <div className="space-y-3">
+            <h3 className="font-bold text-gray-900 mb-3">Upcoming Scheduled Rides</h3>
+            <div className="space-y-2.5">
               {scheduledRides.map((ride: any) => (
-                <Card key={ride.id} className="border border-border">
+                <Card key={ride.id} className="border border-gray-200 shadow-none">
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
-                        <div className="flex items-center space-x-2 mb-2">
-                          <i className="fas fa-calendar text-primary" />
-                          <span className="font-semibold" data-testid={`scheduled-ride-time-${ride.id}`}>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="w-7 h-7 bg-orange-50 rounded-lg flex items-center justify-center">
+                            <Calendar className="w-4 h-4 text-orange-500" />
+                          </div>
+                          <span className="font-semibold text-sm text-gray-900" data-testid={`scheduled-ride-time-${ride.id}`}>
                             {new Date(ride.scheduledAt).toLocaleString('en-US', {
                               month: 'short',
                               day: 'numeric',
@@ -281,40 +295,38 @@ export default function RiderDashboard() {
                             })}
                           </span>
                         </div>
-                        <div className="space-y-1 text-sm">
-                          <div className="flex items-start space-x-2">
-                            <i className="fas fa-map-marker-alt text-green-500 mt-1" />
-                            <span className="text-muted-foreground" data-testid={`scheduled-ride-pickup-${ride.id}`}>
+                        <div className="space-y-1.5 ml-9">
+                          <div className="flex items-start gap-2">
+                            <div className="w-2 h-2 bg-green-500 rounded-full mt-1.5 flex-shrink-0" />
+                            <span className="text-xs text-gray-600" data-testid={`scheduled-ride-pickup-${ride.id}`}>
                               {ride.pickupLocation?.address || 'Pickup location'}
                             </span>
                           </div>
-                          <div className="flex items-start space-x-2">
-                            <i className="fas fa-flag-checkered text-red-500 mt-1" />
-                            <span className="text-muted-foreground" data-testid={`scheduled-ride-destination-${ride.id}`}>
+                          <div className="flex items-start gap-2">
+                            <div className="w-2 h-2 bg-red-500 rounded-full mt-1.5 flex-shrink-0" />
+                            <span className="text-xs text-gray-600" data-testid={`scheduled-ride-destination-${ride.id}`}>
                               {ride.destinationLocation?.address || 'Destination'}
                             </span>
                           </div>
                         </div>
-                        <div className="mt-2">
-                          <span className="text-sm font-semibold text-primary" data-testid={`scheduled-ride-fare-${ride.id}`}>
+                        <div className="mt-2 ml-9">
+                          <span className="text-sm font-bold text-blue-600" data-testid={`scheduled-ride-fare-${ride.id}`}>
                             Est. ${parseFloat(ride.estimatedFare || '0').toFixed(2)}
                           </span>
                         </div>
                       </div>
                       <Button
-                        variant="destructive"
+                        variant="ghost"
                         size="sm"
                         onClick={() => cancelScheduledRide.mutate(ride.id)}
                         disabled={cancelScheduledRide.isPending}
+                        className="text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl"
                         data-testid={`button-cancel-scheduled-${ride.id}`}
                       >
                         {cancelScheduledRide.isPending ? (
-                          <i className="fas fa-spinner animate-spin" />
+                          <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
                         ) : (
-                          <>
-                            <i className="fas fa-times mr-1" />
-                            Cancel
-                          </>
+                          <X className="w-4 h-4" />
                         )}
                       </Button>
                     </div>
@@ -324,18 +336,18 @@ export default function RiderDashboard() {
             </div>
           </div>
         )}
+
+        <div className="h-24" />
       </main>
 
-      {/* Emergency SOS Button */}
-      <Button
+      <button
         onClick={() => { trackFeatureUsed("sos_activated"); setIsSOSModalOpen(true); }}
-        className="fixed bottom-24 right-4 w-14 h-14 rounded-full bg-destructive text-destructive-foreground shadow-lg text-xl font-bold z-40"
+        className="fixed bottom-24 right-4 w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white shadow-lg shadow-red-600/30 flex items-center justify-center text-sm font-black z-40 transition-all active:scale-95"
         data-testid="button-sos"
       >
         SOS
-      </Button>
+      </button>
 
-      {/* Modals */}
       <RideBookingModal
         isOpen={isBookingModalOpen}
         onClose={() => setIsBookingModalOpen(false)}

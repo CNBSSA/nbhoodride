@@ -12,7 +12,7 @@ import IncomingRideRequest from "@/components/IncomingRideRequest";
 import { ActiveRideCard } from "@/components/ActiveRideCard";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { Link } from "wouter";
-import { BarChart3 } from "lucide-react";
+import { BarChart3, Bell, Car, ChevronRight } from "lucide-react";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
@@ -226,20 +226,21 @@ export default function DriverDashboard() {
 
   return (
     <>
-      {/* Header */}
-      <header className="bg-card border-b border-border p-4 flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <i className="fas fa-car text-primary text-2xl" />
+      <header className="bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-green-600 rounded-xl flex items-center justify-center">
+            <Car className="w-5 h-5 text-white" />
+          </div>
           <div>
-            <h1 className="text-lg font-bold">Driver Dashboard</h1>
-            <p className="text-xs text-muted-foreground">PG Ride Community</p>
+            <h1 className="text-lg font-bold text-gray-900">Driver Dashboard</h1>
+            <p className="text-xs text-gray-500">PG Ride Community</p>
           </div>
         </div>
-        <div className="flex items-center space-x-3">
-          <Button variant="ghost" size="sm" className="p-2 rounded-full" data-testid="button-notifications">
-            <i className="fas fa-bell" />
-          </Button>
-          <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-primary-foreground text-sm font-bold">
+        <div className="flex items-center gap-2">
+          <button className="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center" data-testid="button-notifications">
+            <Bell className="w-5 h-5 text-gray-600" />
+          </button>
+          <div className="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center text-white text-sm font-bold">
             {user?.firstName?.[0] || 'D'}{user?.lastName?.[0] || 'R'}
           </div>
         </div>
@@ -344,7 +345,7 @@ export default function DriverDashboard() {
                   <p className="text-xs text-muted-foreground">Scorecard, optimal hours & demand areas</p>
                 </div>
               </div>
-              <i className="fas fa-chevron-right text-muted-foreground" />
+              <ChevronRight className="w-5 h-5 text-gray-400" />
             </CardContent>
           </Card>
         </Link>

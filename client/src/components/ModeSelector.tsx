@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
+import { User, Car } from "lucide-react";
 
 interface ModeSelectorProps {
   currentMode: "rider" | "driver";
@@ -10,20 +11,20 @@ export default function ModeSelector({ currentMode, onModeChange }: ModeSelector
   const { user } = useAuth();
 
   return (
-    <div className="bg-card border-b border-border p-4">
+    <div className="bg-white border-b border-gray-100 px-4 py-3">
       <div className="max-w-[430px] mx-auto">
-        <div className="flex bg-muted rounded-lg p-1 mb-2">
+        <div className="flex bg-gray-100 rounded-2xl p-1">
           <button
             onClick={() => onModeChange("rider")}
             className={cn(
-              "flex-1 py-3 px-4 rounded-md text-sm font-medium transition-all duration-200 flex items-center justify-center",
+              "flex-1 py-2.5 px-4 rounded-xl text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2",
               currentMode === "rider"
-                ? "bg-primary text-primary-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
+                : "text-gray-500 hover:text-gray-700"
             )}
             data-testid="mode-rider"
           >
-            <i className="fas fa-user mr-2" />
+            <User className="w-4 h-4" />
             I need a ride
           </button>
           
@@ -31,46 +32,36 @@ export default function ModeSelector({ currentMode, onModeChange }: ModeSelector
             <button
               onClick={() => onModeChange("driver")}
               className={cn(
-                "flex-1 py-3 px-4 rounded-md text-sm font-medium transition-all duration-200 flex items-center justify-center",
+                "flex-1 py-2.5 px-4 rounded-xl text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2",
                 currentMode === "driver"
-                  ? "bg-primary text-primary-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
+                  ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
+                  : "text-gray-500 hover:text-gray-700"
               )}
               data-testid="mode-driver"
             >
-              <i className="fas fa-car mr-2" />
+              <Car className="w-4 h-4" />
               I'm driving
             </button>
           ) : (
             <button
               onClick={() => onModeChange("driver")}
-              className="flex-1 py-3 px-4 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all duration-200 flex items-center justify-center border border-muted"
+              className="flex-1 py-2.5 px-4 rounded-xl text-sm font-semibold text-gray-500 hover:text-gray-700 transition-all duration-200 flex items-center justify-center gap-2"
               data-testid="mode-driver-signup"
             >
-              <i className="fas fa-car mr-2" />
+              <Car className="w-4 h-4" />
               Become a driver
             </button>
           )}
         </div>
         
-        <div className="text-center text-xs text-muted-foreground">
-          {currentMode === "rider" ? (
-            <>
-              <i className="fas fa-map-marker-alt mr-1" />
-              Find nearby drivers and book rides
-            </>
-          ) : user?.isDriver ? (
-            <>
-              <i className="fas fa-dollar-sign mr-1" />
-              Accept rides and start earning
-            </>
-          ) : (
-            <>
-              <i className="fas fa-info-circle mr-1" />
-              Complete driver signup to start earning
-            </>
-          )}
-        </div>
+        <p className="text-center text-xs text-gray-400 mt-2">
+          {currentMode === "rider" 
+            ? "Find nearby drivers and book rides"
+            : user?.isDriver 
+              ? "Accept rides and start earning"
+              : "Complete driver signup to start earning"
+          }
+        </p>
       </div>
     </div>
   );
