@@ -53,6 +53,7 @@ The application uses PostgreSQL as the primary database with the following key e
 - **Mapping**: Leaflet maps with OpenStreetMap tiles for driver/rider visualization
 - **Location Tracking**: Real-time GPS coordinate storage and updates for active rides
 - **Proximity Search**: Database queries for finding nearby drivers within specified radius
+- **Driver Availability Filter**: Riders only see drivers who are (a) online with no active ride, or (b) online with ≤5 minutes remaining on their current ride. Estimated remaining time is calculated from pickup/destination distance using Haversine formula and 25 mph average speed assumption. This applies to both nearby driver search and phone number search.
 
 ### Real-time Features
 - **WebSocket Integration**: Persistent connections for live ride updates and messaging

@@ -19,8 +19,88 @@ import {
   type InsertEmergencyIncident,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc, sql, or, isNotNull, gt, like } from "drizzle-orm";
+import { eq, and, desc, asc, sql, or, isNotNull, gt, like, inArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+
+function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 3959; // Earth's radius in miles
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function estimateRideDurationMinutes(ride: any): number {
+  const pickup = ride.pickupLocation as { lat: number; lng: number } | null;
+  const dest = ride.destinationLocation as { lat: number; lng: number } | null;
+  if (!pickup || !dest) return 30;
+  const distMiles = haversineDistance(pickup.lat, pickup.lng, dest.lat, dest.lng);
+  const avgSpeedMph = 25;
+  return Math.max(5, (distMiles / avgSpeedMph) * 60);
+}
+
+async function filterAvailableDrivers(
+  drivers: any[],
+  getUserId: (driver: any) => string
+): Promise<any[]> {
+  const driverUserIds = drivers.map(getUserId).filter(Boolean);
+  if (driverUserIds.length === 0) return [];
+
+  const activeStatuses = ['accepted', 'driver_arriving', 'in_progress'] as const;
+  const activeRidesForDrivers = await db
+    .select()
+    .from(rides)
+    .where(
+      and(
+        inArray(rides.driverId, driverUserIds),
+        inArray(rides.status, [...activeStatuses])
+      )
+    );
+
+  const ridesByDriver = new Map<string, typeof activeRidesForDrivers>();
+  for (const ride of activeRidesForDrivers) {
+    if (!ride.driverId) continue;
+    if (!ridesByDriver.has(ride.driverId)) {
+      ridesByDriver.set(ride.driverId, []);
+    }
+    ridesByDriver.get(ride.driverId)!.push(ride);
+  }
+
+  return drivers.filter(driver => {
+    const userId = getUserId(driver);
+    const driverRides = ridesByDriver.get(userId);
+
+    if (!driverRides || driverRides.length === 0) {
+      return true;
+    }
+
+    // Driver is unavailable if they have any ride in 'accepted' or 'driver_arriving' status
+    // (committed to a rider but ride hasn't started yet)
+    const hasPreStartRide = driverRides.some(
+      r => r.status === 'accepted' || r.status === 'driver_arriving'
+    );
+    if (hasPreStartRide) {
+      return false;
+    }
+
+    // For in_progress rides, check if ALL have ≤5 minutes remaining
+    const inProgressRides = driverRides.filter(r => r.status === 'in_progress');
+    if (inProgressRides.length === 0) {
+      return true;
+    }
+
+    return inProgressRides.every(ride => {
+      if (!ride.startedAt) return false;
+      const estimatedMinutes = estimateRideDurationMinutes(ride);
+      const elapsedMinutes = (Date.now() - new Date(ride.startedAt).getTime()) / 60000;
+      const remainingMinutes = estimatedMinutes - elapsedMinutes;
+      return remainingMinutes <= 5;
+    });
+  });
+}
 
 export interface IStorage {
   // User operations (required for Replit Auth)
@@ -232,7 +312,6 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getNearbyDrivers(location: {lat: number, lng: number}, radiusKm: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]> {
-    // For now, return all online drivers - in production, implement proper geospatial query
     const results = await db
       .select()
       .from(driverProfiles)
@@ -240,7 +319,6 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(vehicles, eq(vehicles.driverProfileId, driverProfiles.id))
       .where(eq(driverProfiles.isOnline, true));
 
-    // Group vehicles by driver
     const driversMap = new Map();
     for (const result of results) {
       const driverId = result.driver_profiles.id;
@@ -256,7 +334,9 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    return Array.from(driversMap.values());
+    const allDrivers = Array.from(driversMap.values());
+
+    return filterAvailableDrivers(allDrivers, (d) => d.userId);
   }
 
   async searchDriversByPhone(phone: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]> {
@@ -277,7 +357,6 @@ export class DatabaseStorage implements IStorage {
         )
       );
 
-    // Group vehicles by driver
     const driversMap = new Map();
     for (const result of results) {
       const driverId = result.driver_profiles.id;
@@ -293,7 +372,9 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    return Array.from(driversMap.values());
+    const allDrivers = Array.from(driversMap.values());
+
+    return filterAvailableDrivers(allDrivers, (d) => d.userId);
   }
 
   // Vehicle operations

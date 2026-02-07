@@ -1,0 +1,49 @@
+Here's how the different users of the PG County Community Ride-Share Platform relate to each other:
+
+User Roles and Relationships
+The platform has two main types of users: Riders and Drivers. Every user starts as a rider, and can also become a driver by completing a verification process.
+
+Riders
+Who they are: Residents of Prince George's County, Maryland who need rides around the local area.
+
+What they do:
+Sign up with email and password
+Start with a $1,000 Virtual PG Card balance for paying fares
+Search for available drivers (by proximity or phone number)
+Book immediate rides or schedule future ones
+Track their driver's location in real-time during a ride
+Communicate with their driver through in-app messaging
+Rate and tip drivers after rides
+File disputes if there's an issue with a ride
+
+Drivers (Neighbor Drivers)
+Who they are: Riders who've gone through a verification process to also offer rides. They're positioned as trusted community neighbors, not anonymous strangers.
+
+What they do:
+Go "online" to signal they're available for ride requests
+Accept or decline incoming ride requests from riders
+Navigate to pickup locations and complete rides
+Their GPS location is tracked in real-time and shared with riders
+Earn money directly to their Virtual PG Card balance from completed rides
+Communicate with riders through in-app messaging
+
+How They Interact
+Discovery: A rider searches for nearby drivers or looks up a specific driver by phone number. This phone-based search reflects the community trust model -- you can request a ride from someone you already know. Only the drivers that are available are seen by riders. Available are the drivers who are online and not having riders, or/and have only five minutes left to complete the existing or ongoing ride.
+
+Booking: The rider selects a driver, enters pickup/destination details, and the estimated fare is calculated using GPS-based pricing (distance + time). The fare is deducted from the rider's Virtual PG Card immediately.
+
+During the Ride: Both parties see real-time GPS tracking. They can message each other through the app. The fare updates live based on actual distance traveled.
+
+Completion: When the driver ends the ride, the final fare is automatically calculated from GPS data. If the actual fare differs from the estimate, the difference is refunded to or charged from the rider. The driver receives the fare (plus any tip) on their Virtual PG Card.
+
+Safety Net: Either party can report emergencies or file disputes. Riders can cancel rides (with appropriate refund or cancellation fee depending on how far the driver has already traveled).
+
+The Community Trust Model
+What makes this different from larger ride-share apps is the emphasis on local, known connections. Drivers are "Verified Neighbor Drivers" -- the idea is that riders and drivers may already know each other from the community. The phone number search feature reinforces this: you can specifically request a ride from your neighbor or someone recommended by a friend, rather than being matched with a stranger.
+
+
+Scroll to latest
+
+Make, test, iterate…
+
+
