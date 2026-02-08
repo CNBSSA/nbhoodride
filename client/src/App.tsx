@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -20,6 +20,16 @@ import DriverInsights from "@/pages/DriverInsights";
 import DriverRateCard from "@/pages/DriverRateCard";
 import NotFound from "@/pages/not-found";
 
+function AuthRedirect({ component: Component }: { component: React.ComponentType }) {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (!isLoading && isAuthenticated) {
+    return <Redirect to="/" />;
+  }
+
+  return <Component />;
+}
+
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
 
@@ -28,9 +38,9 @@ function Router() {
       {/* Public emergency tracking route (no auth required) */}
       <Route path="/emergency/:token" component={EmergencyTracking} />
       
-      {/* Public authentication routes (no auth required) */}
-      <Route path="/login" component={Login} />
-      <Route path="/signup" component={Signup} />
+      {/* Auth routes redirect to home if already logged in */}
+      <Route path="/login">{() => <AuthRedirect component={Login} />}</Route>
+      <Route path="/signup">{() => <AuthRedirect component={Signup} />}</Route>
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
       <Route path="/test-login" component={TestLogin} />

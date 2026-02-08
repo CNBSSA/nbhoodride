@@ -10,7 +10,6 @@ import { Link } from 'wouter';
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [resetToken, setResetToken] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
   const { toast } = useToast();
 
@@ -36,9 +35,6 @@ export default function ForgotPassword() {
       const data = await response.json();
       
       setShowSuccess(true);
-      if (data.resetToken) {
-        setResetToken(data.resetToken);
-      }
       
       toast({
         title: "Password Reset Requested",
@@ -73,23 +69,7 @@ export default function ForgotPassword() {
           {showSuccess && (
             <Alert className="border-primary bg-primary/10">
               <AlertDescription>
-                If an account exists with this email, password reset instructions have been sent.
-                {resetToken && (
-                  <div className="mt-3">
-                    <p className="text-sm font-semibold mb-2">Development Mode - Reset Token:</p>
-                    <div className="bg-background p-2 rounded border">
-                      <code className="text-xs break-all">{resetToken}</code>
-                    </div>
-                    <p className="text-xs mt-2">
-                      Use this token on the{' '}
-                      <Link href="/reset-password">
-                        <span className="text-primary hover:underline cursor-pointer">
-                          reset password page
-                        </span>
-                      </Link>
-                    </p>
-                  </div>
-                )}
+                If an account exists with this email, password reset instructions have been sent. Please check your email for the reset link.
               </AlertDescription>
             </Alert>
           )}

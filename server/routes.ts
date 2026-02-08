@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { setupAuth, isAuthenticated, getSession } from "./replitAuth";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
 import { z } from "zod";
@@ -110,43 +110,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Hash password
       const hashedPassword = await bcrypt.hash(password, 10);
 
-      const SUPER_ADMIN_EMAIL = 'thrynovainsights@gmail.com';
-      const isSuperAdmin = email.toLowerCase() === SUPER_ADMIN_EMAIL;
-
       const user = await storage.createUser({
         email,
         password: hashedPassword,
         firstName,
         lastName,
         phone,
-        isApproved: isSuperAdmin,
-        isAdmin: isSuperAdmin || undefined,
-        isSuperAdmin: isSuperAdmin || undefined,
+        isApproved: false,
       });
 
-      if (isSuperAdmin) {
-        res.json({
-          message: "Super Admin account created successfully! You can log in now.",
-          pendingApproval: false,
-          user: {
-            id: user.id,
-            email: user.email,
-            firstName: user.firstName,
-            lastName: user.lastName,
-          }
-        });
-      } else {
-        res.json({ 
-          message: "Account created! Your account is pending approval by an administrator. You will be able to log in once approved.",
-          pendingApproval: true,
-          user: {
-            id: user.id,
-            email: user.email,
-            firstName: user.firstName,
-            lastName: user.lastName,
-          }
-        });
-      }
+      res.json({ 
+        message: "Account created! Your account is pending approval by an administrator. You will be able to log in once approved.",
+        pendingApproval: true,
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+        }
+      });
     } catch (error) {
       console.error("Signup error:", error);
       if (error instanceof z.ZodError) {
@@ -240,7 +222,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.json({ 
         message: "If the email exists, a password reset link will be sent",
-        resetToken: process.env.NODE_ENV === 'development' ? resetToken : undefined
       });
     } catch (error) {
       console.error("Forgot password error:", error);
@@ -1040,11 +1021,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put('/api/rides/:rideId', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
-      const updates = req.body;
       
-      const ride = await storage.updateRide(rideId, updates);
-      res.json(ride);
+      const ride = await storage.getRide(rideId);
+      if (!ride) {
+        return res.status(404).json({ message: "Ride not found" });
+      }
+      if (ride.riderId !== userId && ride.driverId !== userId) {
+        return res.status(403).json({ message: "Not authorized to update this ride" });
+      }
+      
+      const updates = req.body;
+      const updatedRide = await storage.updateRide(rideId, updates);
+      res.json(updatedRide);
     } catch (error) {
       console.error("Error updating ride:", error);
       res.status(400).json({ message: "Failed to update ride" });
@@ -1870,6 +1860,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!targetUser) return res.status(404).json({ message: "User not found" });
 
       if (targetUser.isSuperAdmin) return res.status(403).json({ message: "Cannot revoke super admin" });
+      if (targetUser.isAdmin && !req.adminUser.isSuperAdmin) return res.status(403).json({ message: "Only super admin can revoke other admins" });
 
       const user = await storage.adminUpdateUser(userId, { isApproved: false });
       await storage.logAdminAction(adminId, 'revoke_approval', 'user', userId, { email: targetUser.email });
@@ -2725,8 +2716,23 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
   
   const activeConnections = new Map<string, WebSocket>();
   
+  // Map to track authenticated userId per WebSocket connection
+  const wsAuthenticatedUsers = new WeakMap<WebSocket, string>();
+  
   wss.on('connection', (ws, req) => {
     console.log('WebSocket connection established');
+    
+    // Extract session userId from the upgrade request via Express session middleware
+    // The session cookie is available on the upgrade request
+    const sessionMiddleware = getSession();
+    const fakeRes = { on: () => {}, end: () => {}, setHeader: () => {}, getHeader: () => '' } as any;
+    sessionMiddleware(req as any, fakeRes, () => {
+      const session = (req as any).session;
+      const authenticatedUserId = session?.userId || session?.testUserId;
+      if (authenticatedUserId) {
+        wsAuthenticatedUsers.set(ws, authenticatedUserId);
+      }
+    });
     
     ws.on('message', (data) => {
       try {
@@ -2734,8 +2740,15 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
         
         switch (message.type) {
           case 'join':
-            // User joins with their ID for targeted messaging
-            activeConnections.set(message.userId, ws);
+            if (message.userId && typeof message.userId === 'string') {
+              // If we have an authenticated session, only allow joining as that user
+              const authUserId = wsAuthenticatedUsers.get(ws);
+              if (authUserId && authUserId !== message.userId) {
+                ws.send(JSON.stringify({ type: 'error', message: 'User ID mismatch' }));
+                break;
+              }
+              activeConnections.set(message.userId, ws);
+            }
             break;
             
           case 'location_update':
