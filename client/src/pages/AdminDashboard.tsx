@@ -301,24 +301,70 @@ function UsersPanel() {
 
       <Input placeholder="Search users by name or email..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="mb-4" data-testid="input-search-users" />
 
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+        <Card className="border-orange-200 bg-orange-50 dark:bg-orange-950/20">
+          <CardContent className="pt-4 pb-3 text-center">
+            <Clock className="w-6 h-6 mx-auto mb-1 text-orange-500" />
+            <p className="text-2xl font-bold text-orange-600" data-testid="count-pending">{users.filter((u: any) => !u.isApproved && !u.isSuperAdmin).length}</p>
+            <p className="text-xs text-muted-foreground">Pending</p>
+          </CardContent>
+        </Card>
+        <Card className="border-green-200 bg-green-50 dark:bg-green-950/20">
+          <CardContent className="pt-4 pb-3 text-center">
+            <CheckCircle className="w-6 h-6 mx-auto mb-1 text-green-500" />
+            <p className="text-2xl font-bold text-green-600" data-testid="count-approved">{users.filter((u: any) => (u.isApproved || u.isSuperAdmin) && !u.isSuspended).length}</p>
+            <p className="text-xs text-muted-foreground">Active</p>
+          </CardContent>
+        </Card>
+        <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
+          <CardContent className="pt-4 pb-3 text-center">
+            <Car className="w-6 h-6 mx-auto mb-1 text-blue-500" />
+            <p className="text-2xl font-bold text-blue-600" data-testid="count-drivers">{users.filter((u: any) => u.isDriver).length}</p>
+            <p className="text-xs text-muted-foreground">Drivers</p>
+          </CardContent>
+        </Card>
+        <Card className="border-red-200 bg-red-50 dark:bg-red-950/20">
+          <CardContent className="pt-4 pb-3 text-center">
+            <Ban className="w-6 h-6 mx-auto mb-1 text-red-500" />
+            <p className="text-2xl font-bold text-red-600" data-testid="count-suspended">{users.filter((u: any) => u.isSuspended).length}</p>
+            <p className="text-xs text-muted-foreground">Suspended</p>
+          </CardContent>
+        </Card>
+      </div>
+
       {pendingApproval.length > 0 && (
         <>
           <h3 className="text-lg font-semibold mb-3 text-orange-600 flex items-center gap-2"><Clock className="w-5 h-5" /> Pending Approval ({pendingApproval.length})</h3>
           <div className="space-y-3 mb-6">
             {pendingApproval.map((u: any) => (
-              <Card key={u.id} className="border-orange-200" data-testid={`user-card-${u.id}`}>
+              <Card key={u.id} className="border-l-4 border-l-orange-400 border-orange-200" data-testid={`user-card-${u.id}`}>
                 <CardContent className="pt-4 flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex-1 min-w-[200px]">
-                    <p className="font-semibold" data-testid={`user-name-${u.id}`}>{u.firstName} {u.lastName}</p>
-                    <p className="text-sm text-muted-foreground">{u.email}</p>
-                    <p className="text-xs text-muted-foreground">{u.phone}</p>
-                    <div className="flex gap-1 mt-1">
-                      <Badge variant="outline" className="text-orange-600 border-orange-300">Pending Approval</Badge>
-                      {u.isDriver && <Badge variant="secondary">Driver</Badge>}
+                  <div className="flex items-center gap-3 flex-1 min-w-[200px]">
+                    <div className="w-10 h-10 rounded-full bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center shrink-0">
+                      <span className="text-orange-600 font-bold text-sm">{u.firstName?.[0]}{u.lastName?.[0]}</span>
+                    </div>
+                    <div>
+                      <p className="font-semibold" data-testid={`user-name-${u.id}`}>{u.firstName} {u.lastName}</p>
+                      <p className="text-sm text-muted-foreground">{u.email}</p>
+                      {u.phone && <p className="text-xs text-muted-foreground">{u.phone}</p>}
+                      <div className="flex gap-1 mt-1">
+                        <Badge className="bg-orange-500 text-white text-xs" data-testid={`status-pending-${u.id}`}>
+                          <Clock className="w-3 h-3 mr-1" /> Pending
+                        </Badge>
+                        {u.isDriver ? (
+                          <Badge className="bg-blue-500 text-white text-xs" data-testid={`role-driver-${u.id}`}>
+                            <Car className="w-3 h-3 mr-1" /> Driver
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs" data-testid={`role-rider-${u.id}`}>
+                            <MapPin className="w-3 h-3 mr-1" /> Rider
+                          </Badge>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <Button size="sm" onClick={() => approveUser.mutate(u.id)} data-testid={`btn-approve-user-${u.id}`}>
+                    <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => approveUser.mutate(u.id)} data-testid={`btn-approve-user-${u.id}`}>
                       <CheckCircle className="w-3 h-3 mr-1" /> Approve
                     </Button>
                     {deleteConfirm === u.id ? (
@@ -328,7 +374,7 @@ function UsersPanel() {
                       </div>
                     ) : (
                       <Button size="sm" variant="destructive" onClick={() => setDeleteConfirm(u.id)} data-testid={`btn-delete-user-${u.id}`}>
-                        <XCircle className="w-3 h-3 mr-1" /> Delete
+                        <XCircle className="w-3 h-3 mr-1" /> Reject
                       </Button>
                     )}
                   </div>
@@ -342,18 +388,47 @@ function UsersPanel() {
       <h3 className="text-lg font-semibold mb-3 flex items-center gap-2"><CheckCircle className="w-5 h-5 text-green-600" /> Active Users ({approvedUsers.length})</h3>
       <div className="space-y-3">
         {approvedUsers.map((u: any) => (
-          <Card key={u.id} data-testid={`user-card-${u.id}`}>
+          <Card key={u.id} className={`border-l-4 ${u.isSuspended ? 'border-l-red-400' : u.isSuperAdmin ? 'border-l-purple-400' : u.isAdmin ? 'border-l-indigo-400' : u.isDriver ? 'border-l-blue-400' : 'border-l-green-400'}`} data-testid={`user-card-${u.id}`}>
             <CardContent className="pt-4 flex items-center justify-between flex-wrap gap-2">
-              <div className="flex-1 min-w-[200px]">
-                <p className="font-semibold" data-testid={`user-name-${u.id}`}>{u.firstName} {u.lastName}</p>
-                <p className="text-sm text-muted-foreground">{u.email}</p>
-                <p className="text-xs text-muted-foreground">{u.phone}</p>
-                <div className="flex gap-1 mt-1 flex-wrap">
-                  {u.isSuperAdmin && <Badge className="bg-purple-600">Super Admin</Badge>}
-                  {u.isAdmin && !u.isSuperAdmin && <Badge className="bg-blue-600">Admin</Badge>}
-                  {u.isDriver && <Badge variant="secondary">Driver</Badge>}
-                  {u.isApproved && <Badge variant="outline" className="text-green-600 border-green-300">Approved</Badge>}
-                  {u.isSuspended && <Badge variant="destructive">Suspended</Badge>}
+              <div className="flex items-center gap-3 flex-1 min-w-[200px]">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${u.isSuspended ? 'bg-red-100 dark:bg-red-900/30' : u.isSuperAdmin ? 'bg-purple-100 dark:bg-purple-900/30' : u.isAdmin ? 'bg-indigo-100 dark:bg-indigo-900/30' : u.isDriver ? 'bg-blue-100 dark:bg-blue-900/30' : 'bg-green-100 dark:bg-green-900/30'}`}>
+                  <span className={`font-bold text-sm ${u.isSuspended ? 'text-red-600' : u.isSuperAdmin ? 'text-purple-600' : u.isAdmin ? 'text-indigo-600' : u.isDriver ? 'text-blue-600' : 'text-green-600'}`}>{u.firstName?.[0]}{u.lastName?.[0]}</span>
+                </div>
+                <div>
+                  <p className="font-semibold" data-testid={`user-name-${u.id}`}>{u.firstName} {u.lastName}</p>
+                  <p className="text-sm text-muted-foreground">{u.email}</p>
+                  {u.phone && <p className="text-xs text-muted-foreground">{u.phone}</p>}
+                  <div className="flex gap-1 mt-1 flex-wrap">
+                    {u.isSuperAdmin && (
+                      <Badge className="bg-purple-600 text-white text-xs" data-testid={`role-superadmin-${u.id}`}>
+                        <Shield className="w-3 h-3 mr-1" /> Super Admin
+                      </Badge>
+                    )}
+                    {u.isAdmin && !u.isSuperAdmin && (
+                      <Badge className="bg-indigo-600 text-white text-xs" data-testid={`role-admin-${u.id}`}>
+                        <Shield className="w-3 h-3 mr-1" /> Admin
+                      </Badge>
+                    )}
+                    {u.isDriver ? (
+                      <Badge className="bg-blue-500 text-white text-xs" data-testid={`role-driver-${u.id}`}>
+                        <Car className="w-3 h-3 mr-1" /> Driver
+                      </Badge>
+                    ) : !u.isAdmin && !u.isSuperAdmin ? (
+                      <Badge variant="outline" className="text-xs" data-testid={`role-rider-${u.id}`}>
+                        <MapPin className="w-3 h-3 mr-1" /> Rider
+                      </Badge>
+                    ) : null}
+                    {u.isSuspended && (
+                      <Badge variant="destructive" className="text-xs" data-testid={`status-suspended-${u.id}`}>
+                        <Ban className="w-3 h-3 mr-1" /> Suspended
+                      </Badge>
+                    )}
+                    {u.isApproved && !u.isSuspended && (
+                      <Badge className="bg-green-500 text-white text-xs" data-testid={`status-active-${u.id}`}>
+                        <CheckCircle className="w-3 h-3 mr-1" /> Active
+                      </Badge>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="flex gap-2 flex-wrap">
