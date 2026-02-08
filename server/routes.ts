@@ -110,26 +110,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Hash password
       const hashedPassword = await bcrypt.hash(password, 10);
 
-      // Create user (pending approval)
+      const SUPER_ADMIN_EMAIL = 'thrynovainsights@gmail.com';
+      const isSuperAdmin = email.toLowerCase() === SUPER_ADMIN_EMAIL;
+
       const user = await storage.createUser({
         email,
         password: hashedPassword,
         firstName,
         lastName,
         phone,
-        isApproved: false,
+        isApproved: isSuperAdmin,
+        isAdmin: isSuperAdmin || undefined,
+        isSuperAdmin: isSuperAdmin || undefined,
       });
 
-      res.json({ 
-        message: "Account created! Your account is pending approval by an administrator. You will be able to log in once approved.",
-        pendingApproval: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-        }
-      });
+      if (isSuperAdmin) {
+        res.json({
+          message: "Super Admin account created successfully! You can log in now.",
+          pendingApproval: false,
+          user: {
+            id: user.id,
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName,
+          }
+        });
+      } else {
+        res.json({ 
+          message: "Account created! Your account is pending approval by an administrator. You will be able to log in once approved.",
+          pendingApproval: true,
+          user: {
+            id: user.id,
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName,
+          }
+        });
+      }
     } catch (error) {
       console.error("Signup error:", error);
       if (error instanceof z.ZodError) {
