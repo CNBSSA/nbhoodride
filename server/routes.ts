@@ -38,34 +38,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Email/Password Authentication Routes
   // POST /api/auth/signup - Register new user
-  // Temporary route to seed admin user in production
-  app.post('/api/auth/seed-admin', async (req, res) => {
-    try {
-      // Check if admin already exists
-      const existingUser = await storage.getUserByEmail('admin@pgcountyrideshare.com');
-      if (existingUser) {
-        return res.json({ message: "Admin user already exists" });
-      }
-
-      const adminData = {
-        id: 'c53bdd87-1e92-4645-85b6-b2805d2948f6',
-        email: 'admin@pgcountyrideshare.com',
-        password: '$2b$10$EPJMi2pAl649yRepAfG.SeKO5Wprxat12nWNnebDCOuy/tMs6MXCa',
-        firstName: 'PG County',
-        lastName: 'Administrator',
-        isAdmin: true,
-        isVerified: true,
-        virtualCardBalance: "1000.00"
-      };
-
-      await storage.createUser(adminData);
-      res.json({ message: "Admin user seeded successfully" });
-    } catch (error: any) {
-      console.error("Seeding error:", error);
-      res.status(500).json({ message: "Seeding failed", error: error.message });
-    }
-  });
-
   app.post('/api/auth/signup', async (req, res) => {
     try {
       const signupSchema = z.object({
