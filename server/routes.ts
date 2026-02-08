@@ -279,7 +279,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Test authentication route for test riders - EXPLICITLY DISABLED BY DEFAULT
   // Only enable when ENABLE_TEST_LOGIN environment variable is explicitly set to 'true'
   // This ensures the endpoint is NEVER available in production unless explicitly configured
-  if (process.env.ENABLE_TEST_LOGIN === 'true') {
+  if (process.env.ENABLE_TEST_LOGIN === 'true' && process.env.NODE_ENV !== 'production') {
     const TEST_PASSWORD = process.env.TEST_PASSWORD || "Fes5036tus@3";
     const TEST_RIDERS = [
       { id: 'test-rider-1', email: 'magdelineakingba@gmail.com' },
@@ -483,6 +483,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log(`Virtual card balance deducted successfully for ride ${rideId}`);
         } catch (error: any) {
           console.error("Failed to authorize virtual card payment:", error);
+          // Revert ride status to pending since payment failed
+          try {
+            await storage.updateRide(rideId, { status: "pending" } as any);
+          } catch (revertError) {
+            console.error("Failed to revert ride status after payment failure:", revertError);
+          }
           throw new Error(`Payment authorization failed: ${error.message}`);
         }
       }
