@@ -849,20 +849,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put('/api/vehicles/:vehicleId', isAuthenticated, async (req: any, res) => {
-    try {
-      const { vehicleId } = req.params;
-      const updates = req.body;
-      
-      const vehicle = await storage.updateVehicle(vehicleId, updates);
-      res.json(vehicle);
-    } catch (error) {
-      console.error("Error updating vehicle:", error);
-      res.status(400).json({ message: "Failed to update vehicle" });
-    }
-  });
-
-  // Handle vehicle photo uploads
+  // Handle vehicle photo uploads (must be before :vehicleId route to avoid being shadowed)
   app.put("/api/vehicles/photos", isAuthenticated, async (req: any, res) => {
     if (!req.body.photoURL || !req.body.vehicleId) {
       return res.status(400).json({ error: "photoURL and vehicleId are required" });
@@ -892,6 +879,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error setting vehicle photo:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.put('/api/vehicles/:vehicleId', isAuthenticated, async (req: any, res) => {
+    try {
+      const { vehicleId } = req.params;
+      const updates = req.body;
+      
+      const vehicle = await storage.updateVehicle(vehicleId, updates);
+      res.json(vehicle);
+    } catch (error) {
+      console.error("Error updating vehicle:", error);
+      res.status(400).json({ message: "Failed to update vehicle" });
     }
   });
 
@@ -1701,7 +1701,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/emergency/update-location', async (req: any, res) => {
     try {
       const { lat, lng, incidentId } = req.body;
-      const userId = req.session?.user?.id;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
@@ -1773,7 +1773,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           <div id="map"></div>
           <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
           <script>
-            const incident = ${JSON.stringify(incident)};
+            const incident = ${JSON.stringify(incident).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')};
             const map = L.map('map');
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
             
@@ -2004,8 +2004,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { userId } = req.params;
       const updates = req.body;
-      const user = await storage.adminUpdateUser(userId, updates);
-      await storage.logAdminAction(adminId, 'update_user', 'user', userId, updates);
+
+      const allowedFields = ['isApproved', 'isSuspended', 'isDriver', 'isVerified', 'firstName', 'lastName', 'phone', 'emergencyContact'];
+      const sanitizedUpdates: Record<string, any> = {};
+      for (const key of allowedFields) {
+        if (updates[key] !== undefined) {
+          sanitizedUpdates[key] = updates[key];
+        }
+      }
+
+      if (Object.keys(sanitizedUpdates).length === 0) {
+        return res.status(400).json({ message: "No valid fields to update" });
+      }
+
+      const targetUser = await storage.getUser(userId);
+      if (targetUser?.isSuperAdmin) {
+        return res.status(403).json({ message: "Cannot modify super admin via this endpoint" });
+      }
+
+      const user = await storage.adminUpdateUser(userId, sanitizedUpdates);
+      await storage.logAdminAction(adminId, 'update_user', 'user', userId, sanitizedUpdates);
       res.json(user);
     } catch (error) {
       console.error("Error updating user:", error);

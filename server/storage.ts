@@ -1312,48 +1312,51 @@ export class DatabaseStorage implements IStorage {
 
   // Virtual card operations
   async deductVirtualCardBalance(userId: string, amount: number): Promise<User> {
-    const user = await this.getUser(userId);
-    if (!user) {
-      throw new Error("User not found");
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error("Amount must be a positive number");
     }
-
-    const currentBalance = parseFloat(user.virtualCardBalance || "0");
-    if (currentBalance < amount) {
-      throw new Error("Insufficient virtual card balance");
-    }
-
-    const newBalance = (currentBalance - amount).toFixed(2);
 
     const [updatedUser] = await db
       .update(users)
       .set({
-        virtualCardBalance: newBalance,
+        virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) - ${amount})::TEXT`,
         updatedAt: new Date()
       })
-      .where(eq(users.id, userId))
+      .where(
+        and(
+          eq(users.id, userId),
+          sql`CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) >= ${amount}`
+        )
+      )
       .returning();
     
+    if (!updatedUser) {
+      const user = await this.getUser(userId);
+      if (!user) throw new Error("User not found");
+      throw new Error("Insufficient virtual card balance");
+    }
+
     return updatedUser;
   }
 
   async addVirtualCardBalance(userId: string, amount: number): Promise<User> {
-    const user = await this.getUser(userId);
-    if (!user) {
-      throw new Error("User not found");
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error("Amount must be a positive number");
     }
-
-    const currentBalance = parseFloat(user.virtualCardBalance || "0");
-    const newBalance = (currentBalance + amount).toFixed(2);
 
     const [updatedUser] = await db
       .update(users)
       .set({
-        virtualCardBalance: newBalance,
+        virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) + ${amount})::TEXT`,
         updatedAt: new Date()
       })
       .where(eq(users.id, userId))
       .returning();
     
+    if (!updatedUser) {
+      throw new Error("User not found");
+    }
+
     return updatedUser;
   }
 
@@ -1623,8 +1626,38 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteUser(userId: string): Promise<void> {
+    await db.delete(safetyAlerts).where(eq(safetyAlerts.targetUserId, userId));
+    await db.delete(driverScorecard).where(eq(driverScorecard.driverId, userId));
+    await db.delete(eventTracking).where(eq(eventTracking.userId, userId));
+    await db.delete(ownershipRebalanceLog).where(or(eq(ownershipRebalanceLog.triggeredBy, userId), eq(ownershipRebalanceLog.affectedDriverId, userId)));
+
+    const userDeclarations = await db.select({ id: profitDeclarations.id }).from(profitDeclarations).where(eq(profitDeclarations.declaredBy, userId));
+    const declIds = userDeclarations.map(d => d.id);
+    if (declIds.length > 0) {
+      await db.delete(profitDistributions).where(inArray(profitDistributions.declarationId, declIds));
+      await db.delete(profitDeclarations).where(inArray(profitDeclarations.id, declIds));
+    }
+    await db.delete(profitDistributions).where(eq(profitDistributions.ownerId, userId));
+    await db.delete(adminActivityLog).where(eq(adminActivityLog.adminId, userId));
+    await db.delete(driverWeeklyHours).where(eq(driverWeeklyHours.driverId, userId));
+    await db.delete(driverRateCards).where(eq(driverRateCards.driverId, userId));
+
+    await db.delete(shareCertificates).where(or(eq(shareCertificates.ownerId, userId), eq(shareCertificates.transferredTo, userId)));
+    await db.delete(driverOwnership).where(eq(driverOwnership.driverId, userId));
+
+    await db.delete(aiFeedback).where(eq(aiFeedback.userId, userId));
     await db.delete(conversations).where(eq(conversations.userId, userId));
-    await db.delete(rides).where(eq(rides.riderId, userId));
+    await db.delete(emergencyIncidents).where(eq(emergencyIncidents.userId, userId));
+
+    await db.update(disputes).set({ resolvedBy: null }).where(eq(disputes.resolvedBy, userId));
+
+    const userRides = await db.select({ id: rides.id }).from(rides).where(or(eq(rides.riderId, userId), eq(rides.driverId, userId)));
+    const rideIds = userRides.map(r => r.id);
+    if (rideIds.length > 0) {
+      await db.delete(disputes).where(inArray(disputes.rideId, rideIds));
+      await db.delete(rides).where(inArray(rides.id, rideIds));
+    }
+
     const driverProfile = await this.getDriverProfile(userId);
     if (driverProfile) {
       await db.delete(vehicles).where(eq(vehicles.driverProfileId, driverProfile.id));
