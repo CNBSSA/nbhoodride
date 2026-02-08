@@ -32,9 +32,27 @@ declare module "express-session" {
   }
 }
 
+async function ensureSuperAdminSetup() {
+  try {
+    const setupToken = process.env.SUPER_ADMIN_SETUP_TOKEN;
+    if (!setupToken) return;
+
+    const existing = await storage.getUserByEmail('thrynovainsights@gmail.com');
+    if (existing && !existing.isSuperAdmin) {
+      await storage.adminUpdateUser(existing.id, { isSuperAdmin: true, isAdmin: true, isApproved: true, isVerified: true });
+      console.log('Super Admin account activated for existing user');
+    }
+  } catch (error) {
+    console.error('Super admin auto-setup check failed:', error);
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
+
+  // Ensure super admin account is properly configured on startup
+  await ensureSuperAdminSetup();
 
   // Email/Password Authentication Routes
   // POST /api/auth/signup - Register new user
