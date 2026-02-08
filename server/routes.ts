@@ -1505,12 +1505,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      // Broadcast emergency alert via WebSocket
-      broadcast({
-        type: 'emergency_alert',
-        incident,
-        userId
-      });
+      // Send emergency alert via WebSocket to admins only (not all users)
+      const connEntries = Array.from(activeConnections.entries());
+      for (const [connUserId, connWs] of connEntries) {
+        if (connWs.readyState === WebSocket.OPEN) {
+          try {
+            const connUser = await storage.getUser(connUserId);
+            if (connUser?.isAdmin || connUser?.isSuperAdmin) {
+              connWs.send(JSON.stringify({
+                type: 'emergency_alert',
+                incident,
+                userId
+              }));
+            }
+          } catch {}
+        }
+      }
       
       res.json({ 
         success: true, 
@@ -1620,10 +1630,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Driver rate card endpoints
-  app.get('/api/driver/rate-card', async (req: any, res) => {
+  app.get('/api/driver/rate-card', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      if (!userId) return res.status(401).json({ message: "Not authenticated" });
 
       const card = await storage.getDriverRateCard(userId);
       if (!card) {
@@ -1644,10 +1653,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put('/api/driver/rate-card', async (req: any, res) => {
+  app.put('/api/driver/rate-card', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      if (!userId) return res.status(401).json({ message: "Not authenticated" });
 
       const { minimumFare, baseFare, perMinuteRate, perMileRate, surgeAdjustment, useSuggested } = req.body;
 
@@ -1736,77 +1744,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Public emergency tracking page (no auth required)
-  app.get('/emergency/:token', async (req: any, res) => {
-    try {
-      const { token } = req.params;
-      const incident = await storage.getEmergencyIncidentByToken(token);
-      
-      if (!incident) {
-        return res.status(404).json({ message: "Emergency incident not found" });
-      }
-      
-      // Return basic HTML page for live tracking
-      const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Emergency Tracking - PG Ride</title>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-          <style>
-            body { margin: 0; font-family: system-ui, sans-serif; }
-            #map { height: 100vh; }
-            .info-panel { position: absolute; top: 10px; left: 10px; z-index: 1000; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); max-width: 300px; }
-            .emergency-badge { background: #dc2626; color: white; padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; margin-bottom: 10px; display: inline-block; }
-          </style>
-        </head>
-        <body>
-          <div class="info-panel">
-            <div class="emergency-badge">🚨 EMERGENCY TRACKING</div>
-            <div><strong>Incident:</strong> ${incident.description || incident.incidentType}</div>
-            <div><strong>Time:</strong> ${incident.createdAt ? new Date(incident.createdAt).toLocaleString() : 'Unknown'}</div>
-            <div><strong>Status:</strong> ${incident.status}</div>
-            ${incident.lastLocationUpdate ? `<div><strong>Last Update:</strong> ${new Date(incident.lastLocationUpdate).toLocaleTimeString()}</div>` : ''}
-          </div>
-          <div id="map"></div>
-          <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-          <script>
-            const incident = ${JSON.stringify(incident).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')};
-            const map = L.map('map');
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-            
-            if (incident.location) {
-              const marker = L.marker([incident.location.lat, incident.location.lng]).addTo(map);
-              marker.bindPopup('Emergency Location').openPopup();
-              map.setView([incident.location.lat, incident.location.lng], 15);
-            } else {
-              map.setView([38.9897, -76.9378], 11); // PG County center
-            }
-            
-            // WebSocket for live updates
-            const ws = new WebSocket('${req.protocol === 'https' ? 'wss' : 'ws'}://${req.get('host')}/ws');
-            ws.onmessage = function(event) {
-              const data = JSON.parse(event.data);
-              if (data.type === 'emergency_location_update' && data.incidentId === incident.id) {
-                marker.setLatLng([data.location.lat, data.location.lng]);
-                map.setView([data.location.lat, data.location.lng], 15);
-                document.querySelector('.info-panel').innerHTML += '<div style="color: green; font-size: 12px; margin-top: 5px;">📍 Location updated</div>';
-              }
-            };
-          </script>
-        </body>
-        </html>
-      `;
-      
-      res.setHeader('Content-Type', 'text/html');
-      res.send(html);
-    } catch (error) {
-      console.error("Error serving emergency tracking page:", error);
-      res.status(500).json({ message: "Failed to load emergency tracking" });
-    }
-  });
+  // Emergency tracking is handled by the React SPA at /emergency/:token
+  // The React EmergencyTracking component fetches data via /api/emergency/incident/:token
 
   // ============================================================
   // ADMIN ROUTES
