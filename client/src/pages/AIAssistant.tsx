@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
@@ -19,6 +19,7 @@ export default function AIAssistant() {
   const [showFaq, setShowFaq] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const pendingFaqMessage = useRef<string | null>(null);
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { trackAiChat, trackFeatureUsed } = useAnalytics();
@@ -77,31 +78,25 @@ export default function AIAssistant() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent]);
 
-  useEffect(() => {
-    if (activeConversationId) {
-      inputRef.current?.focus();
-    }
-  }, [activeConversationId]);
+  const sendMessageForConversation = useCallback(async (conversationId: string, messageText: string) => {
+    const userMessage = messageText.trim();
+    if (!userMessage || !conversationId) return;
 
-  const sendMessage = async () => {
-    if (!message.trim() || !activeConversationId || isStreaming) return;
-
-    const userMessage = message.trim();
     setMessage("");
     setIsStreaming(true);
     setStreamingContent("");
     trackAiChat({ action: "send_message" });
 
     queryClient.setQueryData<ChatMessage[]>(
-      ["/api/ai/conversations", activeConversationId, "messages"],
+      ["/api/ai/conversations", conversationId, "messages"],
       (old = []) => [
         ...old,
-        { id: "temp-user", conversationId: activeConversationId, role: "user", content: userMessage, createdAt: new Date() } as ChatMessage,
+        { id: "temp-user", conversationId, role: "user", content: userMessage, createdAt: new Date() } as ChatMessage,
       ]
     );
 
     try {
-      const response = await fetch(`/api/ai/conversations/${activeConversationId}/messages`, {
+      const response = await fetch(`/api/ai/conversations/${conversationId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: userMessage }),
@@ -136,7 +131,7 @@ export default function AIAssistant() {
             if (event.done) {
               setStreamingContent("");
               setIsStreaming(false);
-              queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations", activeConversationId, "messages"] });
+              queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations", conversationId, "messages"] });
             }
           } catch {}
         }
@@ -145,8 +140,25 @@ export default function AIAssistant() {
       console.error("Error sending message:", error);
       setIsStreaming(false);
       setStreamingContent("");
-      queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations", activeConversationId, "messages"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations", conversationId, "messages"] });
     }
+  }, [queryClient, trackAiChat]);
+
+  useEffect(() => {
+    if (activeConversationId) {
+      inputRef.current?.focus();
+      if (pendingFaqMessage.current) {
+        const faqMsg = pendingFaqMessage.current;
+        pendingFaqMessage.current = null;
+        sendMessageForConversation(activeConversationId, faqMsg);
+      }
+    }
+  }, [activeConversationId, sendMessageForConversation]);
+
+  const sendMessage = async (overrideMessage?: string) => {
+    const messageToSend = overrideMessage || message;
+    if (!messageToSend.trim() || !activeConversationId || isStreaming) return;
+    await sendMessageForConversation(activeConversationId, messageToSend);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -158,18 +170,21 @@ export default function AIAssistant() {
 
   const handleFaqClick = async (question: string) => {
     setShowFaq(false);
-    if (!activeConversationId) {
-      const res = await apiRequest("POST", "/api/ai/conversations", { title: question.slice(0, 50) });
-      const convo = await res.json();
-      queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations"] });
-      setActiveConversationId(convo.id);
-      setTimeout(() => {
-        setMessage(question);
-      }, 300);
-    } else {
-      setMessage(question);
-    }
     trackFeatureUsed("faq_clicked", { question });
+    if (!activeConversationId) {
+      try {
+        pendingFaqMessage.current = question;
+        const res = await apiRequest("POST", "/api/ai/conversations", { title: question.slice(0, 50) });
+        const convo = await res.json();
+        queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations"] });
+        setActiveConversationId(convo.id);
+      } catch {
+        pendingFaqMessage.current = null;
+        toast({ title: "Error", description: "Failed to start conversation. Please try again.", variant: "destructive" });
+      }
+    } else {
+      sendMessage(question);
+    }
   };
 
   if (!activeConversationId) {

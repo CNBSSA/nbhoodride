@@ -483,29 +483,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const ride = await storage.acceptRide(rideId, userId);
       
-      // If ride uses card payment, deduct from virtual card balance
       if (ride.paymentMethod === 'card') {
         try {
           const estimatedFare = parseFloat(ride.estimatedFare || "0");
           
           console.log(`Deducting virtual card balance for ride ${rideId}: $${estimatedFare}`);
           
-          // Deduct the estimated fare from rider's virtual card balance
           await storage.deductVirtualCardBalance(ride.riderId, estimatedFare);
-          
-          // Update ride to show payment is authorized
           await storage.setRidePaymentAuthorization(rideId, `virtual-${rideId}`);
           
           console.log(`Virtual card balance deducted successfully for ride ${rideId}`);
         } catch (error: any) {
           console.error("Failed to authorize virtual card payment:", error);
-          // Revert ride status to pending since payment failed
           try {
-            await storage.updateRide(rideId, { status: "pending" } as any);
+            await storage.updateRide(rideId, { status: "pending", acceptedAt: null } as any);
           } catch (revertError) {
             console.error("Failed to revert ride status after payment failure:", revertError);
           }
-          throw new Error(`Payment authorization failed: ${error.message}`);
+          return res.status(402).json({ message: `Payment authorization failed: ${error.message}` });
         }
       }
       

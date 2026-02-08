@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -44,6 +44,7 @@ export default function RideBookingModal({
   userLocation 
 }: RideBookingModalProps) {
   const [pickupAddress, setPickupAddress] = useState(userLocation.address);
+  const [pickupManuallyEdited, setPickupManuallyEdited] = useState(false);
   const [destinationAddress, setDestinationAddress] = useState("");
   const [pickupInstructions, setPickupInstructions] = useState("");
   const [selectedDriver, setSelectedDriver] = useState<string>("");
@@ -55,6 +56,15 @@ export default function RideBookingModal({
   useEffect(() => {
     if (isOpen) {
       trackRideSearch();
+    } else {
+      setDestinationAddress("");
+      setPickupInstructions("");
+      setSelectedDriver("");
+      setFareEstimate(null);
+      setDestCoords(null);
+      setEstimatedDistance(null);
+      setEstimatedDuration(null);
+      setPickupManuallyEdited(false);
     }
   }, [isOpen, trackRideSearch]);
 
@@ -101,6 +111,13 @@ export default function RideBookingModal({
   const [estimatedDistance, setEstimatedDistance] = useState<number | null>(null);
   const [estimatedDuration, setEstimatedDuration] = useState<number | null>(null);
 
+  const selectedDriverRef = useRef(selectedDriver);
+  selectedDriverRef.current = selectedDriver;
+
+  const calculateFare = useCallback((distance: number, duration: number, driverId?: string) => {
+    calculateFareMutation.mutate({ distance, duration, driverId });
+  }, [calculateFareMutation.mutate]);
+
   useEffect(() => {
     if (destinationAddress.length < 5) return;
     const timer = setTimeout(async () => {
@@ -123,7 +140,7 @@ export default function RideBookingModal({
           const duration = Math.round((distance / 25) * 60);
           setEstimatedDistance(distance);
           setEstimatedDuration(duration);
-          calculateFareMutation.mutate({ distance, duration, driverId: selectedDriver || undefined });
+          calculateFare(distance, duration, selectedDriverRef.current || undefined);
         }
       } catch {
         setDestCoords(null);
@@ -133,19 +150,19 @@ export default function RideBookingModal({
       }
     }, 800);
     return () => clearTimeout(timer);
-  }, [destinationAddress, userLocation.lat, userLocation.lng]);
+  }, [destinationAddress, userLocation.lat, userLocation.lng, calculateFare]);
 
   useEffect(() => {
     if (selectedDriver && estimatedDistance && estimatedDuration) {
-      calculateFareMutation.mutate({ distance: estimatedDistance, duration: estimatedDuration, driverId: selectedDriver });
+      calculateFare(estimatedDistance, estimatedDuration, selectedDriver);
     }
-  }, [selectedDriver]);
+  }, [selectedDriver, estimatedDistance, estimatedDuration, calculateFare]);
 
   useEffect(() => {
-    if (isOpen && userLocation) {
+    if (isOpen && userLocation && !pickupManuallyEdited) {
       setPickupAddress(userLocation.address);
     }
-  }, [isOpen, userLocation?.address]);
+  }, [isOpen, userLocation?.address, pickupManuallyEdited]);
 
   const handleBookRide = () => {
     if (!destinationAddress || !selectedDriver) {
@@ -207,7 +224,10 @@ export default function RideBookingModal({
               <div className="w-3 h-3 bg-secondary rounded-full" />
               <Input
                 value={pickupAddress}
-                onChange={(e) => setPickupAddress(e.target.value)}
+                onChange={(e) => {
+                  setPickupAddress(e.target.value);
+                  setPickupManuallyEdited(true);
+                }}
                 placeholder="Enter pickup address"
                 data-testid="input-pickup-address"
               />
