@@ -38,25 +38,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Email/Password Authentication Routes
   // POST /api/auth/signup - Register new user
-  // Temporary route to seed admin user in production
-  app.get('/api/admin/setup-final', async (req, res) => {
+  // Super admin setup - requires setup token and user-provided password
+  app.post('/api/admin/setup-super-admin', async (req, res) => {
     try {
-      const adminData = {
-        id: 'c53bdd87-1e92-4645-85b6-b2805d2948f6',
-        email: 'admin@pgcountyrideshare.com',
-        password: '$2b$10$EPJMi2pAl649yRepAfG.SeKO5Wprxat12nWNnebDCOuy/tMs6MXCa',
-        firstName: 'PG County',
-        lastName: 'Administrator',
+      const setupToken = process.env.SUPER_ADMIN_SETUP_TOKEN;
+      if (!setupToken) {
+        return res.status(403).json({ message: "Setup not available" });
+      }
+
+      const setupSchema = z.object({
+        token: z.string().min(1),
+        password: z.string().min(8, "Password must be at least 8 characters"),
+      });
+      const { token, password } = setupSchema.parse(req.body);
+
+      if (token !== setupToken) {
+        return res.status(403).json({ message: "Invalid setup token" });
+      }
+
+      const existing = await storage.getUserByEmail('thrynovainsights@gmail.com');
+      if (existing) {
+        if (!existing.isSuperAdmin) {
+          const hashedPassword = await bcrypt.hash(password, 10);
+          await storage.adminUpdateUser(existing.id, { isSuperAdmin: true, isAdmin: true, isApproved: true, isVerified: true });
+          await storage.updatePassword(existing.id, hashedPassword);
+          return res.json({ message: "Existing account upgraded to Super Admin" });
+        }
+        return res.json({ message: "Super Admin already exists" });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+      await storage.createUser({
+        email: 'thrynovainsights@gmail.com',
+        password: hashedPassword,
+        firstName: 'Super',
+        lastName: 'Admin',
+        isSuperAdmin: true,
         isAdmin: true,
+        isApproved: true,
         isVerified: true,
         virtualCardBalance: "1000.00"
-      };
-
-      await storage.upsertUser(adminData);
-      res.send("<h1>Admin setup successful!</h1><p>You can now close this tab and log in.</p>");
+      });
+      res.json({ message: "Super Admin created successfully" });
     } catch (error: any) {
       console.error("Setup error:", error);
-      res.status(500).send(`<h1>Setup failed</h1><p>${error.message}</p>`);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      res.status(500).json({ message: "Setup failed" });
     }
   });
 
@@ -81,27 +110,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Hash password
       const hashedPassword = await bcrypt.hash(password, 10);
 
-      // Create user
+      // Create user (pending approval)
       const user = await storage.createUser({
         email,
         password: hashedPassword,
         firstName,
         lastName,
-        phone
+        phone,
+        isApproved: false,
       });
 
-      // Set session
-      req.session.userId = user.id;
-      
       res.json({ 
-        message: "Signup successful",
+        message: "Account created! Your account is pending approval by an administrator. You will be able to log in once approved.",
+        pendingApproval: true,
         user: {
           id: user.id,
           email: user.email,
           firstName: user.firstName,
           lastName: user.lastName,
-          virtualCardBalance: user.virtualCardBalance,
-          isDriver: user.isDriver
         }
       });
     } catch (error) {
@@ -133,6 +159,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const isValidPassword = await bcrypt.compare(password, user.password);
       if (!isValidPassword) {
         return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      // Check if user is approved (admins and super admins skip this check)
+      if (!user.isApproved && !user.isAdmin && !user.isSuperAdmin) {
+        return res.status(403).json({ message: "Your account is pending approval by an administrator. Please check back later." });
+      }
+
+      // Check if suspended
+      if (user.isSuspended) {
+        return res.status(403).json({ message: "Your account has been suspended. Please contact support." });
       }
 
       // Set session
@@ -1776,11 +1812,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ADMIN ROUTES
   // ============================================================
 
+  const SUPER_ADMIN_EMAIL = 'thrynovainsights@gmail.com';
+
   const isAdminOrSessionAuth = async (req: any, res: any, next: any) => {
     const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     const user = await storage.getUser(userId);
-    if (!user?.isAdmin) return res.status(403).json({ message: "Admin access required" });
+    if (!user?.isAdmin && !user?.isSuperAdmin) return res.status(403).json({ message: "Admin access required" });
+    req.adminUser = user;
+    next();
+  };
+
+  const isSuperAdminAuth = async (req: any, res: any, next: any) => {
+    const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    const user = await storage.getUser(userId);
+    if (!user?.isSuperAdmin || user.email !== SUPER_ADMIN_EMAIL) return res.status(403).json({ message: "Super admin access required" });
+    req.adminUser = user;
     next();
   };
 
@@ -1789,6 +1837,143 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     next();
   };
+
+  // Create admin account (super admin only)
+  app.post('/api/admin/create-admin', isSuperAdminAuth, async (req: any, res) => {
+    try {
+      const createAdminSchema = z.object({
+        email: z.string().email(),
+        password: z.string().min(8),
+        firstName: z.string().min(1),
+        lastName: z.string().min(1),
+      });
+      const { email, password, firstName, lastName } = createAdminSchema.parse(req.body);
+
+      if (email === SUPER_ADMIN_EMAIL) {
+        return res.status(400).json({ message: "Cannot create another super admin account" });
+      }
+
+      const existing = await storage.getUserByEmail(email);
+      if (existing) {
+        return res.status(400).json({ message: "Email already registered" });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const user = await storage.createUser({
+        email,
+        password: hashedPassword,
+        firstName,
+        lastName,
+        isAdmin: true,
+        isApproved: true,
+        isVerified: true,
+        approvedBy: req.adminUser.id,
+      });
+
+      await storage.logAdminAction(req.adminUser.id, 'create_admin', 'user', user.id, { email });
+      res.json({ message: "Admin account created", user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName } });
+    } catch (error: any) {
+      console.error("Error creating admin:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      res.status(500).json({ message: "Failed to create admin account" });
+    }
+  });
+
+  // Approve user (admin or super admin)
+  app.post('/api/admin/users/:userId/approve', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { userId } = req.params;
+      const adminId = req.adminUser.id;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      if (targetUser.isApproved) return res.status(400).json({ message: "User already approved" });
+
+      const user = await storage.adminUpdateUser(userId, { isApproved: true, approvedBy: adminId });
+      await storage.logAdminAction(adminId, 'approve_user', 'user', userId, { email: targetUser.email });
+      res.json(user);
+    } catch (error) {
+      console.error("Error approving user:", error);
+      res.status(500).json({ message: "Failed to approve user" });
+    }
+  });
+
+  // Revoke user approval (admin or super admin)
+  app.post('/api/admin/users/:userId/revoke-approval', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { userId } = req.params;
+      const adminId = req.adminUser.id;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+
+      if (targetUser.isSuperAdmin) return res.status(403).json({ message: "Cannot revoke super admin" });
+
+      const user = await storage.adminUpdateUser(userId, { isApproved: false });
+      await storage.logAdminAction(adminId, 'revoke_approval', 'user', userId, { email: targetUser.email });
+      res.json(user);
+    } catch (error) {
+      console.error("Error revoking approval:", error);
+      res.status(500).json({ message: "Failed to revoke approval" });
+    }
+  });
+
+  // Promote user to admin (super admin only)
+  app.post('/api/admin/users/:userId/make-admin', isSuperAdminAuth, async (req: any, res) => {
+    try {
+      const { userId } = req.params;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      if (targetUser.email === SUPER_ADMIN_EMAIL) return res.status(400).json({ message: "User is already super admin" });
+
+      const user = await storage.adminUpdateUser(userId, { isAdmin: true, isApproved: true, approvedBy: req.adminUser.id });
+      await storage.logAdminAction(req.adminUser.id, 'promote_to_admin', 'user', userId, { email: targetUser.email });
+      res.json(user);
+    } catch (error) {
+      console.error("Error promoting user:", error);
+      res.status(500).json({ message: "Failed to promote user" });
+    }
+  });
+
+  // Demote admin (super admin only)
+  app.post('/api/admin/users/:userId/remove-admin', isSuperAdminAuth, async (req: any, res) => {
+    try {
+      const { userId } = req.params;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      if (targetUser.email === SUPER_ADMIN_EMAIL) return res.status(400).json({ message: "Cannot demote super admin" });
+
+      const user = await storage.adminUpdateUser(userId, { isAdmin: false });
+      await storage.logAdminAction(req.adminUser.id, 'demote_admin', 'user', userId, { email: targetUser.email });
+      res.json(user);
+    } catch (error) {
+      console.error("Error demoting admin:", error);
+      res.status(500).json({ message: "Failed to demote admin" });
+    }
+  });
+
+  // Delete user (admin or super admin, but admins can't delete other admins)
+  app.delete('/api/admin/users/:userId', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { userId } = req.params;
+      const adminId = req.adminUser.id;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+
+      if (targetUser.isSuperAdmin) return res.status(403).json({ message: "Cannot delete super admin" });
+      if (targetUser.isAdmin && !req.adminUser.isSuperAdmin) {
+        return res.status(403).json({ message: "Only super admin can delete other admins" });
+      }
+      if (userId === adminId) return res.status(400).json({ message: "Cannot delete yourself" });
+
+      await storage.deleteUser(userId);
+      await storage.logAdminAction(adminId, 'delete_user', 'user', userId, { email: targetUser.email });
+      res.json({ message: "User deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting user:", error);
+      res.status(500).json({ message: "Failed to delete user" });
+    }
+  });
 
   // Dashboard stats
   app.get('/api/admin/dashboard', isAdminOrSessionAuth, async (req: any, res) => {

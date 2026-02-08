@@ -22,7 +22,15 @@ The backend is a Node.js Express.js REST API. It uses Drizzle ORM with Neon serv
 PostgreSQL stores core entities including Users, Driver Profiles, Vehicles, Rides, Disputes, Emergency Incidents, and Sessions.
 
 ### Authentication and Authorization
-Replit Auth provides OIDC-based user authentication. Server-side sessions are stored in PostgreSQL. API endpoints are protected by middleware, and a custom ACL system manages access to uploaded documents. Role-based access distinguishes between regular users and drivers.
+Email/password authentication with bcrypt password hashing and server-side sessions stored in PostgreSQL. API endpoints are protected by middleware. A custom ACL system manages access to uploaded documents.
+
+### Role-Based Access Control (RBAC)
+Three-tier role system:
+- **Super Admin** (thrynovainsights@gmail.com only): Can create admin accounts, promote/demote admins, delete any user, approve users. Hardcoded email restriction ensures only one super admin exists.
+- **Admin**: Can approve/revoke users, suspend users, delete non-admin users. Cannot modify other admins.
+- **Regular User**: Must be approved by an admin before they can log in. Signup creates an unapproved account that requires admin approval.
+
+User fields: `isSuperAdmin`, `isAdmin`, `isApproved`, `approvedBy`, `isSuspended`. The super admin setup endpoint requires a `SUPER_ADMIN_SETUP_TOKEN` environment variable and user-provided password (POST /api/admin/setup-super-admin).
 
 ### Geographic and Location Services
 Browser-based geolocation, Leaflet maps with OpenStreetMap tiles, and real-time GPS tracking provide location functionality. Proximity search identifies nearby drivers, filtering by availability and estimated ride completion time.

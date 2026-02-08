@@ -28,7 +28,7 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<AdminTab>("dashboard");
   const [, setLocation] = useLocation();
 
-  if (!user?.isAdmin) {
+  if (!user?.isAdmin && !user?.isSuperAdmin) {
     return (
       <div className="flex items-center justify-center min-h-screen" data-testid="admin-access-denied">
         <Card className="w-96">
@@ -164,8 +164,15 @@ function DashboardOverview() {
 }
 
 function UsersPanel() {
+  const { user: currentUser } = useAuth();
   const { data: users = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/admin/users"] });
   const { toast } = useToast();
+  const [showCreateAdmin, setShowCreateAdmin] = useState(false);
+  const [newAdmin, setNewAdmin] = useState({ email: '', password: '', firstName: '', lastName: '' });
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const isSuperAdmin = currentUser?.isSuperAdmin && currentUser?.email === 'thrynovainsights@gmail.com';
 
   const updateUser = useMutation({
     mutationFn: async ({ userId, updates }: { userId: string; updates: any }) => {
@@ -173,47 +180,224 @@ function UsersPanel() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard"] });
       toast({ title: "User updated" });
     },
   });
 
+  const approveUser = useMutation({
+    mutationFn: async (userId: string) => {
+      await apiRequest("POST", `/api/admin/users/${userId}/approve`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "User approved" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const revokeApproval = useMutation({
+    mutationFn: async (userId: string) => {
+      await apiRequest("POST", `/api/admin/users/${userId}/revoke-approval`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "User approval revoked" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const makeAdmin = useMutation({
+    mutationFn: async (userId: string) => {
+      await apiRequest("POST", `/api/admin/users/${userId}/make-admin`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "User promoted to admin" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const removeAdmin = useMutation({
+    mutationFn: async (userId: string) => {
+      await apiRequest("POST", `/api/admin/users/${userId}/remove-admin`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "Admin demoted" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteUser = useMutation({
+    mutationFn: async (userId: string) => {
+      await apiRequest("DELETE", `/api/admin/users/${userId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard"] });
+      setDeleteConfirm(null);
+      toast({ title: "User deleted" });
+    },
+    onError: (err: any) => {
+      setDeleteConfirm(null);
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const createAdmin = useMutation({
+    mutationFn: async (data: typeof newAdmin) => {
+      await apiRequest("POST", "/api/admin/create-admin", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setShowCreateAdmin(false);
+      setNewAdmin({ email: '', password: '', firstName: '', lastName: '' });
+      toast({ title: "Admin account created" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   if (isLoading) return <div data-testid="loading-users">Loading users...</div>;
+
+  const filteredUsers = users.filter((u: any) => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    return (u.firstName?.toLowerCase().includes(term) || u.lastName?.toLowerCase().includes(term) || u.email?.toLowerCase().includes(term));
+  });
+
+  const pendingApproval = filteredUsers.filter((u: any) => !u.isApproved && !u.isSuperAdmin);
+  const approvedUsers = filteredUsers.filter((u: any) => u.isApproved || u.isSuperAdmin);
 
   return (
     <div data-testid="panel-users">
-      <h2 className="text-2xl font-bold mb-6">User Management</h2>
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <h2 className="text-2xl font-bold">User Management</h2>
+        <div className="flex gap-2">
+          {isSuperAdmin && (
+            <Dialog open={showCreateAdmin} onOpenChange={setShowCreateAdmin}>
+              <DialogTrigger asChild>
+                <Button data-testid="btn-create-admin"><UserCheck className="w-4 h-4 mr-2" /> Create Admin</Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Create Admin Account</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-3 mt-2">
+                  <Input placeholder="First Name" value={newAdmin.firstName} onChange={e => setNewAdmin({...newAdmin, firstName: e.target.value})} data-testid="input-admin-firstname" />
+                  <Input placeholder="Last Name" value={newAdmin.lastName} onChange={e => setNewAdmin({...newAdmin, lastName: e.target.value})} data-testid="input-admin-lastname" />
+                  <Input placeholder="Email" type="email" value={newAdmin.email} onChange={e => setNewAdmin({...newAdmin, email: e.target.value})} data-testid="input-admin-email" />
+                  <Input placeholder="Password (min 8 chars)" type="password" value={newAdmin.password} onChange={e => setNewAdmin({...newAdmin, password: e.target.value})} data-testid="input-admin-password" />
+                  <Button className="w-full" onClick={() => createAdmin.mutate(newAdmin)} disabled={createAdmin.isPending} data-testid="btn-submit-create-admin">
+                    {createAdmin.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                    Create Admin
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
+        </div>
+      </div>
+
+      <Input placeholder="Search users by name or email..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="mb-4" data-testid="input-search-users" />
+
+      {pendingApproval.length > 0 && (
+        <>
+          <h3 className="text-lg font-semibold mb-3 text-orange-600 flex items-center gap-2"><Clock className="w-5 h-5" /> Pending Approval ({pendingApproval.length})</h3>
+          <div className="space-y-3 mb-6">
+            {pendingApproval.map((u: any) => (
+              <Card key={u.id} className="border-orange-200" data-testid={`user-card-${u.id}`}>
+                <CardContent className="pt-4 flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex-1 min-w-[200px]">
+                    <p className="font-semibold" data-testid={`user-name-${u.id}`}>{u.firstName} {u.lastName}</p>
+                    <p className="text-sm text-muted-foreground">{u.email}</p>
+                    <p className="text-xs text-muted-foreground">{u.phone}</p>
+                    <div className="flex gap-1 mt-1">
+                      <Badge variant="outline" className="text-orange-600 border-orange-300">Pending Approval</Badge>
+                      {u.isDriver && <Badge variant="secondary">Driver</Badge>}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={() => approveUser.mutate(u.id)} data-testid={`btn-approve-user-${u.id}`}>
+                      <CheckCircle className="w-3 h-3 mr-1" /> Approve
+                    </Button>
+                    {deleteConfirm === u.id ? (
+                      <div className="flex gap-1">
+                        <Button size="sm" variant="destructive" onClick={() => deleteUser.mutate(u.id)} data-testid={`btn-confirm-delete-${u.id}`}>Confirm</Button>
+                        <Button size="sm" variant="outline" onClick={() => setDeleteConfirm(null)} data-testid={`btn-cancel-delete-${u.id}`}>Cancel</Button>
+                      </div>
+                    ) : (
+                      <Button size="sm" variant="destructive" onClick={() => setDeleteConfirm(u.id)} data-testid={`btn-delete-user-${u.id}`}>
+                        <XCircle className="w-3 h-3 mr-1" /> Delete
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+
+      <h3 className="text-lg font-semibold mb-3 flex items-center gap-2"><CheckCircle className="w-5 h-5 text-green-600" /> Active Users ({approvedUsers.length})</h3>
       <div className="space-y-3">
-        {users.map((u: any) => (
+        {approvedUsers.map((u: any) => (
           <Card key={u.id} data-testid={`user-card-${u.id}`}>
             <CardContent className="pt-4 flex items-center justify-between flex-wrap gap-2">
               <div className="flex-1 min-w-[200px]">
                 <p className="font-semibold" data-testid={`user-name-${u.id}`}>{u.firstName} {u.lastName}</p>
                 <p className="text-sm text-muted-foreground">{u.email}</p>
                 <p className="text-xs text-muted-foreground">{u.phone}</p>
-                <div className="flex gap-1 mt-1">
+                <div className="flex gap-1 mt-1 flex-wrap">
+                  {u.isSuperAdmin && <Badge className="bg-purple-600">Super Admin</Badge>}
+                  {u.isAdmin && !u.isSuperAdmin && <Badge className="bg-blue-600">Admin</Badge>}
                   {u.isDriver && <Badge variant="secondary">Driver</Badge>}
-                  {u.isAdmin && <Badge>Admin</Badge>}
+                  {u.isApproved && <Badge variant="outline" className="text-green-600 border-green-300">Approved</Badge>}
                   {u.isSuspended && <Badge variant="destructive">Suspended</Badge>}
                 </div>
               </div>
-              <div className="flex gap-2">
-                <Button size="sm" variant={u.isAdmin ? "destructive" : "outline"}
-                  onClick={() => updateUser.mutate({ userId: u.id, updates: { isAdmin: !u.isAdmin } })}
-                  data-testid={`btn-toggle-admin-${u.id}`}
-                >
-                  {u.isAdmin ? "Remove Admin" : "Make Admin"}
-                </Button>
-                <Button size="sm" variant={u.isSuspended ? "default" : "destructive"}
-                  onClick={() => updateUser.mutate({ userId: u.id, updates: { isSuspended: !u.isSuspended } })}
-                  data-testid={`btn-toggle-suspend-${u.id}`}
-                >
-                  {u.isSuspended ? "Unsuspend" : "Suspend"}
-                </Button>
+              <div className="flex gap-2 flex-wrap">
+                {!u.isSuperAdmin && (
+                  <>
+                    {isSuperAdmin && (
+                      <Button size="sm" variant={u.isAdmin ? "destructive" : "outline"}
+                        onClick={() => u.isAdmin ? removeAdmin.mutate(u.id) : makeAdmin.mutate(u.id)}
+                        data-testid={`btn-toggle-admin-${u.id}`}
+                      >
+                        {u.isAdmin ? "Remove Admin" : "Make Admin"}
+                      </Button>
+                    )}
+                    {u.isApproved && (
+                      <Button size="sm" variant="outline"
+                        onClick={() => revokeApproval.mutate(u.id)}
+                        data-testid={`btn-revoke-approval-${u.id}`}
+                      >
+                        Revoke Approval
+                      </Button>
+                    )}
+                    <Button size="sm" variant={u.isSuspended ? "default" : "destructive"}
+                      onClick={() => updateUser.mutate({ userId: u.id, updates: { isSuspended: !u.isSuspended } })}
+                      data-testid={`btn-toggle-suspend-${u.id}`}
+                    >
+                      {u.isSuspended ? "Unsuspend" : "Suspend"}
+                    </Button>
+                    {deleteConfirm === u.id ? (
+                      <div className="flex gap-1">
+                        <Button size="sm" variant="destructive" onClick={() => deleteUser.mutate(u.id)} data-testid={`btn-confirm-delete-${u.id}`}>Confirm Delete</Button>
+                        <Button size="sm" variant="outline" onClick={() => setDeleteConfirm(null)} data-testid={`btn-cancel-delete-${u.id}`}>Cancel</Button>
+                      </div>
+                    ) : (
+                      <Button size="sm" variant="destructive" onClick={() => setDeleteConfirm(u.id)} data-testid={`btn-delete-user-${u.id}`}>
+                        <XCircle className="w-3 h-3 mr-1" /> Delete
+                      </Button>
+                    )}
+                  </>
+                )}
               </div>
             </CardContent>
           </Card>
         ))}
-        {users.length === 0 && <p className="text-muted-foreground text-center py-8">No users found.</p>}
+        {approvedUsers.length === 0 && <p className="text-muted-foreground text-center py-8">No approved users found.</p>}
       </div>
     </div>
   );

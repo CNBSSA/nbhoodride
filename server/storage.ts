@@ -146,6 +146,8 @@ export interface IStorage {
   setPasswordResetToken(email: string, token: string, expiry: Date): Promise<void>;
   getUserByResetToken(token: string): Promise<User | undefined>;
   
+  deleteUser(userId: string): Promise<void>;
+  
   // Driver operations
   createDriverProfile(profile: InsertDriverProfile): Promise<DriverProfile>;
   getDriverProfile(userId: string): Promise<DriverProfile | undefined>;
@@ -1615,9 +1617,20 @@ export class DatabaseStorage implements IStorage {
     return Array.from(driversMap.values());
   }
 
-  async adminUpdateUser(userId: string, updates: Partial<{ isAdmin: boolean; isSuspended: boolean; isVerified: boolean; isDriver: boolean }>): Promise<User> {
+  async adminUpdateUser(userId: string, updates: Partial<{ isAdmin: boolean; isSuperAdmin: boolean; isApproved: boolean; approvedBy: string; isSuspended: boolean; isVerified: boolean; isDriver: boolean }>): Promise<User> {
     const [user] = await db.update(users).set({ ...updates, updatedAt: new Date() }).where(eq(users.id, userId)).returning();
     return user;
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    await db.delete(conversations).where(eq(conversations.userId, userId));
+    await db.delete(rides).where(eq(rides.riderId, userId));
+    const driverProfile = await this.getDriverProfile(userId);
+    if (driverProfile) {
+      await db.delete(vehicles).where(eq(vehicles.driverProfileId, driverProfile.id));
+      await db.delete(driverProfiles).where(eq(driverProfiles.userId, userId));
+    }
+    await db.delete(users).where(eq(users.id, userId));
   }
 
   async adminUpdateDriverProfile(userId: string, updates: Partial<{ isVerifiedNeighbor: boolean; isSuspended: boolean; approvalStatus: string }>): Promise<DriverProfile> {

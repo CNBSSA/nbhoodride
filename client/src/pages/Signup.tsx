@@ -15,6 +15,7 @@ export default function Signup() {
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [pendingApproval, setPendingApproval] = useState(false);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -49,7 +50,15 @@ export default function Signup() {
 
       const data = await response.json();
       
-      // Invalidate auth cache to refresh authentication state
+      if (data.pendingApproval) {
+        setPendingApproval(true);
+        toast({
+          title: "Account Created!",
+          description: data.message,
+        });
+        return;
+      }
+
       await queryClient.invalidateQueries({ queryKey: ['/api/auth/user'] });
       
       toast({
@@ -70,6 +79,27 @@ export default function Signup() {
       setIsLoading(false);
     }
   };
+
+  if (pendingApproval) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-secondary/10 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md">
+          <CardContent className="pt-8 text-center">
+            <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <i className="fas fa-clock text-2xl text-orange-500" />
+            </div>
+            <h2 className="text-xl font-bold mb-2" data-testid="text-pending-title">Account Pending Approval</h2>
+            <p className="text-muted-foreground mb-4" data-testid="text-pending-message">
+              Your account has been created successfully! An administrator needs to approve your account before you can log in. Please check back later.
+            </p>
+            <Link href="/login">
+              <Button variant="outline" className="w-full" data-testid="btn-back-to-login">Back to Login</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-secondary/10 flex items-center justify-center p-4">

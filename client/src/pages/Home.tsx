@@ -59,7 +59,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background max-w-[430px] mx-auto relative">
-      {user?.isAdmin && (
+      {(user?.isAdmin || user?.isSuperAdmin) && (
         <button
           onClick={() => setLocation("/admin")}
           className="fixed top-2 right-2 z-50 flex items-center gap-1 px-3 py-1.5 bg-primary text-primary-foreground rounded-full text-xs font-medium shadow-lg hover:opacity-90 transition-opacity"

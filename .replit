@@ -45,3 +45,6 @@ waitForPort = 5000
 
 [userenv.development]
 ENABLE_TEST_LOGIN = "true"
+
+[userenv.shared]
+SUPER_ADMIN_SETUP_TOKEN = "ba5ba76b0c165c539251407de1ab02f91272246b6aab0ede3c393d85bf4ce661"

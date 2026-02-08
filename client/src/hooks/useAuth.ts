@@ -11,6 +11,9 @@ interface User {
   isDriver: boolean;
   isVerified: boolean;
   isAdmin: boolean;
+  isSuperAdmin: boolean;
+  isApproved: boolean;
+  approvedBy?: string;
   isSuspended: boolean;
   rating: string;
   totalRides: number;
