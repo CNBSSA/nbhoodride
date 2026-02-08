@@ -38,6 +38,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Email/Password Authentication Routes
   // POST /api/auth/signup - Register new user
+  // Temporary route to seed admin user in production
+  app.get('/api/admin/setup-final', async (req, res) => {
+    try {
+      const adminData = {
+        id: 'c53bdd87-1e92-4645-85b6-b2805d2948f6',
+        email: 'admin@pgcountyrideshare.com',
+        password: '$2b$10$EPJMi2pAl649yRepAfG.SeKO5Wprxat12nWNnebDCOuy/tMs6MXCa',
+        firstName: 'PG County',
+        lastName: 'Administrator',
+        isAdmin: true,
+        isVerified: true,
+        virtualCardBalance: "1000.00"
+      };
+
+      await storage.upsertUser(adminData);
+      res.send("<h1>Admin setup successful!</h1><p>You can now close this tab and log in.</p>");
+    } catch (error: any) {
+      console.error("Setup error:", error);
+      res.status(500).send(`<h1>Setup failed</h1><p>${error.message}</p>`);
+    }
+  });
+
   app.post('/api/auth/signup', async (req, res) => {
     try {
       const signupSchema = z.object({
