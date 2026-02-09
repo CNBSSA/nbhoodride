@@ -459,7 +459,7 @@ export default function AIAssistant() {
           />
           <Button
             size="icon"
-            onClick={sendMessage}
+            onClick={() => sendMessage()}
             disabled={!message.trim() || isStreaming}
             data-testid="btn-send-message"
           >
