@@ -2023,6 +2023,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.delete('/api/admin/drivers/:userId', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.adminUser?.id || req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { userId } = req.params;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+
+      const driverProfile = await storage.getDriverProfile(userId);
+      if (!driverProfile) return res.status(404).json({ message: "Driver profile not found" });
+
+      await storage.deleteDriverProfile(userId);
+      if (adminId) {
+        await storage.logAdminAction(adminId, 'delete_driver_profile', 'driver_profile', userId, { email: targetUser.email });
+      }
+      res.json({ message: "Driver profile deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting driver profile:", error);
+      res.status(500).json({ message: "Failed to delete driver profile" });
+    }
+  });
+
   // All rides
   app.get('/api/admin/rides', isAdminOrSessionAuth, async (req: any, res) => {
     try {

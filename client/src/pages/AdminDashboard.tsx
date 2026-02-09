@@ -17,7 +17,7 @@ import {
   DollarSign, Award, TrendingUp, Shield, Activity,
   CheckCircle, XCircle, Eye, Ban, UserCheck, Clock,
   ChevronLeft, BarChart3, Brain, AlertCircle, BookOpen,
-  RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap
+  RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2
 } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -481,6 +481,8 @@ function UsersPanel() {
 function DriversPanel() {
   const { data: drivers = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/admin/drivers"] });
   const { toast } = useToast();
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const updateDriver = useMutation({
     mutationFn: async ({ userId, updates }: { userId: string; updates: any }) => {
@@ -489,18 +491,173 @@ function DriversPanel() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/drivers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       toast({ title: "Driver updated" });
+    },
+  });
+
+  const deleteDriverProfile = useMutation({
+    mutationFn: async (userId: string) => {
+      await apiRequest("DELETE", `/api/admin/drivers/${userId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/drivers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setDeleteConfirm(null);
+      toast({ title: "Driver profile deleted", description: "The driver profile and associated data have been removed. The user account still exists." });
+    },
+    onError: (err: any) => {
+      setDeleteConfirm(null);
+      toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
 
   if (isLoading) return <div data-testid="loading-drivers">Loading drivers...</div>;
 
+  const pendingDrivers = drivers.filter((d: any) => !d.approvalStatus || d.approvalStatus === 'pending');
+  const rejectedDrivers = drivers.filter((d: any) => d.approvalStatus === 'rejected');
+  const approvedDrivers = drivers.filter((d: any) => d.approvalStatus === 'approved');
+
+  const searchFilter = (d: any) => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    return (d.user?.firstName?.toLowerCase().includes(term) || d.user?.lastName?.toLowerCase().includes(term) || d.user?.email?.toLowerCase().includes(term));
+  };
+
+  const filteredPending = pendingDrivers.filter(searchFilter);
+  const filteredRejected = rejectedDrivers.filter(searchFilter);
+  const filteredApproved = approvedDrivers.filter(searchFilter);
+
   return (
     <div data-testid="panel-drivers">
-      <h2 className="text-2xl font-bold mb-6">Driver Management</h2>
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <h2 className="text-2xl font-bold">Driver Management</h2>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="text-sm">{drivers.length} total</Badge>
+          <Badge className="bg-orange-500 text-white text-sm">{pendingDrivers.length} pending</Badge>
+          <Badge className="bg-green-500 text-white text-sm">{approvedDrivers.length} approved</Badge>
+        </div>
+      </div>
+
+      <div className="mb-4">
+        <Input
+          placeholder="Search drivers by name or email..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          data-testid="input-search-drivers"
+        />
+      </div>
+
+      {filteredPending.length > 0 && (
+        <>
+          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+            <Clock className="w-5 h-5 text-orange-500" /> Pending Approval ({filteredPending.length})
+          </h3>
+          <div className="space-y-3 mb-6">
+            {filteredPending.map((d: any) => (
+              <Card key={d.id} className="border-l-4 border-l-orange-400" data-testid={`driver-card-${d.id}`}>
+                <CardContent className="pt-4">
+                  <div className="flex items-start justify-between flex-wrap gap-3">
+                    <div className="flex-1 min-w-[200px]">
+                      <p className="font-semibold" data-testid={`driver-name-${d.id}`}>{d.user?.firstName} {d.user?.lastName}</p>
+                      <p className="text-sm text-muted-foreground">{d.user?.email}</p>
+                      <p className="text-xs text-muted-foreground">{d.user?.phone}</p>
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {d.isOnline && <Badge className="bg-green-500 text-white">Online</Badge>}
+                        <Badge className="bg-orange-500 text-white">Pending</Badge>
+                        {d.licenseNumber && <Badge variant="outline">License: {d.licenseNumber}</Badge>}
+                      </div>
+                      {d.currentLocation && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Location: {(d.currentLocation as any)?.lat?.toFixed(4)}, {(d.currentLocation as any)?.lng?.toFixed(4)}
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Registered: {new Date(d.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => updateDriver.mutate({ userId: d.userId, updates: { approvalStatus: "approved", isVerifiedNeighbor: true } })}
+                        data-testid={`btn-approve-driver-${d.id}`}
+                      >
+                        <CheckCircle className="w-3 h-3 mr-1" /> Approve
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => updateDriver.mutate({ userId: d.userId, updates: { approvalStatus: "rejected" } })}
+                        data-testid={`btn-reject-driver-${d.id}`}
+                      >
+                        <XCircle className="w-3 h-3 mr-1" /> Reject
+                      </Button>
+                      {deleteConfirm === d.id ? (
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="destructive" onClick={() => deleteDriverProfile.mutate(d.userId)} data-testid={`btn-confirm-delete-driver-${d.id}`}>Confirm</Button>
+                          <Button size="sm" variant="outline" onClick={() => setDeleteConfirm(null)} data-testid={`btn-cancel-delete-driver-${d.id}`}>Cancel</Button>
+                        </div>
+                      ) : (
+                        <Button size="sm" variant="destructive" onClick={() => setDeleteConfirm(d.id)} data-testid={`btn-delete-driver-${d.id}`}>
+                          <Trash2 className="w-3 h-3 mr-1" /> Delete Profile
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+
+      {filteredRejected.length > 0 && (
+        <>
+          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+            <XCircle className="w-5 h-5 text-red-500" /> Rejected Drivers ({filteredRejected.length})
+          </h3>
+          <div className="space-y-3 mb-6">
+            {filteredRejected.map((d: any) => (
+              <Card key={d.id} className="border-l-4 border-l-red-400" data-testid={`driver-card-${d.id}`}>
+                <CardContent className="pt-4">
+                  <div className="flex items-start justify-between flex-wrap gap-3">
+                    <div className="flex-1 min-w-[200px]">
+                      <p className="font-semibold" data-testid={`driver-name-${d.id}`}>{d.user?.firstName} {d.user?.lastName}</p>
+                      <p className="text-sm text-muted-foreground">{d.user?.email}</p>
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        <Badge variant="destructive">Rejected</Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Registered: {new Date(d.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => updateDriver.mutate({ userId: d.userId, updates: { approvalStatus: "approved", isVerifiedNeighbor: true } })}
+                        data-testid={`btn-approve-driver-${d.id}`}
+                      >
+                        <CheckCircle className="w-3 h-3 mr-1" /> Approve
+                      </Button>
+                      {deleteConfirm === d.id ? (
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="destructive" onClick={() => deleteDriverProfile.mutate(d.userId)} data-testid={`btn-confirm-delete-driver-${d.id}`}>Confirm</Button>
+                          <Button size="sm" variant="outline" onClick={() => setDeleteConfirm(null)} data-testid={`btn-cancel-delete-driver-${d.id}`}>Cancel</Button>
+                        </div>
+                      ) : (
+                        <Button size="sm" variant="destructive" onClick={() => setDeleteConfirm(d.id)} data-testid={`btn-delete-driver-${d.id}`}>
+                          <Trash2 className="w-3 h-3 mr-1" /> Delete Profile
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+
+      <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+        <CheckCircle className="w-5 h-5 text-green-600" /> Approved Drivers ({filteredApproved.length})
+      </h3>
       <div className="space-y-3">
-        {drivers.map((d: any) => (
-          <Card key={d.id} data-testid={`driver-card-${d.id}`}>
+        {filteredApproved.map((d: any) => (
+          <Card key={d.id} className={`border-l-4 ${d.isSuspended ? 'border-l-red-400' : 'border-l-green-400'}`} data-testid={`driver-card-${d.id}`}>
             <CardContent className="pt-4">
               <div className="flex items-start justify-between flex-wrap gap-3">
                 <div className="flex-1 min-w-[200px]">
@@ -508,10 +665,11 @@ function DriversPanel() {
                   <p className="text-sm text-muted-foreground">{d.user?.email}</p>
                   <p className="text-xs text-muted-foreground">{d.user?.phone}</p>
                   <div className="flex flex-wrap gap-1 mt-2">
-                    {d.isOnline && <Badge className="bg-green-500">Online</Badge>}
-                    {d.isVerifiedNeighbor && <Badge className="bg-blue-500">Verified Neighbor</Badge>}
+                    {d.isOnline && <Badge className="bg-green-500 text-white">Online</Badge>}
+                    {d.isVerifiedNeighbor && <Badge className="bg-blue-500 text-white">Verified Neighbor</Badge>}
                     {d.isSuspended && <Badge variant="destructive">Suspended</Badge>}
-                    <Badge variant="outline">{d.approvalStatus || "pending"}</Badge>
+                    <Badge className="bg-green-500 text-white">Approved</Badge>
+                    {d.licenseNumber && <Badge variant="outline">License: {d.licenseNumber}</Badge>}
                   </div>
                   {d.vehicles?.length > 0 && (
                     <div className="mt-2 text-xs text-muted-foreground">
@@ -522,16 +680,17 @@ function DriversPanel() {
                       ))}
                     </div>
                   )}
+                  {d.currentLocation && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Location: {(d.currentLocation as any)?.lat?.toFixed(4)}, {(d.currentLocation as any)?.lng?.toFixed(4)}
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Registered: {new Date(d.createdAt).toLocaleDateString()}
+                  </p>
                 </div>
                 <div className="flex flex-col gap-2">
-                  {d.approvalStatus !== "approved" && (
-                    <Button size="sm" onClick={() => updateDriver.mutate({ userId: d.userId, updates: { approvalStatus: "approved", isVerifiedNeighbor: true } })}
-                      data-testid={`btn-approve-driver-${d.id}`}
-                    >
-                      <CheckCircle className="w-3 h-3 mr-1" /> Approve
-                    </Button>
-                  )}
-                  {d.approvalStatus === "approved" && !d.isSuspended && (
+                  {!d.isSuspended && (
                     <Button size="sm" variant="destructive"
                       onClick={() => updateDriver.mutate({ userId: d.userId, updates: { isSuspended: true } })}
                       data-testid={`btn-suspend-driver-${d.id}`}
@@ -547,7 +706,7 @@ function DriversPanel() {
                       <UserCheck className="w-3 h-3 mr-1" /> Unsuspend
                     </Button>
                   )}
-                  {!d.isVerifiedNeighbor && d.approvalStatus === "approved" && (
+                  {!d.isVerifiedNeighbor && (
                     <Button size="sm" variant="outline"
                       onClick={() => updateDriver.mutate({ userId: d.userId, updates: { isVerifiedNeighbor: true } })}
                       data-testid={`btn-verify-driver-${d.id}`}
@@ -555,12 +714,22 @@ function DriversPanel() {
                       <Shield className="w-3 h-3 mr-1" /> Verify
                     </Button>
                   )}
+                  {deleteConfirm === d.id ? (
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="destructive" onClick={() => deleteDriverProfile.mutate(d.userId)} data-testid={`btn-confirm-delete-driver-${d.id}`}>Confirm</Button>
+                      <Button size="sm" variant="outline" onClick={() => setDeleteConfirm(null)} data-testid={`btn-cancel-delete-driver-${d.id}`}>Cancel</Button>
+                    </div>
+                  ) : (
+                    <Button size="sm" variant="destructive" onClick={() => setDeleteConfirm(d.id)} data-testid={`btn-delete-driver-${d.id}`}>
+                      <Trash2 className="w-3 h-3 mr-1" /> Delete Profile
+                    </Button>
+                  )}
                 </div>
               </div>
             </CardContent>
           </Card>
         ))}
-        {drivers.length === 0 && <p className="text-muted-foreground text-center py-8">No drivers found.</p>}
+        {filteredApproved.length === 0 && <p className="text-muted-foreground text-center py-8">No approved drivers found.</p>}
       </div>
     </div>
   );

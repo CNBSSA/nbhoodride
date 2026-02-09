@@ -147,6 +147,7 @@ export interface IStorage {
   getUserByResetToken(token: string): Promise<User | undefined>;
   
   deleteUser(userId: string): Promise<void>;
+  deleteDriverProfile(userId: string): Promise<void>;
   
   // Driver operations
   createDriverProfile(profile: InsertDriverProfile): Promise<DriverProfile>;
@@ -392,7 +393,15 @@ export class DatabaseStorage implements IStorage {
       .from(driverProfiles)
       .innerJoin(users, eq(driverProfiles.userId, users.id))
       .leftJoin(vehicles, eq(vehicles.driverProfileId, driverProfiles.id))
-      .where(eq(driverProfiles.isOnline, true));
+      .where(
+        and(
+          eq(driverProfiles.isOnline, true),
+          eq(driverProfiles.approvalStatus, 'approved'),
+          eq(driverProfiles.isSuspended, false),
+          eq(users.isApproved, true),
+          eq(users.isSuspended, false)
+        )
+      );
 
     const driversMap = new Map();
     for (const result of results) {
@@ -1664,6 +1673,22 @@ export class DatabaseStorage implements IStorage {
       await db.delete(driverProfiles).where(eq(driverProfiles.userId, userId));
     }
     await db.delete(users).where(eq(users.id, userId));
+  }
+
+  async deleteDriverProfile(userId: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      const [driverProfile] = await tx.select().from(driverProfiles).where(eq(driverProfiles.userId, userId));
+      if (driverProfile) {
+        await tx.delete(vehicles).where(eq(vehicles.driverProfileId, driverProfile.id));
+        await tx.delete(driverRateCards).where(eq(driverRateCards.driverId, userId));
+        await tx.delete(driverScorecard).where(eq(driverScorecard.driverId, userId));
+        await tx.delete(driverWeeklyHours).where(eq(driverWeeklyHours.driverId, userId));
+        await tx.delete(driverOwnership).where(eq(driverOwnership.driverId, userId));
+        await tx.delete(shareCertificates).where(eq(shareCertificates.ownerId, userId));
+        await tx.delete(driverProfiles).where(eq(driverProfiles.userId, userId));
+      }
+      await tx.update(users).set({ isDriver: false, updatedAt: new Date() }).where(eq(users.id, userId));
+    });
   }
 
   async adminUpdateDriverProfile(userId: string, updates: Partial<{ isVerifiedNeighbor: boolean; isSuspended: boolean; approvalStatus: string }>): Promise<DriverProfile> {
