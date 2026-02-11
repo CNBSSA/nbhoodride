@@ -821,7 +821,6 @@ export class DatabaseStorage implements IStorage {
   }
 
   async acceptRide(rideId: string, driverId: string): Promise<Ride> {
-    // Verify the ride belongs to this driver and is still pending
     const ride = await this.getRide(rideId);
     if (!ride) {
       throw new Error("Ride not found");
@@ -833,18 +832,21 @@ export class DatabaseStorage implements IStorage {
       throw new Error("Ride is no longer available");
     }
 
-    // Update ride status to accepted
-    const [updatedRide] = await db
+    const result = await db
       .update(rides)
       .set({ 
         status: "accepted",
         acceptedAt: new Date(),
         updatedAt: new Date()
       })
-      .where(eq(rides.id, rideId))
+      .where(and(eq(rides.id, rideId), eq(rides.status, "pending")))
       .returning();
     
-    return updatedRide;
+    if (result.length === 0) {
+      throw new Error("Ride is no longer available");
+    }
+    
+    return result[0];
   }
 
   async declineRide(rideId: string, driverId: string): Promise<void> {

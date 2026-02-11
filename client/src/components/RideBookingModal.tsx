@@ -81,6 +81,14 @@ export default function RideBookingModal({
     },
     onSuccess: (data) => {
       setFareEstimate(data);
+    },
+    onError: () => {
+      setFareEstimate(null);
+      toast({
+        title: "Fare Calculation Failed",
+        description: "Unable to estimate fare. Please check your destination and try again.",
+        variant: "destructive",
+      });
     }
   });
 
@@ -117,7 +125,7 @@ export default function RideBookingModal({
 
   const calculateFare = useCallback((distance: number, duration: number, driverId?: string) => {
     calculateFareMutation.mutate({ distance, duration, driverId });
-  }, [calculateFareMutation.mutate]);
+  }, []);
 
   useEffect(() => {
     if (destinationAddress.length < 5) return;

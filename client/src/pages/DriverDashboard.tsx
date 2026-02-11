@@ -127,15 +127,6 @@ export default function DriverDashboard() {
             lng: location.longitude
           }
         });
-        
-        // Also update location in database
-        apiRequest('POST', '/api/driver/location', {
-          lat: location.latitude,
-          lng: location.longitude
-        }).catch((error) => {
-          console.error('Failed to update driver location:', error);
-          // Retry logic could be added here
-        });
       }
     }
   }, [location, isOnline, isConnected, user?.id, sendMessage]);
@@ -186,7 +177,7 @@ export default function DriverDashboard() {
         startWatching();
       }
     }
-  }, [user?.driverProfile?.isOnline, startWatching]);
+  }, [user?.driverProfile?.isOnline]);
 
   // Handle real-time ride status updates via WebSocket (scoped to current driver)
   useEffect(() => {

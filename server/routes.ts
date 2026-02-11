@@ -481,27 +481,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       
-      const ride = await storage.acceptRide(rideId, userId);
-      
-      if (ride.paymentMethod === 'card') {
+      const currentRide = await storage.getRide(rideId);
+      if (!currentRide || currentRide.status !== 'pending') {
+        return res.status(409).json({ message: "Ride is no longer available" });
+      }
+
+      if (currentRide.paymentMethod === 'card') {
+        const estimatedFare = parseFloat(currentRide.estimatedFare || "0");
         try {
-          const estimatedFare = parseFloat(ride.estimatedFare || "0");
-          
-          console.log(`Deducting virtual card balance for ride ${rideId}: $${estimatedFare}`);
-          
-          await storage.deductVirtualCardBalance(ride.riderId, estimatedFare);
+          await storage.deductVirtualCardBalance(currentRide.riderId, estimatedFare);
           await storage.setRidePaymentAuthorization(rideId, `virtual-${rideId}`);
-          
-          console.log(`Virtual card balance deducted successfully for ride ${rideId}`);
         } catch (error: any) {
           console.error("Failed to authorize virtual card payment:", error);
-          try {
-            await storage.updateRide(rideId, { status: "pending", acceptedAt: null } as any);
-          } catch (revertError) {
-            console.error("Failed to revert ride status after payment failure:", revertError);
-          }
           return res.status(402).json({ message: `Payment authorization failed: ${error.message}` });
         }
+      }
+
+      let ride;
+      try {
+        ride = await storage.acceptRide(rideId, userId);
+      } catch (acceptError: any) {
+        if (currentRide.paymentMethod === 'card') {
+          const estimatedFare = parseFloat(currentRide.estimatedFare || "0");
+          try {
+            await storage.addVirtualCardBalance(currentRide.riderId, estimatedFare);
+          } catch (refundError) {
+            console.error("Failed to refund virtual card after acceptance failure:", refundError);
+          }
+        }
+        throw acceptError;
       }
       
       const driverUser = await storage.getUser(userId);
