@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -123,6 +123,20 @@ export default function RideBookingModal({
 
   const selectedDriverRef = useRef(selectedDriver);
   selectedDriverRef.current = selectedDriver;
+  const confirmBtnRef = useRef<HTMLButtonElement>(null);
+  const [viewportHeight, setViewportHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const handleResize = () => {
+      setViewportHeight(vv.height);
+    };
+    handleResize();
+    vv.addEventListener('resize', handleResize);
+    return () => vv.removeEventListener('resize', handleResize);
+  }, [isOpen]);
 
   const calculateFareRef = useRef(calculateFareMutation.mutate);
   calculateFareRef.current = calculateFareMutation.mutate;
@@ -168,6 +182,9 @@ export default function RideBookingModal({
   useEffect(() => {
     if (selectedDriver && estimatedDistance && estimatedDuration) {
       calculateFare(estimatedDistance, estimatedDuration, selectedDriver);
+      setTimeout(() => {
+        confirmBtnRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 100);
     }
   }, [selectedDriver, estimatedDistance, estimatedDuration, calculateFare]);
 
@@ -178,6 +195,9 @@ export default function RideBookingModal({
   }, [isOpen, userLocation?.address, pickupManuallyEdited]);
 
   const handleBookRide = () => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     if (!destinationAddress || !selectedDriver) {
       toast({
         title: "Missing Information",
@@ -227,9 +247,9 @@ export default function RideBookingModal({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center max-w-[430px] mx-auto">
+    <div className="fixed inset-0 z-50 flex items-end justify-center max-w-[430px] mx-auto" style={viewportHeight ? { height: `${viewportHeight}px`, top: 'auto', bottom: 0 } : undefined}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-      <Card className="relative z-10 w-full h-[90vh] rounded-t-2xl border-0 shadow-2xl flex flex-col">
+      <Card className="relative z-10 w-full rounded-t-2xl border-0 shadow-2xl flex flex-col" style={{ maxHeight: viewportHeight ? `${viewportHeight - 16}px` : 'calc(100dvh - 2rem)' }}>
         <div className="flex items-center justify-between px-4 pt-4 pb-2 flex-shrink-0">
           <h2 className="text-lg font-bold">Book a Ride</h2>
           <Button variant="ghost" size="sm" onClick={onClose} className="rounded-full w-8 h-8 p-0" data-testid="button-close-booking">
@@ -415,17 +435,18 @@ export default function RideBookingModal({
           </div>
         </CardContent>
 
-        <div className="p-4 bg-card border-t flex-shrink-0 space-y-2">
+        <div className="p-4 bg-card border-t flex-shrink-0 space-y-2" style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 1rem))' }}>
           {fareEstimate && selectedDriver && (
             <div className="flex items-center justify-between text-xs text-gray-500 px-1">
               <span>Paid via Virtual PG Card</span>
-              <span className="font-bold text-sm text-gray-900">${fareEstimate.total.toFixed(2)}</span>
+              <span className="font-bold text-sm text-gray-900 dark:text-gray-100">${fareEstimate.total.toFixed(2)}</span>
             </div>
           )}
           <Button
+            ref={confirmBtnRef}
             onClick={handleBookRide}
             disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress || (!fareEstimate && !calculateFareMutation.isPending)}
-            className="w-full h-12 text-base font-semibold rounded-xl"
+            className="w-full h-14 text-base font-semibold rounded-xl shadow-lg"
             size="lg"
             data-testid="button-confirm-booking"
           >
