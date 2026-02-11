@@ -8,6 +8,7 @@ import { apiRequest } from '@/lib/queryClient';
 import { MapPin, Clock, User, DollarSign, Navigation, CheckCircle, Route, ExternalLink } from 'lucide-react';
 import { RideHelpers } from '@/services/rideService';
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { RideProgressStepper } from "@/components/RideProgressStepper";
 
 interface ActiveRideCardProps {
   ride: {
@@ -241,13 +242,14 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
 
   return (
     <Card className="border-l-4 border-l-primary" data-testid={`card-active-ride-${ride.id}`}>
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between mb-2">
           <CardTitle className="text-lg">Active Ride</CardTitle>
           <Badge variant="outline" className={RideHelpers.getStatusColor(ride.status)}>
             {RideHelpers.formatRideStatus(ride.status)}
           </Badge>
         </div>
+        <RideProgressStepper status={ride.status} compact />
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Rider Information */}

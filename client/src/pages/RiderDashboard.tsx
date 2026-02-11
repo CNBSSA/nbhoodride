@@ -10,10 +10,11 @@ import MapComponent from "@/components/MapComponent";
 import RideBookingModal from "@/components/RideBookingModal";
 import ScheduleRideModal from "@/components/ScheduleRideModal";
 import SOSModal from "@/components/SOSModal";
+import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { MapPin, Plus, Calendar, Navigation, Bell, AlertTriangle, Star, Clock, X, ChevronRight, Shield, Phone, Car, Loader2, CheckCircle, Route, ThumbsUp, DollarSign } from "lucide-react";
+import { MapPin, Plus, Calendar, Navigation, Bell, AlertTriangle, Star, Clock, X, ChevronRight, Shield, Phone, Car, Loader2, CheckCircle, Route, ThumbsUp, DollarSign, Timer, Banknote } from "lucide-react";
 
 interface Driver {
   id: string;
@@ -67,6 +68,9 @@ export default function RiderDashboard() {
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
   const [realtimeDrivers, setRealtimeDrivers] = useState<Record<string, {lat: number, lng: number}>>({});
   const [recentlyCompletedRide, setRecentlyCompletedRide] = useState<any>(null);
+  const [quickRating, setQuickRating] = useState(0);
+  const [quickRatingHover, setQuickRatingHover] = useState(0);
+  const [quickRatingSubmitted, setQuickRatingSubmitted] = useState(false);
   const [, setLocation] = useLocation();
   const lastProcessedMessageRef = useRef<string | null>(null);
   const { user } = useAuth();
@@ -135,6 +139,53 @@ export default function RiderDashboard() {
       });
     },
   });
+
+  const submitQuickRating = useMutation({
+    mutationFn: async ({ rideId, rating }: { rideId: string; rating: number }) => {
+      const response = await apiRequest('POST', `/api/rides/${rideId}/rating`, { rating });
+      return response.json();
+    },
+    onSuccess: () => {
+      setQuickRatingSubmitted(true);
+      queryClient.invalidateQueries({ queryKey: ["/api/rides/for-rating"] });
+      toast({
+        title: "Thanks for rating!",
+        description: "Your feedback helps our community.",
+      });
+      setTimeout(() => {
+        setRecentlyCompletedRide(null);
+        setQuickRating(0);
+        setQuickRatingHover(0);
+        setQuickRatingSubmitted(false);
+      }, 2000);
+    },
+    onError: () => {
+      toast({
+        title: "Rating failed",
+        description: "Could not submit your rating. You can rate later from the Rides tab.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const getElapsedTime = (startedAt: string) => {
+    const start = new Date(startedAt).getTime();
+    const now = Date.now();
+    const diffMin = Math.max(0, Math.floor((now - start) / 60000));
+    return diffMin;
+  };
+
+  const getDriverETA = (ride: any) => {
+    const driverId = ride.driverId || ride.driver?.id;
+    const driverLoc = driverId ? realtimeDrivers[driverId] : null;
+    if (!driverLoc) return null;
+    const target = ride.status === 'in_progress' ? ride.destinationLocation : ride.pickupLocation;
+    if (!target?.lat || !target?.lng) return null;
+    const dist = calculateDistance(driverLoc.lat, driverLoc.lng, target.lat, target.lng);
+    const roadMiles = dist * 1.3;
+    const minutes = Math.max(1, Math.round((roadMiles / 25) * 60));
+    return { minutes, miles: roadMiles };
+  };
 
   const mapCenter = userLocation || { lat: 38.9073, lng: -76.7781 };
 
@@ -289,73 +340,126 @@ export default function RiderDashboard() {
 
         {recentlyCompletedRide && (
           <div className="px-4 pt-4">
-            <Card className="border-2 border-green-300 bg-green-50/50 dark:bg-green-950/20 shadow-lg animate-in slide-in-from-top duration-500" data-testid="ride-completed-card">
+            <Card className="border-2 border-green-300 bg-gradient-to-b from-green-50 to-white dark:from-green-950/20 dark:to-gray-900 shadow-lg animate-in slide-in-from-top duration-500" data-testid="ride-completed-card">
               <CardContent className="p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <CheckCircle className="w-6 h-6 text-green-600" />
-                  <span className="font-bold text-green-700 text-lg">Ride Complete!</span>
+                <RideProgressStepper status="completed" compact />
+
+                <div className="flex items-center justify-center gap-2 my-3">
+                  <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                    <CheckCircle className="w-6 h-6 text-green-600" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-green-700 text-lg leading-tight">You've Arrived!</p>
+                    <p className="text-xs text-gray-500">Thanks for riding with PG Ride</p>
+                  </div>
                 </div>
 
-                <div className="space-y-2 mb-3">
+                <div className="flex items-center justify-between p-3 bg-green-100/60 dark:bg-green-900/30 rounded-xl mb-3">
+                  <div className="text-center flex-1">
+                    <p className="text-[10px] text-gray-500 uppercase font-medium">Final Fare</p>
+                    <p className="text-xl font-bold text-green-700" data-testid="completed-ride-fare">
+                      ${parseFloat(recentlyCompletedRide.actualFare || recentlyCompletedRide.estimatedFare || '0').toFixed(2)}
+                    </p>
+                  </div>
+                  {recentlyCompletedRide.driver && (
+                    <div className="text-center flex-1 border-l border-green-200">
+                      <p className="text-[10px] text-gray-500 uppercase font-medium">Driver</p>
+                      <p className="text-sm font-semibold">{recentlyCompletedRide.driver.firstName} {recentlyCompletedRide.driver.lastName?.[0]}.</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-1.5 mb-3">
                   <div className="flex items-start gap-2">
                     <div className="w-2.5 h-2.5 bg-green-500 rounded-full mt-1.5 flex-shrink-0" />
-                    <div className="flex-1">
-                      <p className="text-[10px] text-gray-400 uppercase font-medium">From</p>
-                      <p className="text-xs text-gray-700">{recentlyCompletedRide.pickupLocation?.address}</p>
-                    </div>
+                    <p className="text-xs text-gray-600 truncate">{recentlyCompletedRide.pickupLocation?.address}</p>
                   </div>
                   <div className="flex items-start gap-2">
                     <div className="w-2.5 h-2.5 bg-red-500 rounded-full mt-1.5 flex-shrink-0" />
-                    <div className="flex-1">
-                      <p className="text-[10px] text-gray-400 uppercase font-medium">To</p>
-                      <p className="text-xs text-gray-700">{recentlyCompletedRide.destinationLocation?.address}</p>
-                    </div>
+                    <p className="text-xs text-gray-600 truncate">{recentlyCompletedRide.destinationLocation?.address}</p>
                   </div>
                 </div>
 
-                {recentlyCompletedRide.driver && (
-                  <div className="flex items-center gap-3 mb-3 p-2 bg-white dark:bg-gray-900 rounded-lg border">
-                    <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-green-600 font-bold flex-shrink-0">
-                      {recentlyCompletedRide.driver.firstName?.[0]}{recentlyCompletedRide.driver.lastName?.[0]}
+                {!quickRatingSubmitted ? (
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold text-center text-gray-700">How was your ride?</p>
+                    <div className="flex justify-center gap-1" data-testid="quick-rating-stars">
+                      {[1, 2, 3, 4, 5].map((starVal) => (
+                        <button
+                          key={starVal}
+                          type="button"
+                          onClick={() => setQuickRating(starVal)}
+                          onMouseEnter={() => setQuickRatingHover(starVal)}
+                          onMouseLeave={() => setQuickRatingHover(0)}
+                          className="p-1 transition-transform hover:scale-110 active:scale-95"
+                          data-testid={`quick-star-${starVal}`}
+                        >
+                          <Star className={`w-8 h-8 transition-colors ${
+                            starVal <= (quickRatingHover || quickRating)
+                              ? 'fill-yellow-400 text-yellow-400'
+                              : 'text-gray-300'
+                          }`} />
+                        </button>
+                      ))}
                     </div>
-                    <div className="flex-1">
-                      <p className="font-semibold text-sm">{recentlyCompletedRide.driver.firstName} {recentlyCompletedRide.driver.lastName?.[0]}.</p>
-                      <div className="flex items-center gap-1 text-xs text-gray-500">
-                        <Star className="w-3 h-3 text-yellow-500 fill-yellow-500" />
-                        <span>{parseFloat(recentlyCompletedRide.driver.rating || '5').toFixed(1)}</span>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-lg font-bold text-green-700" data-testid="completed-ride-fare">
-                        ${parseFloat(recentlyCompletedRide.actualFare || recentlyCompletedRide.estimatedFare || '0').toFixed(2)}
+                    {quickRating > 0 && (
+                      <p className="text-xs text-center text-gray-500">
+                        {quickRating === 1 && "Poor"}
+                        {quickRating === 2 && "Fair"}
+                        {quickRating === 3 && "Good"}
+                        {quickRating === 4 && "Very Good"}
+                        {quickRating === 5 && "Excellent!"}
                       </p>
-                      <p className="text-[10px] text-gray-400">Final fare</p>
+                    )}
+                    <div className="flex gap-2 mt-2">
+                      <Button
+                        className="flex-1 bg-green-600 hover:bg-green-700"
+                        onClick={() => {
+                          if (quickRating > 0 && recentlyCompletedRide?.id) {
+                            submitQuickRating.mutate({ rideId: recentlyCompletedRide.id, rating: quickRating });
+                          }
+                        }}
+                        disabled={quickRating === 0 || submitQuickRating.isPending}
+                        data-testid="btn-submit-quick-rating"
+                      >
+                        {submitQuickRating.isPending ? (
+                          <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                        ) : (
+                          <ThumbsUp className="w-4 h-4 mr-2" />
+                        )}
+                        {quickRating > 0 ? `Rate ${quickRating} Star${quickRating > 1 ? 's' : ''}` : 'Tap a Star'}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setRecentlyCompletedRide(null);
+                          setQuickRating(0);
+                          setQuickRatingHover(0);
+                        }}
+                        className="text-gray-400 px-3"
+                        data-testid="btn-dismiss-completed"
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
                     </div>
+                    <button
+                      onClick={() => {
+                        setRecentlyCompletedRide(null);
+                        setLocation('/ratings');
+                      }}
+                      className="text-xs text-blue-600 hover:underline text-center w-full mt-1"
+                      data-testid="btn-rate-later"
+                    >
+                      Write a detailed review instead
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-center py-3 animate-in fade-in duration-300">
+                    <CheckCircle className="w-10 h-10 text-green-500 mx-auto mb-1" />
+                    <p className="font-semibold text-green-700">Thanks for your rating!</p>
                   </div>
                 )}
-
-                <div className="flex gap-2">
-                  <Button
-                    className="flex-1 bg-green-600 hover:bg-green-700"
-                    onClick={() => {
-                      setRecentlyCompletedRide(null);
-                      setLocation('/ratings');
-                    }}
-                    data-testid="btn-rate-driver"
-                  >
-                    <ThumbsUp className="w-4 h-4 mr-2" />
-                    Rate Your Driver
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setRecentlyCompletedRide(null)}
-                    className="px-3"
-                    data-testid="btn-dismiss-completed"
-                  >
-                    <X className="w-4 h-4" />
-                  </Button>
-                </div>
               </CardContent>
             </Card>
           </div>
@@ -363,20 +467,27 @@ export default function RiderDashboard() {
 
         {activeRides.length > 0 && (
           <div className="px-4 pt-4 space-y-3">
-            {activeRides.map((ride: any) => (
-              <Card key={ride.id} className="border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-950/20 shadow-md" data-testid={`active-ride-card-${ride.id}`}>
+            {activeRides.map((ride: any) => {
+              const eta = getDriverETA(ride);
+              const elapsedMin = ride.startedAt ? getElapsedTime(ride.startedAt) : 0;
+              return (
+              <Card key={ride.id} className="border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-950/20 shadow-md overflow-hidden" data-testid={`active-ride-card-${ride.id}`}>
                 <CardContent className="p-4">
+                  <div className="mb-4">
+                    <RideProgressStepper status={ride.status} compact />
+                  </div>
+
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                       {ride.status === 'pending' && (
                         <div className="flex items-center gap-2">
                           <Loader2 className="w-5 h-5 text-orange-500 animate-spin" />
-                          <span className="font-semibold text-orange-600" data-testid={`ride-status-${ride.id}`}>Waiting for driver...</span>
+                          <span className="font-semibold text-orange-600" data-testid={`ride-status-${ride.id}`}>Finding your driver...</span>
                         </div>
                       )}
                       {ride.status === 'accepted' && (
                         <div className="flex items-center gap-2">
-                          <Car className="w-5 h-5 text-blue-600" />
+                          <Car className="w-5 h-5 text-blue-600 animate-bounce" />
                           <span className="font-semibold text-blue-600" data-testid={`ride-status-${ride.id}`}>Driver is on the way!</span>
                         </div>
                       )}
@@ -397,6 +508,52 @@ export default function RiderDashboard() {
                       ${parseFloat(ride.estimatedFare || '0').toFixed(2)}
                     </span>
                   </div>
+
+                  {(ride.status === 'accepted' || ride.status === 'driver_arriving') && eta && (
+                    <div className="flex items-center gap-3 mb-3 p-2.5 bg-blue-100/70 dark:bg-blue-900/40 rounded-xl" data-testid={`ride-eta-${ride.id}`}>
+                      <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center flex-shrink-0">
+                        <Timer className="w-5 h-5 text-white" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-blue-800 dark:text-blue-200">
+                          Arriving in ~{eta.minutes} min
+                        </p>
+                        <p className="text-xs text-blue-600 dark:text-blue-400">
+                          {eta.miles.toFixed(1)} miles away
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {ride.status === 'in_progress' && (
+                    <div className="grid grid-cols-3 gap-2 mb-3" data-testid={`ride-live-stats-${ride.id}`}>
+                      <div className="bg-purple-100/60 dark:bg-purple-900/30 p-2.5 rounded-xl text-center">
+                        <Clock className="w-4 h-4 text-purple-600 mx-auto mb-0.5" />
+                        <p className="text-lg font-bold text-purple-700">{elapsedMin}</p>
+                        <p className="text-[9px] text-gray-500 uppercase">Min</p>
+                      </div>
+                      <div className="bg-blue-100/60 dark:bg-blue-900/30 p-2.5 rounded-xl text-center">
+                        {eta ? (
+                          <>
+                            <Navigation className="w-4 h-4 text-blue-600 mx-auto mb-0.5" />
+                            <p className="text-lg font-bold text-blue-700">~{eta.minutes}</p>
+                            <p className="text-[9px] text-gray-500 uppercase">Min Left</p>
+                          </>
+                        ) : (
+                          <>
+                            <Route className="w-4 h-4 text-blue-600 mx-auto mb-0.5" />
+                            <p className="text-lg font-bold text-blue-700">--</p>
+                            <p className="text-[9px] text-gray-500 uppercase">ETA</p>
+                          </>
+                        )}
+                      </div>
+                      <div className="bg-green-100/60 dark:bg-green-900/30 p-2.5 rounded-xl text-center">
+                        <Banknote className="w-4 h-4 text-green-600 mx-auto mb-0.5" />
+                        <p className="text-lg font-bold text-green-700">${parseFloat(ride.estimatedFare || '0').toFixed(0)}</p>
+                        <p className="text-[9px] text-gray-500 uppercase">Est. Fare</p>
+                      </div>
+                    </div>
+                  )}
 
                   {ride.driver && (
                     <div className="flex items-center gap-3 mb-3 p-3 bg-white dark:bg-gray-900 rounded-xl border" data-testid={`ride-driver-info-${ride.id}`}>
@@ -441,6 +598,15 @@ export default function RiderDashboard() {
                     </div>
                   </div>
 
+                  {ride.status === 'pending' && (
+                    <div className="mb-3">
+                      <div className="w-full bg-gray-200 rounded-full h-1 overflow-hidden">
+                        <div className="bg-orange-400 h-1 rounded-full animate-pulse" style={{ width: '60%' }} />
+                      </div>
+                      <p className="text-[10px] text-gray-400 mt-1 text-center">Searching for the best driver match...</p>
+                    </div>
+                  )}
+
                   {(ride.status === 'pending' || ride.status === 'accepted') && (
                     <Button
                       variant="outline"
@@ -456,7 +622,8 @@ export default function RiderDashboard() {
                   )}
                 </CardContent>
               </Card>
-            ))}
+              );
+            })}
           </div>
         )}
 

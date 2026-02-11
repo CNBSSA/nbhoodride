@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { Timer, MapPin, Navigation } from "lucide-react";
 
 interface IncomingRideRequestProps {
   ride: {
@@ -23,10 +24,39 @@ interface IncomingRideRequestProps {
   onDecline: (rideId: string) => void;
 }
 
+const REQUEST_TIMEOUT_SECONDS = 90;
+
 export default function IncomingRideRequest({ ride, onAccept, onDecline }: IncomingRideRequestProps) {
   const [isResponding, setIsResponding] = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState(() => {
+    const created = new Date(ride.createdAt).getTime();
+    const elapsed = Math.floor((Date.now() - created) / 1000);
+    return Math.max(0, REQUEST_TIMEOUT_SECONDS - elapsed);
+  });
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    timerRef.current = setInterval(() => {
+      setSecondsLeft((prev) => {
+        if (prev <= 1) {
+          if (timerRef.current) clearInterval(timerRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (secondsLeft === 0 && !isResponding) {
+      onDecline(ride.id);
+    }
+  }, [secondsLeft, isResponding, ride.id, onDecline]);
 
   const acceptMutation = useMutation({
     mutationFn: async (rideId: string) => {
@@ -98,53 +128,77 @@ export default function IncomingRideRequest({ ride, onAccept, onDecline }: Incom
     ));
   };
 
+  const timerPercent = Math.round((secondsLeft / REQUEST_TIMEOUT_SECONDS) * 100);
+  const isUrgent = secondsLeft <= 15;
+
   return (
-    <Card className="border-primary bg-primary/5 animate-in slide-in-from-top duration-300">
+    <Card className={`border-2 animate-in slide-in-from-top duration-300 overflow-hidden ${
+      isUrgent ? 'border-red-400 bg-red-50/50 dark:bg-red-950/20' : 'border-primary bg-primary/5'
+    }`} data-testid={`incoming-ride-${ride.id}`}>
+      <div className="relative h-1.5 bg-gray-200 dark:bg-gray-700">
+        <div
+          className={`h-full transition-all duration-1000 ease-linear rounded-r ${
+            isUrgent ? 'bg-red-500' : timerPercent > 50 ? 'bg-green-500' : 'bg-orange-400'
+          }`}
+          style={{ width: `${timerPercent}%` }}
+          data-testid={`timer-bar-${ride.id}`}
+        />
+      </div>
       <CardContent className="p-4">
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <Timer className={`w-4 h-4 ${isUrgent ? 'text-red-500 animate-pulse' : 'text-gray-400'}`} />
+            <span className={`text-xs font-semibold ${isUrgent ? 'text-red-600' : 'text-gray-500'}`} data-testid={`timer-text-${ride.id}`}>
+              {secondsLeft > 0 ? `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')} to respond` : 'Expired'}
+            </span>
+          </div>
+          <span className="text-xs text-muted-foreground">{formatTimeAgo(ride.createdAt)}</span>
+        </div>
+
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center space-x-3">
-            <div className="w-12 h-12 bg-primary rounded-full flex items-center justify-center text-primary-foreground">
-              <i className="fas fa-user" />
+            <div className="w-12 h-12 bg-primary rounded-full flex items-center justify-center text-primary-foreground font-bold text-lg">
+              {ride.rider.firstName?.[0]}{ride.rider.lastName?.[0]}
             </div>
             <div>
               <h3 className="font-semibold text-lg">
                 {ride.rider.firstName} {ride.rider.lastName?.[0]}.
               </h3>
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-1">
                 <div className="flex text-sm">
                   {renderStars(ride.rider.rating)}
                 </div>
-                <span className="text-sm text-muted-foreground">
-                  • {formatTimeAgo(ride.createdAt)}
-                </span>
+                <span className="text-sm text-muted-foreground">{ride.rider.rating.toFixed(1)}</span>
               </div>
             </div>
           </div>
           <div className="text-right">
             <p className="text-2xl font-bold text-secondary">${ride.estimatedFare}</p>
-            <p className="text-sm text-muted-foreground">Estimated fare</p>
+            <p className="text-[10px] text-muted-foreground uppercase">Estimated fare</p>
           </div>
         </div>
 
-        <div className="space-y-3 mb-4">
+        <div className="space-y-2 mb-4 p-3 bg-white dark:bg-gray-900 rounded-xl border">
           <div className="flex items-start space-x-3">
-            <div className="w-3 h-3 bg-secondary rounded-full mt-2" />
-            <div className="flex-1">
-              <p className="text-sm text-muted-foreground">Pickup</p>
-              <p className="font-medium">{ride.pickupLocation.address}</p>
+            <MapPin className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] text-gray-400 uppercase font-medium">Pickup</p>
+              <p className="font-medium text-sm truncate">{ride.pickupLocation.address}</p>
               {ride.pickupInstructions && (
-                <p className="text-sm text-muted-foreground mt-1">
-                  Note: {ride.pickupInstructions}
+                <p className="text-xs text-blue-600 mt-0.5 italic">
+                  "{ride.pickupInstructions}"
                 </p>
               )}
             </div>
           </div>
+
+          <div className="border-l-2 border-dashed border-gray-200 ml-2 h-2" />
           
           <div className="flex items-start space-x-3">
-            <div className="w-3 h-3 bg-primary rounded-full mt-2" />
-            <div className="flex-1">
-              <p className="text-sm text-muted-foreground">Destination</p>
-              <p className="font-medium">{ride.destinationLocation.address}</p>
+            <Navigation className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] text-gray-400 uppercase font-medium">Destination</p>
+              <p className="font-medium text-sm truncate">{ride.destinationLocation.address}</p>
             </div>
           </div>
         </div>
@@ -152,18 +206,18 @@ export default function IncomingRideRequest({ ride, onAccept, onDecline }: Incom
         <div className="flex space-x-3">
           <Button
             variant="outline"
-            className="flex-1"
+            className="flex-1 border-gray-300"
             onClick={handleDecline}
-            disabled={isResponding}
+            disabled={isResponding || secondsLeft === 0}
             data-testid={`button-decline-ride-${ride.id}`}
           >
             <i className="fas fa-times mr-2" />
             Decline
           </Button>
           <Button
-            className="flex-1"
+            className={`flex-1 ${isUrgent ? 'bg-red-600 hover:bg-red-700 animate-pulse' : ''}`}
             onClick={handleAccept}
-            disabled={isResponding}
+            disabled={isResponding || secondsLeft === 0}
             data-testid={`button-accept-ride-${ride.id}`}
           >
             <i className="fas fa-check mr-2" />

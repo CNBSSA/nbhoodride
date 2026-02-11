@@ -8,6 +8,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { MapPin, Navigation, User, DollarSign, CheckCircle, ChevronRight, Star, Shield, Loader2 } from "lucide-react";
 
 interface Driver {
   id: string;
@@ -205,104 +206,162 @@ export default function RideBookingModal({
 
   if (!isOpen) return null;
 
+  const bookingStep = !destinationAddress || !destCoords ? 1 : !selectedDriver ? 2 : 3;
+
+  const stepLabels = [
+    { num: 1, label: 'Route', icon: MapPin },
+    { num: 2, label: 'Driver', icon: User },
+    { num: 3, label: 'Confirm', icon: CheckCircle },
+  ];
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center max-w-[430px] mx-auto">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <Card className="relative z-10 w-full h-[90vh] rounded-t-xl border-0 shadow-2xl flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b flex-shrink-0">
-          <h2 className="text-lg font-semibold">Book a Ride</h2>
-          <Button variant="ghost" size="sm" onClick={onClose} data-testid="button-close-booking">
-            <i className="fas fa-times" />
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <Card className="relative z-10 w-full h-[90vh] rounded-t-2xl border-0 shadow-2xl flex flex-col">
+        <div className="flex items-center justify-between px-4 pt-4 pb-2 flex-shrink-0">
+          <h2 className="text-lg font-bold">Book a Ride</h2>
+          <Button variant="ghost" size="sm" onClick={onClose} className="rounded-full w-8 h-8 p-0" data-testid="button-close-booking">
+            <i className="fas fa-times text-gray-400" />
           </Button>
+        </div>
+
+        <div className="flex items-center justify-center gap-0 px-6 pb-3 flex-shrink-0">
+          {stepLabels.map((step, i) => {
+            const isComplete = bookingStep > step.num;
+            const isCurrent = bookingStep === step.num;
+            return (
+              <div key={step.num} className="flex items-center flex-1 last:flex-none">
+                <div className="flex flex-col items-center">
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
+                    isComplete ? 'bg-green-500 text-white' : isCurrent ? 'bg-blue-600 text-white ring-2 ring-blue-200' : 'bg-gray-100 text-gray-400'
+                  }`}>
+                    {isComplete ? <CheckCircle className="w-3.5 h-3.5" /> : <step.icon className="w-3.5 h-3.5" />}
+                  </div>
+                  <span className={`text-[9px] mt-0.5 font-semibold ${isCurrent ? 'text-blue-600' : isComplete ? 'text-green-600' : 'text-gray-400'}`}>
+                    {step.label}
+                  </span>
+                </div>
+                {i < stepLabels.length - 1 && (
+                  <div className={`flex-1 h-0.5 mx-2 mt-[-10px] rounded ${isComplete ? 'bg-green-400' : 'bg-gray-200'}`} />
+                )}
+              </div>
+            );
+          })}
         </div>
         
         <CardContent className="p-4 space-y-4 overflow-y-auto flex-1">
-          {/* Pickup Location */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Pickup Location</label>
-            <div className="flex items-center space-x-2">
-              <div className="w-3 h-3 bg-secondary rounded-full" />
-              <Input
-                value={pickupAddress}
-                onChange={(e) => {
-                  setPickupAddress(e.target.value);
-                  setPickupManuallyEdited(true);
-                }}
-                placeholder="Enter pickup address"
-                data-testid="input-pickup-address"
-              />
+          <div className="space-y-3 p-3 bg-gray-50 dark:bg-gray-900 rounded-xl">
+            <div className="flex items-start gap-3">
+              <div className="flex flex-col items-center mt-1">
+                <div className="w-3 h-3 bg-green-500 rounded-full" />
+                <div className="w-0.5 h-6 bg-gray-300 my-0.5" />
+                <div className="w-3 h-3 bg-red-500 rounded-full" />
+              </div>
+              <div className="flex-1 space-y-2">
+                <div>
+                  <label className="text-[10px] text-gray-400 uppercase font-semibold">Pickup</label>
+                  <Input
+                    value={pickupAddress}
+                    onChange={(e) => {
+                      setPickupAddress(e.target.value);
+                      setPickupManuallyEdited(true);
+                    }}
+                    placeholder="Enter pickup address"
+                    className="h-9 text-sm bg-white dark:bg-gray-800"
+                    data-testid="input-pickup-address"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-400 uppercase font-semibold">Destination</label>
+                  <Input
+                    value={destinationAddress}
+                    onChange={(e) => setDestinationAddress(e.target.value)}
+                    placeholder="Where are you going?"
+                    className="h-9 text-sm bg-white dark:bg-gray-800"
+                    data-testid="input-destination"
+                  />
+                </div>
+              </div>
             </div>
             <Textarea
-              placeholder="Pickup instructions (optional): e.g., Meet me at the main entrance"
+              placeholder="Pickup instructions (optional): e.g., Meet at the main entrance"
               value={pickupInstructions}
               onChange={(e) => setPickupInstructions(e.target.value)}
               rows={2}
-              className="text-sm"
+              className="text-xs bg-white dark:bg-gray-800"
               data-testid="textarea-pickup-instructions"
             />
           </div>
 
-          {/* Destination */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Destination</label>
-            <div className="flex items-center space-x-2">
-              <div className="w-3 h-3 bg-destructive rounded-full" />
-              <Input
-                value={destinationAddress}
-                onChange={(e) => setDestinationAddress(e.target.value)}
-                placeholder="Where are you going?"
-                data-testid="input-destination"
-              />
+          {calculateFareMutation.isPending && (
+            <div className="flex items-center justify-center gap-2 py-3 text-blue-600">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span className="text-sm">Calculating fare...</span>
             </div>
-          </div>
+          )}
 
-          {/* Fare Estimate */}
           {fareEstimate && (
-            <Card className="bg-muted">
-              <CardContent className="p-4">
-                <h3 className="font-semibold mb-2">Fare Estimate</h3>
-                <div className="space-y-1 text-sm">
+            <Card className="bg-gradient-to-r from-green-50 to-blue-50 dark:from-green-950/20 dark:to-blue-950/20 border-green-200">
+              <CardContent className="p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <DollarSign className="w-4 h-4 text-green-600" />
+                  <h3 className="font-semibold text-sm">Fare Breakdown</h3>
+                </div>
+                <div className="space-y-1 text-xs">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Base fare</span>
-                    <span>${fareEstimate.baseFare.toFixed(2)}</span>
+                    <span className="font-medium">${fareEstimate.baseFare.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Time ({estimatedDuration ?? '...'} min)</span>
-                    <span>${fareEstimate.timeCharge.toFixed(2)}</span>
+                    <span className="font-medium">${fareEstimate.timeCharge.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Distance ({estimatedDistance ?? '...'} mi)</span>
-                    <span>${fareEstimate.distanceCharge.toFixed(2)}</span>
+                    <span className="font-medium">${fareEstimate.distanceCharge.toFixed(2)}</span>
                   </div>
                   {fareEstimate.surgeAdjustment !== 0 && (
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Surge</span>
-                      <span className={fareEstimate.surgeAdjustment < 0 ? "text-green-600" : "text-red-600"}>
+                      <span className="text-muted-foreground">Adjustment</span>
+                      <span className={fareEstimate.surgeAdjustment < 0 ? "text-green-600 font-medium" : "text-red-600 font-medium"}>
                         {fareEstimate.surgeAdjustment < 0 ? "-" : "+"}${Math.abs(fareEstimate.surgeAdjustment).toFixed(2)}
                       </span>
                     </div>
                   )}
                   <Separator />
-                  <div className="flex justify-between font-semibold">
-                    <span>Total (Virtual Card)</span>
-                    <span data-testid="text-total-fare">${fareEstimate.total.toFixed(2)}</span>
+                  <div className="flex justify-between font-bold text-sm pt-1">
+                    <span>Total</span>
+                    <span className="text-green-700" data-testid="text-total-fare">${fareEstimate.total.toFixed(2)}</span>
                   </div>
                 </div>
-                <p className="text-xs text-muted-foreground mt-2">
-                  {fareEstimate.formula}
+                <p className="text-[10px] text-gray-400 mt-2 flex items-center gap-1">
+                  <Shield className="w-3 h-3" /> No surge pricing — transparent rates always
                 </p>
               </CardContent>
             </Card>
           )}
 
-          {/* Available Drivers */}
           <div>
-            <h3 className="font-semibold mb-3">Choose Your Driver</h3>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold text-sm">Choose Your Driver</h3>
+              <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{drivers.length} available</span>
+            </div>
             <div className="space-y-2">
+              {drivers.length === 0 && (
+                <div className="text-center py-6 text-gray-400">
+                  <User className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                  <p className="text-sm">No drivers nearby right now</p>
+                  <p className="text-xs">Try again in a moment</p>
+                </div>
+              )}
               {drivers.map((driver) => (
                 <label
                   key={driver.id}
-                  className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-muted"
+                  className={`flex items-center p-3 rounded-xl cursor-pointer transition-all ${
+                    selectedDriver === driver.id
+                      ? 'bg-blue-50 dark:bg-blue-950/30 border-2 border-blue-400 shadow-sm'
+                      : 'border-2 border-transparent bg-white dark:bg-gray-900 hover:border-gray-200 shadow-sm'
+                  }`}
                   data-testid={`driver-option-${driver.id}`}
                 >
                   <input
@@ -311,43 +370,66 @@ export default function RideBookingModal({
                     value={driver.id}
                     checked={selectedDriver === driver.id}
                     onChange={(e) => setSelectedDriver(e.target.value)}
-                    className="mr-3"
+                    className="sr-only"
                   />
-                  <img
-                    src={driver.profileImage || `https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=50&h=50&fit=crop&crop=face`}
-                    alt={`Driver ${driver.name}`}
-                    className="w-10 h-10 rounded-full mr-3"
-                  />
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-2">
-                      <span className="font-medium">{driver.name}</span>
+                  <div className={`w-11 h-11 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 mr-3 ${
+                    selectedDriver === driver.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'
+                  }`}>
+                    {driver.name.split(' ').map(n => n[0]).join('')}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold text-sm">{driver.name}</span>
                       {driver.isVerifiedNeighbor && (
-                        <span className="bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full">
-                          Verified
-                        </span>
+                        <Shield className="w-3.5 h-3.5 text-green-500" />
                       )}
                     </div>
-                    <div className="flex items-center space-x-1 text-sm">
-                      <div className="text-yellow-500">★★★★★</div>
-                      <span className="text-muted-foreground">{driver.rating} • {driver.estimatedTime}</span>
+                    <div className="flex items-center gap-1 text-xs text-gray-500">
+                      <Star className="w-3 h-3 text-yellow-500 fill-yellow-500" />
+                      <span>{driver.rating.toFixed(1)}</span>
+                      <span className="text-gray-300">|</span>
+                      <span>{driver.estimatedTime}</span>
                     </div>
                   </div>
-                  <span className="font-semibold">{driver.estimatedFare}</span>
+                  <div className="text-right">
+                    <span className="font-bold text-sm">{driver.estimatedFare}</span>
+                    {selectedDriver === driver.id && (
+                      <CheckCircle className="w-4 h-4 text-blue-600 ml-auto mt-0.5" />
+                    )}
+                  </div>
                 </label>
               ))}
             </div>
           </div>
         </CardContent>
 
-        <div className="p-4 bg-card border-t flex-shrink-0">
+        <div className="p-4 bg-card border-t flex-shrink-0 space-y-2">
+          {fareEstimate && selectedDriver && (
+            <div className="flex items-center justify-between text-xs text-gray-500 px-1">
+              <span>Paid via Virtual PG Card</span>
+              <span className="font-bold text-sm text-gray-900">${fareEstimate.total.toFixed(2)}</span>
+            </div>
+          )}
           <Button
             onClick={handleBookRide}
             disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress || !fareEstimate}
-            className="w-full h-12 text-base font-semibold"
+            className="w-full h-12 text-base font-semibold rounded-xl"
             size="lg"
             data-testid="button-confirm-booking"
           >
-            {bookRideMutation.isPending ? "Booking..." : `Confirm Booking${fareEstimate ? ` — $${fareEstimate.total.toFixed(2)}` : ''}`}
+            {bookRideMutation.isPending ? (
+              <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Booking...</>
+            ) : fareEstimate && selectedDriver ? (
+              `Confirm Ride — $${fareEstimate.total.toFixed(2)}`
+            ) : !destinationAddress ? (
+              'Enter Destination'
+            ) : !destCoords ? (
+              'Looking up address...'
+            ) : !selectedDriver ? (
+              'Select a Driver'
+            ) : (
+              'Confirm Booking'
+            )}
           </Button>
         </div>
       </Card>
