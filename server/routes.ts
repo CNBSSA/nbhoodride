@@ -504,12 +504,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      // Send targeted WebSocket messages to driver and rider only  
+      const driverUser = await storage.getUser(userId);
       const rideAcceptedMessage = {
         type: 'ride_accepted',
         rideId: ride.id,
         driverId: userId,
-        riderId: ride.riderId
+        riderId: ride.riderId,
+        driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'Your driver',
       };
       
       // Send to driver
@@ -752,7 +753,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         rideId: ride.id,
         driverId: userId,
         riderId: ride.riderId,
-        status: 'completed'
+        status: 'completed',
+        actualFare: ride.actualFare,
+        estimatedFare: ride.estimatedFare,
       };
       
       // Send to driver

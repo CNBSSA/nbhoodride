@@ -11,7 +11,7 @@ export default function RatingsPage() {
   const [, setLocation] = useLocation();
 
   // Get rides that need rating
-  const { data: ridesToRate = [], isLoading } = useQuery({
+  const { data: ridesToRate = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/rides/for-rating"],
     enabled: !!user?.id,
   });

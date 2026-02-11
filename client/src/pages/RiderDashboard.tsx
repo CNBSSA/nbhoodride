@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useGeolocation } from "@/hooks/useGeolocation";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useLocation } from "wouter";
 import MapComponent from "@/components/MapComponent";
 import RideBookingModal from "@/components/RideBookingModal";
 import ScheduleRideModal from "@/components/ScheduleRideModal";
@@ -12,7 +13,7 @@ import SOSModal from "@/components/SOSModal";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { MapPin, Plus, Calendar, Navigation, Bell, AlertTriangle, Star, Clock, X, ChevronRight, Shield, Phone, Car, Loader2, CheckCircle, Route } from "lucide-react";
+import { MapPin, Plus, Calendar, Navigation, Bell, AlertTriangle, Star, Clock, X, ChevronRight, Shield, Phone, Car, Loader2, CheckCircle, Route, ThumbsUp, DollarSign } from "lucide-react";
 
 interface Driver {
   id: string;
@@ -65,6 +66,9 @@ export default function RiderDashboard() {
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
   const [realtimeDrivers, setRealtimeDrivers] = useState<Record<string, {lat: number, lng: number}>>({});
+  const [recentlyCompletedRide, setRecentlyCompletedRide] = useState<any>(null);
+  const [, setLocation] = useLocation();
+  const lastProcessedMessageRef = useRef<string | null>(null);
   const { user } = useAuth();
   const { location, error: locationError, requestLocation } = useGeolocation();
   const { lastMessage } = useWebSocket();
@@ -134,17 +138,75 @@ export default function RiderDashboard() {
 
   const mapCenter = userLocation || { lat: 38.9073, lng: -76.7781 };
 
+  const activeRidesRef = useRef(activeRides);
+  activeRidesRef.current = activeRides;
+
   useEffect(() => {
-    if (lastMessage?.type === 'driver_location') {
+    if (!lastMessage) return;
+
+    if (lastMessage.type !== 'driver_location' && lastProcessedMessageRef.current === `${lastMessage.type}-${lastMessage.rideId}`) {
+      return;
+    }
+    if (lastMessage.type !== 'driver_location') {
+      lastProcessedMessageRef.current = `${lastMessage.type}-${lastMessage.rideId}`;
+    }
+
+    if (lastMessage.type === 'driver_location') {
       setRealtimeDrivers(prev => ({
         ...prev,
         [lastMessage.driverId]: lastMessage.location
       }));
-    }
-    if (lastMessage?.type === 'ride_accepted' || lastMessage?.type === 'ride_started' || lastMessage?.type === 'ride_completed' || lastMessage?.type === 'ride_cancelled' || lastMessage?.type === 'ride_update') {
+    } else if (lastMessage.type === 'ride_accepted') {
+      refetchActiveRides();
+      toast({
+        title: "Driver Accepted!",
+        description: lastMessage.driverName ? `${lastMessage.driverName} is on the way to pick you up.` : "Your driver is on the way to pick you up.",
+      });
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate([200, 100, 200]);
+      }
+    } else if (lastMessage.type === 'ride_started') {
+      refetchActiveRides();
+      toast({
+        title: "Ride Started",
+        description: "You're on your way! Enjoy the ride.",
+      });
+    } else if (lastMessage.type === 'ride_completed') {
+      const currentActiveRides = activeRidesRef.current;
+      const completedRide = currentActiveRides.find((r: any) => r.id === lastMessage.rideId);
+      if (completedRide) {
+        setRecentlyCompletedRide({
+          ...completedRide,
+          actualFare: lastMessage.actualFare || completedRide.actualFare || completedRide.estimatedFare,
+        });
+      } else {
+        setRecentlyCompletedRide({
+          id: lastMessage.rideId,
+          actualFare: lastMessage.actualFare || lastMessage.estimatedFare,
+          estimatedFare: lastMessage.estimatedFare,
+        });
+      }
+      refetchActiveRides();
+      queryClient.invalidateQueries({ queryKey: ['/api/virtual-card/balance'] });
+      const fare = lastMessage.actualFare ? `$${parseFloat(lastMessage.actualFare).toFixed(2)}` : '';
+      toast({
+        title: "Ride Complete!",
+        description: fare ? `Final fare: ${fare}. Please rate your driver!` : "You've arrived! Please rate your driver.",
+      });
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate([200]);
+      }
+    } else if (lastMessage.type === 'ride_cancelled') {
+      refetchActiveRides();
+      toast({
+        title: "Ride Cancelled",
+        description: "Your ride has been cancelled.",
+        variant: "destructive",
+      });
+    } else if (lastMessage.type === 'ride_update') {
       refetchActiveRides();
     }
-  }, [lastMessage, refetchActiveRides]);
+  }, [lastMessage, refetchActiveRides, toast]);
 
   const drivers: Driver[] = nearbyDrivers.map((driver: any) => {
     const realtimeLocation = realtimeDrivers[driver.id];
@@ -224,6 +286,80 @@ export default function RiderDashboard() {
             />
           </div>
         </div>
+
+        {recentlyCompletedRide && (
+          <div className="px-4 pt-4">
+            <Card className="border-2 border-green-300 bg-green-50/50 dark:bg-green-950/20 shadow-lg animate-in slide-in-from-top duration-500" data-testid="ride-completed-card">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <CheckCircle className="w-6 h-6 text-green-600" />
+                  <span className="font-bold text-green-700 text-lg">Ride Complete!</span>
+                </div>
+
+                <div className="space-y-2 mb-3">
+                  <div className="flex items-start gap-2">
+                    <div className="w-2.5 h-2.5 bg-green-500 rounded-full mt-1.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-[10px] text-gray-400 uppercase font-medium">From</p>
+                      <p className="text-xs text-gray-700">{recentlyCompletedRide.pickupLocation?.address}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <div className="w-2.5 h-2.5 bg-red-500 rounded-full mt-1.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-[10px] text-gray-400 uppercase font-medium">To</p>
+                      <p className="text-xs text-gray-700">{recentlyCompletedRide.destinationLocation?.address}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {recentlyCompletedRide.driver && (
+                  <div className="flex items-center gap-3 mb-3 p-2 bg-white dark:bg-gray-900 rounded-lg border">
+                    <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-green-600 font-bold flex-shrink-0">
+                      {recentlyCompletedRide.driver.firstName?.[0]}{recentlyCompletedRide.driver.lastName?.[0]}
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-semibold text-sm">{recentlyCompletedRide.driver.firstName} {recentlyCompletedRide.driver.lastName?.[0]}.</p>
+                      <div className="flex items-center gap-1 text-xs text-gray-500">
+                        <Star className="w-3 h-3 text-yellow-500 fill-yellow-500" />
+                        <span>{parseFloat(recentlyCompletedRide.driver.rating || '5').toFixed(1)}</span>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-bold text-green-700" data-testid="completed-ride-fare">
+                        ${parseFloat(recentlyCompletedRide.actualFare || recentlyCompletedRide.estimatedFare || '0').toFixed(2)}
+                      </p>
+                      <p className="text-[10px] text-gray-400">Final fare</p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <Button
+                    className="flex-1 bg-green-600 hover:bg-green-700"
+                    onClick={() => {
+                      setRecentlyCompletedRide(null);
+                      setLocation('/ratings');
+                    }}
+                    data-testid="btn-rate-driver"
+                  >
+                    <ThumbsUp className="w-4 h-4 mr-2" />
+                    Rate Your Driver
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setRecentlyCompletedRide(null)}
+                    className="px-3"
+                    data-testid="btn-dismiss-completed"
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         {activeRides.length > 0 && (
           <div className="px-4 pt-4 space-y-3">

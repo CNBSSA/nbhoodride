@@ -78,13 +78,18 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
       const response = await apiRequest('POST', `/api/driver/rides/${rideId}/complete`, {});
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       trackRideCompleted();
       queryClient.invalidateQueries({ queryKey: ["/api/driver/active-rides"] });
       queryClient.invalidateQueries({ queryKey: ["/api/driver/earnings/today"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/driver/rides/today"] });
+      const fare = parseFloat(data.actualFare || data.estimatedFare || '0').toFixed(2);
+      const distance = rideStats?.distance ? `${rideStats.distance.toFixed(1)} mi` : '';
+      const duration = rideStats?.duration ? `${rideStats.duration} min` : '';
+      const summary = [distance, duration].filter(Boolean).join(' • ');
       toast({
-        title: "Ride Completed!",
-        description: "Trip completed successfully. Great job!",
+        title: `Ride Complete — $${fare} Earned!`,
+        description: summary ? `Trip: ${summary}. Great job!` : "Trip completed successfully. Great job!",
       });
     },
     onError: () => {
