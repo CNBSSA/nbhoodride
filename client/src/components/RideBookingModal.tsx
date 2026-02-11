@@ -123,8 +123,11 @@ export default function RideBookingModal({
   const selectedDriverRef = useRef(selectedDriver);
   selectedDriverRef.current = selectedDriver;
 
+  const calculateFareRef = useRef(calculateFareMutation.mutate);
+  calculateFareRef.current = calculateFareMutation.mutate;
+
   const calculateFare = useCallback((distance: number, duration: number, driverId?: string) => {
-    calculateFareMutation.mutate({ distance, duration, driverId });
+    calculateFareRef.current({ distance, duration, driverId });
   }, []);
 
   useEffect(() => {

@@ -481,35 +481,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       
-      const currentRide = await storage.getRide(rideId);
-      if (!currentRide || currentRide.status !== 'pending') {
-        return res.status(409).json({ message: "Ride is no longer available" });
-      }
-
-      if (currentRide.paymentMethod === 'card') {
-        const estimatedFare = parseFloat(currentRide.estimatedFare || "0");
+      const ride = await storage.acceptRide(rideId, userId);
+      
+      if (ride.paymentMethod === 'card') {
+        const estimatedFare = parseFloat(ride.estimatedFare || "0");
         try {
-          await storage.deductVirtualCardBalance(currentRide.riderId, estimatedFare);
+          await storage.deductVirtualCardBalance(ride.riderId, estimatedFare);
           await storage.setRidePaymentAuthorization(rideId, `virtual-${rideId}`);
         } catch (error: any) {
           console.error("Failed to authorize virtual card payment:", error);
+          try {
+            const { db: dbInstance } = await import("./db");
+            const { rides: ridesTable } = await import("@shared/schema");
+            const { eq, and } = await import("drizzle-orm");
+            await dbInstance.update(ridesTable)
+              .set({ status: "pending", acceptedAt: null, updatedAt: new Date() })
+              .where(and(eq(ridesTable.id, rideId), eq(ridesTable.status, "accepted")));
+          } catch (revertError) {
+            console.error("Failed to revert ride status after payment failure:", revertError);
+          }
           return res.status(402).json({ message: `Payment authorization failed: ${error.message}` });
         }
-      }
-
-      let ride;
-      try {
-        ride = await storage.acceptRide(rideId, userId);
-      } catch (acceptError: any) {
-        if (currentRide.paymentMethod === 'card') {
-          const estimatedFare = parseFloat(currentRide.estimatedFare || "0");
-          try {
-            await storage.addVirtualCardBalance(currentRide.riderId, estimatedFare);
-          } catch (refundError) {
-            console.error("Failed to refund virtual card after acceptance failure:", refundError);
-          }
-        }
-        throw acceptError;
       }
       
       const driverUser = await storage.getUser(userId);
@@ -2847,10 +2839,11 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
             break;
             
           case 'location_update':
-            // Driver location update - only send to riders in active rides with this driver
-            // For now, we'll store the location but not broadcast globally for privacy
-            // In production, implement targeted delivery to assigned riders only
-            // TODO: Send location only to rider(s) currently on a ride with this driver
+            if (message.userId && message.location) {
+              storage.updateDriverLocation(message.userId, { lat: message.location.lat, lng: message.location.lng }).catch((err: any) => {
+                console.error('Failed to persist driver location from WebSocket:', err);
+              });
+            }
             break;
             
           case 'ride_status':
