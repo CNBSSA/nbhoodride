@@ -104,8 +104,14 @@ export default function RiderDashboard() {
   };
 
   const { data: nearbyDrivers = [], isLoading } = useQuery<any[]>({
-    queryKey: [`/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}`],
-    refetchInterval: 30000,
+    queryKey: ['/api/rides/nearby-drivers', userLocation.lat, userLocation.lng],
+    queryFn: async () => {
+      const res = await fetch(`/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}`, { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch nearby drivers');
+      return res.json();
+    },
+    refetchInterval: isBookingModalOpen ? false : 30000,
+    placeholderData: (prev) => prev,
   });
 
   const { data: activeRides = [], refetch: refetchActiveRides } = useQuery<any[]>({

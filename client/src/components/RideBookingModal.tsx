@@ -82,13 +82,14 @@ export default function RideBookingModal({
     onSuccess: (data) => {
       setFareEstimate(data);
     },
-    onError: () => {
-      setFareEstimate(null);
-      toast({
-        title: "Fare Calculation Failed",
-        description: "Unable to estimate fare. Please check your destination and try again.",
-        variant: "destructive",
-      });
+    onError: (error, variables) => {
+      if (!fareEstimate) {
+        toast({
+          title: "Fare Calculation Failed",
+          description: "Unable to estimate fare. Please check your destination and try again.",
+          variant: "destructive",
+        });
+      }
     }
   });
 
@@ -423,13 +424,15 @@ export default function RideBookingModal({
           )}
           <Button
             onClick={handleBookRide}
-            disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress || !fareEstimate}
+            disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress || (!fareEstimate && !calculateFareMutation.isPending)}
             className="w-full h-12 text-base font-semibold rounded-xl"
             size="lg"
             data-testid="button-confirm-booking"
           >
             {bookRideMutation.isPending ? (
               <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Booking...</>
+            ) : calculateFareMutation.isPending && selectedDriver ? (
+              <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Updating fare...</>
             ) : fareEstimate && selectedDriver ? (
               `Confirm Ride — $${fareEstimate.total.toFixed(2)}`
             ) : !destinationAddress ? (
