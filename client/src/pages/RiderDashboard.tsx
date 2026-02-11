@@ -12,7 +12,7 @@ import SOSModal from "@/components/SOSModal";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { MapPin, Plus, Calendar, Navigation, Bell, AlertTriangle, Star, Clock, X, ChevronRight, Shield } from "lucide-react";
+import { MapPin, Plus, Calendar, Navigation, Bell, AlertTriangle, Star, Clock, X, ChevronRight, Shield, Phone, Car, Loader2, CheckCircle, Route } from "lucide-react";
 
 interface Driver {
   id: string;
@@ -100,21 +100,27 @@ export default function RiderDashboard() {
     refetchInterval: 30000,
   });
 
+  const { data: activeRides = [], refetch: refetchActiveRides } = useQuery<any[]>({
+    queryKey: ['/api/rides/active'],
+    refetchInterval: 5000,
+  });
+
   const { data: scheduledRides = [] } = useQuery<any[]>({
     queryKey: ['/api/rides/scheduled'],
     refetchInterval: 30000,
   });
 
-  const cancelScheduledRide = useMutation({
+  const cancelRide = useMutation({
     mutationFn: async (rideId: string) => {
       const response = await apiRequest('POST', `/api/rides/${rideId}/cancel`);
       return response.json();
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/active'] });
       queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
       toast({
         title: "Ride Cancelled",
-        description: "Your scheduled ride has been cancelled successfully.",
+        description: "Your ride has been cancelled.",
       });
     },
     onError: (error: any) => {
@@ -135,7 +141,10 @@ export default function RiderDashboard() {
         [lastMessage.driverId]: lastMessage.location
       }));
     }
-  }, [lastMessage]);
+    if (lastMessage?.type === 'ride_accepted' || lastMessage?.type === 'ride_started' || lastMessage?.type === 'ride_completed' || lastMessage?.type === 'ride_cancelled' || lastMessage?.type === 'ride_update') {
+      refetchActiveRides();
+    }
+  }, [lastMessage, refetchActiveRides]);
 
   const drivers: Driver[] = nearbyDrivers.map((driver: any) => {
     const realtimeLocation = realtimeDrivers[driver.id];
@@ -215,6 +224,105 @@ export default function RiderDashboard() {
             />
           </div>
         </div>
+
+        {activeRides.length > 0 && (
+          <div className="px-4 pt-4 space-y-3">
+            {activeRides.map((ride: any) => (
+              <Card key={ride.id} className="border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-950/20 shadow-md" data-testid={`active-ride-card-${ride.id}`}>
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      {ride.status === 'pending' && (
+                        <div className="flex items-center gap-2">
+                          <Loader2 className="w-5 h-5 text-orange-500 animate-spin" />
+                          <span className="font-semibold text-orange-600" data-testid={`ride-status-${ride.id}`}>Waiting for driver...</span>
+                        </div>
+                      )}
+                      {ride.status === 'accepted' && (
+                        <div className="flex items-center gap-2">
+                          <Car className="w-5 h-5 text-blue-600" />
+                          <span className="font-semibold text-blue-600" data-testid={`ride-status-${ride.id}`}>Driver is on the way!</span>
+                        </div>
+                      )}
+                      {ride.status === 'driver_arriving' && (
+                        <div className="flex items-center gap-2">
+                          <Navigation className="w-5 h-5 text-green-600" />
+                          <span className="font-semibold text-green-600" data-testid={`ride-status-${ride.id}`}>Driver arriving!</span>
+                        </div>
+                      )}
+                      {ride.status === 'in_progress' && (
+                        <div className="flex items-center gap-2">
+                          <Route className="w-5 h-5 text-purple-600" />
+                          <span className="font-semibold text-purple-600" data-testid={`ride-status-${ride.id}`}>Ride in progress</span>
+                        </div>
+                      )}
+                    </div>
+                    <span className="text-sm font-bold text-blue-600" data-testid={`ride-fare-${ride.id}`}>
+                      ${parseFloat(ride.estimatedFare || '0').toFixed(2)}
+                    </span>
+                  </div>
+
+                  {ride.driver && (
+                    <div className="flex items-center gap-3 mb-3 p-3 bg-white dark:bg-gray-900 rounded-xl border" data-testid={`ride-driver-info-${ride.id}`}>
+                      <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold text-lg flex-shrink-0">
+                        {ride.driver.firstName?.[0]}{ride.driver.lastName?.[0]}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-sm">{ride.driver.firstName} {ride.driver.lastName?.[0]}.</p>
+                        <div className="flex items-center gap-1 text-xs text-gray-500">
+                          <Star className="w-3 h-3 text-yellow-500 fill-yellow-500" />
+                          <span>{parseFloat(ride.driver.rating || '5').toFixed(1)}</span>
+                        </div>
+                        {ride.driver.vehicle && (
+                          <p className="text-xs text-gray-500 truncate">{ride.driver.vehicle}</p>
+                        )}
+                        {ride.driver.licensePlate && (
+                          <p className="text-xs font-semibold text-gray-700 mt-0.5">{ride.driver.licensePlate}</p>
+                        )}
+                      </div>
+                      {ride.driver.phone && (
+                        <a href={`tel:${ride.driver.phone}`} className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0" data-testid={`btn-call-driver-${ride.id}`}>
+                          <Phone className="w-4 h-4 text-green-600" />
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="space-y-2 mb-3">
+                    <div className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 bg-green-500 rounded-full mt-1.5 flex-shrink-0" />
+                      <div className="flex-1">
+                        <p className="text-[10px] text-gray-400 uppercase font-medium">Pickup</p>
+                        <p className="text-xs text-gray-700" data-testid={`ride-pickup-${ride.id}`}>{ride.pickupLocation?.address || 'Loading...'}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 bg-red-500 rounded-full mt-1.5 flex-shrink-0" />
+                      <div className="flex-1">
+                        <p className="text-[10px] text-gray-400 uppercase font-medium">Destination</p>
+                        <p className="text-xs text-gray-700" data-testid={`ride-destination-${ride.id}`}>{ride.destinationLocation?.address || 'Loading...'}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {(ride.status === 'pending' || ride.status === 'accepted') && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full text-red-600 border-red-200 hover:bg-red-50"
+                      onClick={() => cancelRide.mutate(ride.id)}
+                      disabled={cancelRide.isPending}
+                      data-testid={`btn-cancel-ride-${ride.id}`}
+                    >
+                      {cancelRide.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <X className="w-3 h-3 mr-1" />}
+                      Cancel Ride
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
 
         <div className="px-4 pt-4">
           <div className="grid grid-cols-2 gap-3">
@@ -364,12 +472,12 @@ export default function RiderDashboard() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => cancelScheduledRide.mutate(ride.id)}
-                        disabled={cancelScheduledRide.isPending}
+                        onClick={() => cancelRide.mutate(ride.id)}
+                        disabled={cancelRide.isPending}
                         className="text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl"
                         data-testid={`button-cancel-scheduled-${ride.id}`}
                       >
-                        {cancelScheduledRide.isPending ? (
+                        {cancelRide.isPending ? (
                           <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
                         ) : (
                           <X className="w-4 h-4" />

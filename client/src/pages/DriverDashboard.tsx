@@ -192,22 +192,31 @@ export default function DriverDashboard() {
   useEffect(() => {
     if (!lastMessage || !user?.id) return;
 
-    // Only process events for this driver
-    if (lastMessage.type === 'new_ride_request' && lastMessage.driverId === user.id) {
+    if (lastMessage.type === 'new_ride_request') {
       refetchPendingRides();
       toast({
         title: "New Ride Request!",
-        description: "You have a new ride request waiting.",
+        description: lastMessage.riderName ? `${lastMessage.riderName} needs a ride` : "You have a new ride request waiting.",
       });
-    } else if ((lastMessage.type === 'ride_accepted' || lastMessage.type === 'ride_declined') && lastMessage.driverId === user.id) {
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate([200, 100, 200, 100, 200]);
+      }
+    } else if (lastMessage.type === 'ride_accepted' || lastMessage.type === 'ride_declined') {
       refetchPendingRides();
       refetchActiveRides();
-    } else if ((lastMessage.type === 'ride_started' || lastMessage.type === 'ride_completed') && lastMessage.driverId === user.id) {
+    } else if (lastMessage.type === 'ride_started' || lastMessage.type === 'ride_completed') {
       refetchActiveRides();
-      // Also refresh earnings when ride is completed
       if (lastMessage.type === 'ride_completed') {
         queryClient.invalidateQueries({ queryKey: ["/api/driver/earnings/today"] });
       }
+    } else if (lastMessage.type === 'ride_cancelled') {
+      refetchPendingRides();
+      refetchActiveRides();
+      toast({
+        title: "Ride Cancelled",
+        description: "A ride has been cancelled by the rider.",
+        variant: "destructive",
+      });
     }
   }, [lastMessage, user?.id, refetchPendingRides, refetchActiveRides, queryClient, toast]);
 

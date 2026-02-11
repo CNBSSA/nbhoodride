@@ -1022,6 +1022,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const rideData = insertRideSchema.parse(dataToValidate);
       
       const ride = await storage.createRide(rideData);
+
+      if (ride.driverId && activeConnections.has(ride.driverId)) {
+        const driverWs = activeConnections.get(ride.driverId);
+        if (driverWs && driverWs.readyState === WebSocket.OPEN) {
+          const riderUser = await storage.getUser(userId);
+          driverWs.send(JSON.stringify({
+            type: 'new_ride_request',
+            rideId: ride.id,
+            riderId: userId,
+            riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ''}.` : 'Rider',
+            riderRating: riderUser?.rating || '5.0',
+            pickupAddress: ride.pickupLocation?.address || '',
+            destinationAddress: ride.destinationLocation?.address || '',
+            estimatedFare: ride.estimatedFare,
+            pickupInstructions: ride.pickupInstructions || '',
+          }));
+        }
+      }
+
       res.json(ride);
     } catch (error) {
       console.error("Error creating ride:", error);
@@ -1179,8 +1198,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/rides/active', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const rides = await storage.getActiveRides(userId);
-      res.json(rides);
+      const activeRides = await storage.getActiveRides(userId);
+      const ridesWithDetails = await Promise.all(activeRides.map(async (ride) => {
+        let driver = null;
+        let rider = null;
+        if (ride.driverId) {
+          const driverUser = await storage.getUser(ride.driverId);
+          if (driverUser) {
+            const driverProfile = await storage.getDriverProfile(ride.driverId);
+            const driverVehicles = driverProfile ? await storage.getVehiclesByDriverId(driverProfile.id) : [];
+            driver = {
+              firstName: driverUser.firstName,
+              lastName: driverUser.lastName,
+              rating: driverUser.rating,
+              phone: driverUser.phone,
+              profileImageUrl: driverUser.profileImageUrl,
+              vehicle: driverVehicles[0] ? `${driverVehicles[0].year} ${driverVehicles[0].make} ${driverVehicles[0].model} - ${driverVehicles[0].color}` : null,
+              licensePlate: driverVehicles[0]?.licensePlate || null,
+            };
+          }
+        }
+        if (ride.riderId) {
+          const riderUser = await storage.getUser(ride.riderId);
+          if (riderUser) {
+            rider = {
+              firstName: riderUser.firstName,
+              lastName: riderUser.lastName,
+              rating: riderUser.rating,
+            };
+          }
+        }
+        return { ...ride, driver, rider };
+      }));
+      res.json(ridesWithDetails);
     } catch (error) {
       console.error("Error fetching active rides:", error);
       res.status(500).json({ message: "Failed to fetch active rides" });

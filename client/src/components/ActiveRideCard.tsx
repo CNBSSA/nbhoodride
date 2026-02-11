@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest } from '@/lib/queryClient';
-import { MapPin, Clock, User, DollarSign, Navigation, CheckCircle, Route } from 'lucide-react';
+import { MapPin, Clock, User, DollarSign, Navigation, CheckCircle, Route, ExternalLink } from 'lucide-react';
 import { RideHelpers } from '@/services/rideService';
 import { useAnalytics } from "@/hooks/useAnalytics";
 
@@ -109,18 +109,32 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
     completeRideMutation.mutate(ride.id);
   };
 
+  const openNavigation = (lat: number, lng: number, label: string) => {
+    const encodedLabel = encodeURIComponent(label);
+    const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&destination_place_id=&travelmode=driving`;
+    window.open(googleMapsUrl, '_blank');
+  };
+
   const getStatusDisplay = () => {
     switch (ride.status) {
       case 'accepted':
         return (
-          <div className="space-y-4">
+          <div className="space-y-3">
             <Badge variant="secondary" className="text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-950">
               <Navigation className="w-3 h-3 mr-1" />
-              Driver Assigned
+              Driver Assigned — Head to Pickup
             </Badge>
-            <p className="text-sm text-muted-foreground">
-              Navigate to pickup location and start the ride when you arrive.
-            </p>
+            {ride.pickupLocation?.lat && ride.pickupLocation?.lng && (
+              <Button 
+                variant="outline"
+                onClick={() => openNavigation(ride.pickupLocation.lat, ride.pickupLocation.lng, ride.pickupLocation.address)}
+                className="w-full border-blue-200 text-blue-700 hover:bg-blue-50"
+                data-testid={`button-navigate-pickup-${ride.id}`}
+              >
+                <ExternalLink className="w-4 h-4 mr-2" />
+                Navigate to Pickup (Google Maps)
+              </Button>
+            )}
             <Button 
               onClick={handleStartRide}
               disabled={isUpdating}
@@ -128,7 +142,7 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
               data-testid={`button-start-ride-${ride.id}`}
             >
               <Navigation className="w-4 h-4 mr-2" />
-              {isUpdating ? "Starting..." : "Start Ride"}
+              {isUpdating ? "Starting..." : "Arrived — Start Ride"}
             </Button>
           </div>
         );
@@ -191,6 +205,18 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
             <p className="text-xs text-muted-foreground text-center">
               Base $4.00 + $0.29/min + $0.90/mi ($7.65 min, $100 max)
             </p>
+
+            {ride.destinationLocation?.lat && ride.destinationLocation?.lng && (
+              <Button 
+                variant="outline"
+                onClick={() => openNavigation(ride.destinationLocation.lat, ride.destinationLocation.lng, ride.destinationLocation.address)}
+                className="w-full border-purple-200 text-purple-700 hover:bg-purple-50"
+                data-testid={`button-navigate-destination-${ride.id}`}
+              >
+                <ExternalLink className="w-4 h-4 mr-2" />
+                Navigate to Destination (Google Maps)
+              </Button>
+            )}
             
             <Button 
               onClick={handleCompleteRide}

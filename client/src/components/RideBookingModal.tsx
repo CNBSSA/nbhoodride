@@ -208,15 +208,15 @@ export default function RideBookingModal({
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center max-w-[430px] mx-auto">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <Card className="relative z-10 w-full h-[90vh] rounded-t-xl border-0 shadow-2xl">
-        <div className="flex items-center justify-between p-4 border-b">
+      <Card className="relative z-10 w-full h-[90vh] rounded-t-xl border-0 shadow-2xl flex flex-col">
+        <div className="flex items-center justify-between p-4 border-b flex-shrink-0">
           <h2 className="text-lg font-semibold">Book a Ride</h2>
           <Button variant="ghost" size="sm" onClick={onClose} data-testid="button-close-booking">
             <i className="fas fa-times" />
           </Button>
         </div>
         
-        <CardContent className="p-4 space-y-4 overflow-y-auto h-full pb-20">
+        <CardContent className="p-4 space-y-4 overflow-y-auto flex-1">
           {/* Pickup Location */}
           <div className="space-y-2">
             <label className="text-sm font-medium">Pickup Location</label>
@@ -339,14 +339,15 @@ export default function RideBookingModal({
           </div>
         </CardContent>
 
-        <div className="absolute bottom-0 left-0 right-0 p-4 bg-card border-t">
+        <div className="p-4 bg-card border-t flex-shrink-0">
           <Button
             onClick={handleBookRide}
             disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress || !fareEstimate}
-            className="w-full"
+            className="w-full h-12 text-base font-semibold"
+            size="lg"
             data-testid="button-confirm-booking"
           >
-            {bookRideMutation.isPending ? "Booking..." : "Confirm Booking"}
+            {bookRideMutation.isPending ? "Booking..." : `Confirm Booking${fareEstimate ? ` — $${fareEstimate.total.toFixed(2)}` : ''}`}
           </Button>
         </div>
       </Card>
