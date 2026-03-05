@@ -149,7 +149,54 @@ Safety is a primary concern for riders choosing any rideshare. PG Ride's safety 
 
 ---
 
-## 9. Technology Overview (For Context)
+## 9. User Experience Walkthrough
+
+Understanding the user journey is essential for creating marketing materials that show real product value.
+
+### 9A. Rider Journey (Step-by-Step)
+
+1. **Sign Up:** Rider visits the app in their phone's browser (no app store needed). Creates an account with email and password.
+2. **Admin Approval:** Account is reviewed and approved by a PG Ride admin to ensure community integrity.
+3. **Home Screen:** After login, the rider sees a live map of their area with nearby available drivers, their ratings, and estimated fares.
+4. **Book a Ride:**
+   - Tap "Request Ride" to book now, or "Schedule" for a future ride.
+   - Enter destination — the app calculates fare instantly based on distance and time.
+   - Optionally search for a specific trusted driver by phone number.
+5. **Ride in Progress:**
+   - Real-time map tracks the driver's location from acceptance through pickup to drop-off.
+   - Status bar shows: Pending → Accepted → Driver Arriving → In Progress → Completed.
+   - SOS button is always visible for emergencies.
+   - Can message or call the driver directly in the app.
+6. **Ride Complete:**
+   - Fare is automatically deducted from the Virtual PG Card.
+   - Rider rates the driver and can leave a review.
+7. **Ongoing:** Access ride history, manage payments, top up PG Card, and use the AI Assistant for help anytime.
+
+### 9B. Driver Journey (Step-by-Step)
+
+1. **Sign Up & Verification:** Driver creates an account, uploads required documents (license, insurance, vehicle info), and awaits admin verification.
+2. **Go Online:** After approval, toggle "Online" status to start receiving ride requests.
+3. **Receive Requests:** Real-time notifications show rider details, pickup location, destination, and estimated payout before accepting.
+4. **Complete Rides:** Navigate to rider, pick up, follow route, drop off. GPS tracks the route automatically every 5 seconds.
+5. **Earn & Track:**
+   - View daily/weekly earnings on the dashboard.
+   - Customize rate card (base fare, per-mile, per-minute) to control income.
+6. **Build Ownership:**
+   - Track qualifying weeks and total hours on the Ownership Dashboard.
+   - At 12 qualifying weeks → Ad-Hoc Owner (Share Certificate + profit distributions).
+   - At 5,640 hours → Lifetime Owner (permanent equity + ongoing dividends).
+7. **Insights:** Access performance scorecards, demand heatmaps, and optimal driving hours for data-driven decisions.
+
+### 9C. How the App Feels
+
+- **Mobile-first design:** Optimized for smartphones; works seamlessly on any phone browser.
+- **No download required:** As a Progressive Web App (PWA), riders and drivers simply visit the URL — no App Store or Google Play needed.
+- **Clean, modern interface:** Uses the Inter font, blue/green/gold color palette, and intuitive navigation with a bottom tab bar (Home, Rides, Payments, Assistant, Profile).
+- **Real-time everything:** Live map updates, instant fare calculations, push notifications for ride status changes.
+
+---
+
+## 10. Technology Overview (For Context)
 
 - **Platform Type:** Progressive Web App (PWA) — works on any phone browser, no app store download needed
 - **Maps:** Real-time GPS with OpenStreetMap (free, no Google Maps dependency)
@@ -159,9 +206,16 @@ Safety is a primary concern for riders choosing any rideshare. PG Ride's safety 
 - **Analytics:** Demand heatmaps, driver scorecards, safety pattern detection
 - **Admin Panel:** Full back-office for user management, dispute resolution, financial oversight
 
+### How to Access the App (For Demos & Marketing)
+- **URL:** https://pg-county-community-ride-share.replit.app
+- **Works on:** Any smartphone or computer browser (Chrome, Safari, Firefox, Edge)
+- **No download needed:** Just visit the URL on a phone and it works like a native app
+- **Add to Home Screen:** On most phones, users can "Add to Home Screen" for an app-like icon and experience
+- **Admin access:** Contact thrynovainsights@gmail.com for demo accounts or admin access to showcase features
+
 ---
 
-## 10. Suggested Marketing Channels & Strategies
+## 11. Suggested Marketing Channels & Strategies
 
 ### Digital
 - **Social Media:** Facebook Groups for PG County neighborhoods, Instagram, TikTok (short driver testimonial videos)
@@ -187,7 +241,7 @@ Safety is a primary concern for riders choosing any rideshare. PG Ride's safety 
 
 ---
 
-## 11. Key Metrics to Track
+## 12. Key Metrics to Track
 
 | Metric | Why It Matters |
 |--------|---------------|
@@ -202,7 +256,7 @@ Safety is a primary concern for riders choosing any rideshare. PG Ride's safety 
 
 ---
 
-## 12. Immediate Action Items
+## 13. Immediate Action Items
 
 1. **Finalize brand assets:** High-resolution logo, brand style guide, social media templates
 2. **Create driver recruitment materials:** Emphasize ownership model and rate card flexibility
@@ -214,12 +268,53 @@ Safety is a primary concern for riders choosing any rideshare. PG Ride's safety 
 
 ---
 
-## 13. Contact & Access
+## 14. Elevator Pitches (Ready-to-Use)
+
+### 15-Second Pitch (For Riders)
+"PG Ride is the rideshare app made for PG County. You ride with verified neighbors — not strangers. There's never surge pricing, and every dollar stays in the community."
+
+### 15-Second Pitch (For Drivers)
+"PG Ride lets you drive for your own community and actually own a piece of the platform. Set your own rates, earn equity, and get profit-sharing — not just a paycheck."
+
+### 30-Second Pitch (General)
+"PG Ride is the first community-owned rideshare platform, built exclusively for Prince George's County, Maryland. Riders get verified neighborhood drivers with transparent pricing — no surge fees, ever. Drivers set their own rates and earn real equity through our cooperative ownership model, with 49% of platform profits going back to qualifying driver-owners. It's not just a ride. It's your community, moving together."
+
+---
+
+## 15. Frequently Asked Questions (For Marketing Materials)
+
+**Q: Is PG Ride available outside Prince George's County?**
+A: No. PG Ride is exclusively for PG County residents. That's what makes it special — every driver is a verified local neighbor.
+
+**Q: Do I need to download an app from the App Store?**
+A: No. PG Ride is a web app. Just visit pg-county-community-ride-share.replit.app on your phone's browser. You can add it to your home screen for an app-like experience.
+
+**Q: How is pricing different from Uber or Lyft?**
+A: PG Ride never charges surge pricing. The price you see is the price you pay, based on simple distance and time rates. A typical 5-mile ride costs around $11.40.
+
+**Q: How do drivers become owners?**
+A: Drivers who consistently work 40+ hours per week and maintain a 4.85+ star rating earn qualifying weeks. After 12 qualifying weeks, they receive a Share Certificate and start earning profit distributions from the 49% driver-owner pool.
+
+**Q: Is it safe?**
+A: Yes. Every driver is a verified PG County resident. During every ride, you have a one-tap SOS button, direct 911 calling, and the ability to share a live tracking link with family or friends — no app needed on their end.
+
+**Q: Can I choose my own driver?**
+A: Yes. You can search for a specific driver by phone number and request them directly. This is great for riding with people you already know and trust.
+
+---
+
+## 16. Contact & Access
 
 - **App URL:** https://pg-county-community-ride-share.replit.app
 - **Platform:** Progressive Web App (accessible via any mobile browser)
 - **Admin Email:** thrynovainsights@gmail.com
 - **Tech Stack:** React, Node.js, PostgreSQL, deployed on Replit
+
+---
+
+## 17. App Screenshots Reference
+
+The project includes development screenshots in the `attached_assets/` folder that can be used as reference for marketing materials. These show the actual app interface including the landing page, rider dashboard with live map, driver mode, and ride booking flow. Contact the admin for the latest high-resolution screenshots or arrange a live demo through the app URL above.
 
 ---
 
