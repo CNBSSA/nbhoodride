@@ -445,7 +445,7 @@ export default function RideBookingModal({
           <Button
             ref={confirmBtnRef}
             onClick={handleBookRide}
-            disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress || (!fareEstimate && !calculateFareMutation.isPending)}
+            disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress || calculateFareMutation.isPending}
             className="w-full h-14 text-base font-semibold rounded-xl shadow-lg"
             size="lg"
             data-testid="button-confirm-booking"
@@ -458,8 +458,6 @@ export default function RideBookingModal({
               `Confirm Ride — $${fareEstimate.total.toFixed(2)}`
             ) : !destinationAddress ? (
               'Enter Destination'
-            ) : !destCoords ? (
-              'Looking up address...'
             ) : !selectedDriver ? (
               'Select a Driver'
             ) : (
