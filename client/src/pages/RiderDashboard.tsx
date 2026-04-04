@@ -15,15 +15,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import {
   MapPin, Navigation, Bell, Star, Clock, X, Shield, Car,
-  Loader2, CheckCircle, Route, ThumbsUp, Timer, Search,
-  ChevronDown, Calendar, DollarSign, ChevronRight, RefreshCw, Edit2
+  Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign
 } from "lucide-react";
-
-interface AddressSuggestion {
-  label: string;
-  lat: number;
-  lng: number;
-}
 
 interface Driver {
   id: string;
@@ -65,6 +58,7 @@ function estimateArrival(miles: number): string {
 type BookingPanel = "idle" | "search" | "drivers" | "confirm";
 
 export default function RiderDashboard() {
+  // ── Booking flow state ──
   const [panel, setPanel] = useState<BookingPanel>("idle");
   const [destinationAddress, setDestinationAddress] = useState("");
   const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -73,43 +67,35 @@ export default function RiderDashboard() {
   const [estimatedDistance, setEstimatedDistance] = useState<number | null>(null);
   const [estimatedDuration, setEstimatedDuration] = useState<number | null>(null);
   const [pickupInstructions, setPickupInstructions] = useState("");
+  const [geocoding, setGeocoding] = useState(false);
+  const [calculatingFare, setCalculatingFare] = useState(false);
+
+  // ── UI state ──
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
   const [realtimeDrivers, setRealtimeDrivers] = useState<Record<string, { lat: number; lng: number }>>({});
   const [recentlyCompletedRide, setRecentlyCompletedRide] = useState<any>(null);
   const [quickRating, setQuickRating] = useState(0);
   const [quickRatingSubmitted, setQuickRatingSubmitted] = useState(false);
-  const [geocoding, setGeocoding] = useState(false);
-  const [calculatingFare, setCalculatingFare] = useState(false);
-  const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const [pickupAddress, setPickupAddress] = useState("");
-  const [pickupManuallyEdited, setPickupManuallyEdited] = useState(false);
-  const [editingPickup, setEditingPickup] = useState(false);
 
   const destinationInputRef = useRef<HTMLInputElement>(null);
   const lastProcessedMessageRef = useRef<string | null>(null);
   const activeRidesRef = useRef<any[]>([]);
 
+  // ── Hooks ──
   const { user } = useAuth();
   const { location, error: locationError, requestLocation } = useGeolocation();
   const { lastMessage } = useWebSocket();
   const { toast } = useToast();
-  const [, setLocation] = useLocation();
+  const [, setWouterLocation] = useLocation();
   const { trackPageView, trackFeatureUsed, trackRideSearch, trackRideBooked } = useAnalytics();
 
   useEffect(() => { trackPageView("rider_dashboard"); }, [trackPageView]);
 
-  // Sync pickup address from GPS unless rider has manually edited it
-  useEffect(() => {
-    if (!pickupManuallyEdited && geocodeData?.address) {
-      setPickupAddress(geocodeData.address);
-    }
-  }, [geocodeData?.address, pickupManuallyEdited]);
-
   const currentLat = location?.latitude ?? 38.9073;
   const currentLng = location?.longitude ?? -76.7781;
 
+  // ── Data queries (all declared before any useEffects that reference their results) ──
   const { data: geocodeData } = useQuery<{ address: string }>({
     queryKey: ['/api/geocode/reverse', currentLat, currentLng],
     queryFn: async () => {
@@ -127,7 +113,7 @@ export default function RiderDashboard() {
     address: geocodeData?.address || (location ? "Getting address..." : "Prince George's County, MD"),
   };
 
-  const { data: nearbyDrivers = [], isLoading: driversLoading, refetch: refetchNearbyDrivers } = useQuery<any[]>({
+  const { data: nearbyDrivers = [], isLoading: driversLoading } = useQuery<any[]>({
     queryKey: ['/api/rides/nearby-drivers', userLocation.lat, userLocation.lng],
     queryFn: async () => {
       const res = await fetch(`/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}`, { credentials: 'include' });
@@ -149,6 +135,7 @@ export default function RiderDashboard() {
     refetchInterval: 30000,
   });
 
+  // ── Derived data ──
   const drivers: Driver[] = nearbyDrivers.map((driver: any) => {
     const realtimeLocation = realtimeDrivers[driver.id];
     const driverLocation = realtimeLocation || driver.currentLocation || { lat: currentLat, lng: currentLng };
@@ -166,57 +153,7 @@ export default function RiderDashboard() {
     };
   });
 
-  const selectedDriver = drivers.find(d => d.id === selectedDriverId) || null;
-
-  // Fetch address autocomplete suggestions as user types (300ms debounce)
-  useEffect(() => {
-    if (destinationAddress.length < 3) {
-      setSuggestions([]);
-      setShowSuggestions(false);
-      return;
-    }
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationAddress)}&limit=5&countrycodes=us`,
-          { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } }
-        );
-        const results = await res.json();
-        if (results.length > 0) {
-          setSuggestions(results.map((r: any) => ({
-            label: r.display_name,
-            lat: parseFloat(r.lat),
-            lng: parseFloat(r.lon),
-          })));
-          setShowSuggestions(true);
-        } else {
-          setSuggestions([]);
-          setShowSuggestions(false);
-        }
-      } catch {
-        setSuggestions([]);
-      }
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [destinationAddress]);
-
-  const handleSelectSuggestion = useCallback((suggestion: AddressSuggestion) => {
-    setDestinationAddress(suggestion.label);
-    setDestCoords({ lat: suggestion.lat, lng: suggestion.lng });
-    setSuggestions([]);
-    setShowSuggestions(false);
-    const R = 3959;
-    const dLat = (suggestion.lat - userLocation.lat) * Math.PI / 180;
-    const dLng = (suggestion.lng - userLocation.lng) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(suggestion.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-    const dist = Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
-    const dur = Math.round((dist / 25) * 60);
-    setEstimatedDistance(dist);
-    setEstimatedDuration(dur);
-    setPanel("drivers");
-  }, [userLocation.lat, userLocation.lng]);
-
-  // Geocode destination with debounce (fallback for when user does not pick a suggestion)
+  // ── Geocode destination with debounce ──
   useEffect(() => {
     if (destinationAddress.length < 5) {
       setDestCoords(null);
@@ -235,11 +172,10 @@ export default function RiderDashboard() {
           const lat = parseFloat(results[0].lat);
           const lng = parseFloat(results[0].lon);
           setDestCoords({ lat, lng });
-          const R = 3959;
           const dLat = (lat - userLocation.lat) * Math.PI / 180;
           const dLng = (lng - userLocation.lng) * Math.PI / 180;
           const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-          const dist = Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
+          const dist = Math.round(3959 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
           const dur = Math.round((dist / 25) * 60);
           setEstimatedDistance(dist);
           setEstimatedDuration(dur);
@@ -256,7 +192,7 @@ export default function RiderDashboard() {
     return () => clearTimeout(timer);
   }, [destinationAddress, userLocation.lat, userLocation.lng]);
 
-  // Calculate fare when driver selected
+  // ── Calculate fare when driver is selected ──
   useEffect(() => {
     if (!selectedDriverId || !estimatedDistance || !estimatedDuration) return;
     setCalculatingFare(true);
@@ -269,15 +205,10 @@ export default function RiderDashboard() {
       setPanel("confirm");
     }).catch(() => {
       setFareEstimate(null);
-      toast({
-        title: "Fare Unavailable",
-        description: "Could not retrieve an exact fare. You can still book — the driver's standard rates will apply.",
-        variant: "destructive",
-      });
-      setPanel("confirm");
     }).finally(() => setCalculatingFare(false));
   }, [selectedDriverId, estimatedDistance, estimatedDuration]);
 
+  // ── Mutations ──
   const bookRideMutation = useMutation({
     mutationFn: async (rideData: any) => {
       const response = await apiRequest('POST', '/api/rides', rideData);
@@ -322,6 +253,7 @@ export default function RiderDashboard() {
     },
   });
 
+  // ── Helpers ──
   const resetBooking = useCallback(() => {
     setPanel("idle");
     setDestinationAddress("");
@@ -333,9 +265,6 @@ export default function RiderDashboard() {
     setPickupInstructions("");
     setGeocoding(false);
     setCalculatingFare(false);
-    setSuggestions([]);
-    setShowSuggestions(false);
-    setEditingPickup(false);
   }, []);
 
   const handleConfirmRide = () => {
@@ -348,7 +277,7 @@ export default function RiderDashboard() {
       return;
     }
     bookRideMutation.mutate({
-      pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: pickupAddress || userLocation.address },
+      pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: userLocation.address },
       destinationLocation: { lat: destCoords.lat, lng: destCoords.lng, address: destinationAddress },
       pickupInstructions,
       driverId: selectedDriverId,
@@ -357,7 +286,7 @@ export default function RiderDashboard() {
     });
   };
 
-  const getDriverETA = (ride: any) => {
+  const getDriverETA = (ride: any): number | null => {
     const driverId = ride.driverId || ride.driver?.id;
     const driverLoc = driverId ? realtimeDrivers[driverId] : null;
     if (!driverLoc) return null;
@@ -367,6 +296,7 @@ export default function RiderDashboard() {
     return Math.max(1, Math.round((dist * 1.3 / 25) * 60));
   };
 
+  // ── WebSocket messages ──
   useEffect(() => {
     if (!lastMessage) return;
     if (lastMessage.type !== 'driver_location' && lastProcessedMessageRef.current === `${lastMessage.type}-${lastMessage.rideId}`) return;
@@ -380,10 +310,12 @@ export default function RiderDashboard() {
       navigator.vibrate?.([200, 100, 200]);
     } else if (lastMessage.type === 'ride_started') {
       refetchActiveRides();
-      toast({ title: "Ride Started", description: "You're on your way! Enjoy the ride." });
+      toast({ title: "Ride Started", description: "You're on your way!" });
     } else if (lastMessage.type === 'ride_completed') {
       const completedRide = activeRidesRef.current.find((r: any) => r.id === lastMessage.rideId);
-      setRecentlyCompletedRide(completedRide ? { ...completedRide, actualFare: lastMessage.actualFare || completedRide.actualFare } : { id: lastMessage.rideId, actualFare: lastMessage.actualFare });
+      setRecentlyCompletedRide(completedRide
+        ? { ...completedRide, actualFare: lastMessage.actualFare || completedRide.actualFare }
+        : { id: lastMessage.rideId, actualFare: lastMessage.actualFare });
       refetchActiveRides();
       queryClient.invalidateQueries({ queryKey: ['/api/virtual-card/balance'] });
       toast({ title: "Ride Complete!", description: `Final fare: $${parseFloat(lastMessage.actualFare || '0').toFixed(2)}. Please rate your driver!` });
@@ -396,15 +328,18 @@ export default function RiderDashboard() {
     }
   }, [lastMessage, refetchActiveRides, toast]);
 
-  const hasActiveRide = activeRides.length > 0;
-  const activeRide = activeRides[0];
+  // ── Derived UI values ──
+  const activeRide = activeRides[0] || null;
+  const panelHeight = panel === "idle" ? "h-auto"
+    : panel === "search" ? "h-[55vh]"
+    : panel === "drivers" ? "h-[65vh]"
+    : "h-[70vh]";
 
-  // Panel height classes
-  const panelHeight = panel === "idle" ? "h-auto" : panel === "search" ? "h-[55vh]" : panel === "drivers" ? "h-[65vh]" : "h-[70vh]";
-
+  // ── Render ──
   return (
     <div className="relative w-full h-full flex flex-col overflow-hidden bg-gray-100">
-      {/* ── Full-screen map background ── */}
+
+      {/* Full-screen map background */}
       <div className="absolute inset-0" style={{ bottom: panel === "idle" ? "140px" : "0" }}>
         <MapComponent
           center={{ lat: currentLat, lng: currentLng }}
@@ -414,7 +349,7 @@ export default function RiderDashboard() {
         />
       </div>
 
-      {/* ── Fixed top header ── */}
+      {/* Top header */}
       <div className="relative z-20 flex items-center justify-between px-4 pt-3 pb-2">
         <div className="flex items-center gap-2 bg-white/90 backdrop-blur-sm rounded-2xl px-3 py-2 shadow-sm">
           <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center">
@@ -440,8 +375,8 @@ export default function RiderDashboard() {
         </div>
       </div>
 
-      {/* ── Active ride overlay card ── */}
-      {hasActiveRide && activeRide && (
+      {/* Active ride overlay */}
+      {activeRide && (
         <div className="relative z-20 mx-4 mt-2">
           <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg p-3 border border-blue-100">
             <RideProgressStepper status={activeRide.status} compact />
@@ -453,7 +388,7 @@ export default function RiderDashboard() {
                 {activeRide.status === 'in_progress' && <><Route className="w-4 h-4 text-purple-600" /><span className="text-sm font-semibold text-purple-600">Ride in progress</span></>}
               </div>
               <div className="flex items-center gap-2">
-                {getDriverETA(activeRide) && (
+                {getDriverETA(activeRide) !== null && (
                   <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
                     ~{getDriverETA(activeRide)} min
                   </span>
@@ -480,7 +415,7 @@ export default function RiderDashboard() {
         </div>
       )}
 
-      {/* ── Completed ride / rating card ── */}
+      {/* Completed ride / rating card */}
       {recentlyCompletedRide && (
         <div className="relative z-20 mx-4 mt-2">
           <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg p-4 border-2 border-green-200">
@@ -516,25 +451,25 @@ export default function RiderDashboard() {
                 </div>
               </>
             ) : (
-              <div className="text-center py-2 text-green-700 font-semibold text-sm">Thanks for your rating! 🙏</div>
+              <div className="text-center py-2 text-green-700 font-semibold text-sm">Thanks for your rating!</div>
             )}
           </div>
         </div>
       )}
 
-      {/* ── SOS floating button ── */}
+      {/* SOS button — only in idle mode */}
       {panel === "idle" && (
         <button
           onClick={() => { trackFeatureUsed("sos_activated"); setIsSOSModalOpen(true); }}
           className="absolute right-4 z-[56] w-12 h-12 rounded-full bg-red-600 text-white shadow-lg shadow-red-600/40 flex items-center justify-center text-xs font-black transition-all active:scale-95"
-          style={{ bottom: 'calc(64px + 120px)' }}
+          style={{ bottom: 'calc(64px + 128px)' }}
           data-testid="button-sos"
         >
           SOS
         </button>
       )}
 
-      {/* ── Bottom sheet (z-[55] to sit above the fixed bottom nav at z-50) ── */}
+      {/* Bottom sheet — sits above the fixed bottom nav (z-50) */}
       <div
         className={`absolute left-0 right-0 z-[55] bg-white rounded-t-3xl shadow-2xl transition-all duration-300 ease-in-out flex flex-col ${panelHeight}`}
         style={{
@@ -542,18 +477,24 @@ export default function RiderDashboard() {
           maxHeight: panel === "idle" ? "160px" : "80vh",
         }}
       >
-
-        {/* Drag handle */}
-        <div className="flex justify-center pt-3 pb-1 flex-shrink-0" onClick={() => panel !== "idle" && resetBooking()}>
+        {/* Drag handle / close hint */}
+        <div
+          className="flex justify-center pt-3 pb-1 flex-shrink-0 cursor-pointer"
+          onClick={() => panel !== "idle" && resetBooking()}
+        >
           <div className="w-10 h-1 bg-gray-200 rounded-full" />
         </div>
 
-        {/* ── IDLE STATE: "Where to?" bar ── */}
+        {/* ── IDLE: "Where to?" bar ── */}
         {panel === "idle" && (
           <div className="px-4 pb-5 pt-1 flex-shrink-0">
             <button
               className="w-full flex items-center gap-3 bg-gray-100 hover:bg-gray-200 transition-colors rounded-2xl px-4 py-3.5 text-left"
-              onClick={() => { trackRideSearch(); setPanel("search"); setTimeout(() => destinationInputRef.current?.focus(), 100); }}
+              onClick={() => {
+                trackRideSearch();
+                setPanel("search");
+                setTimeout(() => destinationInputRef.current?.focus(), 100);
+              }}
               data-testid="button-book-ride"
             >
               <Search className="w-5 h-5 text-gray-400 flex-shrink-0" />
@@ -568,37 +509,20 @@ export default function RiderDashboard() {
                 <Calendar className="w-4 h-4" />
                 Schedule
               </button>
-              {scheduledRides.length > 0 && (
+              {drivers.length > 0 && (
                 <div className="flex-1 flex items-center gap-2 justify-center bg-blue-50 text-blue-600 rounded-xl py-2.5 text-sm font-semibold">
-                  <Clock className="w-4 h-4" />
-                  {scheduledRides.length} Scheduled
+                  <Car className="w-4 h-4" />
+                  {drivers.length} nearby
                 </div>
               )}
-            </div>
-            <div className="flex items-center justify-center gap-2 mt-3">
-              {drivers.length > 0 ? (
-                <p className="text-xs text-gray-400">
-                  {drivers.length} driver{drivers.length !== 1 ? 's' : ''} nearby • No surge pricing ever
-                </p>
-              ) : (
-                <p className="text-xs text-gray-400">No drivers nearby right now</p>
-              )}
-              <button
-                onClick={() => refetchNearbyDrivers()}
-                className="text-gray-400 hover:text-blue-500 transition-colors"
-                title="Refresh drivers"
-                data-testid="button-refresh-drivers-idle"
-              >
-                <RefreshCw className="w-3 h-3" />
-              </button>
             </div>
           </div>
         )}
 
-        {/* ── SEARCH / DESTINATION input ── */}
-        {(panel === "search" || panel === "drivers" || panel === "confirm") && (
+        {/* ── SEARCH / DRIVERS / CONFIRM ── */}
+        {panel !== "idle" && (
           <>
-            {/* Header row */}
+            {/* Header with destination input */}
             <div className="flex items-center gap-3 px-4 pt-1 pb-3 border-b border-gray-100 flex-shrink-0">
               <button
                 onClick={resetBooking}
@@ -617,69 +541,35 @@ export default function RiderDashboard() {
                     setSelectedDriverId("");
                     setFareEstimate(null);
                     setDestCoords(null);
-                    if (e.target.value.length >= 3) setShowSuggestions(true);
-                    else setShowSuggestions(false);
                   }}
-                  onFocus={() => { if (suggestions.length > 0) setShowSuggestions(true); }}
                   placeholder="Where are you going?"
                   className="h-10 rounded-xl pr-8 text-sm font-medium border-gray-200 focus:border-blue-400"
                   autoFocus
-                  autoComplete="off"
                   data-testid="input-destination"
                 />
                 {geocoding && <Loader2 className="w-4 h-4 text-blue-500 animate-spin absolute right-2 top-3" />}
                 {destinationAddress && !geocoding && (
-                  <button onClick={() => { setDestinationAddress(""); setDestCoords(null); setFareEstimate(null); setPanel("search"); setSuggestions([]); setShowSuggestions(false); }} className="absolute right-2 top-2.5">
+                  <button
+                    onClick={() => { setDestinationAddress(""); setDestCoords(null); setFareEstimate(null); setPanel("search"); }}
+                    className="absolute right-2 top-2.5"
+                  >
                     <X className="w-4 h-4 text-gray-400" />
                   </button>
-                )}
-                {/* Autocomplete suggestions dropdown */}
-                {showSuggestions && suggestions.length > 0 && (
-                  <div className="absolute left-0 right-0 top-11 z-50 bg-white rounded-xl shadow-xl border border-gray-100 overflow-hidden">
-                    {suggestions.map((s, i) => (
-                      <button
-                        key={i}
-                        onMouseDown={e => { e.preventDefault(); handleSelectSuggestion(s); }}
-                        className="w-full flex items-start gap-2 px-3 py-2.5 hover:bg-blue-50 text-left border-b border-gray-50 last:border-0 transition-colors"
-                        data-testid={`suggestion-${i}`}
-                      >
-                        <MapPin className="w-3.5 h-3.5 text-blue-400 flex-shrink-0 mt-0.5" />
-                        <span className="text-xs text-gray-700 leading-snug line-clamp-2">{s.label}</span>
-                      </button>
-                    ))}
-                  </div>
                 )}
               </div>
             </div>
 
-            {/* Pickup info — tap pencil to edit */}
+            {/* Pickup row */}
             <div className="flex items-center gap-2 px-4 py-2 bg-green-50 flex-shrink-0">
               <div className="w-2.5 h-2.5 bg-green-500 rounded-full flex-shrink-0" />
-              {editingPickup ? (
-                <Input
-                  value={pickupAddress}
-                  onChange={e => { setPickupAddress(e.target.value); setPickupManuallyEdited(true); }}
-                  onBlur={() => setEditingPickup(false)}
-                  autoFocus
-                  placeholder="Enter pickup address"
-                  className="h-7 text-xs flex-1 border-green-300 bg-white rounded-lg px-2 py-1"
-                  data-testid="input-pickup-address"
-                />
-              ) : (
-                <>
-                  <p className="text-xs text-gray-600 truncate flex-1">{pickupAddress || userLocation.address}</p>
-                  <button onClick={() => setEditingPickup(true)} className="ml-1 text-gray-400 hover:text-green-600 flex-shrink-0" data-testid="button-edit-pickup">
-                    <Edit2 className="w-3 h-3" />
-                  </button>
-                </>
-              )}
+              <p className="text-xs text-gray-600 truncate">{userLocation.address}</p>
             </div>
 
             {/* Scrollable content */}
-            <div className="flex-1 overflow-y-auto px-4 pb-4">
+            <div className="flex-1 overflow-y-auto px-4 pb-2">
 
-              {/* Optional pickup instructions (show when we have a destination) */}
-              {(panel === "drivers" || panel === "confirm") && destCoords && (
+              {/* Pickup instructions (when destination is found) */}
+              {(panel === "drivers" || panel === "confirm") && (
                 <div className="mt-3">
                   <Input
                     placeholder="Pickup instructions (optional)"
@@ -691,14 +581,14 @@ export default function RiderDashboard() {
                 </div>
               )}
 
-              {/* Status messages when typing */}
+              {/* Search hints */}
               {panel === "search" && !destinationAddress && (
                 <div className="mt-6 text-center">
                   <MapPin className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                  <p className="text-sm text-gray-400">Type your destination to see nearby drivers and fare estimates</p>
+                  <p className="text-sm text-gray-400">Type your destination to see drivers and fare estimates</p>
                 </div>
               )}
-              {panel === "search" && destinationAddress && destinationAddress.length < 5 && (
+              {panel === "search" && destinationAddress.length > 0 && destinationAddress.length < 5 && (
                 <p className="mt-4 text-sm text-gray-400 text-center">Keep typing...</p>
               )}
               {panel === "search" && destinationAddress.length >= 5 && geocoding && (
@@ -708,9 +598,9 @@ export default function RiderDashboard() {
                 </div>
               )}
               {panel === "search" && destinationAddress.length >= 5 && !geocoding && !destCoords && (
-                <div className="mt-6 text-center">
-                  <p className="text-sm text-red-400">Address not found. Try a more specific address in PG County.</p>
-                </div>
+                <p className="mt-6 text-sm text-red-400 text-center">
+                  Address not found. Try a more specific address in PG County, MD.
+                </p>
               )}
 
               {/* Driver list */}
@@ -720,7 +610,6 @@ export default function RiderDashboard() {
                     <p className="text-sm font-semibold text-gray-800">Choose your driver</p>
                     <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{drivers.length} nearby</span>
                   </div>
-
                   {driversLoading ? (
                     <div className="text-center py-8">
                       <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto mb-2" />
@@ -730,15 +619,7 @@ export default function RiderDashboard() {
                     <div className="text-center py-8">
                       <Car className="w-10 h-10 text-gray-300 mx-auto mb-2" />
                       <p className="text-sm font-medium text-gray-500">No drivers nearby right now</p>
-                      <p className="text-xs text-gray-400 mt-1 mb-3">They may be just outside your area</p>
-                      <button
-                        onClick={() => refetchNearbyDrivers()}
-                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors px-4 py-2 rounded-full"
-                        data-testid="button-refresh-drivers"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        Refresh drivers
-                      </button>
+                      <p className="text-xs text-gray-400 mt-1">Try again in a moment</p>
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -753,8 +634,10 @@ export default function RiderDashboard() {
                           }`}
                           data-testid={`driver-option-${driver.id}`}
                         >
-                          <div className={`w-11 h-11 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 ${selectedDriverId === driver.id ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}>
-                            {driver.name.split(' ').map(n => n[0]).join('')}
+                          <div className={`w-11 h-11 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 ${
+                            selectedDriverId === driver.id ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'
+                          }`}>
+                            {driver.name.split(' ').map((n: string) => n[0]).join('')}
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1">
@@ -781,7 +664,7 @@ export default function RiderDashboard() {
                 </div>
               )}
 
-              {/* Fare breakdown when driver selected */}
+              {/* Fare breakdown */}
               {panel === "confirm" && fareEstimate && (
                 <div className="mt-3 bg-green-50 border border-green-200 rounded-2xl p-3">
                   <div className="flex items-center gap-1.5 mb-2">
@@ -811,9 +694,12 @@ export default function RiderDashboard() {
               )}
             </div>
 
-            {/* ── Sticky confirm button ── */}
+            {/* Sticky confirm button */}
             {(panel === "drivers" || panel === "confirm") && (
-              <div className="px-4 pt-2 border-t border-gray-100 bg-white flex-shrink-0" style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom, 1.5rem))' }}>
+              <div
+                className="px-4 pt-2 border-t border-gray-100 bg-white flex-shrink-0"
+                style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom, 1.5rem))' }}
+              >
                 {fareEstimate && selectedDriverId && (
                   <div className="flex items-center justify-between text-xs text-gray-500 mb-2 px-1">
                     <span>Via Virtual PG Card</span>
