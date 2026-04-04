@@ -15,7 +15,14 @@ export default function ModeSelector({ currentMode, onModeChange }: ModeSelector
       <div className="max-w-[430px] mx-auto">
         <div className="flex bg-gray-100 rounded-2xl p-1">
           <button
-            onClick={() => onModeChange("rider")}
+            onClick={() => {
+              if (currentMode === "rider") {
+                // Already in rider mode — open the booking panel
+                window.dispatchEvent(new CustomEvent('pgride:open-booking'));
+              } else {
+                onModeChange("rider");
+              }
+            }}
             className={cn(
               "flex-1 py-2.5 px-4 rounded-xl text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2",
               currentMode === "rider"

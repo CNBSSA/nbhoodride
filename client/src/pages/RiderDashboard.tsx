@@ -92,6 +92,16 @@ export default function RiderDashboard() {
 
   useEffect(() => { trackPageView("rider_dashboard"); }, [trackPageView]);
 
+  // Listen for "I need a ride" tap from the ModeSelector while already in rider mode
+  useEffect(() => {
+    const handler = () => {
+      setPanel("search");
+      setTimeout(() => destinationInputRef.current?.focus(), 150);
+    };
+    window.addEventListener('pgride:open-booking', handler);
+    return () => window.removeEventListener('pgride:open-booking', handler);
+  }, []);
+
   const currentLat = location?.latitude ?? 38.9073;
   const currentLng = location?.longitude ?? -76.7781;
 
