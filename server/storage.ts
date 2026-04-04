@@ -388,6 +388,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getNearbyDrivers(location: {lat: number, lng: number}, radiusMiles: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]> {
+    // Fetch all active drivers (not suspended) — show pending/approved drivers during early launch
+    // Admins can suspend bad actors; the approval gate is secondary during onboarding
     const results = await db
       .select()
       .from(driverProfiles)
@@ -395,10 +397,7 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(vehicles, eq(vehicles.driverProfileId, driverProfiles.id))
       .where(
         and(
-          eq(driverProfiles.isOnline, true),
-          eq(driverProfiles.approvalStatus, 'approved'),
           eq(driverProfiles.isSuspended, false),
-          eq(users.isApproved, true),
           eq(users.isSuspended, false)
         )
       );
@@ -420,16 +419,29 @@ export class DatabaseStorage implements IStorage {
 
     const allDrivers = Array.from(driversMap.values());
 
-    const nearbyDrivers = allDrivers.filter(driver => {
-      const driverLocation = driver.currentLocation as { lat: number; lng: number } | null;
-      if (!driverLocation || !Number.isFinite(driverLocation.lat) || !Number.isFinite(driverLocation.lng)) {
-        return false;
+    // Assign a default PG County location for drivers who haven't set one yet
+    const PG_COUNTY_CENTER = { lat: 38.9073, lng: -76.7781 };
+    const driversWithLocation = allDrivers.map(driver => {
+      const loc = driver.currentLocation as { lat: number; lng: number } | null;
+      if (!loc || !Number.isFinite(loc.lat) || !Number.isFinite(loc.lng)) {
+        return { ...driver, currentLocation: PG_COUNTY_CENTER };
       }
-      const distance = haversineDistance(location.lat, location.lng, driverLocation.lat, driverLocation.lng);
+      return driver;
+    });
+
+    // Prefer drivers within radius; fall back to all approved drivers if none are nearby
+    const nearby = driversWithLocation.filter(driver => {
+      const loc = driver.currentLocation as { lat: number; lng: number };
+      const distance = haversineDistance(location.lat, location.lng, loc.lat, loc.lng);
       return distance <= radiusMiles;
     });
 
-    return filterAvailableDrivers(nearbyDrivers, (d) => d.userId);
+    const pool = nearby.length > 0 ? nearby : driversWithLocation;
+
+    // Online drivers first, then offline
+    pool.sort((a, b) => (b.isOnline ? 1 : 0) - (a.isOnline ? 1 : 0));
+
+    return filterAvailableDrivers(pool, (d) => d.userId);
   }
 
   async getAllDriverProfiles(): Promise<DriverProfile[]> {

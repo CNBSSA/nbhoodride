@@ -196,16 +196,27 @@ export default function RiderDashboard() {
   useEffect(() => {
     if (!selectedDriverId || !estimatedDistance || !estimatedDuration) return;
     setCalculatingFare(true);
+    // Build a client-side fallback fare so the rider can always confirm
+    const roadMiles = estimatedDistance * 1.3;
+    const baseFare = 4.00;
+    const timeCharge = parseFloat((0.29 * estimatedDuration).toFixed(2));
+    const distanceCharge = parseFloat((0.90 * roadMiles).toFixed(2));
+    const total = parseFloat(Math.max(7.65, Math.min(100, baseFare + timeCharge + distanceCharge)).toFixed(2));
+    const fallbackFare = { baseFare, timeCharge, distanceCharge, total };
+
     apiRequest('POST', '/api/rides/calculate-fare', {
       distance: estimatedDistance,
       duration: estimatedDuration,
       driverId: selectedDriverId,
     }).then(r => r.json()).then(data => {
       setFareEstimate(data);
-      setPanel("confirm");
     }).catch(() => {
-      setFareEstimate(null);
-    }).finally(() => setCalculatingFare(false));
+      // Use client-side estimate if API fails — booking still proceeds
+      setFareEstimate(fallbackFare);
+    }).finally(() => {
+      setCalculatingFare(false);
+      setPanel("confirm");
+    });
   }, [selectedDriverId, estimatedDistance, estimatedDuration]);
 
   // ── Mutations ──
