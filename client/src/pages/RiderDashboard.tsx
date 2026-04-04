@@ -20,6 +20,7 @@ import {
 
 interface Driver {
   id: string;
+  userId: string;
   name: string;
   location: { lat: number; lng: number };
   rating: number;
@@ -152,6 +153,7 @@ export default function RiderDashboard() {
     const distMiles = calculateDistance(userLocation.lat, userLocation.lng, driverLocation.lat, driverLocation.lng);
     return {
       id: driver.id,
+      userId: driver.userId,
       name: `${driver.user.firstName} ${driver.user.lastName?.[0] || ''}.`,
       location: driverLocation,
       rating: parseFloat(driver.user.rating) || 5.0,
@@ -352,7 +354,6 @@ export default function RiderDashboard() {
   // ── Derived UI values ──
   const activeRide = activeRides[0] || null;
   const panelHeight = panel === "idle" ? "h-auto"
-    : panel === "search" ? "h-[55vh]"
     : panel === "drivers" ? "h-[65vh]"
     : "h-[70vh]";
 
@@ -490,15 +491,95 @@ export default function RiderDashboard() {
         </button>
       )}
 
-      {/* Bottom sheet — sits above the fixed bottom nav (z-50) */}
+      {/* ── FULL-SCREEN SEARCH OVERLAY (keyboard-safe: input at top, keyboard opens below) ── */}
+      {panel === "search" && (
+        <div className="absolute inset-0 z-[60] bg-white flex flex-col">
+          {/* Input row — pinned to top so keyboard never covers it */}
+          <div className="flex items-center gap-2 px-3 pt-4 pb-3 border-b border-gray-100 flex-shrink-0">
+            <button
+              onClick={resetBooking}
+              className="w-11 h-11 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0 active:bg-gray-200"
+              data-testid="button-close-booking"
+            >
+              <X className="w-5 h-5 text-gray-700" />
+            </button>
+            <div className="flex-1 relative">
+              <Input
+                ref={destinationInputRef}
+                value={destinationAddress}
+                onChange={e => {
+                  setDestinationAddress(e.target.value);
+                  setSelectedDriverId("");
+                  setFareEstimate(null);
+                  setDestCoords(null);
+                }}
+                placeholder="Where are you going?"
+                className="h-12 rounded-2xl pr-9 font-medium border-gray-200 focus:border-blue-400"
+                autoFocus
+                data-testid="input-destination"
+              />
+              {geocoding && <Loader2 className="w-4 h-4 text-blue-500 animate-spin absolute right-3 top-4" />}
+              {destinationAddress && !geocoding && (
+                <button
+                  onClick={() => { setDestinationAddress(""); setDestCoords(null); setFareEstimate(null); }}
+                  className="absolute right-3 top-3.5"
+                >
+                  <X className="w-4 h-4 text-gray-400" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Pickup row */}
+          <div className="flex items-center gap-3 px-4 py-3 bg-green-50 border-b border-green-100 flex-shrink-0">
+            <div className="w-3 h-3 bg-green-500 rounded-full flex-shrink-0" />
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold text-green-700 uppercase tracking-wider leading-none mb-0.5">Pickup</p>
+              <p className="text-sm text-gray-700 truncate">{userLocation.address}</p>
+            </div>
+          </div>
+
+          {/* Results — shows above the keyboard since input is at top */}
+          <div className="flex-1 overflow-y-auto px-4 py-6">
+            {!destinationAddress && (
+              <div className="text-center">
+                <Search className="w-12 h-12 text-gray-200 mx-auto mb-3" />
+                <p className="text-base font-medium text-gray-400 mb-1">Where are you going?</p>
+                <p className="text-sm text-gray-300">Type any address in PG County, MD</p>
+              </div>
+            )}
+            {destinationAddress.length > 0 && destinationAddress.length < 5 && (
+              <p className="text-center text-gray-400 text-sm">Keep typing...</p>
+            )}
+            {destinationAddress.length >= 5 && geocoding && (
+              <div className="text-center">
+                <Loader2 className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
+                <p className="text-sm text-gray-400">Finding your destination...</p>
+              </div>
+            )}
+            {destinationAddress.length >= 5 && !geocoding && !destCoords && (
+              <div className="text-center">
+                <MapPin className="w-8 h-8 text-red-300 mx-auto mb-3" />
+                <p className="text-sm font-medium text-red-400 mb-1">Address not found</p>
+                <p className="text-xs text-gray-400">Try a more specific address in PG County, MD</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── BOTTOM SHEET: idle / drivers / confirm ── */}
+      {panel !== "search" && (
       <div
-        className={`absolute left-0 right-0 z-[55] bg-white rounded-t-3xl shadow-2xl transition-all duration-300 ease-in-out flex flex-col ${panelHeight}`}
+        className={`absolute left-0 right-0 z-[55] bg-white rounded-t-3xl shadow-2xl transition-all duration-300 ease-in-out flex flex-col ${
+          panel === "idle" ? "h-auto" : panel === "drivers" ? "h-[65vh]" : "h-[70vh]"
+        }`}
         style={{
           bottom: panel === "idle" ? "calc(64px + env(safe-area-inset-bottom, 0px))" : "0",
           maxHeight: panel === "idle" ? "160px" : "80vh",
         }}
       >
-        {/* Drag handle / close hint */}
+        {/* Drag handle */}
         <div
           className="flex justify-center pt-3 pb-1 flex-shrink-0 cursor-pointer"
           onClick={() => panel !== "idle" && resetBooking()}
@@ -510,7 +591,7 @@ export default function RiderDashboard() {
         {panel === "idle" && (
           <div className="px-4 pb-5 pt-1 flex-shrink-0">
             <button
-              className="w-full flex items-center gap-3 bg-gray-100 hover:bg-gray-200 transition-colors rounded-2xl px-4 py-3.5 text-left"
+              className="w-full flex items-center gap-3 bg-gray-100 active:bg-gray-200 transition-colors rounded-2xl px-4 py-4 text-left"
               onClick={() => {
                 trackRideSearch();
                 setPanel("search");
@@ -519,19 +600,19 @@ export default function RiderDashboard() {
               data-testid="button-book-ride"
             >
               <Search className="w-5 h-5 text-gray-400 flex-shrink-0" />
-              <span className="text-gray-500 text-sm font-medium">Where to?</span>
+              <span className="text-gray-500 text-base font-medium">Where to?</span>
             </button>
             <div className="flex gap-3 mt-3">
               <button
                 onClick={() => setIsScheduleModalOpen(true)}
-                className="flex-1 flex items-center gap-2 justify-center bg-orange-50 text-orange-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-orange-100 transition-colors"
+                className="flex-1 flex items-center gap-2 justify-center bg-orange-50 text-orange-600 rounded-xl py-3 text-sm font-semibold active:bg-orange-100 transition-colors"
                 data-testid="button-schedule-ride"
               >
                 <Calendar className="w-4 h-4" />
                 Schedule
               </button>
               {drivers.length > 0 && (
-                <div className="flex-1 flex items-center gap-2 justify-center bg-blue-50 text-blue-600 rounded-xl py-2.5 text-sm font-semibold">
+                <div className="flex-1 flex items-center gap-2 justify-center bg-blue-50 text-blue-600 rounded-xl py-3 text-sm font-semibold">
                   <Car className="w-4 h-4" />
                   {drivers.length} nearby
                 </div>
@@ -540,44 +621,28 @@ export default function RiderDashboard() {
           </div>
         )}
 
-        {/* ── SEARCH / DRIVERS / CONFIRM ── */}
-        {panel !== "idle" && (
+        {/* ── DRIVERS / CONFIRM ── */}
+        {(panel === "drivers" || panel === "confirm") && (
           <>
-            {/* Header with destination input */}
+            {/* Destination display with Change button (no keyboard triggered) */}
             <div className="flex items-center gap-3 px-4 pt-1 pb-3 border-b border-gray-100 flex-shrink-0">
               <button
                 onClick={resetBooking}
-                className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0"
+                className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0 active:bg-gray-200"
                 data-testid="button-close-booking"
               >
                 <X className="w-4 h-4 text-gray-600" />
               </button>
-              <div className="flex-1 relative">
-                <Input
-                  ref={destinationInputRef}
-                  value={destinationAddress}
-                  onChange={e => {
-                    setDestinationAddress(e.target.value);
-                    setPanel("search");
-                    setSelectedDriverId("");
-                    setFareEstimate(null);
-                    setDestCoords(null);
-                  }}
-                  placeholder="Where are you going?"
-                  className="h-10 rounded-xl pr-8 text-sm font-medium border-gray-200 focus:border-blue-400"
-                  autoFocus
-                  data-testid="input-destination"
-                />
-                {geocoding && <Loader2 className="w-4 h-4 text-blue-500 animate-spin absolute right-2 top-3" />}
-                {destinationAddress && !geocoding && (
-                  <button
-                    onClick={() => { setDestinationAddress(""); setDestCoords(null); setFareEstimate(null); setPanel("search"); }}
-                    className="absolute right-2 top-2.5"
-                  >
-                    <X className="w-4 h-4 text-gray-400" />
-                  </button>
-                )}
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide leading-none mb-0.5">Destination</p>
+                <p className="text-sm font-semibold text-gray-900 truncate">{destinationAddress}</p>
               </div>
+              <button
+                onClick={() => setPanel("search")}
+                className="text-xs text-blue-600 font-semibold bg-blue-50 px-3 py-1.5 rounded-full flex-shrink-0 active:bg-blue-100"
+              >
+                Change
+              </button>
             </div>
 
             {/* Pickup row */}
@@ -589,40 +654,16 @@ export default function RiderDashboard() {
             {/* Scrollable content */}
             <div className="flex-1 overflow-y-auto px-4 pb-2">
 
-              {/* Pickup instructions (when destination is found) */}
-              {(panel === "drivers" || panel === "confirm") && (
-                <div className="mt-3">
-                  <Input
-                    placeholder="Pickup instructions (optional)"
-                    value={pickupInstructions}
-                    onChange={e => setPickupInstructions(e.target.value)}
-                    className="h-9 text-xs rounded-xl border-gray-200"
-                    data-testid="input-pickup-instructions"
-                  />
-                </div>
-              )}
-
-              {/* Search hints */}
-              {panel === "search" && !destinationAddress && (
-                <div className="mt-6 text-center">
-                  <MapPin className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                  <p className="text-sm text-gray-400">Type your destination to see drivers and fare estimates</p>
-                </div>
-              )}
-              {panel === "search" && destinationAddress.length > 0 && destinationAddress.length < 5 && (
-                <p className="mt-4 text-sm text-gray-400 text-center">Keep typing...</p>
-              )}
-              {panel === "search" && destinationAddress.length >= 5 && geocoding && (
-                <div className="mt-6 text-center">
-                  <Loader2 className="w-6 h-6 text-blue-500 animate-spin mx-auto mb-2" />
-                  <p className="text-sm text-gray-400">Finding your destination...</p>
-                </div>
-              )}
-              {panel === "search" && destinationAddress.length >= 5 && !geocoding && !destCoords && (
-                <p className="mt-6 text-sm text-red-400 text-center">
-                  Address not found. Try a more specific address in PG County, MD.
-                </p>
-              )}
+              {/* Pickup instructions */}
+              <div className="mt-3">
+                <Input
+                  placeholder="Pickup instructions (optional)"
+                  value={pickupInstructions}
+                  onChange={e => setPickupInstructions(e.target.value)}
+                  className="h-9 text-xs rounded-xl border-gray-200"
+                  data-testid="input-pickup-instructions"
+                />
+              </div>
 
               {/* Driver list */}
               {(panel === "drivers" || panel === "confirm") && (
@@ -750,6 +791,7 @@ export default function RiderDashboard() {
           </>
         )}
       </div>
+      )}
 
       {/* Modals */}
       <ScheduleRideModal isOpen={isScheduleModalOpen} onClose={() => setIsScheduleModalOpen(false)} drivers={drivers} userLocation={userLocation} />
