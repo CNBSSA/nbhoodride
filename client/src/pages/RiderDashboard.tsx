@@ -483,7 +483,7 @@ export default function RiderDashboard() {
         <button
           onClick={() => { trackFeatureUsed("sos_activated"); setIsSOSModalOpen(true); }}
           className="absolute right-4 z-[56] w-12 h-12 rounded-full bg-red-600 text-white shadow-lg shadow-red-600/40 flex items-center justify-center text-xs font-black transition-all active:scale-95"
-          style={{ bottom: 'calc(64px + 128px)' }}
+          style={{ bottom: 'calc(192px + env(safe-area-inset-bottom, 0px))' }}
           data-testid="button-sos"
         >
           SOS
@@ -494,7 +494,7 @@ export default function RiderDashboard() {
       <div
         className={`absolute left-0 right-0 z-[55] bg-white rounded-t-3xl shadow-2xl transition-all duration-300 ease-in-out flex flex-col ${panelHeight}`}
         style={{
-          bottom: panel === "idle" ? "64px" : "0",
+          bottom: panel === "idle" ? "calc(64px + env(safe-area-inset-bottom, 0px))" : "0",
           maxHeight: panel === "idle" ? "160px" : "80vh",
         }}
       >

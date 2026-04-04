@@ -95,8 +95,11 @@ export default function Home() {
       )}
       
       {/* Rider home: flex-1 with overflow-hidden so full-screen map works */}
-      {/* All other tabs: flex-1 with overflow-y-auto and pb-20 for bottom nav */}
-      <div className={isRiderHome ? "flex-1 overflow-hidden relative" : "flex-1 overflow-y-auto pb-20"}>
+      {/* All other tabs: flex-1 with overflow-y-auto; bottom padding covers nav + safe area */}
+      <div
+        className={isRiderHome ? "flex-1 overflow-hidden relative" : "flex-1 overflow-y-auto"}
+        style={!isRiderHome ? { paddingBottom: 'calc(5rem + env(safe-area-inset-bottom, 0px))' } : undefined}
+      >
         {renderActiveTab()}
       </div>
       

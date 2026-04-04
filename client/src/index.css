@@ -90,11 +90,58 @@
 @layer base {
   * {
     @apply border-border;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Remove 300ms tap delay on interactive elements only (not the map) */
+  button, a, input, textarea, select, label, [role="button"], [role="tab"], [role="checkbox"] {
+    touch-action: manipulation;
+  }
+
+  html, body {
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
     @apply font-sans antialiased bg-background text-foreground;
     font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Prevent iOS zoom on input focus — minimum 16px font size */
+  input, textarea, select {
+    font-size: 16px !important;
+  }
+
+  /* iOS momentum scrolling for all scrollable containers */
+  .overflow-y-auto,
+  .overflow-y-scroll,
+  .overflow-x-auto,
+  .overflow-x-scroll {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Safe area inset support for notched phones */
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Only apply hover lifts on devices that support real hover (not touch) */
+  @media (hover: hover) and (pointer: fine) {
+    button:not(:disabled):hover {
+      transform: translateY(-1px);
+      transition: transform 0.2s ease;
+    }
+
+    button:not(:disabled):active {
+      transform: translateY(0);
+    }
   }
 
   /* Mobile-first responsive design */
@@ -188,16 +235,6 @@
   @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
-  }
-
-  /* Enhanced button hover states */
-  button:not(:disabled):hover {
-    transform: translateY(-1px);
-    transition: transform 0.2s ease;
-  }
-
-  button:not(:disabled):active {
-    transform: translateY(0);
   }
 
   /* Uppy file uploader customization */
