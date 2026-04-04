@@ -57,8 +57,10 @@ export default function Home() {
     }
   };
 
+  const isRiderHome = activeTab === "home" && currentMode === "rider";
+
   return (
-    <div className="min-h-screen bg-background max-w-[430px] mx-auto relative">
+    <div className="h-[100dvh] bg-background max-w-[430px] mx-auto relative flex flex-col overflow-hidden">
       {(user?.isAdmin || user?.isSuperAdmin) && (
         <button
           onClick={() => setLocation("/admin")}
@@ -71,14 +73,16 @@ export default function Home() {
       )}
 
       {activeTab === "home" && (
-        <ModeSelector 
-          currentMode={currentMode} 
-          onModeChange={handleModeChange} 
-        />
+        <div className="flex-shrink-0">
+          <ModeSelector 
+            currentMode={currentMode} 
+            onModeChange={handleModeChange} 
+          />
+        </div>
       )}
       
       {currentMode === "driver" && user?.isDriver && activeTab === "home" && (
-        <div className="px-4 pb-2">
+        <div className="flex-shrink-0 px-4 pb-2">
           <button
             onClick={() => setActiveTab("ownership")}
             className="w-full flex items-center justify-center gap-2 py-2 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800 hover:bg-yellow-100 transition-colors"
@@ -90,7 +94,9 @@ export default function Home() {
         </div>
       )}
       
-      <div className="pb-20">
+      {/* Rider home: flex-1 with overflow-hidden so full-screen map works */}
+      {/* All other tabs: flex-1 with overflow-y-auto and pb-20 for bottom nav */}
+      <div className={isRiderHome ? "flex-1 overflow-hidden relative" : "flex-1 overflow-y-auto pb-20"}>
         {renderActiveTab()}
       </div>
       
