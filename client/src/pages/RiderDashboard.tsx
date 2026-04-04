@@ -361,7 +361,7 @@ export default function RiderDashboard() {
     <div className="relative w-full h-full flex flex-col overflow-hidden bg-gray-100">
 
       {/* Full-screen map background */}
-      <div className="absolute inset-0" style={{ bottom: panel === "idle" ? "140px" : "0" }}>
+      <div className="absolute inset-0 z-0" style={{ bottom: panel === "idle" ? "140px" : "0" }}>
         <MapComponent
           center={{ lat: currentLat, lng: currentLng }}
           drivers={drivers}
@@ -647,16 +647,16 @@ export default function RiderDashboard() {
                       {drivers.map(driver => (
                         <button
                           key={driver.id}
-                          onClick={() => setSelectedDriverId(driver.id)}
+                          onClick={() => setSelectedDriverId(driver.userId)}
                           className={`w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition-all text-left ${
-                            selectedDriverId === driver.id
+                            selectedDriverId === driver.userId
                               ? 'border-blue-500 bg-blue-50'
                               : 'border-transparent bg-gray-50 hover:border-gray-200'
                           }`}
                           data-testid={`driver-option-${driver.id}`}
                         >
                           <div className={`w-11 h-11 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 ${
-                            selectedDriverId === driver.id ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'
+                            selectedDriverId === driver.userId ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'
                           }`}>
                             {driver.name.split(' ').map((n: string) => n[0]).join('')}
                           </div>
@@ -676,7 +676,7 @@ export default function RiderDashboard() {
                           </div>
                           <div className="text-right flex-shrink-0">
                             <p className="font-bold text-sm text-blue-600">{driver.estimatedFare}</p>
-                            {selectedDriverId === driver.id && <CheckCircle className="w-4 h-4 text-blue-500 ml-auto mt-0.5" />}
+                            {selectedDriverId === driver.userId && <CheckCircle className="w-4 h-4 text-blue-500 ml-auto mt-0.5" />}
                           </div>
                         </button>
                       ))}
