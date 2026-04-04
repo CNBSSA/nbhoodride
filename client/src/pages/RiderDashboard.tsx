@@ -16,8 +16,14 @@ import { useAnalytics } from "@/hooks/useAnalytics";
 import {
   MapPin, Navigation, Bell, Star, Clock, X, Shield, Car,
   Loader2, CheckCircle, Route, ThumbsUp, Timer, Search,
-  ChevronDown, Calendar, DollarSign, ChevronRight
+  ChevronDown, Calendar, DollarSign, ChevronRight, RefreshCw, Edit2
 } from "lucide-react";
+
+interface AddressSuggestion {
+  label: string;
+  lat: number;
+  lng: number;
+}
 
 interface Driver {
   id: string;
@@ -75,6 +81,11 @@ export default function RiderDashboard() {
   const [quickRatingSubmitted, setQuickRatingSubmitted] = useState(false);
   const [geocoding, setGeocoding] = useState(false);
   const [calculatingFare, setCalculatingFare] = useState(false);
+  const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [pickupAddress, setPickupAddress] = useState("");
+  const [pickupManuallyEdited, setPickupManuallyEdited] = useState(false);
+  const [editingPickup, setEditingPickup] = useState(false);
 
   const destinationInputRef = useRef<HTMLInputElement>(null);
   const lastProcessedMessageRef = useRef<string | null>(null);
@@ -88,6 +99,13 @@ export default function RiderDashboard() {
   const { trackPageView, trackFeatureUsed, trackRideSearch, trackRideBooked } = useAnalytics();
 
   useEffect(() => { trackPageView("rider_dashboard"); }, [trackPageView]);
+
+  // Sync pickup address from GPS unless rider has manually edited it
+  useEffect(() => {
+    if (!pickupManuallyEdited && geocodeData?.address) {
+      setPickupAddress(geocodeData.address);
+    }
+  }, [geocodeData?.address, pickupManuallyEdited]);
 
   const currentLat = location?.latitude ?? 38.9073;
   const currentLng = location?.longitude ?? -76.7781;
@@ -109,7 +127,7 @@ export default function RiderDashboard() {
     address: geocodeData?.address || (location ? "Getting address..." : "Prince George's County, MD"),
   };
 
-  const { data: nearbyDrivers = [], isLoading: driversLoading } = useQuery<any[]>({
+  const { data: nearbyDrivers = [], isLoading: driversLoading, refetch: refetchNearbyDrivers } = useQuery<any[]>({
     queryKey: ['/api/rides/nearby-drivers', userLocation.lat, userLocation.lng],
     queryFn: async () => {
       const res = await fetch(`/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}`, { credentials: 'include' });
@@ -150,7 +168,55 @@ export default function RiderDashboard() {
 
   const selectedDriver = drivers.find(d => d.id === selectedDriverId) || null;
 
-  // Geocode destination with debounce
+  // Fetch address autocomplete suggestions as user types (300ms debounce)
+  useEffect(() => {
+    if (destinationAddress.length < 3) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationAddress)}&limit=5&countrycodes=us`,
+          { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } }
+        );
+        const results = await res.json();
+        if (results.length > 0) {
+          setSuggestions(results.map((r: any) => ({
+            label: r.display_name,
+            lat: parseFloat(r.lat),
+            lng: parseFloat(r.lon),
+          })));
+          setShowSuggestions(true);
+        } else {
+          setSuggestions([]);
+          setShowSuggestions(false);
+        }
+      } catch {
+        setSuggestions([]);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [destinationAddress]);
+
+  const handleSelectSuggestion = useCallback((suggestion: AddressSuggestion) => {
+    setDestinationAddress(suggestion.label);
+    setDestCoords({ lat: suggestion.lat, lng: suggestion.lng });
+    setSuggestions([]);
+    setShowSuggestions(false);
+    const R = 3959;
+    const dLat = (suggestion.lat - userLocation.lat) * Math.PI / 180;
+    const dLng = (suggestion.lng - userLocation.lng) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(suggestion.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    const dist = Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
+    const dur = Math.round((dist / 25) * 60);
+    setEstimatedDistance(dist);
+    setEstimatedDuration(dur);
+    setPanel("drivers");
+  }, [userLocation.lat, userLocation.lng]);
+
+  // Geocode destination with debounce (fallback for when user does not pick a suggestion)
   useEffect(() => {
     if (destinationAddress.length < 5) {
       setDestCoords(null);
@@ -177,7 +243,6 @@ export default function RiderDashboard() {
           const dur = Math.round((dist / 25) * 60);
           setEstimatedDistance(dist);
           setEstimatedDuration(dur);
-          // Auto-advance to drivers step
           setPanel("drivers");
         } else {
           setDestCoords(null);
@@ -204,6 +269,12 @@ export default function RiderDashboard() {
       setPanel("confirm");
     }).catch(() => {
       setFareEstimate(null);
+      toast({
+        title: "Fare Unavailable",
+        description: "Could not retrieve an exact fare. You can still book — the driver's standard rates will apply.",
+        variant: "destructive",
+      });
+      setPanel("confirm");
     }).finally(() => setCalculatingFare(false));
   }, [selectedDriverId, estimatedDistance, estimatedDuration]);
 
@@ -262,6 +333,9 @@ export default function RiderDashboard() {
     setPickupInstructions("");
     setGeocoding(false);
     setCalculatingFare(false);
+    setSuggestions([]);
+    setShowSuggestions(false);
+    setEditingPickup(false);
   }, []);
 
   const handleConfirmRide = () => {
@@ -274,7 +348,7 @@ export default function RiderDashboard() {
       return;
     }
     bookRideMutation.mutate({
-      pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: userLocation.address },
+      pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: pickupAddress || userLocation.address },
       destinationLocation: { lat: destCoords.lat, lng: destCoords.lng, address: destinationAddress },
       pickupInstructions,
       driverId: selectedDriverId,
@@ -501,11 +575,23 @@ export default function RiderDashboard() {
                 </div>
               )}
             </div>
-            {drivers.length > 0 && (
-              <p className="text-center text-xs text-gray-400 mt-3">
-                {drivers.length} driver{drivers.length !== 1 ? 's' : ''} nearby • No surge pricing ever
-              </p>
-            )}
+            <div className="flex items-center justify-center gap-2 mt-3">
+              {drivers.length > 0 ? (
+                <p className="text-xs text-gray-400">
+                  {drivers.length} driver{drivers.length !== 1 ? 's' : ''} nearby • No surge pricing ever
+                </p>
+              ) : (
+                <p className="text-xs text-gray-400">No drivers nearby right now</p>
+              )}
+              <button
+                onClick={() => refetchNearbyDrivers()}
+                className="text-gray-400 hover:text-blue-500 transition-colors"
+                title="Refresh drivers"
+                data-testid="button-refresh-drivers-idle"
+              >
+                <RefreshCw className="w-3 h-3" />
+              </button>
+            </div>
           </div>
         )}
 
@@ -525,25 +611,68 @@ export default function RiderDashboard() {
                 <Input
                   ref={destinationInputRef}
                   value={destinationAddress}
-                  onChange={e => { setDestinationAddress(e.target.value); setPanel("search"); setSelectedDriverId(""); setFareEstimate(null); setDestCoords(null); }}
+                  onChange={e => {
+                    setDestinationAddress(e.target.value);
+                    setPanel("search");
+                    setSelectedDriverId("");
+                    setFareEstimate(null);
+                    setDestCoords(null);
+                    if (e.target.value.length >= 3) setShowSuggestions(true);
+                    else setShowSuggestions(false);
+                  }}
+                  onFocus={() => { if (suggestions.length > 0) setShowSuggestions(true); }}
                   placeholder="Where are you going?"
                   className="h-10 rounded-xl pr-8 text-sm font-medium border-gray-200 focus:border-blue-400"
                   autoFocus
+                  autoComplete="off"
                   data-testid="input-destination"
                 />
                 {geocoding && <Loader2 className="w-4 h-4 text-blue-500 animate-spin absolute right-2 top-3" />}
                 {destinationAddress && !geocoding && (
-                  <button onClick={() => { setDestinationAddress(""); setDestCoords(null); setFareEstimate(null); setPanel("search"); }} className="absolute right-2 top-2.5">
+                  <button onClick={() => { setDestinationAddress(""); setDestCoords(null); setFareEstimate(null); setPanel("search"); setSuggestions([]); setShowSuggestions(false); }} className="absolute right-2 top-2.5">
                     <X className="w-4 h-4 text-gray-400" />
                   </button>
+                )}
+                {/* Autocomplete suggestions dropdown */}
+                {showSuggestions && suggestions.length > 0 && (
+                  <div className="absolute left-0 right-0 top-11 z-50 bg-white rounded-xl shadow-xl border border-gray-100 overflow-hidden">
+                    {suggestions.map((s, i) => (
+                      <button
+                        key={i}
+                        onMouseDown={e => { e.preventDefault(); handleSelectSuggestion(s); }}
+                        className="w-full flex items-start gap-2 px-3 py-2.5 hover:bg-blue-50 text-left border-b border-gray-50 last:border-0 transition-colors"
+                        data-testid={`suggestion-${i}`}
+                      >
+                        <MapPin className="w-3.5 h-3.5 text-blue-400 flex-shrink-0 mt-0.5" />
+                        <span className="text-xs text-gray-700 leading-snug line-clamp-2">{s.label}</span>
+                      </button>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
 
-            {/* Pickup info */}
+            {/* Pickup info — tap pencil to edit */}
             <div className="flex items-center gap-2 px-4 py-2 bg-green-50 flex-shrink-0">
               <div className="w-2.5 h-2.5 bg-green-500 rounded-full flex-shrink-0" />
-              <p className="text-xs text-gray-600 truncate">{userLocation.address}</p>
+              {editingPickup ? (
+                <Input
+                  value={pickupAddress}
+                  onChange={e => { setPickupAddress(e.target.value); setPickupManuallyEdited(true); }}
+                  onBlur={() => setEditingPickup(false)}
+                  autoFocus
+                  placeholder="Enter pickup address"
+                  className="h-7 text-xs flex-1 border-green-300 bg-white rounded-lg px-2 py-1"
+                  data-testid="input-pickup-address"
+                />
+              ) : (
+                <>
+                  <p className="text-xs text-gray-600 truncate flex-1">{pickupAddress || userLocation.address}</p>
+                  <button onClick={() => setEditingPickup(true)} className="ml-1 text-gray-400 hover:text-green-600 flex-shrink-0" data-testid="button-edit-pickup">
+                    <Edit2 className="w-3 h-3" />
+                  </button>
+                </>
+              )}
             </div>
 
             {/* Scrollable content */}
@@ -601,7 +730,15 @@ export default function RiderDashboard() {
                     <div className="text-center py-8">
                       <Car className="w-10 h-10 text-gray-300 mx-auto mb-2" />
                       <p className="text-sm font-medium text-gray-500">No drivers nearby right now</p>
-                      <p className="text-xs text-gray-400 mt-1">Try again in a moment</p>
+                      <p className="text-xs text-gray-400 mt-1 mb-3">They may be just outside your area</p>
+                      <button
+                        onClick={() => refetchNearbyDrivers()}
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors px-4 py-2 rounded-full"
+                        data-testid="button-refresh-drivers"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Refresh drivers
+                      </button>
                     </div>
                   ) : (
                     <div className="space-y-2">
