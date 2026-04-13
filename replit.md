@@ -57,7 +57,13 @@ WebSocket integration enables live ride updates, push notifications, and in-app 
 Fares use a rate card model inspired by rideshare platforms. Default (suggested) rates: Base fare $4.00 + $0.29/min + $0.90/mi, with a minimum fare of $7.65 and maximum of $100.00. Drivers can customize their rates via `/driver/rate-card` page or toggle back to suggested rates. Rate cards are stored in `driver_rate_cards` table with per-driver values for minimumFare, baseFare, perMinuteRate, perMileRate, surgeAdjustment, and useSuggested toggle. The fare calculation API (`/api/rides/calculate-fare`) accepts an optional `driverId` to compute fare using that driver's custom rate card. GPS waypoints are tracked every 5 seconds during rides, and final fares are automatically calculated upon completion using the driver's active rate card.
 
 ### Payment System: Virtual PG Card
-All transactions occur via a Virtual PG Card system, where each user has a virtual balance starting at $1000. Estimated fares are deducted upon ride acceptance, and adjustments are made upon completion. Cancellation fees are applied for rider cancellations after a driver has started traveling.
+All transactions occur via a Virtual PG Card system. New users receive $20 in welcome credit and 4 promo rides with $5 off each (promoRidesRemaining, virtualCardBalance on users table). Riders can top up their balance at any time via Stripe (debit/credit card) using the "Add Funds" button on their Profile page. Top-up flow: POST /api/virtual-card/topup/create-intent → client confirms via Stripe Elements → POST /api/virtual-card/topup/confirm → balance updated. Fare deductions happen at ride acceptance, promo discounts applied automatically. Cancellation fees deducted for rider cancellations after driver has started traveling. VITE_STRIPE_PUBLIC_KEY env var required for Stripe Elements on frontend.
+
+### Rate Limiting
+express-rate-limit applied globally: 200 req/15min general; 20 req/15min for /api/auth/login and /api/auth/signup; 10 req/min for /api/ai endpoints.
+
+### Legal Pages
+Terms of Service at /terms and Privacy Policy at /privacy — publicly accessible without login.
 
 ### Admin Back Office System
 An administrative panel at `/admin` allows users with `isAdmin: true` to manage users, drivers, rides, disputes, finances, driver ownership, and profit declarations, as well as view an activity log.

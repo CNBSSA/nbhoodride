@@ -8,11 +8,14 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import DocumentUploadModal from "@/components/DocumentUploadModal";
 import SafetyPrivacyModal from "@/components/SafetyPrivacyModal";
+import TopUpModal from "@/components/TopUpModal";
 import { isUnauthorizedError } from "@/lib/authUtils";
+import { Plus } from "lucide-react";
 
 export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
   const [isSafetyPrivacyModalOpen, setIsSafetyPrivacyModalOpen] = useState(false);
+  const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const { user, isLoading } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -164,10 +167,23 @@ export default function Profile() {
                     ${parseFloat(user?.virtualCardBalance || "0").toFixed(2)}
                   </h3>
                   <p className="text-xs text-green-700 dark:text-green-400">Available Balance</p>
+                  {(user?.promoRidesRemaining ?? 0) > 0 && (
+                    <p className="text-xs text-orange-600 dark:text-orange-400 font-semibold mt-0.5">
+                      🎉 {user?.promoRidesRemaining} welcome ride{(user?.promoRidesRemaining ?? 0) > 1 ? "s" : ""} left (-$5 each)
+                    </p>
+                  )}
                 </div>
               </div>
-              <div className="text-right">
-                <div className="text-xs text-green-800 dark:text-green-300 mb-1">Payment Method</div>
+              <div className="text-right space-y-2">
+                <Button
+                  size="sm"
+                  onClick={() => setIsTopUpOpen(true)}
+                  className="bg-green-600 hover:bg-green-700 text-white text-xs px-3"
+                  data-testid="button-add-funds"
+                >
+                  <Plus className="w-3 h-3 mr-1" />
+                  Add Funds
+                </Button>
                 <div className="inline-flex items-center space-x-1 bg-green-100 dark:bg-green-900 px-2 py-1 rounded">
                   <i className="fas fa-check-circle text-green-600 dark:text-green-400 text-xs" />
                   <span className="text-xs font-medium text-green-900 dark:text-green-100">Active</span>
@@ -176,6 +192,12 @@ export default function Profile() {
             </div>
           </CardContent>
         </Card>
+
+        <TopUpModal
+          isOpen={isTopUpOpen}
+          onClose={() => setIsTopUpOpen(false)}
+          currentBalance={user?.virtualCardBalance || "0"}
+        />
 
         {/* Driver Section */}
         {!user?.isDriver ? (

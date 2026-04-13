@@ -11,6 +11,7 @@ import twilio from "twilio";
 import { stripeService } from "./stripeService";
 import bcrypt from "bcrypt";
 import OpenAI from "openai";
+import rateLimit from "express-rate-limit";
 import {
   insertDriverProfileSchema,
   insertVehicleSchema,
@@ -48,6 +49,37 @@ async function ensureSuperAdminSetup() {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Rate limiting
+  const generalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: "Too many requests, please try again later." },
+    skip: (req) => req.path.startsWith('/api/admin'), // admins exempt
+  });
+
+  const aiLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 10, // 10 AI messages per minute per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: "Too many AI requests. Please slow down." },
+  });
+
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20, // 20 login/signup attempts per 15 min
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: "Too many authentication attempts. Please try again later." },
+  });
+
+  app.use('/api', generalLimiter);
+  app.use('/api/auth/login', authLimiter);
+  app.use('/api/auth/signup', authLimiter);
+  app.use('/api/ai', aiLimiter);
+
   // Auth middleware
   await setupAuth(app);
 
@@ -1513,6 +1545,86 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error fetching payment methods:", error);
       res.status(500).json({ message: "Failed to fetch payment methods" });
+    }
+  });
+
+  // Virtual PG Card top-up routes
+  app.post('/api/virtual-card/topup/create-intent', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      const { amount } = req.body;
+      if (!amount || typeof amount !== 'number' || amount < 5 || amount > 500) {
+        return res.status(400).json({ message: "Amount must be between $5 and $500" });
+      }
+
+      // Ensure customer exists in Stripe
+      let customerId = user.stripeCustomerId;
+      if (!customerId) {
+        customerId = await stripeService.createOrGetCustomer(
+          userId,
+          user.email || '',
+          `${user.firstName || ''} ${user.lastName || ''}`
+        );
+        await storage.updateUserStripeInfo(userId, customerId);
+      }
+
+      // Create a PaymentIntent (confirm: false so client confirms with card details)
+      const Stripe = await import("stripe");
+      const stripeInstance = new Stripe.default(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2025-09-30.clover" as any });
+      const intent = await stripeInstance.paymentIntents.create({
+        amount: Math.round(amount * 100),
+        currency: "usd",
+        customer: customerId,
+        metadata: { userId, topupAmount: amount.toString(), type: "virtual_card_topup" },
+        automatic_payment_methods: { enabled: true },
+      });
+
+      res.json({ clientSecret: intent.client_secret, amount });
+    } catch (error: any) {
+      console.error("Error creating top-up intent:", error);
+      res.status(500).json({ message: error.message || "Failed to create payment" });
+    }
+  });
+
+  app.post('/api/virtual-card/topup/confirm', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { paymentIntentId } = req.body;
+      if (!paymentIntentId) return res.status(400).json({ message: "paymentIntentId required" });
+
+      const Stripe = await import("stripe");
+      const stripeInstance = new Stripe.default(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2025-09-30.clover" as any });
+      const intent = await stripeInstance.paymentIntents.retrieve(paymentIntentId);
+
+      if (intent.metadata?.userId !== userId) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      if (intent.status !== "succeeded") {
+        return res.status(400).json({ message: `Payment not completed (status: ${intent.status})` });
+      }
+
+      const topupAmount = parseFloat(intent.metadata?.topupAmount || "0");
+      if (topupAmount <= 0) return res.status(400).json({ message: "Invalid top-up amount" });
+
+      const updatedUser = await storage.addVirtualCardBalance(userId, topupAmount);
+      res.json({ success: true, newBalance: updatedUser.virtualCardBalance });
+    } catch (error: any) {
+      console.error("Error confirming top-up:", error);
+      res.status(500).json({ message: error.message || "Failed to confirm top-up" });
+    }
+  });
+
+  app.get('/api/virtual-card/balance', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const balance = await storage.getVirtualCardBalance(userId);
+      const user = await storage.getUser(userId);
+      res.json({ balance, promoRidesRemaining: user?.promoRidesRemaining ?? 0 });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to get balance" });
     }
   });
 

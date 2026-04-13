@@ -220,10 +220,13 @@ export default function Signup() {
 
           <div className="mt-4 text-xs text-center text-muted-foreground">
             <p>
-              By signing up, you agree to our community guidelines and terms of service.
+              By signing up, you agree to our{" "}
+              <a href="/terms" className="underline text-primary" target="_blank">Terms of Service</a>
+              {" "}and{" "}
+              <a href="/privacy" className="underline text-primary" target="_blank">Privacy Policy</a>.
             </p>
-            <p className="mt-2">
-              All new accounts start with $1,000 virtual card balance for testing.
+            <p className="mt-2 text-green-700 dark:text-green-400 font-medium">
+              🎉 New riders get $20 in Virtual PG Card credit + 4 rides with $5 off each!
             </p>
           </div>
         </CardContent>

@@ -18,6 +18,7 @@ import ResetPassword from "@/pages/ResetPassword";
 import AdminDashboard from "@/pages/AdminDashboard";
 import DriverInsights from "@/pages/DriverInsights";
 import DriverRateCard from "@/pages/DriverRateCard";
+import { TermsOfService, PrivacyPolicy } from "@/pages/LegalPages";
 import NotFound from "@/pages/not-found";
 
 function AuthRedirect({ component: Component }: { component: React.ComponentType }) {
@@ -35,8 +36,10 @@ function Router() {
 
   return (
     <Switch>
-      {/* Public emergency tracking route (no auth required) */}
+      {/* Public routes */}
       <Route path="/emergency/:token" component={EmergencyTracking} />
+      <Route path="/terms" component={TermsOfService} />
+      <Route path="/privacy" component={PrivacyPolicy} />
       
       {/* Auth routes redirect to home if already logged in */}
       <Route path="/login">{() => <AuthRedirect component={Login} />}</Route>
