@@ -17,11 +17,12 @@ import {
   DollarSign, Award, TrendingUp, Shield, Activity,
   CheckCircle, XCircle, Eye, Ban, UserCheck, Clock,
   ChevronLeft, BarChart3, Brain, AlertCircle, BookOpen,
-  RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2
+  RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2, Banknote
 } from "lucide-react";
+import { format } from "date-fns";
 import { useLocation } from "wouter";
 
-type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "disputes" | "finances" | "ownership" | "profits" | "activity" | "analytics";
+type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "disputes" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -49,6 +50,7 @@ export default function AdminDashboard() {
     { id: "drivers", label: "Drivers", icon: Car },
     { id: "rides", label: "Rides", icon: MapPin },
     { id: "disputes", label: "Disputes", icon: AlertTriangle },
+    { id: "payouts", label: "Payouts", icon: Banknote },
     { id: "finances", label: "Finances", icon: DollarSign },
     { id: "ownership", label: "Ownership", icon: Award },
     { id: "profits", label: "Profits", icon: TrendingUp },
@@ -109,6 +111,7 @@ export default function AdminDashboard() {
           {activeTab === "drivers" && <DriversPanel />}
           {activeTab === "rides" && <RidesPanel />}
           {activeTab === "disputes" && <DisputesPanel />}
+          {activeTab === "payouts" && <PayoutsPanel />}
           {activeTab === "finances" && <FinancesPanel />}
           {activeTab === "ownership" && <OwnershipPanel />}
           {activeTab === "profits" && <ProfitsPanel />}
@@ -775,6 +778,135 @@ function RidesPanel() {
         ))}
         {allRides.length === 0 && <p className="text-muted-foreground text-center py-8">No rides found.</p>}
       </div>
+    </div>
+  );
+}
+
+function PayoutsPanel() {
+  const { data: allPayouts = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/admin/payout-requests"] });
+  const { toast } = useToast();
+  const [noteMap, setNoteMap] = useState<Record<string, string>>({});
+
+  const updatePayout = useMutation({
+    mutationFn: async ({ id, status, adminNote }: { id: string; status: string; adminNote?: string }) => {
+      const res = await apiRequest("PATCH", `/api/admin/payout-requests/${id}`, { status, adminNote });
+      return res.json();
+    },
+    onSuccess: (_, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/payout-requests"] });
+      toast({ title: `Payout marked as ${vars.status}` });
+    },
+    onError: () => toast({ title: "Failed to update payout", variant: "destructive" }),
+  });
+
+  const STATUS_COLOR: Record<string, string> = {
+    pending:    "bg-yellow-100 text-yellow-800",
+    processing: "bg-blue-100 text-blue-800",
+    paid:       "bg-green-100 text-green-800",
+    rejected:   "bg-red-100 text-red-800",
+  };
+
+  const pending = allPayouts.filter((p: any) => p.status === "pending");
+  const other   = allPayouts.filter((p: any) => p.status !== "pending");
+
+  if (isLoading) return <div data-testid="loading-payouts">Loading payouts...</div>;
+
+  return (
+    <div data-testid="panel-payouts" className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold">Driver Payout Requests</h2>
+        <Badge className="bg-yellow-100 text-yellow-800 text-sm px-3 py-1">
+          {pending.length} pending
+        </Badge>
+      </div>
+
+      {allPayouts.length === 0 && (
+        <p className="text-muted-foreground text-center py-12">No payout requests yet.</p>
+      )}
+
+      {pending.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="font-semibold text-lg">Pending</h3>
+          {pending.map((req: any) => (
+            <Card key={req.id} className="border-yellow-200" data-testid={`payout-card-${req.id}`}>
+              <CardContent className="pt-4 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <p className="font-semibold text-lg text-green-700">${parseFloat(req.amount).toFixed(2)}</p>
+                    <p className="text-sm text-muted-foreground">{req.driverName} — {req.driverEmail}</p>
+                    <p className="text-sm capitalize">{req.payoutMethod}: <span className="font-medium">{req.payoutDetails}</span></p>
+                    <p className="text-xs text-muted-foreground">
+                      {req.createdAt ? format(new Date(req.createdAt), "MMM d, yyyy 'at' h:mm a") : ""}
+                    </p>
+                  </div>
+                  <Badge className={STATUS_COLOR[req.status]}>{req.status}</Badge>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Input
+                    placeholder="Admin note (optional)"
+                    value={noteMap[req.id] || ""}
+                    onChange={(e) => setNoteMap((m) => ({ ...m, [req.id]: e.target.value }))}
+                    data-testid={`input-payout-note-${req.id}`}
+                  />
+                  <div className="flex gap-2 flex-wrap">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => updatePayout.mutate({ id: req.id, status: "processing", adminNote: noteMap[req.id] })}
+                      disabled={updatePayout.isPending}
+                      data-testid={`btn-processing-${req.id}`}
+                    >
+                      <Clock className="w-4 h-4 mr-1" /> Mark Processing
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="bg-green-600 hover:bg-green-700 text-white"
+                      onClick={() => updatePayout.mutate({ id: req.id, status: "paid", adminNote: noteMap[req.id] })}
+                      disabled={updatePayout.isPending}
+                      data-testid={`btn-paid-${req.id}`}
+                    >
+                      <CheckCircle className="w-4 h-4 mr-1" /> Mark Paid
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => updatePayout.mutate({ id: req.id, status: "rejected", adminNote: noteMap[req.id] })}
+                      disabled={updatePayout.isPending}
+                      data-testid={`btn-reject-${req.id}`}
+                    >
+                      <XCircle className="w-4 h-4 mr-1" /> Reject
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {other.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="font-semibold text-lg text-muted-foreground">History</h3>
+          {other.map((req: any) => (
+            <Card key={req.id} className="opacity-80" data-testid={`payout-history-admin-${req.id}`}>
+              <CardContent className="pt-4">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <p className="font-semibold text-green-700">${parseFloat(req.amount).toFixed(2)}</p>
+                    <p className="text-sm text-muted-foreground">{req.driverName} — {req.driverEmail}</p>
+                    <p className="text-sm capitalize">{req.payoutMethod}: {req.payoutDetails}</p>
+                    {req.adminNote && <p className="text-xs italic text-muted-foreground">Note: {req.adminNote}</p>}
+                    <p className="text-xs text-muted-foreground">
+                      {req.createdAt ? format(new Date(req.createdAt), "MMM d, yyyy") : ""}
+                    </p>
+                  </div>
+                  <Badge className={STATUS_COLOR[req.status] || ""}>{req.status}</Badge>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

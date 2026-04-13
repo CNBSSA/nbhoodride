@@ -191,6 +191,21 @@ export const sharedRideGroups = pgTable("shared_ride_groups", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Driver payout requests
+export const payoutRequests = pgTable("payout_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  driverId: varchar("driver_id").notNull().references(() => users.id),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  payoutMethod: varchar("payout_method").notNull(), // 'zelle' | 'cashapp' | 'paypal' | 'check'
+  payoutDetails: varchar("payout_details").notNull(), // phone/email/address for payout
+  status: varchar("status").default("pending"), // 'pending' | 'processing' | 'paid' | 'rejected'
+  adminNote: text("admin_note"),
+  processedBy: varchar("processed_by").references(() => users.id),
+  processedAt: timestamp("processed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Dispute reports
 export const disputes = pgTable("disputes", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -760,6 +775,18 @@ export type OwnershipRebalanceLog = typeof ownershipRebalanceLog.$inferSelect;
 export type ProfitDeclaration = typeof profitDeclarations.$inferSelect;
 export type ProfitDistribution = typeof profitDistributions.$inferSelect;
 export type AdminActivityLog = typeof adminActivityLog.$inferSelect;
+
+export const insertPayoutRequestSchema = createInsertSchema(payoutRequests).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  processedAt: true,
+  processedBy: true,
+  adminNote: true,
+  status: true,
+});
+export type InsertPayoutRequest = z.infer<typeof insertPayoutRequestSchema>;
+export type PayoutRequest = typeof payoutRequests.$inferSelect;
 
 export const insertSharedRideGroupSchema = createInsertSchema(sharedRideGroups).omit({
   id: true,

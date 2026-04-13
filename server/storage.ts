@@ -21,6 +21,9 @@ import {
   demandHeatmap,
   driverScorecard,
   safetyAlerts,
+  payoutRequests,
+  type PayoutRequest,
+  type InsertPayoutRequest,
   type User,
   type UpsertUser,
   type DriverProfile,
@@ -193,6 +196,12 @@ export interface IStorage {
   getVirtualCardBalance(userId: string): Promise<number>;
   consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
   
+  // Payout request operations
+  createPayoutRequest(request: InsertPayoutRequest): Promise<PayoutRequest>;
+  getDriverPayoutRequests(driverId: string): Promise<PayoutRequest[]>;
+  getAllPayoutRequests(): Promise<(PayoutRequest & { driverName: string; driverEmail: string })[]>;
+  updatePayoutRequest(id: string, updates: { status: string; adminNote?: string; processedBy?: string }): Promise<PayoutRequest>;
+
   // Dispute operations
   createDispute(dispute: InsertDispute): Promise<Dispute>;
   getDisputesByRide(rideId: string): Promise<Dispute[]>;
@@ -744,6 +753,56 @@ export class DatabaseStorage implements IStorage {
         })
         .where(eq(rides.id, rideId));
     }
+  }
+
+  // Payout request operations
+  async createPayoutRequest(request: InsertPayoutRequest): Promise<PayoutRequest> {
+    const [record] = await db.insert(payoutRequests).values(request).returning();
+    return record;
+  }
+
+  async getDriverPayoutRequests(driverId: string): Promise<PayoutRequest[]> {
+    return await db
+      .select()
+      .from(payoutRequests)
+      .where(eq(payoutRequests.driverId, driverId))
+      .orderBy(desc(payoutRequests.createdAt));
+  }
+
+  async getAllPayoutRequests(): Promise<(PayoutRequest & { driverName: string; driverEmail: string })[]> {
+    const rows = await db
+      .select({
+        payout: payoutRequests,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        email: users.email,
+      })
+      .from(payoutRequests)
+      .leftJoin(users, eq(payoutRequests.driverId, users.id))
+      .orderBy(desc(payoutRequests.createdAt));
+
+    return rows.map((r) => ({
+      ...r.payout,
+      driverName: `${r.firstName || ''} ${r.lastName || ''}`.trim(),
+      driverEmail: r.email || '',
+    }));
+  }
+
+  async updatePayoutRequest(
+    id: string,
+    updates: { status: string; adminNote?: string; processedBy?: string }
+  ): Promise<PayoutRequest> {
+    const [record] = await db
+      .update(payoutRequests)
+      .set({
+        status: updates.status,
+        ...(updates.adminNote !== undefined && { adminNote: updates.adminNote }),
+        ...(updates.processedBy && { processedBy: updates.processedBy, processedAt: new Date() }),
+        updatedAt: new Date(),
+      })
+      .where(eq(payoutRequests.id, id))
+      .returning();
+    return record;
   }
 
   // Dispute operations

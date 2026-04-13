@@ -14,10 +14,12 @@ import { ActiveRideCard } from "@/components/ActiveRideCard";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { Link } from "wouter";
 import { format } from "date-fns";
-import { BarChart3, Bell, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin } from "lucide-react";
+import { BarChart3, Bell, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote } from "lucide-react";
+import PayoutModal from "@/components/PayoutModal";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
+  const [showPayoutModal, setShowPayoutModal] = useState(false);
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -462,6 +464,32 @@ export default function DriverDashboard() {
           </Card>
         </div>
 
+        {/* Payout Card */}
+        <Card className="border-green-200 dark:border-green-800">
+          <CardContent className="p-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-green-100 dark:bg-green-900 flex items-center justify-center">
+                <Banknote className="h-5 w-5 text-green-600 dark:text-green-400" />
+              </div>
+              <div>
+                <p className="font-semibold">Wallet Balance</p>
+                <p className="text-2xl font-bold text-green-700 dark:text-green-300" data-testid="text-wallet-balance">
+                  ${parseFloat(user?.virtualCardBalance || '0').toFixed(2)}
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-green-500 text-green-700 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-950"
+              onClick={() => setShowPayoutModal(true)}
+              data-testid="button-request-payout"
+            >
+              Withdraw
+            </Button>
+          </CardContent>
+        </Card>
+
         {/* Performance Insights Link */}
         <Link href="/driver/insights">
           <Card className="cursor-pointer hover:border-primary transition-colors" data-testid="card-performance-insights">
@@ -587,6 +615,12 @@ export default function DriverDashboard() {
           </CardContent>
         </Card>
       </main>
+
+      <PayoutModal
+        open={showPayoutModal}
+        onClose={() => setShowPayoutModal(false)}
+        availableBalance={parseFloat(user?.virtualCardBalance || '0')}
+      />
     </>
   );
 }

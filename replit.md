@@ -65,8 +65,11 @@ express-rate-limit applied globally: 200 req/15min general; 20 req/15min for /ap
 ### Legal Pages
 Terms of Service at /terms and Privacy Policy at /privacy — publicly accessible without login.
 
+### Driver Payout System
+Drivers accumulate earnings in their Virtual PG Card wallet. They can request cash withdrawals via the "Withdraw" button on the Driver Dashboard. Supported payout methods: Zelle, Cash App, PayPal, or check by mail. Minimum payout $5.00. The requested amount is held (deducted from balance) immediately. If an admin rejects the request, the balance is refunded. Payouts table: `payout_requests` (driverId, amount, payoutMethod, payoutDetails, status, adminNote, processedBy, processedAt). Driver routes: `GET/POST /api/driver/payout-requests`. Admin routes: `GET /api/admin/payout-requests`, `PATCH /api/admin/payout-requests/:id` (status: processing | paid | rejected). Admin Payouts tab in the admin dashboard shows pending queue with mark-processing/mark-paid/reject actions.
+
 ### Admin Back Office System
-An administrative panel at `/admin` allows users with `isAdmin: true` to manage users, drivers, rides, disputes, finances, driver ownership, and profit declarations, as well as view an activity log.
+An administrative panel at `/admin` allows users with `isAdmin: true` to manage users, drivers, rides, disputes, payouts, finances, driver ownership, and profit declarations, as well as view an activity log.
 
 ### Driver Cooperative Ownership Model
 The platform implements a cooperative ownership model where 49% of the platform's ownership is distributed among qualifying drivers. Drivers can achieve "Ad-Hoc Ownership" after 12 qualifying weeks (40+ hours/week with 4.85+ rating) and "Lifetime Ownership" after accumulating 5,640 total hours. Share certificates are issued, and profit distributions are made from a 49% pool among owners. Drivers have a dashboard to track their progress and view profit history.

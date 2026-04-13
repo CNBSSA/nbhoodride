@@ -13,6 +13,13 @@ import bcrypt from "bcrypt";
 import OpenAI from "openai";
 import rateLimit from "express-rate-limit";
 import {
+  sendAccountApprovedEmail,
+  sendPasswordResetEmail,
+  sendRideAcceptedEmail,
+  sendRideReceiptEmail,
+  sendSignupPendingEmail,
+} from "./emailService";
+import {
   insertDriverProfileSchema,
   insertVehicleSchema,
   insertRideSchema,
@@ -171,6 +178,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         promoRidesRemaining: 4,
       });
 
+      sendSignupPendingEmail({ email: user.email, firstName: user.firstName }).catch(console.error);
+
       res.json({ 
         message: "Account created! Your account is pending approval by an administrator. You will be able to log in once approved.",
         pendingApproval: true,
@@ -268,10 +277,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Save reset token
       await storage.setPasswordResetToken(email, resetToken, resetExpiry);
 
-      // In production, you would send an email here
-      // For now, we'll just return the token (development only)
-      console.log(`Password reset token for ${email}: ${resetToken}`);
-      
+      const appUrl = process.env.APP_URL || `https://${req.get('host')}`;
+      sendPasswordResetEmail(email, user.firstName, resetToken, appUrl).catch(console.error);
+
       res.json({ 
         message: "If the email exists, a password reset link will be sent",
       });
@@ -575,7 +583,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           riderWs.send(JSON.stringify(rideAcceptedMessage));
         }
       }
-      
+
+      // Send ride-accepted email to rider
+      if (rider) {
+        sendRideAcceptedEmail({
+          riderEmail: rider.email,
+          riderFirstName: rider.firstName,
+          driverName: rideAcceptedMessage.driverName,
+          driverPhone: driverUser?.phone,
+          pickupAddress: ride.pickupAddress,
+          destinationAddress: ride.destinationAddress,
+          estimatedFare: ride.estimatedFare,
+          promoDiscount: ride.promoDiscountApplied,
+        }).catch(console.error);
+      }
+
       res.json(ride);
     } catch (error) {
       console.error("Error accepting ride:", error);
@@ -820,7 +842,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
           riderWs.send(JSON.stringify(rideCompletedMessage));
         }
       }
-      
+
+      // Send receipt email to rider
+      try {
+        const [riderForEmail, driverForEmail] = await Promise.all([
+          storage.getUser(ride.riderId),
+          ride.driverId ? storage.getUser(ride.driverId) : null,
+        ]);
+        if (riderForEmail) {
+          sendRideReceiptEmail({
+            riderEmail: riderForEmail.email,
+            riderFirstName: riderForEmail.firstName,
+            driverName: driverForEmail
+              ? `${driverForEmail.firstName || ''} ${driverForEmail.lastName?.[0] || ''}.`.trim()
+              : 'Your driver',
+            pickupAddress: ride.pickupAddress,
+            destinationAddress: ride.destinationAddress,
+            actualFare: ride.actualFare,
+            promoDiscountApplied: ride.promoDiscountApplied,
+            completedAt: ride.completedAt,
+          }).catch(console.error);
+        }
+      } catch (emailErr) {
+        console.error("Failed to send receipt email:", emailErr);
+      }
+
       res.json(ride);
     } catch (error) {
       console.error("Error completing ride:", error);
@@ -2125,6 +2171,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const user = await storage.adminUpdateUser(userId, { isApproved: true, approvedBy: adminId });
       await storage.logAdminAction(adminId, 'approve_user', 'user', userId, { email: targetUser.email });
+      sendAccountApprovedEmail({
+        email: user.email,
+        firstName: user.firstName,
+        virtualCardBalance: user.virtualCardBalance,
+        promoRidesRemaining: user.promoRidesRemaining,
+      }).catch(console.error);
       res.json(user);
     } catch (error) {
       console.error("Error approving user:", error);
@@ -2347,6 +2399,93 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error resolving dispute:", error);
       res.status(500).json({ message: "Failed to resolve dispute" });
+    }
+  });
+
+  // ── PAYOUT REQUESTS ─────────────────────────────────────────────────────────
+
+  // Driver: list own payout requests
+  app.get('/api/driver/payout-requests', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const requests = await storage.getDriverPayoutRequests(userId);
+      res.json(requests);
+    } catch (error) {
+      console.error("Error fetching payout requests:", error);
+      res.status(500).json({ message: "Failed to fetch payout requests" });
+    }
+  });
+
+  // Driver: submit new payout request
+  app.post('/api/driver/payout-requests', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      const { amount, payoutMethod, payoutDetails } = req.body;
+      if (!amount || !payoutMethod || !payoutDetails) {
+        return res.status(400).json({ message: "amount, payoutMethod, and payoutDetails are required" });
+      }
+      const numAmount = parseFloat(amount);
+      if (isNaN(numAmount) || numAmount < 5) {
+        return res.status(400).json({ message: "Minimum payout amount is $5.00" });
+      }
+      const balance = parseFloat(user.virtualCardBalance || '0');
+      if (numAmount > balance) {
+        return res.status(400).json({ message: "Payout amount exceeds available balance" });
+      }
+
+      // Deduct balance immediately and create request
+      await storage.addVirtualCardBalance(userId, -numAmount);
+      const request = await storage.createPayoutRequest({
+        driverId: userId,
+        amount: numAmount.toFixed(2),
+        payoutMethod,
+        payoutDetails,
+      });
+      res.json(request);
+    } catch (error) {
+      console.error("Error creating payout request:", error);
+      res.status(500).json({ message: "Failed to submit payout request" });
+    }
+  });
+
+  // Admin: list all payout requests
+  app.get('/api/admin/payout-requests', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const requests = await storage.getAllPayoutRequests();
+      res.json(requests);
+    } catch (error) {
+      console.error("Error fetching payout requests:", error);
+      res.status(500).json({ message: "Failed to fetch payout requests" });
+    }
+  });
+
+  // Admin: update payout request status
+  app.patch('/api/admin/payout-requests/:id', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { id } = req.params;
+      const { status, adminNote } = req.body;
+      if (!['processing', 'paid', 'rejected'].includes(status)) {
+        return res.status(400).json({ message: "status must be processing, paid, or rejected" });
+      }
+      // If rejecting, refund the balance
+      if (status === 'rejected') {
+        const existing = (await storage.getDriverPayoutRequests('')); // lazy approach — get all then filter
+        const allRequests = await storage.getAllPayoutRequests();
+        const request = allRequests.find(r => r.id === id);
+        if (request && request.status === 'pending') {
+          await storage.addVirtualCardBalance(request.driverId, parseFloat(request.amount));
+        }
+      }
+      const updated = await storage.updatePayoutRequest(id, { status, adminNote, processedBy: adminId });
+      await storage.logAdminAction(adminId, `payout_${status}`, 'payout_request', id, { adminNote });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating payout request:", error);
+      res.status(500).json({ message: "Failed to update payout request" });
     }
   });
 
