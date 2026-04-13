@@ -10,11 +10,13 @@ import DocumentUploadModal from "@/components/DocumentUploadModal";
 import SafetyPrivacyModal from "@/components/SafetyPrivacyModal";
 import TopUpModal from "@/components/TopUpModal";
 import { isUnauthorizedError } from "@/lib/authUtils";
-import { Plus } from "lucide-react";
+import { Bell, BellOff, Plus } from "lucide-react";
+import { usePushNotifications } from "@/hooks/usePushNotifications";
 
 export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
   const [isSafetyPrivacyModalOpen, setIsSafetyPrivacyModalOpen] = useState(false);
+  const { permission, isSubscribed, isSupported, isLoading: pushLoading, subscribe, unsubscribe } = usePushNotifications();
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const { user, isLoading } = useAuth();
   const { toast } = useToast();
@@ -304,6 +306,41 @@ export default function Profile() {
             </div>
             <i className="fas fa-chevron-right text-muted-foreground" />
           </Button>
+
+          {/* Push Notification Toggle */}
+          {isSupported && permission !== "denied" && (
+            <div className="w-full flex items-center justify-between p-4 border rounded-xl" data-testid="push-notification-setting">
+              <div className="flex items-center space-x-3">
+                {isSubscribed
+                  ? <Bell className="text-primary w-5 h-5" />
+                  : <BellOff className="text-muted-foreground w-5 h-5" />
+                }
+                <div className="text-left">
+                  <p className="font-medium">Ride Notifications</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isSubscribed
+                      ? "You'll be notified even when the app is closed"
+                      : permission === "granted"
+                        ? "Tap to re-enable notifications"
+                        : "Get alerts when your driver accepts or arrives"
+                    }
+                  </p>
+                </div>
+              </div>
+              <Switch
+                checked={isSubscribed}
+                onCheckedChange={(checked) => checked ? subscribe() : unsubscribe()}
+                disabled={pushLoading}
+                data-testid="toggle-push-notifications"
+              />
+            </div>
+          )}
+          {isSupported && permission === "denied" && (
+            <div className="w-full flex items-center space-x-3 p-4 border rounded-xl text-muted-foreground" data-testid="push-blocked-notice">
+              <BellOff className="w-5 h-5 shrink-0" />
+              <p className="text-sm">Notifications blocked in browser settings. Enable them in your browser to receive ride alerts.</p>
+            </div>
+          )}
         </div>
 
         {/* Community Badge */}

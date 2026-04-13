@@ -191,6 +191,16 @@ export const sharedRideGroups = pgTable("shared_ride_groups", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Push notification subscriptions
+export const pushSubscriptions = pgTable("push_subscriptions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Driver payout requests
 export const payoutRequests = pgTable("payout_requests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -775,6 +785,8 @@ export type OwnershipRebalanceLog = typeof ownershipRebalanceLog.$inferSelect;
 export type ProfitDeclaration = typeof profitDeclarations.$inferSelect;
 export type ProfitDistribution = typeof profitDistributions.$inferSelect;
 export type AdminActivityLog = typeof adminActivityLog.$inferSelect;
+
+export type PushSubscription = typeof pushSubscriptions.$inferSelect;
 
 export const insertPayoutRequestSchema = createInsertSchema(payoutRequests).omit({
   id: true,

@@ -20,6 +20,7 @@ import DriverInsights from "@/pages/DriverInsights";
 import DriverRateCard from "@/pages/DriverRateCard";
 import { TermsOfService, PrivacyPolicy } from "@/pages/LegalPages";
 import NotFound from "@/pages/not-found";
+import PushNotificationPrompt from "@/components/PushNotificationPrompt";
 
 function AuthRedirect({ component: Component }: { component: React.ComponentType }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -72,6 +73,7 @@ function App() {
       <TooltipProvider>
         <Toaster />
         <Router />
+        <PushNotificationPrompt />
       </TooltipProvider>
     </QueryClientProvider>
   );

@@ -19,6 +19,7 @@ import {
   sendRideReceiptEmail,
   sendSignupPendingEmail,
 } from "./emailService";
+import { sendPushToSubscriptions } from "./pushService";
 import {
   insertDriverProfileSchema,
   insertVehicleSchema,
@@ -596,6 +597,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           estimatedFare: ride.estimatedFare,
           promoDiscount: ride.promoDiscountApplied,
         }).catch(console.error);
+
+        // Push notification to rider
+        storage.getPushSubscriptionsByUser(ride.riderId).then((subs) =>
+          sendPushToSubscriptions(subs, {
+            title: "Driver On The Way! 🚗",
+            body: `${rideAcceptedMessage.driverName} accepted your ride. They'll pick you up soon.`,
+            tag: "ride-accepted",
+            url: "/",
+          }, (ep) => storage.deletePushSubscription(ep))
+        ).catch(console.error);
       }
 
       res.json(ride);
@@ -862,6 +873,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
             promoDiscountApplied: ride.promoDiscountApplied,
             completedAt: ride.completedAt,
           }).catch(console.error);
+
+          // Push notification — ride complete
+          const fare = parseFloat(ride.actualFare || ride.estimatedFare || '0');
+          storage.getPushSubscriptionsByUser(ride.riderId).then((subs) =>
+            sendPushToSubscriptions(subs, {
+              title: "Ride Complete! ✅",
+              body: `Thanks for riding with PG Ride. Total: $${fare.toFixed(2)}.`,
+              tag: "ride-completed",
+              url: "/",
+            }, (ep) => storage.deletePushSubscription(ep))
+          ).catch(console.error);
         }
       } catch (emailErr) {
         console.error("Failed to send receipt email:", emailErr);
@@ -1156,6 +1178,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             pickupInstructions: ride.pickupInstructions || '',
           }));
         }
+        // Also push — catches the case where the driver's app is closed
+        storage.getPushSubscriptionsByUser(ride.driverId).then((subs) =>
+          sendPushToSubscriptions(subs, {
+            title: isScheduledFuture ? "New Scheduled Ride 📅" : "New Ride Request! 🚗",
+            body: `${riderUser?.firstName || 'A rider'} needs a ride from ${ride.pickupLocation?.address?.split(',')[0] || 'nearby'}`,
+            tag: "new-ride-request",
+            url: "/",
+          }, (ep) => storage.deletePushSubscription(ep))
+        ).catch(console.error);
       }
 
       res.json(ride);
@@ -2399,6 +2430,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error resolving dispute:", error);
       res.status(500).json({ message: "Failed to resolve dispute" });
+    }
+  });
+
+  // ── PUSH NOTIFICATIONS ──────────────────────────────────────────────────────
+
+  // Expose VAPID public key so the frontend can subscribe
+  app.get('/api/push/vapid-key', (_req, res) => {
+    res.json({ publicKey: process.env.VAPID_PUBLIC_KEY || "" });
+  });
+
+  // Save a new push subscription for the current user
+  app.post('/api/push/subscribe', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { endpoint, p256dh, auth } = req.body;
+      if (!endpoint || !p256dh || !auth) return res.status(400).json({ message: "Missing subscription fields" });
+      const sub = await storage.savePushSubscription(userId, { endpoint, p256dh, auth });
+      res.json(sub);
+    } catch (error) {
+      console.error("Error saving push subscription:", error);
+      res.status(500).json({ message: "Failed to save subscription" });
+    }
+  });
+
+  // Remove a push subscription
+  app.post('/api/push/unsubscribe', isAuthenticated, async (req: any, res) => {
+    try {
+      const { endpoint } = req.body;
+      if (!endpoint) return res.status(400).json({ message: "Missing endpoint" });
+      await storage.deletePushSubscription(endpoint);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error removing push subscription:", error);
+      res.status(500).json({ message: "Failed to remove subscription" });
     }
   });
 

@@ -22,8 +22,10 @@ import {
   driverScorecard,
   safetyAlerts,
   payoutRequests,
+  pushSubscriptions,
   type PayoutRequest,
   type InsertPayoutRequest,
+  type PushSubscription,
   type User,
   type UpsertUser,
   type DriverProfile,
@@ -196,6 +198,11 @@ export interface IStorage {
   getVirtualCardBalance(userId: string): Promise<number>;
   consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
   
+  // Push subscription operations
+  savePushSubscription(userId: string, sub: { endpoint: string; p256dh: string; auth: string }): Promise<PushSubscription>;
+  getPushSubscriptionsByUser(userId: string): Promise<PushSubscription[]>;
+  deletePushSubscription(endpoint: string): Promise<void>;
+
   // Payout request operations
   createPayoutRequest(request: InsertPayoutRequest): Promise<PayoutRequest>;
   getDriverPayoutRequests(driverId: string): Promise<PayoutRequest[]>;
@@ -753,6 +760,24 @@ export class DatabaseStorage implements IStorage {
         })
         .where(eq(rides.id, rideId));
     }
+  }
+
+  // Push subscription operations
+  async savePushSubscription(userId: string, sub: { endpoint: string; p256dh: string; auth: string }): Promise<PushSubscription> {
+    const [record] = await db
+      .insert(pushSubscriptions)
+      .values({ userId, endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth })
+      .onConflictDoUpdate({ target: pushSubscriptions.endpoint, set: { userId, p256dh: sub.p256dh, auth: sub.auth } })
+      .returning();
+    return record;
+  }
+
+  async getPushSubscriptionsByUser(userId: string): Promise<PushSubscription[]> {
+    return await db.select().from(pushSubscriptions).where(eq(pushSubscriptions.userId, userId));
+  }
+
+  async deletePushSubscription(endpoint: string): Promise<void> {
+    await db.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, endpoint));
   }
 
   // Payout request operations
