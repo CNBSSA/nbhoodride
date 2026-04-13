@@ -1026,12 +1026,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const ride = await storage.createRide(rideData);
 
-      if (ride.driverId && activeConnections.has(ride.driverId)) {
+      const riderUser = await storage.getUser(userId);
+      const isScheduledFuture = ride.scheduledAt && new Date(ride.scheduledAt) > new Date();
+
+      if (isScheduledFuture && !ride.driverId) {
+        // Open scheduled ride — broadcast to ALL connected drivers
+        const payload = JSON.stringify({
+          type: 'new_scheduled_ride',
+          rideId: ride.id,
+          riderId: userId,
+          riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ''}.` : 'Rider',
+          riderRating: riderUser?.rating || '5.0',
+          pickupAddress: ride.pickupLocation?.address || '',
+          destinationAddress: ride.destinationLocation?.address || '',
+          estimatedFare: ride.estimatedFare,
+          scheduledAt: ride.scheduledAt,
+          pickupInstructions: ride.pickupInstructions || '',
+        });
+        activeConnections.forEach((ws) => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+        });
+      } else if (ride.driverId && activeConnections.has(ride.driverId)) {
+        // Specific driver chosen — notify only them
         const driverWs = activeConnections.get(ride.driverId);
         if (driverWs && driverWs.readyState === WebSocket.OPEN) {
-          const riderUser = await storage.getUser(userId);
           driverWs.send(JSON.stringify({
-            type: 'new_ride_request',
+            type: isScheduledFuture ? 'new_scheduled_ride' : 'new_ride_request',
             rideId: ride.id,
             riderId: userId,
             riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ''}.` : 'Rider',
@@ -1039,6 +1059,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             pickupAddress: ride.pickupLocation?.address || '',
             destinationAddress: ride.destinationLocation?.address || '',
             estimatedFare: ride.estimatedFare,
+            scheduledAt: ride.scheduledAt,
             pickupInstructions: ride.pickupInstructions || '',
           }));
         }
@@ -1240,15 +1261,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get scheduled rides for the current user
+  // Get scheduled rides for the current rider (includes driver info if claimed)
   app.get('/api/rides/scheduled', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const rides = await storage.getScheduledRides(userId);
+      const rides = await storage.getScheduledRidesWithDriver(userId);
       res.json(rides);
     } catch (error) {
       console.error("Error fetching scheduled rides:", error);
       res.status(500).json({ message: "Failed to fetch scheduled rides" });
+    }
+  });
+
+  // Get open scheduled rides for drivers to claim + their already-claimed upcoming rides
+  app.get('/api/driver/scheduled-rides', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const [open, mine] = await Promise.all([
+        storage.getOpenScheduledRides(),
+        storage.getDriverUpcomingRides(userId),
+      ]);
+      res.json({ open, mine });
+    } catch (error) {
+      console.error("Error fetching driver scheduled rides:", error);
+      res.status(500).json({ message: "Failed to fetch scheduled rides" });
+    }
+  });
+
+  // Driver claims an open scheduled ride
+  app.post('/api/driver/rides/:rideId/claim', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+
+      const ride = await storage.claimScheduledRide(rideId, userId);
+
+      // Notify the rider their scheduled ride has been claimed
+      if (activeConnections.has(ride.riderId)) {
+        const riderWs = activeConnections.get(ride.riderId);
+        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+          const driverUser = await storage.getUser(userId);
+          riderWs.send(JSON.stringify({
+            type: 'scheduled_ride_claimed',
+            rideId: ride.id,
+            driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'A driver',
+            scheduledAt: ride.scheduledAt,
+          }));
+        }
+      }
+
+      // Let all other drivers know this ride is taken (so they remove it from open list)
+      const takenPayload = JSON.stringify({ type: 'scheduled_ride_taken', rideId: ride.id });
+      activeConnections.forEach((ws, connUserId) => {
+        if (connUserId !== userId && ws.readyState === WebSocket.OPEN) ws.send(takenPayload);
+      });
+
+      res.json(ride);
+    } catch (error: any) {
+      console.error("Error claiming scheduled ride:", error);
+      res.status(409).json({ message: error.message || "Failed to claim ride" });
     }
   });
 
@@ -2895,6 +2966,58 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       }
     });
   }
+
+  // ── Pre-ride reminder: fires every minute, sends alerts 30 min before scheduled rides ──
+  setInterval(async () => {
+    try {
+      const { db: dbInst } = await import("./db");
+      const { rides: ridesT, users: usersT } = await import("@shared/schema");
+      const { and: _and, eq: _eq, isNotNull: _isNotNull, gte: _gte, lte: _lte, isNull: _isNull, sql: _sql } = await import("drizzle-orm");
+
+      const now = new Date();
+      const windowStart = new Date(now.getTime() + 28 * 60 * 1000); // 28 min from now
+      const windowEnd   = new Date(now.getTime() + 32 * 60 * 1000); // 32 min from now
+
+      const upcomingRides = await dbInst
+        .select()
+        .from(ridesT)
+        .where(
+          _and(
+            _isNotNull(ridesT.scheduledAt),
+            _gte(ridesT.scheduledAt, windowStart),
+            _lte(ridesT.scheduledAt, windowEnd),
+            _sql`${ridesT.status} IN ('pending', 'accepted')`
+          )
+        );
+
+      for (const ride of upcomingRides) {
+        const formattedTime = ride.scheduledAt
+          ? new Date(ride.scheduledAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+          : '';
+        const reminderMsg = JSON.stringify({
+          type: 'ride_reminder',
+          rideId: ride.id,
+          scheduledAt: ride.scheduledAt,
+          message: `Your ride is in 30 minutes at ${formattedTime}`,
+          pickupAddress: (ride.pickupLocation as any)?.address || '',
+          destinationAddress: (ride.destinationLocation as any)?.address || '',
+        });
+
+        // Notify rider
+        if (ride.riderId && activeConnections.has(ride.riderId)) {
+          const riderWs = activeConnections.get(ride.riderId);
+          if (riderWs && riderWs.readyState === WebSocket.OPEN) riderWs.send(reminderMsg);
+        }
+        // Notify driver if claimed
+        if (ride.driverId && activeConnections.has(ride.driverId)) {
+          const driverWs = activeConnections.get(ride.driverId);
+          if (driverWs && driverWs.readyState === WebSocket.OPEN) driverWs.send(reminderMsg);
+        }
+      }
+    } catch (err) {
+      console.error("Reminder interval error:", err);
+    }
+  }, 60 * 1000);
 
   return httpServer;
 }

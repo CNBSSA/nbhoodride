@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
@@ -12,7 +13,8 @@ import IncomingRideRequest from "@/components/IncomingRideRequest";
 import { ActiveRideCard } from "@/components/ActiveRideCard";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { Link } from "wouter";
-import { BarChart3, Bell, Car, ChevronRight } from "lucide-react";
+import { format } from "date-fns";
+import { BarChart3, Bell, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin } from "lucide-react";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
@@ -63,6 +65,32 @@ export default function DriverDashboard() {
     queryKey: ["/api/driver/active-rides"],
     enabled: !!user?.isDriver,
     refetchInterval: 30000,
+  });
+
+  // Get scheduled rides: open (unclaimed) + mine (claimed by me)
+  const { data: scheduledRidesData, refetch: refetchScheduledRides } = useQuery<{ open: any[]; mine: any[] }>({
+    queryKey: ["/api/driver/scheduled-rides"],
+    enabled: !!user?.isDriver,
+    refetchInterval: 60000,
+    select: (data) => data,
+  });
+  const openScheduledRides = scheduledRidesData?.open ?? [];
+  const myUpcomingRides = scheduledRidesData?.mine ?? [];
+
+  // Claim a scheduled ride
+  const claimRideMutation = useMutation({
+    mutationFn: async (rideId: string) => {
+      const response = await apiRequest('POST', `/api/driver/rides/${rideId}/claim`);
+      return response.json();
+    },
+    onSuccess: () => {
+      refetchScheduledRides();
+      toast({ title: "Ride Claimed!", description: "You've claimed this scheduled ride. The rider has been notified." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Claim Failed", description: error.message || "Another driver may have claimed this first.", variant: "destructive" });
+      refetchScheduledRides();
+    },
   });
 
   // Toggle driver status
@@ -192,6 +220,28 @@ export default function DriverDashboard() {
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         navigator.vibrate([200, 100, 200, 100, 200]);
       }
+    } else if (lastMessage.type === 'new_scheduled_ride') {
+      refetchScheduledRides();
+      const scheduledTime = lastMessage.scheduledAt
+        ? format(new Date(lastMessage.scheduledAt), "MMM d 'at' h:mm a")
+        : '';
+      toast({
+        title: "New Scheduled Ride Available",
+        description: `${lastMessage.riderName || 'A rider'} needs a driver for ${scheduledTime}. Claim it before another driver does!`,
+      });
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate([100, 50, 100]);
+      }
+    } else if (lastMessage.type === 'scheduled_ride_taken') {
+      refetchScheduledRides();
+    } else if (lastMessage.type === 'ride_reminder') {
+      toast({
+        title: "Ride Reminder",
+        description: lastMessage.message || "You have a scheduled ride in 30 minutes.",
+      });
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate([300, 100, 300]);
+      }
     } else if (lastMessage.type === 'ride_accepted' || lastMessage.type === 'ride_declined') {
       refetchPendingRides();
       refetchActiveRides();
@@ -209,7 +259,7 @@ export default function DriverDashboard() {
         variant: "destructive",
       });
     }
-  }, [lastMessage, user?.id, refetchPendingRides, refetchActiveRides, queryClient, toast]);
+  }, [lastMessage, user?.id, refetchPendingRides, refetchActiveRides, refetchScheduledRides, queryClient, toast]);
 
   // Transform ride data for display
   const transformedTrips = todayTrips.map((ride: any) => ({
@@ -278,6 +328,86 @@ export default function DriverDashboard() {
             </h3>
             {activeRides.map((ride: any) => (
               <ActiveRideCard key={ride.id} ride={ride} />
+            ))}
+          </div>
+        )}
+
+        {/* My Upcoming Claimed Scheduled Rides */}
+        {myUpcomingRides.length > 0 && (
+          <div className="space-y-3">
+            <h3 className="text-lg font-semibold text-primary flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5" />
+              Your Upcoming Rides ({myUpcomingRides.length})
+            </h3>
+            {myUpcomingRides.map((ride: any) => (
+              <Card key={ride.id} className="border-green-200 bg-green-50" data-testid={`upcoming-ride-${ride.id}`}>
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Badge className="bg-green-600 text-white">Claimed</Badge>
+                    <span className="text-sm font-semibold text-green-700">
+                      {ride.scheduledAt ? format(new Date(ride.scheduledAt), "MMM d 'at' h:mm a") : ''}
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-2 text-sm">
+                    <MapPin className="w-4 h-4 text-green-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-medium">{ride.pickupLocation?.address || 'Pickup'}</p>
+                      <p className="text-gray-500">→ {ride.destinationLocation?.address || 'Destination'}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-sm text-gray-600">
+                    <span>Rider: {ride.rider?.firstName || 'Unknown'} {ride.rider?.lastName?.[0] || ''}.</span>
+                    <span className="font-semibold text-green-700">${parseFloat(ride.estimatedFare || '0').toFixed(2)}</span>
+                  </div>
+                  {ride.pickupInstructions && (
+                    <p className="text-xs text-gray-500 italic">"{ride.pickupInstructions}"</p>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {/* Open Scheduled Rides — available to claim */}
+        {openScheduledRides.length > 0 && (
+          <div className="space-y-3">
+            <h3 className="text-lg font-semibold text-blue-700 flex items-center gap-2">
+              <CalendarClock className="w-5 h-5" />
+              Scheduled Rides to Claim ({openScheduledRides.length})
+            </h3>
+            {openScheduledRides.map((ride: any) => (
+              <Card key={ride.id} className="border-blue-200" data-testid={`open-scheduled-ride-${ride.id}`}>
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Badge variant="outline" className="border-blue-400 text-blue-700">
+                      <Clock className="w-3 h-3 mr-1" />
+                      {ride.scheduledAt ? format(new Date(ride.scheduledAt), "MMM d 'at' h:mm a") : ''}
+                    </Badge>
+                    <span className="font-semibold text-green-700">${parseFloat(ride.estimatedFare || '0').toFixed(2)}</span>
+                  </div>
+                  <div className="flex items-start gap-2 text-sm">
+                    <MapPin className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-medium">{ride.pickupLocation?.address || 'Pickup'}</p>
+                      <p className="text-gray-500">→ {ride.destinationLocation?.address || 'Destination'}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-sm text-gray-600">
+                    <span>Rider: {ride.rider?.firstName || 'Rider'} {ride.rider?.lastName?.[0] || ''}. ★{parseFloat(ride.rider?.rating || '5').toFixed(1)}</span>
+                  </div>
+                  {ride.pickupInstructions && (
+                    <p className="text-xs text-gray-500 italic">"{ride.pickupInstructions}"</p>
+                  )}
+                  <Button
+                    className="w-full mt-2"
+                    onClick={() => claimRideMutation.mutate(ride.id)}
+                    disabled={claimRideMutation.isPending}
+                    data-testid={`button-claim-ride-${ride.id}`}
+                  >
+                    {claimRideMutation.isPending ? "Claiming..." : "Claim This Ride"}
+                  </Button>
+                </CardContent>
+              </Card>
             ))}
           </div>
         )}

@@ -204,10 +204,20 @@ export default function ScheduleRideModal({
   };
 
   const handleBookRide = () => {
-    if (!destinationAddress || !selectedDriver) {
+    if (!destinationAddress) {
       toast({
-        title: "Missing Information",
-        description: "Please select a destination and driver.",
+        title: "Missing Destination",
+        description: "Please enter a destination.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // For scheduled rides, driver selection is optional — open broadcast
+    if (bookingType === "now" && !selectedDriver) {
+      toast({
+        title: "Select a Driver",
+        description: "Please select a driver for an immediate booking.",
         variant: "destructive",
       });
       return;
@@ -470,9 +480,14 @@ export default function ScheduleRideModal({
 
           {/* Available Drivers */}
           <div>
-            <h3 className="font-semibold mb-3">
+            <h3 className="font-semibold mb-1">
               {searchedDrivers.length > 0 ? "Search Results" : "Choose Your Driver"}
             </h3>
+            {bookingType === "schedule" && (
+              <p className="text-xs text-muted-foreground mb-3">
+                Optional — leave unselected and any available driver will claim your ride.
+              </p>
+            )}
             {availableDrivers.length === 0 ? (
               <Card>
                 <CardContent className="p-6 text-center text-muted-foreground">
@@ -533,11 +548,21 @@ export default function ScheduleRideModal({
           )}
           <Button
             onClick={handleBookRide}
-            disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress || !fareEstimate || (bookingType === "schedule" && !scheduledDate)}
+            disabled={
+              bookRideMutation.isPending ||
+              !destinationAddress ||
+              !fareEstimate ||
+              (bookingType === "now" && !selectedDriver) ||
+              (bookingType === "schedule" && !scheduledDate)
+            }
             className="w-full"
             data-testid="button-confirm-booking"
           >
-            {bookRideMutation.isPending ? "Booking..." : bookingType === "schedule" ? "Schedule Ride" : "Book Now"}
+            {bookRideMutation.isPending
+              ? "Booking..."
+              : bookingType === "schedule"
+              ? selectedDriver ? "Schedule with Driver" : "Schedule — Open to Drivers"
+              : "Book Now"}
           </Button>
         </div>
       </Card>

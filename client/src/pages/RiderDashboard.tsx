@@ -15,8 +15,9 @@ import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import {
   MapPin, Navigation, Bell, Star, Clock, X, Shield, Car,
-  Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign
+  Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign, CalendarClock, UserCheck
 } from "lucide-react";
+import { format } from "date-fns";
 
 interface Driver {
   id: string;
@@ -348,6 +349,20 @@ export default function RiderDashboard() {
       toast({ title: "Ride Cancelled", description: "Your ride has been cancelled.", variant: "destructive" });
     } else if (lastMessage.type === 'ride_update') {
       refetchActiveRides();
+    } else if (lastMessage.type === 'scheduled_ride_claimed') {
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
+      toast({
+        title: "Ride Claimed!",
+        description: `${lastMessage.driverName || 'A driver'} has claimed your scheduled ride. You're all set!`,
+      });
+      navigator.vibrate?.([200, 100, 200]);
+    } else if (lastMessage.type === 'ride_reminder') {
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
+      toast({
+        title: "Ride Reminder",
+        description: lastMessage.message || "Your scheduled ride is in 30 minutes.",
+      });
+      navigator.vibrate?.([300, 100, 300]);
     }
   }, [lastMessage, refetchActiveRides, toast]);
 
@@ -618,6 +633,44 @@ export default function RiderDashboard() {
                 </div>
               )}
             </div>
+
+            {/* Upcoming scheduled rides */}
+            {scheduledRides.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                  <CalendarClock className="w-3.5 h-3.5" /> Upcoming Scheduled Rides
+                </p>
+                {scheduledRides.map((ride: any) => (
+                  <div
+                    key={ride.id}
+                    className="flex items-start justify-between bg-orange-50 rounded-xl p-3 border border-orange-100"
+                    data-testid={`scheduled-ride-${ride.id}`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-orange-700">
+                        {ride.scheduledAt ? format(new Date(ride.scheduledAt), "EEE, MMM d 'at' h:mm a") : ''}
+                      </p>
+                      <p className="text-xs text-gray-600 truncate mt-0.5">
+                        → {ride.destinationLocation?.address || 'Destination'}
+                      </p>
+                      <div className="mt-1 flex items-center gap-1">
+                        {ride.driver?.firstName ? (
+                          <span className="text-xs text-green-700 font-semibold flex items-center gap-1">
+                            <UserCheck className="w-3 h-3" />
+                            {ride.driver.firstName} {ride.driver.lastName?.[0] || ''}.
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-400 italic">Waiting for a driver to claim…</span>
+                        )}
+                      </div>
+                    </div>
+                    <span className="text-xs font-bold text-gray-700 ml-2 shrink-0">
+                      ${parseFloat(ride.estimatedFare || '0').toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

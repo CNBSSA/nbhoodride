@@ -209,6 +209,12 @@ export interface IStorage {
   getDriverEarnings(driverId: string, period: 'today' | 'week' | 'month'): Promise<{fare: number, tips: number, total: number, rideCount: number}>;
   getDriverRides(driverId: string, period: 'today' | 'week' | 'month'): Promise<Ride[]>;
   
+  // Scheduled ride operations
+  getOpenScheduledRides(): Promise<any[]>;
+  getScheduledRidesWithDriver(userId: string): Promise<any[]>;
+  claimScheduledRide(rideId: string, driverId: string): Promise<Ride>;
+  getDriverUpcomingRides(driverId: string): Promise<any[]>;
+
   // Driver ride management operations
   getPendingRidesForDriver(driverId: string): Promise<any[]>;
   acceptRide(rideId: string, driverId: string): Promise<Ride>;
@@ -582,6 +588,132 @@ export class DatabaseStorage implements IStorage {
           eq(rides.status, "pending"),
           isNotNull(rides.scheduledAt),
           gt(rides.scheduledAt, sql`now()`)
+        )
+      )
+      .orderBy(asc(rides.scheduledAt));
+  }
+
+  async getScheduledRidesWithDriver(userId: string): Promise<any[]> {
+    const driverAlias = alias(users, 'driver_user');
+    return await db
+      .select({
+        id: rides.id,
+        riderId: rides.riderId,
+        driverId: rides.driverId,
+        pickupLocation: rides.pickupLocation,
+        destinationLocation: rides.destinationLocation,
+        pickupInstructions: rides.pickupInstructions,
+        status: rides.status,
+        estimatedFare: rides.estimatedFare,
+        scheduledAt: rides.scheduledAt,
+        createdAt: rides.createdAt,
+        driver: {
+          id: driverAlias.id,
+          firstName: driverAlias.firstName,
+          lastName: driverAlias.lastName,
+          rating: driverAlias.rating,
+          profileImageUrl: driverAlias.profileImageUrl,
+        }
+      })
+      .from(rides)
+      .leftJoin(driverAlias, eq(rides.driverId, driverAlias.id))
+      .where(
+        and(
+          eq(rides.riderId, userId),
+          isNotNull(rides.scheduledAt),
+          gt(rides.scheduledAt, sql`now()`),
+          sql`${rides.status} IN ('pending', 'accepted')`
+        )
+      )
+      .orderBy(asc(rides.scheduledAt));
+  }
+
+  async getOpenScheduledRides(): Promise<any[]> {
+    const riderAlias = alias(users, 'rider_user');
+    return await db
+      .select({
+        id: rides.id,
+        riderId: rides.riderId,
+        driverId: rides.driverId,
+        pickupLocation: rides.pickupLocation,
+        destinationLocation: rides.destinationLocation,
+        pickupInstructions: rides.pickupInstructions,
+        status: rides.status,
+        estimatedFare: rides.estimatedFare,
+        scheduledAt: rides.scheduledAt,
+        createdAt: rides.createdAt,
+        rider: {
+          id: riderAlias.id,
+          firstName: riderAlias.firstName,
+          lastName: riderAlias.lastName,
+          rating: riderAlias.rating,
+        }
+      })
+      .from(rides)
+      .leftJoin(riderAlias, eq(rides.riderId, riderAlias.id))
+      .where(
+        and(
+          eq(rides.status, "pending"),
+          isNotNull(rides.scheduledAt),
+          gt(rides.scheduledAt, sql`now()`),
+          sql`${rides.driverId} IS NULL`
+        )
+      )
+      .orderBy(asc(rides.scheduledAt));
+  }
+
+  async claimScheduledRide(rideId: string, driverId: string): Promise<Ride> {
+    const ride = await this.getRide(rideId);
+    if (!ride) throw new Error("Ride not found");
+    if (ride.driverId) throw new Error("This ride has already been claimed by another driver");
+    if (!ride.scheduledAt) throw new Error("This is not a scheduled ride");
+    if (new Date(ride.scheduledAt) <= new Date()) throw new Error("This scheduled ride has already passed");
+
+    const [updated] = await db
+      .update(rides)
+      .set({ driverId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(rides.id, rideId),
+          sql`${rides.driverId} IS NULL`
+        )
+      )
+      .returning();
+
+    if (!updated) throw new Error("Ride was just claimed by another driver");
+    return updated;
+  }
+
+  async getDriverUpcomingRides(driverId: string): Promise<any[]> {
+    const riderAlias = alias(users, 'rider_user');
+    return await db
+      .select({
+        id: rides.id,
+        riderId: rides.riderId,
+        driverId: rides.driverId,
+        pickupLocation: rides.pickupLocation,
+        destinationLocation: rides.destinationLocation,
+        pickupInstructions: rides.pickupInstructions,
+        status: rides.status,
+        estimatedFare: rides.estimatedFare,
+        scheduledAt: rides.scheduledAt,
+        createdAt: rides.createdAt,
+        rider: {
+          id: riderAlias.id,
+          firstName: riderAlias.firstName,
+          lastName: riderAlias.lastName,
+          rating: riderAlias.rating,
+          profileImageUrl: riderAlias.profileImageUrl,
+        }
+      })
+      .from(rides)
+      .leftJoin(riderAlias, eq(rides.riderId, riderAlias.id))
+      .where(
+        and(
+          eq(rides.driverId, driverId),
+          isNotNull(rides.scheduledAt),
+          gt(rides.scheduledAt, sql`now()`),
+          sql`${rides.status} IN ('pending', 'accepted')`
         )
       )
       .orderBy(asc(rides.scheduledAt));
