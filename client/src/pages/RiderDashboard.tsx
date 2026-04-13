@@ -793,9 +793,17 @@ export default function RiderDashboard() {
                     <div className="flex justify-between"><span>Base fare</span><span className="font-medium">${fareEstimate.baseFare?.toFixed(2)}</span></div>
                     <div className="flex justify-between"><span>Time ({estimatedDuration} min)</span><span className="font-medium">${fareEstimate.timeCharge?.toFixed(2)}</span></div>
                     <div className="flex justify-between"><span>Distance ({estimatedDistance} mi)</span><span className="font-medium">${fareEstimate.distanceCharge?.toFixed(2)}</span></div>
+                    {(fareEstimate.promoDiscount ?? 0) > 0 && (
+                      <div className="flex justify-between text-orange-600 font-semibold">
+                        <span>🎉 PG Welcome Credit ({fareEstimate.promoRidesRemaining} left)</span>
+                        <span>-${fareEstimate.promoDiscount?.toFixed(2)}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between font-bold text-sm text-gray-800 pt-1 border-t border-green-200 mt-1">
                       <span>Total</span>
-                      <span className="text-green-700" data-testid="text-total-fare">${fareEstimate.total?.toFixed(2)}</span>
+                      <span className="text-green-700" data-testid="text-total-fare">
+                        ${(fareEstimate.promoDiscount ?? 0) > 0 ? fareEstimate.totalAfterPromo?.toFixed(2) : fareEstimate.total?.toFixed(2)}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -818,7 +826,9 @@ export default function RiderDashboard() {
                 {fareEstimate && selectedDriverId && (
                   <div className="flex items-center justify-between text-xs text-gray-500 mb-2 px-1">
                     <span>Via Virtual PG Card</span>
-                    <span className="font-bold text-sm text-gray-800">${fareEstimate.total?.toFixed(2)}</span>
+                    <span className="font-bold text-sm text-gray-800">
+                      ${(fareEstimate.promoDiscount ?? 0) > 0 ? fareEstimate.totalAfterPromo?.toFixed(2) : fareEstimate.total?.toFixed(2)}
+                    </span>
                   </div>
                 )}
                 <Button
@@ -832,7 +842,7 @@ export default function RiderDashboard() {
                   ) : calculatingFare ? (
                     <><Loader2 className="w-4 h-4 animate-spin mr-2" />Calculating fare...</>
                   ) : fareEstimate && selectedDriverId ? (
-                    `Confirm Ride — $${fareEstimate.total?.toFixed(2)}`
+                    `Confirm Ride — $${(fareEstimate.promoDiscount ?? 0) > 0 ? fareEstimate.totalAfterPromo?.toFixed(2) : fareEstimate.total?.toFixed(2)}`
                   ) : selectedDriverId ? (
                     "Confirm Booking"
                   ) : (

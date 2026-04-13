@@ -47,7 +47,8 @@ export const users = pgTable("users", {
   emergencyContact: varchar("emergency_contact"),
   stripeCustomerId: varchar("stripe_customer_id"),
   stripePaymentMethodId: varchar("stripe_payment_method_id"),
-  virtualCardBalance: decimal("virtual_card_balance", { precision: 10, scale: 2 }).default("1000.00"),
+  virtualCardBalance: decimal("virtual_card_balance", { precision: 10, scale: 2 }).default("0.00"),
+  promoRidesRemaining: integer("promo_rides_remaining").default(0),
   passwordResetToken: varchar("password_reset_token"),
   passwordResetExpiry: timestamp("password_reset_expiry"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -163,9 +164,29 @@ export const rides = pgTable("rides", {
   riderReview: text("rider_review"),
   driverReview: text("driver_review"),
   scheduledAt: timestamp("scheduled_at"),
+  sharedRideGroupId: varchar("shared_ride_group_id"),
+  promoDiscountApplied: decimal("promo_discount_applied", { precision: 8, scale: 2 }).default("0.00"),
   acceptedAt: timestamp("accepted_at"),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Shared ride groups (cluster scheduling)
+export const sharedRideGroups = pgTable("shared_ride_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  scheduledAt: timestamp("scheduled_at").notNull(),
+  destinationLabel: varchar("destination_label").notNull(),
+  destinationLat: decimal("destination_lat", { precision: 10, scale: 6 }).notNull(),
+  destinationLng: decimal("destination_lng", { precision: 10, scale: 6 }).notNull(),
+  radiusMiles: decimal("radius_miles", { precision: 4, scale: 2 }).default("2.00"),
+  maxRiders: integer("max_riders").default(4),
+  riderCount: integer("rider_count").default(0),
+  status: varchar("status").default("open"),
+  driverId: varchar("driver_id").references(() => users.id),
+  discountPct: integer("discount_pct").default(30),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -739,6 +760,14 @@ export type OwnershipRebalanceLog = typeof ownershipRebalanceLog.$inferSelect;
 export type ProfitDeclaration = typeof profitDeclarations.$inferSelect;
 export type ProfitDistribution = typeof profitDistributions.$inferSelect;
 export type AdminActivityLog = typeof adminActivityLog.$inferSelect;
+
+export const insertSharedRideGroupSchema = createInsertSchema(sharedRideGroups).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertSharedRideGroup = z.infer<typeof insertSharedRideGroupSchema>;
+export type SharedRideGroup = typeof sharedRideGroups.$inferSelect;
 
 export type InsertDriverProfile = z.infer<typeof insertDriverProfileSchema>;
 export type InsertVehicle = z.infer<typeof insertVehicleSchema>;

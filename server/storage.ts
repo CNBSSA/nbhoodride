@@ -191,6 +191,7 @@ export interface IStorage {
   deductVirtualCardBalance(userId: string, amount: number): Promise<User>;
   addVirtualCardBalance(userId: string, amount: number): Promise<User>;
   getVirtualCardBalance(userId: string): Promise<number>;
+  consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
   
   // Dispute operations
   createDispute(dispute: InsertDispute): Promise<Dispute>;
@@ -1521,6 +1522,21 @@ export class DatabaseStorage implements IStorage {
       throw new Error("User not found");
     }
     return parseFloat(user.virtualCardBalance || "0");
+  }
+
+  async consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void> {
+    // Decrement promoRidesRemaining by 1 (floor at 0) and record discount on the ride
+    await db.update(users)
+      .set({
+        promoRidesRemaining: sql`GREATEST(0, COALESCE(${users.promoRidesRemaining}, 0) - 1)`,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
+
+    // Record the promo discount on the ride
+    await db.update(rides)
+      .set({ promoDiscountApplied: discountAmount.toString(), updatedAt: new Date() })
+      .where(eq(rides.id, rideId));
   }
 
   // GPS tracking operations

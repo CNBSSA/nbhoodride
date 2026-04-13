@@ -135,6 +135,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         lastName,
         phone,
         isApproved: false,
+        virtualCardBalance: "20.00",
+        promoRidesRemaining: 4,
       });
 
       res.json({ 
@@ -484,9 +486,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const ride = await storage.acceptRide(rideId, userId);
       
       if (ride.paymentMethod === 'card') {
-        const estimatedFare = parseFloat(ride.estimatedFare || "0");
+        const rider = await storage.getUser(ride.riderId);
+        const rawFare = parseFloat(ride.estimatedFare || "0");
+
+        // Apply $5 promo discount if rider has promo rides remaining
+        const promoRemaining = rider?.promoRidesRemaining ?? 0;
+        const promoDiscount = promoRemaining > 0 ? Math.min(5, rawFare) : 0;
+        const chargeAmount = Math.max(0, rawFare - promoDiscount);
+
         try {
-          await storage.deductVirtualCardBalance(ride.riderId, estimatedFare);
+          if (chargeAmount > 0) {
+            await storage.deductVirtualCardBalance(ride.riderId, chargeAmount);
+          }
+          // Consume one promo ride and record discount applied
+          if (promoDiscount > 0 && rider) {
+            await storage.consumePromoRide(ride.riderId, promoDiscount, rideId);
+          }
           await storage.setRidePaymentAuthorization(rideId, `virtual-${rideId}`);
         } catch (error: any) {
           console.error("Failed to authorize virtual card payment:", error);
@@ -1726,9 +1741,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Fare calculation endpoint
-  app.post('/api/rides/calculate-fare', async (req, res) => {
+  app.post('/api/rides/calculate-fare', isAuthenticated, async (req: any, res) => {
     try {
       const { distance, duration, driverId } = req.body;
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       
       if (!distance || !duration) {
         return res.status(400).json({ message: "Distance and duration required" });
@@ -1757,6 +1773,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const subtotal = baseFare + timeCharge + distanceCharge + surgeAdjustment;
       const total = Math.max(rates.minimumFare, Math.min(100, subtotal));
       
+      // Check if rider has promo rides remaining
+      let promoDiscount = 0;
+      let promoRidesRemaining = 0;
+      if (userId) {
+        try {
+          const rider = await storage.getUser(userId);
+          promoRidesRemaining = rider?.promoRidesRemaining ?? 0;
+          if (promoRidesRemaining > 0) {
+            promoDiscount = Math.min(5, total);
+          }
+        } catch { /* non-critical */ }
+      }
+
       res.json({
         baseFare: parseFloat(baseFare.toFixed(2)),
         timeCharge: parseFloat(timeCharge.toFixed(2)),
@@ -1764,6 +1793,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         surgeAdjustment: parseFloat(surgeAdjustment.toFixed(2)),
         subtotal: parseFloat(subtotal.toFixed(2)),
         total: parseFloat(total.toFixed(2)),
+        promoDiscount: parseFloat(promoDiscount.toFixed(2)),
+        promoRidesRemaining,
+        totalAfterPromo: parseFloat(Math.max(0, total - promoDiscount).toFixed(2)),
         rates: {
           minimumFare: rates.minimumFare,
           baseFare: rates.baseFare,

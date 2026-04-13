@@ -33,6 +33,9 @@ interface FareEstimate {
   surgeAdjustment: number;
   subtotal: number;
   total: number;
+  promoDiscount?: number;
+  promoRidesRemaining?: number;
+  totalAfterPromo?: number;
   formula: string;
 }
 
@@ -428,10 +431,18 @@ export default function ScheduleRideModal({
                       </span>
                     </div>
                   )}
+                  {(fareEstimate.promoDiscount ?? 0) > 0 && (
+                    <div className="flex justify-between text-orange-600 font-semibold">
+                      <span>🎉 PG Welcome Credit ({fareEstimate.promoRidesRemaining} left)</span>
+                      <span>-${fareEstimate.promoDiscount?.toFixed(2)}</span>
+                    </div>
+                  )}
                   <Separator />
                   <div className="flex justify-between font-semibold">
                     <span>Total (Virtual Card)</span>
-                    <span data-testid="text-total-fare">${fareEstimate.total.toFixed(2)}</span>
+                    <span data-testid="text-total-fare">
+                      ${(fareEstimate.promoDiscount ?? 0) > 0 ? fareEstimate.totalAfterPromo?.toFixed(2) : fareEstimate.total.toFixed(2)}
+                    </span>
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
