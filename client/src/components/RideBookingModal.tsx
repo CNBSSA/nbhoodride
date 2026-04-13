@@ -8,7 +8,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { MapPin, Navigation, User, DollarSign, CheckCircle, ChevronRight, Star, Shield, Loader2 } from "lucide-react";
+import { MapPin, Navigation, User, DollarSign, CheckCircle, ChevronRight, Star, Shield, Loader2, Users } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 
 interface Driver {
   id: string;
@@ -48,6 +49,7 @@ export default function RideBookingModal({
   const [pickupManuallyEdited, setPickupManuallyEdited] = useState(false);
   const [destinationAddress, setDestinationAddress] = useState("");
   const [pickupInstructions, setPickupInstructions] = useState("");
+  const [wantsSharedRide, setWantsSharedRide] = useState(false);
   const [selectedDriver, setSelectedDriver] = useState<string>("");
   const [fareEstimate, setFareEstimate] = useState<FareEstimate | null>(null);
   const { toast } = useToast();
@@ -66,6 +68,7 @@ export default function RideBookingModal({
       setEstimatedDistance(null);
       setEstimatedDuration(null);
       setPickupManuallyEdited(false);
+      setWantsSharedRide(false);
     }
   }, [isOpen, trackRideSearch]);
 
@@ -99,12 +102,25 @@ export default function RideBookingModal({
       const response = await apiRequest('POST', '/api/rides', rideData);
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       trackRideBooked();
-      toast({
-        title: "Ride Booked!",
-        description: "Your driver is on the way. You'll receive updates shortly.",
-      });
+      const matchInfo = data?.sharedMatch;
+      if (matchInfo?.matched) {
+        toast({
+          title: "Shared Ride Matched!",
+          description: `You saved $${parseFloat(matchInfo.discountAmount || 0).toFixed(2)} — a co-rider is being picked up on the way!`,
+        });
+      } else if (wantsSharedRide) {
+        toast({
+          title: "Ride Booked!",
+          description: "Looking for a co-rider to share your trip. You'll be notified if matched.",
+        });
+      } else {
+        toast({
+          title: "Ride Booked!",
+          description: "Your driver is on the way. You'll receive updates shortly.",
+        });
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/rides"] });
       onClose();
     },
@@ -230,7 +246,8 @@ export default function RideBookingModal({
       pickupInstructions,
       driverId: selectedDriver,
       estimatedFare: fareEstimate?.total || 0,
-      paymentMethod: 'card'
+      paymentMethod: 'card',
+      wantsSharedRide,
     };
 
     bookRideMutation.mutate(rideData);
@@ -373,6 +390,29 @@ export default function RideBookingModal({
             </Card>
           )}
 
+          {/* Share My Ride toggle */}
+          <div className="flex items-center justify-between p-3 rounded-xl border-2 border-dashed border-purple-200 bg-purple-50 dark:bg-purple-950/20 dark:border-purple-800">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-purple-600" />
+              <div>
+                <p className="text-sm font-semibold text-purple-800 dark:text-purple-200">Share My Ride</p>
+                <p className="text-[10px] text-purple-600 dark:text-purple-400">Save 30% if matched with a co-rider</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {wantsSharedRide && fareEstimate && (
+                <span className="text-xs font-bold text-green-600 bg-green-100 dark:bg-green-900/40 px-2 py-0.5 rounded-full">
+                  ~${(fareEstimate.total * 0.7).toFixed(2)} if matched
+                </span>
+              )}
+              <Switch
+                checked={wantsSharedRide}
+                onCheckedChange={setWantsSharedRide}
+                data-testid="switch-shared-ride"
+              />
+            </div>
+          </div>
+
           <div>
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-semibold text-sm">Choose Your Driver</h3>
@@ -439,14 +479,21 @@ export default function RideBookingModal({
           {fareEstimate && selectedDriver && (
             <div className="flex items-center justify-between text-xs text-gray-500 px-1">
               <span>Paid via Virtual PG Card</span>
-              <span className="font-bold text-sm text-gray-900 dark:text-gray-100">${fareEstimate.total.toFixed(2)}</span>
+              {wantsSharedRide ? (
+                <span className="text-right">
+                  <span className="line-through text-gray-400 mr-1">${fareEstimate.total.toFixed(2)}</span>
+                  <span className="font-bold text-sm text-green-700 dark:text-green-400">~${(fareEstimate.total * 0.7).toFixed(2)} if matched</span>
+                </span>
+              ) : (
+                <span className="font-bold text-sm text-gray-900 dark:text-gray-100">${fareEstimate.total.toFixed(2)}</span>
+              )}
             </div>
           )}
           <Button
             ref={confirmBtnRef}
             onClick={handleBookRide}
             disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress || calculateFareMutation.isPending}
-            className="w-full h-14 text-base font-semibold rounded-xl shadow-lg"
+            className={`w-full h-14 text-base font-semibold rounded-xl shadow-lg ${wantsSharedRide ? 'bg-purple-600 hover:bg-purple-700' : ''}`}
             size="lg"
             data-testid="button-confirm-booking"
           >
@@ -454,6 +501,8 @@ export default function RideBookingModal({
               <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Booking...</>
             ) : calculateFareMutation.isPending && selectedDriver ? (
               <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Updating fare...</>
+            ) : fareEstimate && selectedDriver && wantsSharedRide ? (
+              <><Users className="w-4 h-4 mr-2" /> Share Ride — ${fareEstimate.total.toFixed(2)}</>
             ) : fareEstimate && selectedDriver ? (
               `Confirm Ride — $${fareEstimate.total.toFixed(2)}`
             ) : !destinationAddress ? (

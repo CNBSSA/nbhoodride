@@ -165,6 +165,8 @@ export const rides = pgTable("rides", {
   driverReview: text("driver_review"),
   scheduledAt: timestamp("scheduled_at"),
   sharedRideGroupId: varchar("shared_ride_group_id"),
+  wantsSharedRide: boolean("wants_shared_ride").default(false),
+  sharedFareDiscount: decimal("shared_fare_discount", { precision: 8, scale: 2 }).default("0.00"),
   promoDiscountApplied: decimal("promo_discount_applied", { precision: 8, scale: 2 }).default("0.00"),
   acceptedAt: timestamp("accepted_at"),
   startedAt: timestamp("started_at"),

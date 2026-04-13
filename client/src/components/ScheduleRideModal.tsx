@@ -10,7 +10,8 @@ import { Separator } from "@/components/ui/separator";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Calendar as CalendarIcon, Clock, Search, X } from "lucide-react";
+import { Calendar as CalendarIcon, Clock, Search, X, Users } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { format, addDays } from "date-fns";
 import { useAnalytics } from "@/hooks/useAnalytics";
 
@@ -64,6 +65,7 @@ export default function ScheduleRideModal({
   const [scheduledPeriod, setScheduledPeriod] = useState<"AM" | "PM">("PM");
   const [phoneSearch, setPhoneSearch] = useState("");
   const [searchedDrivers, setSearchedDrivers] = useState<Driver[]>([]);
+  const [wantsSharedRide, setWantsSharedRide] = useState(false);
   
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -272,7 +274,8 @@ export default function ScheduleRideModal({
       driverId: selectedDriver,
       estimatedFare: fareEstimate?.total || 0,
       scheduledAt,
-      paymentMethod: 'card' // Virtual card is the only payment method
+      paymentMethod: 'card',
+      wantsSharedRide,
     };
 
     bookRideMutation.mutate(rideData);
@@ -451,6 +454,29 @@ export default function ScheduleRideModal({
               </CardContent>
             </Card>
           )}
+
+          {/* Share My Ride toggle */}
+          <div className="flex items-center justify-between p-3 rounded-xl border-2 border-dashed border-purple-200 bg-purple-50 dark:bg-purple-950/20 dark:border-purple-800">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-purple-600" />
+              <div>
+                <p className="text-sm font-semibold text-purple-800 dark:text-purple-200">Share My Ride</p>
+                <p className="text-[10px] text-purple-600 dark:text-purple-400">Save 30% if matched with a co-rider</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {wantsSharedRide && fareEstimate && (
+                <span className="text-xs font-bold text-green-600 bg-green-100 dark:bg-green-900/40 px-2 py-0.5 rounded-full">
+                  ~${(fareEstimate.total * 0.7).toFixed(2)} if matched
+                </span>
+              )}
+              <Switch
+                checked={wantsSharedRide}
+                onCheckedChange={setWantsSharedRide}
+                data-testid="switch-shared-ride"
+              />
+            </div>
+          </div>
 
           {/* Driver Search by Phone */}
           <div className="space-y-2">

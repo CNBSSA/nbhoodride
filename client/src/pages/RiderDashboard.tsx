@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import {
   MapPin, Navigation, Bell, Star, Clock, X, Shield, Car,
-  Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign, CalendarClock, UserCheck
+  Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign, CalendarClock, UserCheck, Users
 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -145,6 +145,12 @@ export default function RiderDashboard() {
   const { data: scheduledRides = [] } = useQuery<any[]>({
     queryKey: ['/api/rides/scheduled'],
     refetchInterval: 30000,
+  });
+
+  const { data: sharedGroup } = useQuery<any>({
+    queryKey: ['/api/shared-rides/my-group'],
+    refetchInterval: 10000,
+    enabled: !!activeRides[0],
   });
 
   // ── Derived data ──
@@ -437,6 +443,15 @@ export default function RiderDashboard() {
               <div className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0" />
               <span className="truncate">{activeRide.destinationLocation?.address || 'En route...'}</span>
             </div>
+            {sharedGroup && (
+              <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-purple-700 bg-purple-50 dark:bg-purple-950/30 rounded-lg px-2 py-1.5">
+                <Users className="w-3.5 h-3.5 flex-shrink-0" />
+                <span>Shared ride · {sharedGroup.totalRiders} riders</span>
+                {sharedGroup.discountAmount && (
+                  <span className="ml-auto text-green-600 font-bold">-${parseFloat(sharedGroup.discountAmount).toFixed(2)} saved</span>
+                )}
+              </div>
+            )}
             {(activeRide.status === 'pending' || activeRide.status === 'accepted') && (
               <button
                 onClick={() => cancelRide.mutate(activeRide.id)}

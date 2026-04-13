@@ -20,6 +20,7 @@ import {
   sendSignupPendingEmail,
 } from "./emailService";
 import { sendPushToSubscriptions } from "./pushService";
+import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import {
   insertDriverProfileSchema,
   insertVehicleSchema,
@@ -1141,6 +1142,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const ride = await storage.createRide(rideData);
 
+      // Attempt shared-ride matching if the rider opted in
+      let matchResult = { matched: false, groupId: undefined as string | undefined, discountAmount: undefined as number | undefined };
+      if (ride.wantsSharedRide) {
+        try {
+          matchResult = await tryMatchSharedRide(ride.id) as typeof matchResult;
+        } catch (matchErr) {
+          console.error("Shared ride matching error (non-fatal):", matchErr);
+        }
+      }
+
       const riderUser = await storage.getUser(userId);
       const isScheduledFuture = ride.scheduledAt && new Date(ride.scheduledAt) > new Date();
 
@@ -1189,7 +1200,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ).catch(console.error);
       }
 
-      res.json(ride);
+      res.json({ ...ride, sharedMatch: matchResult });
     } catch (error) {
       console.error("Error creating ride:", error);
       if (error instanceof z.ZodError) {
@@ -2430,6 +2441,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error resolving dispute:", error);
       res.status(500).json({ message: "Failed to resolve dispute" });
+    }
+  });
+
+  // ── SHARED RIDES ────────────────────────────────────────────────────────────
+
+  // Rider: get details of the shared group their active ride belongs to
+  app.get('/api/shared-rides/my-group', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const group = await getMyActiveSharedGroup(userId);
+      res.json(group);
+    } catch (error) {
+      console.error("Error fetching shared group:", error);
+      res.status(500).json({ message: "Failed to fetch shared group" });
     }
   });
 
