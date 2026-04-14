@@ -19,7 +19,7 @@ A React-based Single Page Application (SPA) uses TypeScript, Vite, Shadcn/ui (bu
 The backend is a Node.js Express.js REST API. It uses Drizzle ORM with Neon serverless PostgreSQL for data persistence. Authentication is handled via Replit Auth (OpenID Connect) with server-side sessions. Real-time features like live ride tracking and communication use WebSockets. Google Cloud Storage is used for driver document storage with custom ACL policies.
 
 ### Data Storage
-PostgreSQL stores core entities including Users, Driver Profiles, Vehicles, Rides, Disputes, Emergency Incidents, and Sessions.
+PostgreSQL stores core entities including Users, Driver Profiles, Vehicles, Rides, Ride Groups, Disputes, Emergency Incidents, and Sessions.
 
 ### Authentication and Authorization
 Email/password authentication with bcrypt password hashing and server-side sessions stored in PostgreSQL. API endpoints are protected by middleware. A custom ACL system manages access to uploaded documents.
@@ -61,6 +61,11 @@ All transactions occur via a Virtual PG Card system. New users receive $20 in we
 
 ### Rate Limiting
 express-rate-limit applied globally: 200 req/15min general; 20 req/15min for /api/auth/login and /api/auth/signup; 10 req/min for /api/ai endpoints.
+
+### Group Ride Modes
+Two additional ride modes beyond standard solo and auto-matched shared rides:
+- **Mode 3 — Multi-Stop** (`rideType: "multi_stop"`): Organizer books a single ride with multiple intermediate pickup stops. The organizer pays the full fare for the entire route. No passenger accounts needed. Managed via `POST /api/rides/multi-stop`, stored in a `ride_groups` record with `groupType: "multi_stop"`.
+- **Mode 4 — Shared Schedule** (`rideType: "shared_schedule"`): Organizer books a scheduled ride and receives a shareable `PG-XXXXXX` code. Others join using that code via `POST /api/rides/join-schedule`; each joiner pays their own fare with a 30% group discount applied to all riders (including the organizer) once the first joiner joins. Schedule codes expire 1 hour after the scheduled pickup time. Group managed in `ride_groups` table (fields: `scheduleCode`, `organizerId`, `groupType`, `maxSlots`, `filledSlots`, `status`, `driverId`, `discountActive`, `scheduledAt`). Rides store `groupId`, `rideType`, `pickupStops`, `originalFare`, and `groupDiscountAmount`. Frontend components: `MultiStopBookingSheet`, `SharedScheduleSheet`, `JoinScheduleModal`, accessed via four action buttons (Schedule / Multi-Stop / Share / Join) on the Rider Dashboard idle panel.
 
 ### Legal Pages
 Terms of Service at /terms and Privacy Policy at /privacy — publicly accessible without login.

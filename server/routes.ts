@@ -1131,8 +1131,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       
-      console.log("Ride creation request body:", JSON.stringify(req.body, null, 2));
-      
       // SECURITY: Enforce virtual card as the only payment method
       if (req.body.paymentMethod && req.body.paymentMethod !== 'card') {
         return res.status(400).json({ message: "Only virtual card payment is supported" });
@@ -1147,14 +1145,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         bodyData.estimatedFare = bodyData.estimatedFare.toString();
       }
       
-      console.log("Processed body data:", JSON.stringify(bodyData, null, 2));
-      
       const dataToValidate = {
         ...bodyData,
         riderId: userId
       };
-      
-      console.log("Data to validate:", JSON.stringify(dataToValidate, null, 2));
       
       const rideData = insertRideSchema.parse(dataToValidate);
       
