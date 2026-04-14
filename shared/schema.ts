@@ -167,6 +167,11 @@ export const rides = pgTable("rides", {
   sharedRideGroupId: varchar("shared_ride_group_id"),
   wantsSharedRide: boolean("wants_shared_ride").default(false),
   sharedFareDiscount: decimal("shared_fare_discount", { precision: 8, scale: 2 }).default("0.00"),
+  groupId: varchar("group_id"),
+  rideType: varchar("ride_type").default("solo"),
+  pickupStops: jsonb("pickup_stops").$type<Array<{lat: number, lng: number, address: string}>>(),
+  originalFare: decimal("original_fare", { precision: 8, scale: 2 }),
+  groupDiscountAmount: decimal("group_discount_amount", { precision: 8, scale: 2 }).default("0.00"),
   promoDiscountApplied: decimal("promo_discount_applied", { precision: 8, scale: 2 }).default("0.00"),
   acceptedAt: timestamp("accepted_at"),
   startedAt: timestamp("started_at"),
@@ -191,6 +196,22 @@ export const sharedRideGroups = pgTable("shared_ride_groups", {
   createdBy: varchar("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Ride groups — for Mode 3 (multi-stop, organizer pays) and Mode 4 (code-based shared schedule)
+export const rideGroups = pgTable("ride_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  scheduleCode: varchar("schedule_code", { length: 12 }).unique(),
+  organizerId: varchar("organizer_id").notNull().references(() => users.id),
+  groupType: varchar("group_type").notNull(),
+  sharedDestination: jsonb("shared_destination").$type<{lat: number, lng: number, address: string}>(),
+  maxSlots: integer("max_slots").default(3),
+  filledSlots: integer("filled_slots").default(1),
+  status: varchar("status").default("open"),
+  driverId: varchar("driver_id").references(() => users.id),
+  discountActive: boolean("discount_active").default(false),
+  scheduledAt: timestamp("scheduled_at"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Push notification subscriptions
@@ -809,6 +830,13 @@ export const insertSharedRideGroupSchema = createInsertSchema(sharedRideGroups).
 });
 export type InsertSharedRideGroup = z.infer<typeof insertSharedRideGroupSchema>;
 export type SharedRideGroup = typeof sharedRideGroups.$inferSelect;
+
+export const insertRideGroupSchema = createInsertSchema(rideGroups).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertRideGroup = z.infer<typeof insertRideGroupSchema>;
+export type RideGroup = typeof rideGroups.$inferSelect;
 
 export type InsertDriverProfile = z.infer<typeof insertDriverProfileSchema>;
 export type InsertVehicle = z.infer<typeof insertVehicleSchema>;
