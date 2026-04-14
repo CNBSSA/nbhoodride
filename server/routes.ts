@@ -504,6 +504,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
+      // If this ride belongs to a shared schedule group, close the group join window
+      if (ride.groupId && ride.rideType === 'shared_schedule') {
+        const group = await storage.getRideGroupById(ride.groupId);
+        if (group && group.status === 'open') {
+          // Close the group — no more joiners allowed after driver accepts
+          await storage.updateRideGroup(group.id, { status: 'closed', driverId: userId });
+
+          // If discount hasn't been triggered yet but filledSlots >= 2, apply it now
+          if (!group.discountActive && group.filledSlots >= 2) {
+            await storage.applyGroupDiscount(group.id);
+          }
+
+          // Notify all riders in the group that the driver accepted
+          const groupRides = await storage.getRidesInGroup(group.id);
+          const driverUser2 = await storage.getUser(userId);
+          for (const groupRide of groupRides) {
+            if (groupRide.riderId && activeConnections.has(groupRide.riderId)) {
+              const riderWs = activeConnections.get(groupRide.riderId);
+              if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+                riderWs.send(JSON.stringify({
+                  type: 'ride_accepted',
+                  rideId: groupRide.id,
+                  driverId: userId,
+                  riderId: groupRide.riderId,
+                  driverName: driverUser2 ? `${driverUser2.firstName} ${driverUser2.lastName?.[0] || ''}.` : 'Your driver',
+                  isGroupRide: true,
+                }));
+              }
+            }
+          }
+        }
+      }
+
       const driverUser = await storage.getUser(userId);
       const rideAcceptedMessage = {
         type: 'ride_accepted',
@@ -512,7 +545,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         riderId: ride.riderId,
         driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'Your driver',
       };
-      
+
       // Send to driver
       if (activeConnections.has(userId)) {
         const driverWs = activeConnections.get(userId);
@@ -520,15 +553,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           driverWs.send(JSON.stringify(rideAcceptedMessage));
         }
       }
-      
-      // Send to rider
-      if (activeConnections.has(ride.riderId)) {
+
+      // Send to rider (only for solo or multi_stop — shared_schedule riders already notified above)
+      if (!ride.groupId && activeConnections.has(ride.riderId)) {
         const riderWs = activeConnections.get(ride.riderId);
         if (riderWs && riderWs.readyState === WebSocket.OPEN) {
           riderWs.send(JSON.stringify(rideAcceptedMessage));
         }
       }
-      
+
       res.json(ride);
     } catch (error) {
       console.error("Error accepting ride:", error);
@@ -1249,6 +1282,267 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching scheduled rides:", error);
       res.status(500).json({ message: "Failed to fetch scheduled rides" });
+    }
+  });
+
+  // ── Group Ride Routes (must come before parameterized /api/rides/:rideId) ──
+
+  // POST /api/rides/multi-stop — Mode 3: organizer books up to 3 pickups, one shared destination
+  app.post('/api/rides/multi-stop', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { pickupStops, destination, driverId, estimatedFare, pickupInstructions } = req.body;
+
+      if (!pickupStops || !Array.isArray(pickupStops) || pickupStops.length < 1 || pickupStops.length > 3) {
+        return res.status(400).json({ message: "Between 1 and 3 pickup stops required" });
+      }
+      if (!destination) return res.status(400).json({ message: "Destination required" });
+      if (!driverId) return res.status(400).json({ message: "Driver required" });
+
+      const fare = parseFloat(estimatedFare || "0");
+      if (fare <= 0) return res.status(400).json({ message: "Invalid fare" });
+
+      // Generate a unique schedule code (used for internal reference on multi-stop)
+      const { nanoid: _nanoid } = await import("nanoid");
+      const code = "MS-" + _nanoid(6).toUpperCase();
+
+      // Create ride group
+      const group = await storage.createRideGroup({
+        scheduleCode: code,
+        organizerId: userId,
+        groupType: "multi_stop",
+        sharedDestination: destination,
+        maxSlots: pickupStops.length,
+        filledSlots: pickupStops.length,
+        status: "open",
+        driverId: null,
+        discountRate: "0.00",
+        discountActive: false,
+      });
+
+      // Create a single ride covering the full route (organizer pays)
+      const ride = await storage.createRide({
+        riderId: userId,
+        driverId,
+        status: "pending",
+        paymentMethod: "card",
+        pickupLocation: pickupStops[0],
+        destinationLocation: destination,
+        estimatedFare: fare.toString(),
+        originalFare: fare.toString(),
+        rideType: "multi_stop",
+        groupId: group.id,
+        pickupStops,
+        pickupInstructions: pickupInstructions || null,
+      });
+
+      // Notify driver
+      if (activeConnections.has(driverId)) {
+        const driverWs = activeConnections.get(driverId);
+        if (driverWs && driverWs.readyState === WebSocket.OPEN) {
+          const riderUser = await storage.getUser(userId);
+          driverWs.send(JSON.stringify({
+            type: 'new_ride_request',
+            rideId: ride.id,
+            riderId: userId,
+            riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ''}.` : 'Rider',
+            riderRating: riderUser?.rating || '5.0',
+            pickupAddress: pickupStops[0]?.address || '',
+            destinationAddress: destination?.address || '',
+            estimatedFare: ride.estimatedFare,
+            pickupInstructions: ride.pickupInstructions || '',
+            isGroupRide: true,
+            groupType: 'multi_stop',
+            pickupStops,
+          }));
+        }
+      }
+
+      res.json({ ride, group });
+    } catch (error) {
+      console.error("Error creating multi-stop ride:", error);
+      res.status(500).json({ message: "Failed to create multi-stop ride" });
+    }
+  });
+
+  // POST /api/rides/create-shared-schedule — Mode 4: organizer creates a joinable schedule
+  app.post('/api/rides/create-shared-schedule', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { pickupLocation, destination, driverId, estimatedFare, pickupInstructions, scheduledAt } = req.body;
+
+      if (!pickupLocation) return res.status(400).json({ message: "Pickup location required" });
+      if (!destination) return res.status(400).json({ message: "Destination required" });
+      if (!driverId) return res.status(400).json({ message: "Driver required" });
+
+      const fare = parseFloat(estimatedFare || "0");
+      if (fare <= 0) return res.status(400).json({ message: "Invalid fare" });
+
+      // Generate PG-XXXXXX schedule code
+      const { nanoid: _nanoid } = await import("nanoid");
+      const code = "PG-" + _nanoid(6).toUpperCase();
+
+      // Create the ride group (open for joiners, max 3 slots = organizer + 2 joiners)
+      const group = await storage.createRideGroup({
+        scheduleCode: code,
+        organizerId: userId,
+        groupType: "shared_schedule",
+        sharedDestination: null,
+        maxSlots: 3,
+        filledSlots: 1,
+        status: "open",
+        driverId: null,
+        discountRate: "0.30",
+        discountActive: false,
+        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+      });
+
+      // Create organizer's ride
+      const ride = await storage.createRide({
+        riderId: userId,
+        driverId,
+        status: "pending",
+        paymentMethod: "card",
+        pickupLocation,
+        destinationLocation: destination,
+        estimatedFare: fare.toString(),
+        originalFare: fare.toString(),
+        rideType: "shared_schedule",
+        groupId: group.id,
+        pickupInstructions: pickupInstructions || null,
+        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+      });
+
+      // Notify driver of pending request
+      if (activeConnections.has(driverId)) {
+        const driverWs = activeConnections.get(driverId);
+        if (driverWs && driverWs.readyState === WebSocket.OPEN) {
+          const riderUser = await storage.getUser(userId);
+          driverWs.send(JSON.stringify({
+            type: 'new_ride_request',
+            rideId: ride.id,
+            riderId: userId,
+            riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ''}.` : 'Rider',
+            riderRating: riderUser?.rating || '5.0',
+            pickupAddress: pickupLocation?.address || '',
+            destinationAddress: destination?.address || '',
+            estimatedFare: ride.estimatedFare,
+            pickupInstructions: ride.pickupInstructions || '',
+            isGroupRide: true,
+            groupType: 'shared_schedule',
+            scheduleCode: code,
+            filledSlots: 1,
+            maxSlots: 3,
+          }));
+        }
+      }
+
+      res.json({ ride, group, scheduleCode: code });
+    } catch (error) {
+      console.error("Error creating shared schedule:", error);
+      res.status(500).json({ message: "Failed to create shared schedule" });
+    }
+  });
+
+  // GET /api/rides/schedule/:code — look up a shared schedule by PG-XXXXXX code
+  app.get('/api/rides/schedule/:code', isAuthenticated, async (req: any, res) => {
+    try {
+      const { code } = req.params;
+      const group = await storage.getRideGroupByCode(code.toUpperCase());
+      if (!group) return res.status(404).json({ message: "Schedule not found" });
+      if (group.status !== "open") return res.status(410).json({ message: "This schedule is no longer open for joining" });
+      if (group.filledSlots >= group.maxSlots) return res.status(409).json({ message: "This schedule is full" });
+
+      const groupRides = await storage.getRidesInGroup(group.id);
+      const organizer = await storage.getUser(group.organizerId);
+
+      res.json({
+        group,
+        organizerName: organizer ? `${organizer.firstName} ${organizer.lastName?.[0] || ''}.` : 'Organizer',
+        spotsLeft: group.maxSlots - group.filledSlots,
+        rides: groupRides.map(r => ({
+          pickupLocation: r.pickupLocation,
+          destinationLocation: r.destinationLocation,
+          estimatedFare: r.estimatedFare,
+        })),
+      });
+    } catch (error) {
+      console.error("Error fetching schedule:", error);
+      res.status(500).json({ message: "Failed to fetch schedule" });
+    }
+  });
+
+  // POST /api/rides/join-schedule — joiner books into an existing shared schedule
+  app.post('/api/rides/join-schedule', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { scheduleCode, pickupLocation, destination, estimatedFare, pickupInstructions } = req.body;
+
+      if (!scheduleCode) return res.status(400).json({ message: "Schedule code required" });
+      if (!pickupLocation) return res.status(400).json({ message: "Pickup location required" });
+      if (!destination) return res.status(400).json({ message: "Destination required" });
+
+      const group = await storage.getRideGroupByCode(scheduleCode.toUpperCase());
+      if (!group) return res.status(404).json({ message: "Schedule not found" });
+      if (group.status !== "open") return res.status(410).json({ message: "This schedule is no longer open" });
+      if (group.filledSlots >= group.maxSlots) return res.status(409).json({ message: "Schedule is full" });
+
+      const fare = parseFloat(estimatedFare || "0");
+      if (fare <= 0) return res.status(400).json({ message: "Invalid fare" });
+
+      // Find the driver from the organizer's ride
+      const groupRides = await storage.getRidesInGroup(group.id);
+      const driverId = groupRides[0]?.driverId || group.driverId;
+
+      // Create joiner's ride linked to the same group
+      const ride = await storage.createRide({
+        riderId: userId,
+        driverId: driverId || null,
+        status: "pending",
+        paymentMethod: "card",
+        pickupLocation,
+        destinationLocation: destination,
+        estimatedFare: fare.toString(),
+        originalFare: fare.toString(),
+        rideType: "shared_schedule",
+        groupId: group.id,
+        pickupInstructions: pickupInstructions || null,
+      });
+
+      // Increment filledSlots
+      const newFilledSlots = group.filledSlots + 1;
+      const updatedGroup = await storage.updateRideGroup(group.id, {
+        filledSlots: newFilledSlots,
+      });
+
+      // If this is the first joiner (filledSlots was 1, now 2) → trigger 30% discount for everyone
+      if (group.filledSlots === 1 && newFilledSlots === 2) {
+        // First save originalFare on the joiner's ride (already set above)
+        await storage.applyGroupDiscount(group.id);
+      }
+
+      // Notify driver of the new joiner
+      if (driverId && activeConnections.has(driverId)) {
+        const driverWs = activeConnections.get(driverId);
+        if (driverWs && driverWs.readyState === WebSocket.OPEN) {
+          const joinerUser = await storage.getUser(userId);
+          driverWs.send(JSON.stringify({
+            type: 'group_joiner_added',
+            groupId: group.id,
+            scheduleCode: group.scheduleCode,
+            joinerName: joinerUser ? `${joinerUser.firstName} ${joinerUser.lastName?.[0] || ''}.` : 'New Rider',
+            filledSlots: newFilledSlots,
+            maxSlots: group.maxSlots,
+          }));
+        }
+      }
+
+      // Return the ride with the (possibly discounted) fare
+      const finalRide = await storage.getRide(ride.id);
+      res.json({ ride: finalRide, group: updatedGroup, scheduleCode: group.scheduleCode });
+    } catch (error) {
+      console.error("Error joining schedule:", error);
+      res.status(500).json({ message: "Failed to join schedule" });
     }
   });
 

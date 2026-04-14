@@ -4,7 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Timer, MapPin, Navigation } from "lucide-react";
+import { Timer, MapPin, Navigation, Route, Users } from "lucide-react";
 
 interface IncomingRideRequestProps {
   ride: {
@@ -14,11 +14,21 @@ interface IncomingRideRequestProps {
     estimatedFare: string;
     pickupInstructions?: string;
     createdAt: string;
+    rideType?: string;
+    groupId?: string;
+    pickupStops?: Array<{ address: string; lat: number; lng: number }>;
     rider: {
       firstName: string;
       lastName: string;
       rating: number;
     };
+    // From WebSocket new_ride_request message (optional enrichment)
+    isGroupRide?: boolean;
+    groupType?: string;
+    scheduleCode?: string;
+    filledSlots?: number;
+    maxSlots?: number;
+    pickupStopsWs?: Array<{ address: string; lat: number; lng: number }>;
   };
   onAccept: (rideId: string) => void;
   onDecline: (rideId: string) => void;
@@ -130,10 +140,14 @@ export default function IncomingRideRequest({ ride, onAccept, onDecline }: Incom
 
   const timerPercent = Math.round((secondsLeft / REQUEST_TIMEOUT_SECONDS) * 100);
   const isUrgent = secondsLeft <= 15;
+  const isGroupRide = !!(ride.isGroupRide || ride.groupId || ride.rideType === 'multi_stop' || ride.rideType === 'shared_schedule');
+  const isMultiStop = ride.rideType === 'multi_stop' || ride.groupType === 'multi_stop';
+  const isSharedSchedule = ride.rideType === 'shared_schedule' || ride.groupType === 'shared_schedule';
+  const allPickupStops = ride.pickupStops || ride.pickupStopsWs || [];
 
   return (
     <Card className={`border-2 animate-in slide-in-from-top duration-300 overflow-hidden ${
-      isUrgent ? 'border-red-400 bg-red-50/50 dark:bg-red-950/20' : 'border-primary bg-primary/5'
+      isUrgent ? 'border-red-400 bg-red-50/50 dark:bg-red-950/20' : isGroupRide ? 'border-purple-400 bg-purple-50/30' : 'border-primary bg-primary/5'
     }`} data-testid={`incoming-ride-${ride.id}`}>
       <div className="relative h-1.5 bg-gray-200 dark:bg-gray-700">
         <div
@@ -154,6 +168,18 @@ export default function IncomingRideRequest({ ride, onAccept, onDecline }: Incom
           </div>
           <span className="text-xs text-muted-foreground">{formatTimeAgo(ride.createdAt)}</span>
         </div>
+
+        {/* Group ride badge */}
+        {isGroupRide && (
+          <div className={`flex items-center gap-2 mb-3 px-3 py-1.5 rounded-xl text-xs font-semibold ${isMultiStop ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'}`}>
+            {isMultiStop ? <Route className="w-3.5 h-3.5" /> : <Users className="w-3.5 h-3.5" />}
+            {isMultiStop ? (
+              <span>Multi-Stop Ride — {allPickupStops.length > 0 ? allPickupStops.length : 'Multiple'} pickup stops · You collect all passengers</span>
+            ) : (
+              <span>Shared Schedule {ride.scheduleCode ? `(${ride.scheduleCode})` : ''} — {ride.filledSlots ?? 1}/{ride.maxSlots ?? 3} riders · More profitable!</span>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center space-x-3">
@@ -179,28 +205,51 @@ export default function IncomingRideRequest({ ride, onAccept, onDecline }: Incom
         </div>
 
         <div className="space-y-2 mb-4 p-3 bg-white dark:bg-gray-900 rounded-xl border">
-          <div className="flex items-start space-x-3">
-            <MapPin className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-[10px] text-gray-400 uppercase font-medium">Pickup</p>
-              <p className="font-medium text-sm truncate">{ride.pickupLocation.address}</p>
-              {ride.pickupInstructions && (
-                <p className="text-xs text-blue-600 mt-0.5 italic">
-                  "{ride.pickupInstructions}"
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="border-l-2 border-dashed border-gray-200 ml-2 h-2" />
-          
-          <div className="flex items-start space-x-3">
-            <Navigation className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-[10px] text-gray-400 uppercase font-medium">Destination</p>
-              <p className="font-medium text-sm truncate">{ride.destinationLocation.address}</p>
-            </div>
-          </div>
+          {/* Multi-stop: show numbered stops */}
+          {isMultiStop && allPickupStops.length > 0 ? (
+            <>
+              {allPickupStops.map((stop, i) => (
+                <div key={i} className="flex items-start space-x-3">
+                  <div className="w-4 h-4 bg-blue-500 text-white rounded-full flex items-center justify-center text-[9px] font-bold flex-shrink-0 mt-0.5">{i + 1}</div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] text-gray-400 uppercase font-medium">{i === 0 ? 'First Pickup' : `Stop ${i + 1}`}</p>
+                    <p className="font-medium text-sm truncate">{stop.address}</p>
+                  </div>
+                </div>
+              ))}
+              <div className="border-l-2 border-dashed border-gray-200 ml-2 h-2" />
+              <div className="flex items-start space-x-3">
+                <Navigation className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] text-gray-400 uppercase font-medium">Shared Destination</p>
+                  <p className="font-medium text-sm truncate">{ride.destinationLocation.address}</p>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-start space-x-3">
+                <MapPin className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] text-gray-400 uppercase font-medium">Pickup</p>
+                  <p className="font-medium text-sm truncate">{ride.pickupLocation.address}</p>
+                  {ride.pickupInstructions && (
+                    <p className="text-xs text-blue-600 mt-0.5 italic">
+                      "{ride.pickupInstructions}"
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="border-l-2 border-dashed border-gray-200 ml-2 h-2" />
+              <div className="flex items-start space-x-3">
+                <Navigation className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] text-gray-400 uppercase font-medium">Destination</p>
+                  <p className="font-medium text-sm truncate">{ride.destinationLocation.address}</p>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex space-x-3">

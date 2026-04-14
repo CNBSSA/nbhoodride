@@ -9,6 +9,9 @@ import { useLocation } from "wouter";
 import MapComponent from "@/components/MapComponent";
 import ScheduleRideModal from "@/components/ScheduleRideModal";
 import SOSModal from "@/components/SOSModal";
+import MultiStopBookingSheet from "@/components/MultiStopBookingSheet";
+import SharedScheduleSheet from "@/components/SharedScheduleSheet";
+import JoinScheduleModal from "@/components/JoinScheduleModal";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -16,7 +19,8 @@ import { useAnalytics } from "@/hooks/useAnalytics";
 import {
   MapPin, Navigation, Bell, Star, Clock, X, Shield, Car,
   Loader2, CheckCircle, Route, ThumbsUp, Timer, Search,
-  ChevronDown, Calendar, DollarSign, ChevronRight, RefreshCw, Edit2
+  ChevronDown, Calendar, DollarSign, ChevronRight, RefreshCw, Edit2,
+  Users, Tag
 } from "lucide-react";
 
 interface AddressSuggestion {
@@ -75,6 +79,9 @@ export default function RiderDashboard() {
   const [pickupInstructions, setPickupInstructions] = useState("");
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
+  const [isMultiStopOpen, setIsMultiStopOpen] = useState(false);
+  const [isSharedScheduleOpen, setIsSharedScheduleOpen] = useState(false);
+  const [isJoinScheduleOpen, setIsJoinScheduleOpen] = useState(false);
   const [realtimeDrivers, setRealtimeDrivers] = useState<Record<string, { lat: number; lng: number }>>({});
   const [recentlyCompletedRide, setRecentlyCompletedRide] = useState<any>(null);
   const [quickRating, setQuickRating] = useState(0);
@@ -563,7 +570,7 @@ export default function RiderDashboard() {
               <Search className="w-5 h-5 text-gray-400 flex-shrink-0" />
               <span className="text-gray-500 text-sm font-medium">Where to?</span>
             </button>
-            <div className="flex gap-3 mt-3">
+            <div className="flex gap-2 mt-3">
               <button
                 onClick={() => setIsScheduleModalOpen(true)}
                 className="flex-1 flex items-center gap-2 justify-center bg-orange-50 text-orange-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-orange-100 transition-colors"
@@ -572,13 +579,39 @@ export default function RiderDashboard() {
                 <Calendar className="w-4 h-4" />
                 Schedule
               </button>
-              {scheduledRides.length > 0 && (
-                <div className="flex-1 flex items-center gap-2 justify-center bg-blue-50 text-blue-600 rounded-xl py-2.5 text-sm font-semibold">
-                  <Clock className="w-4 h-4" />
-                  {scheduledRides.length} Scheduled
-                </div>
-              )}
+              <button
+                onClick={() => setIsMultiStopOpen(true)}
+                className="flex-1 flex items-center gap-2 justify-center bg-blue-50 text-blue-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-blue-100 transition-colors"
+                data-testid="button-multi-stop"
+              >
+                <Route className="w-4 h-4" />
+                Multi-Stop
+              </button>
             </div>
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={() => setIsSharedScheduleOpen(true)}
+                className="flex-1 flex items-center gap-2 justify-center bg-purple-50 text-purple-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-purple-100 transition-colors"
+                data-testid="button-shared-schedule"
+              >
+                <Users className="w-4 h-4" />
+                Share Ride
+              </button>
+              <button
+                onClick={() => setIsJoinScheduleOpen(true)}
+                className="flex-1 flex items-center gap-2 justify-center bg-green-50 text-green-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-green-100 transition-colors"
+                data-testid="button-join-schedule"
+              >
+                <Tag className="w-4 h-4" />
+                Join Schedule
+              </button>
+            </div>
+            {scheduledRides.length > 0 && (
+              <div className="flex items-center gap-2 justify-center bg-blue-50 text-blue-600 rounded-xl py-2 text-sm font-semibold mt-2">
+                <Clock className="w-4 h-4" />
+                {scheduledRides.length} Scheduled
+              </div>
+            )}
             <div className="flex items-center justify-center gap-2 mt-3">
               {drivers.length > 0 ? (
                 <p className="text-xs text-gray-400">
@@ -851,6 +884,23 @@ export default function RiderDashboard() {
       {/* Modals */}
       <ScheduleRideModal isOpen={isScheduleModalOpen} onClose={() => setIsScheduleModalOpen(false)} drivers={drivers} userLocation={userLocation} />
       <SOSModal isOpen={isSOSModalOpen} onClose={() => setIsSOSModalOpen(false)} />
+      <MultiStopBookingSheet
+        isOpen={isMultiStopOpen}
+        onClose={() => setIsMultiStopOpen(false)}
+        userLocation={userLocation}
+        nearbyDrivers={nearbyDrivers}
+      />
+      <SharedScheduleSheet
+        isOpen={isSharedScheduleOpen}
+        onClose={() => setIsSharedScheduleOpen(false)}
+        userLocation={userLocation}
+        nearbyDrivers={nearbyDrivers}
+      />
+      <JoinScheduleModal
+        isOpen={isJoinScheduleOpen}
+        onClose={() => setIsJoinScheduleOpen(false)}
+        userLocation={userLocation}
+      />
     </div>
   );
 }

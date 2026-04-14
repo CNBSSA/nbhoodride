@@ -3,6 +3,7 @@ import {
   driverProfiles,
   vehicles,
   rides,
+  rideGroups,
   disputes,
   emergencyIncidents,
   driverWeeklyHours,
@@ -26,6 +27,8 @@ import {
   type DriverProfile,
   type Vehicle,
   type Ride,
+  type RideGroup,
+  type InsertRideGroup,
   type Dispute,
   type EmergencyIncident,
   type DriverWeeklyHours,
@@ -257,6 +260,14 @@ export interface IStorage {
   resolveSafetyAlert(id: string, resolvedBy: string): Promise<SafetyAlert>;
   getConversionMetrics(startDate: Date, endDate: Date): Promise<{ searches: number; bookings: number; completions: number; conversionRate: number }>;
   getDriverOptimalHours(driverId: string): Promise<{ hour: number; dayOfWeek: number; avgRides: number; avgEarnings: number }[]>;
+
+  // Ride group operations (multi-stop & shared schedule)
+  createRideGroup(data: InsertRideGroup): Promise<RideGroup>;
+  getRideGroupByCode(code: string): Promise<RideGroup | undefined>;
+  getRideGroupById(id: string): Promise<RideGroup | undefined>;
+  updateRideGroup(id: string, updates: Partial<RideGroup>): Promise<RideGroup>;
+  getRidesInGroup(groupId: string): Promise<Ride[]>;
+  applyGroupDiscount(groupId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2360,6 +2371,66 @@ export class DatabaseStorage implements IStorage {
       const numWeeks = Math.max(data.weeks.size, 1);
       return { hour, dayOfWeek, avgRides: data.rides / numWeeks, avgEarnings: data.earnings / numWeeks };
     }).sort((a, b) => b.avgEarnings - a.avgEarnings);
+  }
+
+  // ── Ride group operations ──────────────────────────────────────────────────
+
+  async createRideGroup(data: InsertRideGroup): Promise<RideGroup> {
+    const [group] = await db.insert(rideGroups).values(data).returning();
+    return group;
+  }
+
+  async getRideGroupByCode(code: string): Promise<RideGroup | undefined> {
+    const [group] = await db
+      .select()
+      .from(rideGroups)
+      .where(eq(rideGroups.scheduleCode, code));
+    return group;
+  }
+
+  async getRideGroupById(id: string): Promise<RideGroup | undefined> {
+    const [group] = await db
+      .select()
+      .from(rideGroups)
+      .where(eq(rideGroups.id, id));
+    return group;
+  }
+
+  async updateRideGroup(id: string, updates: Partial<RideGroup>): Promise<RideGroup> {
+    const [group] = await db
+      .update(rideGroups)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(rideGroups.id, id))
+      .returning();
+    return group;
+  }
+
+  async getRidesInGroup(groupId: string): Promise<Ride[]> {
+    return db.select().from(rides).where(eq(rides.groupId, groupId));
+  }
+
+  async applyGroupDiscount(groupId: string): Promise<void> {
+    // Fetch all rides in the group that haven't already been discounted
+    const groupRides = await this.getRidesInGroup(groupId);
+    for (const ride of groupRides) {
+      const original = parseFloat(ride.originalFare?.toString() || ride.estimatedFare?.toString() || '0');
+      if (original <= 0) continue;
+      const discounted = parseFloat((original * 0.70).toFixed(2));
+      const discountAmt = parseFloat((original * 0.30).toFixed(2));
+      await db
+        .update(rides)
+        .set({
+          estimatedFare: discounted.toString(),
+          originalFare: original.toString(),
+          discountAmount: discountAmt.toString(),
+        })
+        .where(eq(rides.id, ride.id));
+    }
+    // Mark the group discount as active
+    await db
+      .update(rideGroups)
+      .set({ discountActive: true, updatedAt: new Date() })
+      .where(eq(rideGroups.id, groupId));
   }
 }
 

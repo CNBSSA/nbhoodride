@@ -133,6 +133,24 @@ export const profitDeclStatusEnum = pgEnum("profit_decl_status", [
   "distributed"
 ]);
 
+// Ride Groups — for multi-stop and shared-schedule rides
+export const rideGroups = pgTable("ride_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  scheduleCode: varchar("schedule_code", { length: 12 }).notNull().unique(),
+  organizerId: varchar("organizer_id").notNull().references(() => users.id),
+  groupType: varchar("group_type", { length: 20 }).notNull(), // 'multi_stop' | 'shared_schedule'
+  sharedDestination: jsonb("shared_destination").$type<{lat: number, lng: number, address: string}>(),
+  maxSlots: integer("max_slots").notNull().default(3),
+  filledSlots: integer("filled_slots").notNull().default(1),
+  status: varchar("status", { length: 20 }).notNull().default("open"), // 'open' | 'active' | 'completed' | 'cancelled'
+  driverId: varchar("driver_id").references(() => users.id),
+  discountRate: decimal("discount_rate", { precision: 4, scale: 2 }).default("0.30"),
+  discountActive: boolean("discount_active").default(false),
+  scheduledAt: timestamp("scheduled_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Rides table
 export const rides = pgTable("rides", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -162,6 +180,12 @@ export const rides = pgTable("rides", {
   driverRating: integer("driver_rating"),
   riderReview: text("rider_review"),
   driverReview: text("driver_review"),
+  // Group ride fields
+  groupId: varchar("group_id"),  // references ride_groups.id (no FK to avoid circular dep)
+  rideType: varchar("ride_type", { length: 20 }).default("solo"), // 'solo' | 'multi_stop' | 'shared_schedule'
+  pickupStops: jsonb("pickup_stops").$type<Array<{lat: number, lng: number, address: string}>>(),
+  originalFare: decimal("original_fare", { precision: 8, scale: 2 }),
+  discountAmount: decimal("discount_amount", { precision: 8, scale: 2 }),
   scheduledAt: timestamp("scheduled_at"),
   acceptedAt: timestamp("accepted_at"),
   startedAt: timestamp("started_at"),
@@ -638,6 +662,12 @@ export const insertVehicleSchema = createInsertSchema(vehicles).omit({
   updatedAt: true,
 });
 
+export const insertRideGroupSchema = createInsertSchema(rideGroups).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertRideSchema = createInsertSchema(rides).omit({
   id: true,
   createdAt: true,
@@ -729,6 +759,8 @@ export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type DriverProfile = typeof driverProfiles.$inferSelect;
 export type Vehicle = typeof vehicles.$inferSelect;
+export type RideGroup = typeof rideGroups.$inferSelect;
+export type InsertRideGroup = z.infer<typeof insertRideGroupSchema>;
 export type Ride = typeof rides.$inferSelect;
 export type Dispute = typeof disputes.$inferSelect;
 export type EmergencyIncident = typeof emergencyIncidents.$inferSelect;
