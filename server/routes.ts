@@ -2444,6 +2444,194 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ── RIDE GROUPS: MODE 3 (MULTI-STOP) & MODE 4 (SHARED SCHEDULE) ────────────
+
+  // Helper: generate a unique PG-XXXXXX code
+  const generateScheduleCode = async (): Promise<string> => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const suffix = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+      const code = `PG-${suffix}`;
+      const existing = await storage.getRideGroupByCode(code);
+      if (!existing) return code;
+    }
+    throw new Error("Could not generate unique schedule code");
+  };
+
+  // POST /api/rides/multi-stop — Mode 3: organizer pays for full route
+  app.post('/api/rides/multi-stop', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { pickupLocation, destinationLocation, pickupStops, driverId, estimatedFare, pickupInstructions } = req.body;
+
+      if (!pickupLocation || !destinationLocation || !estimatedFare) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      // Create a ride group first
+      const group = await storage.createRideGroup({
+        organizerId: userId,
+        groupType: "multi_stop",
+        sharedDestination: destinationLocation,
+        maxSlots: 1,
+        filledSlots: 1,
+        status: "open",
+      });
+
+      // Create the ride linked to the group
+      const ride = await storage.createRide({
+        riderId: userId,
+        driverId: driverId || null,
+        pickupLocation,
+        destinationLocation,
+        pickupStops: pickupStops || [],
+        pickupInstructions,
+        estimatedFare: String(estimatedFare),
+        paymentMethod: "card",
+        rideType: "multi_stop",
+        groupId: group.id,
+      });
+
+      res.json({ ...ride, group });
+    } catch (error) {
+      console.error("Error creating multi-stop ride:", error);
+      res.status(500).json({ message: "Failed to create multi-stop ride" });
+    }
+  });
+
+  // POST /api/rides/create-shared-schedule — Mode 4: organizer books and gets a code
+  app.post('/api/rides/create-shared-schedule', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { pickupLocation, destinationLocation, driverId, estimatedFare, pickupInstructions, scheduledAt } = req.body;
+
+      if (!pickupLocation || !destinationLocation || !estimatedFare) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      const scheduleCode = await generateScheduleCode();
+
+      // Create the group
+      const group = await storage.createRideGroup({
+        scheduleCode,
+        organizerId: userId,
+        groupType: "shared_schedule",
+        maxSlots: 3,
+        filledSlots: 1,
+        status: "open",
+        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+      });
+
+      // Create organizer's ride linked to the group
+      const ride = await storage.createRide({
+        riderId: userId,
+        driverId: driverId || null,
+        pickupLocation,
+        destinationLocation,
+        pickupInstructions,
+        estimatedFare: String(estimatedFare),
+        originalFare: String(estimatedFare),
+        paymentMethod: "card",
+        rideType: "shared_schedule",
+        groupId: group.id,
+        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+      });
+
+      res.json({ ...ride, group, scheduleCode });
+    } catch (error) {
+      console.error("Error creating shared schedule:", error);
+      res.status(500).json({ message: "Failed to create shared schedule" });
+    }
+  });
+
+  // GET /api/rides/schedule/:code — preview a group before joining
+  app.get('/api/rides/schedule/:code', isAuthenticated, async (_req: any, res) => {
+    try {
+      const code = _req.params.code.toUpperCase();
+      const group = await storage.getRideGroupByCode(code);
+      if (!group) return res.status(404).json({ message: "Schedule not found" });
+      if (group.status !== "open") return res.status(410).json({ message: "This schedule is no longer open" });
+      // Check expiry: if scheduledAt is set and > 1 hr in the past, consider expired
+      if (group.scheduledAt && new Date(group.scheduledAt).getTime() < Date.now() - 3600000) {
+        await storage.updateRideGroup(group.id, { status: "cancelled" });
+        return res.status(410).json({ message: "This schedule has expired" });
+      }
+      res.json({
+        groupId: group.id,
+        scheduleCode: group.scheduleCode,
+        groupType: group.groupType,
+        filledSlots: group.filledSlots,
+        maxSlots: group.maxSlots,
+        scheduledAt: group.scheduledAt,
+      });
+    } catch (error) {
+      console.error("Error previewing schedule:", error);
+      res.status(500).json({ message: "Failed to load schedule" });
+    }
+  });
+
+  // POST /api/rides/join-schedule — Mode 4: joiner enters code and books their own ride
+  app.post('/api/rides/join-schedule', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { scheduleCode, pickupLocation, destinationLocation, paymentMethod } = req.body;
+
+      if (!scheduleCode || !pickupLocation || !destinationLocation) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      const group = await storage.getRideGroupByCode(scheduleCode.toUpperCase());
+      if (!group) return res.status(404).json({ message: "Schedule code not found" });
+      if (group.status !== "open") return res.status(410).json({ message: "This schedule is no longer accepting riders" });
+      if (group.filledSlots >= (group.maxSlots ?? 3)) return res.status(409).json({ message: "This schedule is full" });
+
+      // Estimate fare for the joiner's route
+      const { lat: pLat, lng: pLng } = pickupLocation;
+      const { lat: dLat, lng: dLng } = destinationLocation;
+      const R = 3958.8;
+      const dLatR = ((dLat - pLat) * Math.PI) / 180;
+      const dLngR = ((dLng - pLng) * Math.PI) / 180;
+      const a = Math.sin(dLatR / 2) ** 2 + Math.cos((pLat * Math.PI) / 180) * Math.cos((dLat * Math.PI) / 180) * Math.sin(dLngR / 2) ** 2;
+      const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3;
+      const duration = Math.round((dist / 25) * 60);
+      const fullFare = Math.max(5, 2.5 + dist * 1.5 + duration * 0.3);
+      const discountedFare = fullFare * 0.7;
+
+      // Create the joiner's ride
+      const ride = await storage.createRide({
+        riderId: userId,
+        driverId: group.driverId || null,
+        pickupLocation,
+        destinationLocation,
+        estimatedFare: discountedFare.toFixed(2),
+        originalFare: fullFare.toFixed(2),
+        groupDiscountAmount: (fullFare * 0.3).toFixed(2),
+        paymentMethod: paymentMethod || "card",
+        rideType: "shared_schedule",
+        groupId: group.id,
+      });
+
+      // Increment filled slots
+      const newFilledSlots = (group.filledSlots ?? 1) + 1;
+      await storage.updateRideGroup(group.id, { filledSlots: newFilledSlots });
+
+      // Apply 30% discount to ALL rides in the group (including organizer) if first joiner
+      if (newFilledSlots === 2 && !group.discountActive) {
+        await storage.applyGroupDiscount(group.id, 30);
+      }
+
+      // Close group if full
+      if (newFilledSlots >= (group.maxSlots ?? 3)) {
+        await storage.updateRideGroup(group.id, { status: "active" });
+      }
+
+      res.json({ ...ride, scheduleCode, discountApplied: true });
+    } catch (error) {
+      console.error("Error joining schedule:", error);
+      res.status(500).json({ message: "Failed to join schedule" });
+    }
+  });
+
   // ── SHARED RIDES ────────────────────────────────────────────────────────────
 
   // Rider: get details of the shared group their active ride belongs to

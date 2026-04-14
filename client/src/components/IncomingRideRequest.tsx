@@ -4,7 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Timer, MapPin, Navigation } from "lucide-react";
+import { Timer, MapPin, Navigation, Users, Route } from "lucide-react";
 
 interface IncomingRideRequestProps {
   ride: {
@@ -14,6 +14,9 @@ interface IncomingRideRequestProps {
     estimatedFare: string;
     pickupInstructions?: string;
     createdAt: string;
+    rideType?: string;
+    groupId?: string;
+    pickupStops?: Array<{ address: string; lat: number; lng: number }>;
     rider: {
       firstName: string;
       lastName: string;
@@ -152,7 +155,21 @@ export default function IncomingRideRequest({ ride, onAccept, onDecline }: Incom
               {secondsLeft > 0 ? `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')} to respond` : 'Expired'}
             </span>
           </div>
-          <span className="text-xs text-muted-foreground">{formatTimeAgo(ride.createdAt)}</span>
+          <div className="flex items-center gap-2">
+            {ride.rideType === "multi_stop" && (
+              <span className="flex items-center gap-1 text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full" data-testid={`badge-multi-stop-${ride.id}`}>
+                <Route className="w-3 h-3" />
+                Multi-Stop {ride.pickupStops && ride.pickupStops.length > 0 ? `(${ride.pickupStops.length + 1} stops)` : ""}
+              </span>
+            )}
+            {ride.rideType === "shared_schedule" && (
+              <span className="flex items-center gap-1 text-[10px] font-bold bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full" data-testid={`badge-shared-schedule-${ride.id}`}>
+                <Users className="w-3 h-3" />
+                Shared Schedule
+              </span>
+            )}
+            <span className="text-xs text-muted-foreground">{formatTimeAgo(ride.createdAt)}</span>
+          </div>
         </div>
 
         <div className="flex items-center justify-between mb-4">
