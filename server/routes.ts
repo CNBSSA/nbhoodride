@@ -2840,8 +2840,30 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
             
           case 'location_update':
             if (message.userId && message.location) {
-              storage.updateDriverLocation(message.userId, { lat: message.location.lat, lng: message.location.lng }).catch((err: any) => {
+              const { lat, lng } = message.location;
+
+              // Persist location to DB
+              storage.updateDriverLocation(message.userId, { lat, lng }).catch((err: any) => {
                 console.error('Failed to persist driver location from WebSocket:', err);
+              });
+
+              // Broadcast driver_location to any rider with an active ride for this driver
+              const locationMsg = JSON.stringify({
+                type: 'driver_location',
+                driverId: message.userId,
+                location: { lat, lng },
+              });
+              storage.getActiveRidesForDriver(message.userId).then((activeRides: any[]) => {
+                for (const ride of activeRides) {
+                  if (ride.riderId && activeConnections.has(ride.riderId)) {
+                    const riderWs = activeConnections.get(ride.riderId);
+                    if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+                      riderWs.send(locationMsg);
+                    }
+                  }
+                }
+              }).catch((err: any) => {
+                console.error('Failed to broadcast driver location:', err);
               });
             }
             break;

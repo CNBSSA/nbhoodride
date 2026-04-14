@@ -150,11 +150,11 @@ export default function RiderDashboard() {
   });
 
   const drivers: Driver[] = nearbyDrivers.map((driver: any) => {
-    const realtimeLocation = realtimeDrivers[driver.id];
+    const realtimeLocation = realtimeDrivers[driver.userId];
     const driverLocation = realtimeLocation || driver.currentLocation || { lat: currentLat, lng: currentLng };
     const distMiles = calculateDistance(userLocation.lat, userLocation.lng, driverLocation.lat, driverLocation.lng);
     return {
-      id: driver.id,
+      id: driver.userId,  // rides.driverId references users.id — must use userId, not profile id
       name: `${driver.user.firstName} ${driver.user.lastName?.[0] || ''}.`,
       location: driverLocation,
       rating: parseFloat(driver.user.rating) || 5.0,
@@ -399,13 +399,17 @@ export default function RiderDashboard() {
   const hasActiveRide = activeRides.length > 0;
   const activeRide = activeRides[0];
 
-  // Panel height classes
-  const panelHeight = panel === "idle" ? "h-auto" : panel === "search" ? "h-[55vh]" : panel === "drivers" ? "h-[65vh]" : "h-[70vh]";
+  // Panel height classes — use most of the screen when actively booking
+  const panelHeight = panel === "idle" ? "h-auto" : panel === "search" ? "h-[78vh]" : panel === "drivers" ? "h-[88vh]" : "h-[92vh]";
 
   return (
     <div className="relative w-full h-full flex flex-col overflow-hidden bg-gray-100">
       {/* ── Full-screen map background ── */}
-      <div className="absolute inset-0" style={{ bottom: panel === "idle" ? "140px" : "0" }}>
+      {/* When booking panel is fully open (drivers/confirm), map is hidden behind panel */}
+      <div
+        className="absolute inset-0 transition-all duration-300"
+        style={{ bottom: panel === "idle" ? "140px" : panel === "search" ? "78vh" : "0" }}
+      >
         <MapComponent
           center={{ lat: currentLat, lng: currentLng }}
           drivers={drivers}
@@ -539,7 +543,7 @@ export default function RiderDashboard() {
         className={`absolute left-0 right-0 z-[55] bg-white rounded-t-3xl shadow-2xl transition-all duration-300 ease-in-out flex flex-col ${panelHeight}`}
         style={{
           bottom: panel === "idle" ? "64px" : "0",
-          maxHeight: panel === "idle" ? "160px" : "80vh",
+          maxHeight: panel === "idle" ? "160px" : "92dvh",
         }}
       >
 
