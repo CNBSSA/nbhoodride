@@ -24,11 +24,13 @@ import {
   payoutRequests,
   pushSubscriptions,
   rideGroups,
+  walletTransactions,
   type PayoutRequest,
   type InsertPayoutRequest,
   type PushSubscription,
   type RideGroup,
   type InsertRideGroup,
+  type WalletTransaction,
   type User,
   type UpsertUser,
   type DriverProfile,
@@ -196,10 +198,12 @@ export interface IStorage {
   cancelRideWithFee(rideId: string, cancellationFee: number, reason: string, traveledDistance?: number, traveledTime?: number): Promise<Ride>;
   
   // Virtual card operations
-  deductVirtualCardBalance(userId: string, amount: number): Promise<User>;
-  addVirtualCardBalance(userId: string, amount: number): Promise<User>;
+  deductVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
+  addVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
   getVirtualCardBalance(userId: string): Promise<number>;
   consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
+  logWalletTransaction(data: { userId: string; amount: number; balanceAfter: number; reason: string; rideId?: string; disputeId?: string; performedBy?: string }): Promise<WalletTransaction>;
+  getWalletTransactions(userId: string, limit?: number): Promise<WalletTransaction[]>;
   
   // Push subscription operations
   savePushSubscription(userId: string, sub: { endpoint: string; p256dh: string; auth: string }): Promise<PushSubscription>;
@@ -1564,7 +1568,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Virtual card operations
-  async deductVirtualCardBalance(userId: string, amount: number): Promise<User> {
+  async deductVirtualCardBalance(userId: string, amount: number, reason = "ride_charge", rideId?: string, performedBy?: string): Promise<User> {
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new Error("Amount must be a positive number");
     }
@@ -1582,17 +1586,27 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .returning();
-    
+
     if (!updatedUser) {
       const user = await this.getUser(userId);
       if (!user) throw new Error("User not found");
       throw new Error("Insufficient virtual card balance");
     }
 
+    // Log immutable ledger entry
+    await this.logWalletTransaction({
+      userId,
+      amount: -amount,
+      balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0"),
+      reason,
+      rideId,
+      performedBy,
+    });
+
     return updatedUser;
   }
 
-  async addVirtualCardBalance(userId: string, amount: number): Promise<User> {
+  async addVirtualCardBalance(userId: string, amount: number, reason = "topup", rideId?: string, performedBy?: string): Promise<User> {
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new Error("Amount must be a positive number");
     }
@@ -1605,10 +1619,20 @@ export class DatabaseStorage implements IStorage {
       })
       .where(eq(users.id, userId))
       .returning();
-    
+
     if (!updatedUser) {
       throw new Error("User not found");
     }
+
+    // Log immutable ledger entry
+    await this.logWalletTransaction({
+      userId,
+      amount,
+      balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0"),
+      reason,
+      rideId,
+      performedBy,
+    });
 
     return updatedUser;
   }
@@ -1619,6 +1643,31 @@ export class DatabaseStorage implements IStorage {
       throw new Error("User not found");
     }
     return parseFloat(user.virtualCardBalance || "0");
+  }
+
+  async logWalletTransaction(data: { userId: string; amount: number; balanceAfter: number; reason: string; rideId?: string; disputeId?: string; performedBy?: string }): Promise<WalletTransaction> {
+    const [entry] = await db
+      .insert(walletTransactions)
+      .values({
+        userId: data.userId,
+        amount: data.amount.toFixed(2),
+        balanceAfter: data.balanceAfter.toFixed(2),
+        reason: data.reason,
+        rideId: data.rideId ?? null,
+        disputeId: data.disputeId ?? null,
+        performedBy: data.performedBy ?? null,
+      })
+      .returning();
+    return entry;
+  }
+
+  async getWalletTransactions(userId: string, limit = 50): Promise<WalletTransaction[]> {
+    return db
+      .select()
+      .from(walletTransactions)
+      .where(eq(walletTransactions.userId, userId))
+      .orderBy(desc(walletTransactions.createdAt))
+      .limit(limit);
   }
 
   async consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void> {
@@ -1963,13 +2012,26 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(disputes).orderBy(desc(disputes.createdAt));
   }
 
-  async adminResolveDispute(disputeId: string, resolution: string, resolvedBy: string): Promise<Dispute> {
+  async adminResolveDispute(disputeId: string, resolution: string, resolvedBy: string, refundAmount?: number): Promise<Dispute> {
     const [dispute] = await db.update(disputes).set({
       status: "resolved",
       resolution,
       resolvedBy,
       updatedAt: new Date()
     }).where(eq(disputes.id, disputeId)).returning();
+
+    // Apply refund to the rider's virtual card if requested
+    if (refundAmount && refundAmount > 0 && dispute?.rideId) {
+      const [ride] = await db.select().from(rides).where(eq(rides.id, dispute.rideId));
+      if (ride?.riderId) {
+        await this.addVirtualCardBalance(ride.riderId, refundAmount, "dispute_refund", dispute.rideId, resolvedBy);
+        // Mark refunded amount on the ride
+        await db.update(rides)
+          .set({ refundedAmount: refundAmount.toFixed(2), updatedAt: new Date() })
+          .where(eq(rides.id, dispute.rideId));
+      }
+    }
+
     return dispute;
   }
 

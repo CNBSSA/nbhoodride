@@ -70,7 +70,10 @@ export const driverProfiles = pgTable("driver_profiles", {
   currentLocation: jsonb("current_location").$type<{lat: number, lng: number}>(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => [
+  index("idx_driver_profiles_user_id").on(table.userId),
+  index("idx_driver_profiles_is_online").on(table.isOnline),
+]);
 
 // Vehicle information
 export const vehicles = pgTable("vehicles", {
@@ -178,7 +181,12 @@ export const rides = pgTable("rides", {
   completedAt: timestamp("completed_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => [
+  index("idx_rides_rider_id").on(table.riderId),
+  index("idx_rides_driver_id").on(table.driverId),
+  index("idx_rides_status").on(table.status),
+  index("idx_rides_created_at").on(table.createdAt),
+]);
 
 // Shared ride groups (cluster scheduling)
 export const sharedRideGroups = pgTable("shared_ride_groups", {
@@ -384,6 +392,21 @@ export const adminActivityLog = pgTable("admin_activity_log", {
   details: jsonb("details").$type<Record<string, any>>(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+// Immutable ledger of every virtual card balance change
+export const walletTransactions = pgTable("wallet_transactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(), // positive = credit, negative = debit
+  balanceAfter: decimal("balance_after", { precision: 10, scale: 2 }).notNull(),
+  reason: varchar("reason", { length: 100 }).notNull(), // e.g. 'ride_charge', 'tip', 'refund', 'topup', 'payout', 'dispute_refund'
+  rideId: varchar("ride_id"),
+  disputeId: varchar("dispute_id"),
+  performedBy: varchar("performed_by"), // admin userId if manually adjusted
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_wallet_user_created").on(table.userId, table.createdAt),
+]);
 
 // ============================================================
 // RELATIONS
@@ -868,3 +891,10 @@ export type InsertSafetyAlert = z.infer<typeof insertSafetyAlertSchema>;
 
 export type DriverRateCard = typeof driverRateCards.$inferSelect;
 export type InsertDriverRateCard = z.infer<typeof insertDriverRateCardSchema>;
+
+export const insertWalletTransactionSchema = createInsertSchema(walletTransactions).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertWalletTransaction = z.infer<typeof insertWalletTransactionSchema>;
+export type WalletTransaction = typeof walletTransactions.$inferSelect;

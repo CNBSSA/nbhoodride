@@ -43,6 +43,22 @@ declare module "express-session" {
   }
 }
 
+// ── Ride state machine ──────────────────────────────────────────────────────
+// Maps each status to the set of statuses it is allowed to transition into.
+const VALID_RIDE_TRANSITIONS: Record<string, string[]> = {
+  pending:        ["accepted", "cancelled"],
+  accepted:       ["driver_arriving", "cancelled"],
+  driver_arriving:["in_progress", "cancelled"],
+  in_progress:    ["completed", "cancelled"],
+  completed:      [],   // terminal
+  cancelled:      [],   // terminal
+};
+
+function isValidRideTransition(from: string, to: string): boolean {
+  return VALID_RIDE_TRANSITIONS[from]?.includes(to) ?? false;
+}
+// ────────────────────────────────────────────────────────────────────────────
+
 async function ensureSuperAdminSetup() {
   try {
     const setupToken = process.env.SUPER_ADMIN_SETUP_TOKEN;
@@ -492,9 +508,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/driver/location', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const { lat, lng } = req.body;
-      
+      const { lat, lng, rideId } = req.body;
+      if (typeof lat !== 'number' || typeof lng !== 'number') {
+        return res.status(400).json({ message: "lat and lng must be numbers" });
+      }
       await storage.updateDriverLocation(userId, { lat, lng });
+      // Broadcast to rider of active ride (if provided)
+      if (rideId) {
+        const ride = await storage.getRide(rideId);
+        if (ride?.riderId && activeConnections.has(ride.riderId)) {
+          const riderWs = activeConnections.get(ride.riderId)!;
+          if (riderWs.readyState === WebSocket.OPEN) {
+            riderWs.send(JSON.stringify({ type: 'driver_location', rideId, lat, lng }));
+          }
+        }
+      }
       res.json({ success: true });
     } catch (error) {
       console.error("Error updating driver location:", error);
@@ -1204,7 +1232,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
-      
+
       const ride = await storage.getRide(rideId);
       if (!ride) {
         return res.status(404).json({ message: "Ride not found" });
@@ -1212,8 +1240,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (ride.riderId !== userId && ride.driverId !== userId) {
         return res.status(403).json({ message: "Not authorized to update this ride" });
       }
-      
+
       const updates = req.body;
+
+      // Enforce state machine if caller is trying to change status
+      if (updates.status && updates.status !== ride.status) {
+        if (!isValidRideTransition(ride.status ?? "", updates.status)) {
+          return res.status(400).json({
+            message: `Invalid status transition: ${ride.status} → ${updates.status}`,
+          });
+        }
+      }
+
       const updatedRide = await storage.updateRide(rideId, updates);
       res.json(updatedRide);
     } catch (error) {
@@ -2424,9 +2462,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { disputeId } = req.params;
-      const { resolution } = req.body;
-      const dispute = await storage.adminResolveDispute(disputeId, resolution, adminId);
-      await storage.logAdminAction(adminId, 'resolve_dispute', 'dispute', disputeId, { resolution });
+      const { resolution, refundAmount } = req.body;
+      const parsedRefund = refundAmount ? parseFloat(refundAmount) : undefined;
+      if (parsedRefund !== undefined && (!Number.isFinite(parsedRefund) || parsedRefund < 0)) {
+        return res.status(400).json({ message: "Invalid refund amount" });
+      }
+      const dispute = await storage.adminResolveDispute(disputeId, resolution, adminId, parsedRefund);
+      await storage.logAdminAction(adminId, 'resolve_dispute', 'dispute', disputeId, { resolution, refundAmount: parsedRefund });
       res.json(dispute);
     } catch (error) {
       console.error("Error resolving dispute:", error);
@@ -2573,7 +2615,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const group = await storage.getRideGroupByCode(scheduleCode.toUpperCase());
       if (!group) return res.status(404).json({ message: "Schedule code not found" });
       if (group.status !== "open") return res.status(410).json({ message: "This schedule is no longer accepting riders" });
-      if (group.filledSlots >= (group.maxSlots ?? 3)) return res.status(409).json({ message: "This schedule is full" });
+      if ((group.filledSlots ?? 0) >= (group.maxSlots ?? 3)) return res.status(409).json({ message: "This schedule is full" });
 
       // Estimate fare for the joiner's route
       const { lat: pLat, lng: pLng } = pickupLocation;
@@ -3456,15 +3498,39 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
                 ws.send(JSON.stringify({ type: 'error', message: 'User ID mismatch' }));
                 break;
               }
-              activeConnections.set(message.userId, ws);
+              // Reject suspended users before adding to active connections
+              storage.getUser(message.userId).then(user => {
+                if (!user || user.isSuspended) {
+                  ws.send(JSON.stringify({ type: 'error', message: 'Account suspended' }));
+                  ws.close();
+                  return;
+                }
+                activeConnections.set(message.userId, ws);
+              }).catch(() => {
+                ws.send(JSON.stringify({ type: 'error', message: 'Authentication failed' }));
+                ws.close();
+              });
             }
             break;
             
           case 'location_update':
             if (message.userId && message.location) {
-              storage.updateDriverLocation(message.userId, { lat: message.location.lat, lng: message.location.lng }).catch((err: any) => {
+              const { lat, lng } = message.location;
+              // Persist location (skip if HTTP POST already handled it for this tick)
+              storage.updateDriverLocation(message.userId, { lat, lng }).catch((err: any) => {
                 console.error('Failed to persist driver location from WebSocket:', err);
               });
+              // Forward to rider of the active ride
+              if (message.rideId) {
+                storage.getRide(message.rideId).then(ride => {
+                  if (ride?.riderId && activeConnections.has(ride.riderId)) {
+                    const riderWs = activeConnections.get(ride.riderId)!;
+                    if (riderWs.readyState === WebSocket.OPEN) {
+                      riderWs.send(JSON.stringify({ type: 'driver_location', rideId: message.rideId, lat, lng }));
+                    }
+                  }
+                }).catch(() => {});
+              }
             }
             break;
             

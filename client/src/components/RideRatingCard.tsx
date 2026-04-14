@@ -3,6 +3,16 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest } from '@/lib/queryClient';
@@ -40,6 +50,7 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
   const [hoveredRating, setHoveredRating] = useState(0);
   const [review, setReview] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showLowRatingConfirm, setShowLowRatingConfirm] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -86,6 +97,14 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
     }
   });
 
+  const doSubmitRating = () => {
+    setIsSubmitting(true);
+    submitRatingMutation.mutate({
+      rating,
+      review: review.trim() || undefined
+    });
+  };
+
   const handleSubmitRating = () => {
     if (rating === 0) {
       toast({
@@ -95,12 +114,12 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
       });
       return;
     }
-
-    setIsSubmitting(true);
-    submitRatingMutation.mutate({
-      rating,
-      review: review.trim() || undefined
-    });
+    // Ask for confirmation before submitting a low rating
+    if (rating <= 2) {
+      setShowLowRatingConfirm(true);
+      return;
+    }
+    doSubmitRating();
   };
 
   const renderStars = () => {
@@ -129,6 +148,23 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
   };
 
   return (
+    <>
+    <AlertDialog open={showLowRatingConfirm} onOpenChange={setShowLowRatingConfirm}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Confirm {rating}-Star Rating</AlertDialogTitle>
+          <AlertDialogDescription>
+            You selected {rating} {rating === 1 ? "star" : "stars"} — this is a low rating that will affect your {role}'s overall score. Are you sure this reflects your experience?
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={() => setShowLowRatingConfirm(false)}>Change Rating</AlertDialogCancel>
+          <AlertDialogAction onClick={() => { setShowLowRatingConfirm(false); doSubmitRating(); }}>
+            Yes, Submit {rating} Stars
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     <Card className="border-l-4 border-l-primary" data-testid={`card-rating-${ride.id}`}>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
@@ -234,5 +270,6 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
         </div>
       </CardContent>
     </Card>
+    </>
   );
 }
