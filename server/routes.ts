@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
+import { db } from "./db";
 import { setupAuth, isAuthenticated, getSession } from "./replitAuth";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
@@ -65,7 +66,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     standardHeaders: true,
     legacyHeaders: false,
     message: { message: "Too many requests, please try again later." },
-    skip: (req) => req.path.startsWith('/api/admin'), // admins exempt
+    // NOTE: No skip for /api/admin — all endpoints are rate-limited
   });
 
   const aiLimiter = rateLimit({
@@ -87,6 +88,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api', generalLimiter);
   app.use('/api/auth/login', authLimiter);
   app.use('/api/auth/signup', authLimiter);
+  app.use('/api/auth/forgot-password', authLimiter);
+  app.use('/api/auth/reset-password', authLimiter);
+  app.use('/api/auth/test-login', authLimiter);
+  app.use('/api/admin/setup-super-admin', authLimiter);
   app.use('/api/ai', aiLimiter);
 
   // Auth middleware
@@ -339,39 +344,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Test authentication route for test riders - EXPLICITLY DISABLED BY DEFAULT
   // Only enable when ENABLE_TEST_LOGIN environment variable is explicitly set to 'true'
   // This ensures the endpoint is NEVER available in production unless explicitly configured
-  if (process.env.ENABLE_TEST_LOGIN === 'true' && process.env.NODE_ENV !== 'production') {
-    const TEST_PASSWORD = process.env.TEST_PASSWORD || "Fes5036tus@3";
-    const TEST_RIDERS = [
-      { id: 'test-rider-1', email: 'magdelineakingba@gmail.com' },
-      { id: 'test-rider-2', email: 'wunmiakingba@gmail.com' },
-      { id: 'test-rider-3', email: 'bolaakingba@gmail.com' },
-    ];
+  // Test login endpoint — requires both ENABLE_TEST_LOGIN=true AND TEST_PASSWORD env var to be set.
+  // Real user emails and passwords must NEVER be hardcoded here. Configure via environment only.
+  if (process.env.ENABLE_TEST_LOGIN === 'true' && process.env.NODE_ENV !== 'production' && process.env.TEST_PASSWORD) {
+    const TEST_PASSWORD = process.env.TEST_PASSWORD;
+    // TEST_USER_IDS: comma-separated list of real user IDs from the database, e.g. "uuid1,uuid2"
+    const testUserIds = (process.env.TEST_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 
-    console.log('⚠️  WARNING: Test login endpoint is ENABLED. This should ONLY be used in local development!');
+    console.log('⚠️  WARNING: Test login endpoint is ENABLED. Only for local development!');
 
     app.post('/api/auth/test-login', async (req, res) => {
       try {
-        const { email, password } = req.body;
-        
-        const testRider = TEST_RIDERS.find(r => r.email === email);
-        if (!testRider || password !== TEST_PASSWORD) {
+        const { userId, password } = req.body;
+        if (!userId || password !== TEST_PASSWORD) {
           return res.status(401).json({ message: "Invalid credentials" });
         }
-
-        const user = await storage.getUser(testRider.id);
-        if (!user) {
-          return res.status(404).json({ message: "Test user not found in database" });
+        if (!testUserIds.includes(userId)) {
+          return res.status(403).json({ message: "User not in test allow-list" });
         }
-
-        req.session.testUserId = testRider.id;
-        
-        res.json({ 
-          message: "Login successful",
-          user: {
-            ...user,
-            driverProfile: null
-          }
-        });
+        const user = await storage.getUser(userId);
+        if (!user) return res.status(404).json({ message: "User not found" });
+        req.session.testUserId = userId;
+        res.json({ message: "Login successful", user: { ...user, driverProfile: null } });
       } catch (error) {
         console.error("Test login error:", error);
         res.status(500).json({ message: "Login failed" });
@@ -772,42 +766,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const ride = await storage.completeRide(rideId, userId, actualFare);
       
-      // If ride uses card payment, process virtual card payment
+      // If ride uses card payment, process virtual card payment inside a transaction
       if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
         try {
           const estimatedFare = parseFloat(ride.estimatedFare || "0");
           const finalFare = actualFare ?? parseFloat(ride.actualFare || "0");
           const totalAmount = finalFare + (tipAmount || 0);
           const priceDifference = finalFare - estimatedFare;
-          
-          console.log(`Processing virtual card payment for ride ${rideId}: Estimated: $${estimatedFare}, Actual: $${actualFare}, Tip: $${tipAmount || 0}`);
-          
-          // If actual fare is less than estimated, refund the difference
-          if (priceDifference < 0) {
-            await storage.addVirtualCardBalance(ride.riderId, Math.abs(priceDifference));
-            console.log(`Refunded $${Math.abs(priceDifference)} to rider`);
-          }
-          // If actual fare is more than estimated, deduct the difference
-          else if (priceDifference > 0) {
-            await storage.deductVirtualCardBalance(ride.riderId, priceDifference);
-            console.log(`Deducted additional $${priceDifference} from rider`);
-          }
-          
-          // If there's a tip, deduct it from rider
-          if (tipAmount && tipAmount > 0) {
-            await storage.deductVirtualCardBalance(ride.riderId, tipAmount);
-            console.log(`Deducted tip $${tipAmount} from rider`);
-          }
-          
-          // Add the total amount to driver's virtual card balance
-          if (ride.driverId) {
-            await storage.addVirtualCardBalance(ride.driverId, totalAmount);
-            console.log(`Added $${totalAmount} to driver's balance`);
-          }
-          
-          await storage.captureRidePayment(rideId, actualFare, tipAmount);
-          
-          console.log(`Virtual card payment processed successfully for ride ${rideId}`);
+
+          await db.transaction(async (tx) => {
+            // If actual fare is less than estimated, refund the difference
+            if (priceDifference < 0) {
+              await storage.addVirtualCardBalance(ride.riderId, Math.abs(priceDifference));
+            }
+            // If actual fare is more than estimated, deduct the difference
+            else if (priceDifference > 0) {
+              await storage.deductVirtualCardBalance(ride.riderId, priceDifference);
+            }
+
+            // If there's a tip, deduct it from rider
+            if (tipAmount && tipAmount > 0) {
+              await storage.deductVirtualCardBalance(ride.riderId, tipAmount);
+            }
+
+            // Credit driver
+            if (ride.driverId && totalAmount > 0) {
+              await storage.addVirtualCardBalance(ride.driverId, totalAmount);
+            }
+
+            await storage.captureRidePayment(rideId, actualFare, tipAmount);
+          });
+
+          console.log(`Virtual card payment processed successfully for ride ${rideId}: actual $${finalFare}, tip $${tipAmount || 0}`);
         } catch (error: any) {
           console.error("Failed to process virtual card payment:", error);
           throw new Error(`Payment processing failed: ${error.message}`);
@@ -2715,7 +2705,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Deduct balance immediately and create request
-      await storage.addVirtualCardBalance(userId, -numAmount);
+      await storage.deductVirtualCardBalance(userId, numAmount);
       const request = await storage.createPayoutRequest({
         driverId: userId,
         amount: numAmount.toFixed(2),

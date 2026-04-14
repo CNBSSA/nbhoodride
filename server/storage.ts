@@ -283,6 +283,9 @@ export interface IStorage {
   resolveSafetyAlert(id: string, resolvedBy: string): Promise<SafetyAlert>;
   getConversionMetrics(startDate: Date, endDate: Date): Promise<{ searches: number; bookings: number; completions: number; conversionRate: number }>;
   getDriverOptimalHours(driverId: string): Promise<{ hour: number; dayOfWeek: number; avgRides: number; avgEarnings: number }[]>;
+  // Driver hour tracking for ownership qualification
+  getOrCreateWeeklyHours(driverId: string, weekStart: string): Promise<DriverWeeklyHours>;
+  addDriverMinutes(driverId: string, minutes: number): Promise<void>;
   // Ride groups (Mode 3: multi-stop, Mode 4: shared schedule)
   createRideGroup(data: InsertRideGroup): Promise<RideGroup>;
   getRideGroupByCode(code: string): Promise<RideGroup | undefined>;
