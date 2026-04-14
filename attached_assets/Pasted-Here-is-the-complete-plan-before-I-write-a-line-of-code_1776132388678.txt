@@ -1,0 +1,261 @@
+Here is the complete plan before I write a line of code:
+
+Implementation Plan
+What's being built
+Mode 3 — Multi-Stop (You Pay)
+
+Rider adds 1–3 pickup stops (e.g. pick me up, then pick up my friend, then pick up my sister)
+All pickups share ONE final destination
+Fare = full-route distance (stop1→stop2→stop3→destination), single payment by organizer
+Mode 4 — Shared Schedule (Code-Based)
+
+Rider books their own ride, receives a PG-XXXXXX schedule code
+They share the code with up to 2 other riders (copy/SMS/WhatsApp, manually)
+Each joiner enters their own pickup AND their own destination (independent trips)
+Discount logic: 30% off for EVERYONE (including organizer) the moment 1 person joins. If nobody joins → full price for organizer
+Join window: stays open until driver accepts the group
+Driver earns combined discounted fares (still more profitable than a single solo ride)
+Existing auto-match: untouched, still works side by side
+
+Data model
+New table ride_groups: scheduleCode (unique, "PG-XXXXXX"), organizerId, groupType ('multi_stop' | 'shared_schedule'), sharedDestination (for multi_stop), maxSlots=3, filledSlots, status ('open'|'active'|'completed'|'cancelled'), driverId, discountActive
+
+New fields on rides: groupId (FK → ride_groups), rideType (default 'solo'), pickupStops (JSON array for multi_stop), originalFare, discountAmount
+
+Payment timing: Virtual card deduction happens at driver acceptance, not booking. At that point the server checks group size, applies discount if ≥2 riders, then deducts each rider's adjusted fare.
+
+API endpoints added
+Method	Path	Purpose
+POST	/api/rides/multi-stop	Create multi-stop ride (1 payer)
+POST	/api/rides/create-shared-schedule	Create shared schedule, returns code
+GET	/api/rides/schedule/:code	Preview a schedule (slots, time) before joining
+POST	/api/rides/join-schedule	Join someone's schedule with a code
+Modified: POST /api/driver/rides/:rideId/accept — when accepting a grouped ride, automatically closes the group and applies discount to all rides if ≥2 riders.
+
+Frontend (3 new components, 2 modified)
+MultiStopBookingSheet.tsx — inline bottom sheet with 4 steps: add stops → shared destination → pick driver → confirm
+SharedScheduleSheet.tsx — inline bottom sheet: your pickup + destination → pick driver → confirm → show code prominently with copy button
+JoinScheduleModal.tsx — enter code → preview group → enter your pickup + destination → confirm (shows discounted fare)
+RiderDashboard.tsx: idle panel gets two new icon buttons — "Multi-stop" and "Join Schedule"
+
+IncomingRideRequest.tsx: shows "Group Ride" badge, lists all pickups, shows combined earnings
+
+Executing now:
+
+Phase 1 — Schema
+
+
+Updated todo list, edited a file
+Updated todo list, edited a file
+
+Now add the new fields to the rides table:
+
+
+Edited a file
+Edited a file
+
+Now add the insert schema and types at the bottom of schema.ts:
+
+
+Ran 8 commands, edited 2 files, updated todo list
+Ran 8 commands, edited 2 files, updated todo list
+
+The DATABASE_URL is a Replit secret, not available in this sandbox. The schema push must run on Replit. I'll note this at the end and continue with all other phases now.
+
+Phase 3 — Storage Layer
+
+
+Read 5 files, updated todo list, ran a command
+Read 5 files, updated todo list, ran a command
+
+Now let me check what's been added to schema.ts already (the rideGroups table and related types):
+
+
+Searched code
+Searched code
+
+Good. Now let me add the storage methods. First, I'll update the IStorage interface, then add implementations:
+
+
+Edited a file
+Edited a file
+
+Now add the interface methods to IStorage:
+
+
+Edited a file
+Edited a file
+
+Now add the implementations at the end of DatabaseStorage:
+
+
+Edited a file
+Edited a file
+
+Storage layer done. Now let's work on the API routes. Let me read the relevant portion of routes.ts:
+
+
+Read 2 files, ran a command
+Read 2 files, ran a command
+
+Now let me look at the driver accept route to understand how to modify it for group discount logic:
+
+
+Ran a command, read a file
+Ran a command, read a file
+
+Now let me look at the spot where I need to insert the new routes (before the parameterized /:rideId route):
+
+
+Read a file
+Read a file
+
+Now I have everything I need. Let me look at the calculate-fare endpoint to understand fare calculation:
+
+
+Read a file
+Read a file
+
+Now I have all the context. Let me add the new API routes — place them before the /:rideId route. I'll add them right before the comment "Rating and Payment routes":
+
+
+Edited a file
+Edited a file
+
+Now I need to modify the driver accept route to close the group when a driver accepts and apply discount logic. Let me update that:
+
+
+Edited a file
+Edited a file
+
+Now let's build the frontend components. First, let me check the existing RideBookingModal to understand patterns, then build the MultiStopBookingSheet:
+
+
+Read 5 files
+Read 5 files
+
+I have enough context now to build the new components. Let me create the MultiStopBookingSheet.tsx and SharedScheduleSheet.tsx + JoinScheduleModal.tsx components:
+
+
+Created a file
+Created a file
+
+Now create the SharedScheduleSheet and JoinScheduleModal as one file:
+
+
+Created a file
+Created a file
+
+Now create the JoinScheduleModal:
+
+
+Created a file
+Created a file
+
+Now wire up the new mode buttons in RiderDashboard. Let me read the idle panel section:
+
+
+Read a file
+Read a file
+
+Now I'll add the new mode buttons and wire up the components in RiderDashboard:
+
+
+Edited 2 files
+Edited 2 files
+
+Now add state for the new modals:
+
+
+Edited a file
+Edited a file
+
+Now add the new buttons to the idle panel:
+
+
+Edited a file
+Edited a file
+
+Now add the new modal components at the bottom of the JSX. Let me find where ScheduleRideModal is rendered:
+
+
+Searched code, read a file, edited a file
+Searched code, read a file, edited a file
+
+Now update IncomingRideRequest to show group ride info. Let me read it first:
+
+
+Read a file
+Read a file
+
+Now let me update IncomingRideRequest to show group ride info when applicable:
+
+
+Edited 2 files
+Edited 2 files
+
+Now add the group ride badge after the timer row and update the pickup section to show multiple stops:
+
+
+Edited a file
+Edited a file
+
+Now update the pickup/destination section to show all stops for multi-stop rides:
+
+
+Edited a file
+Edited a file
+
+Now let me do a quick TypeScript check to catch any obvious errors:
+
+
+TypeScript type check
+TypeScript type check
+
+All TypeScript errors shown are pre-existing in the codebase (not in any of our new files). Let me verify the one RiderDashboard error is pre-existing and not caused by our changes:
+
+
+Read a file
+Read a file
+
+That's a pre-existing ordering issue (useEffect referencing geocodeData before it's declared). Not our problem to fix. Now let's check if there are any errors specifically in our new files:
+
+
+Check TypeScript errors in our new files
+Check TypeScript errors in our new files
+
+No errors in our new code. Now let's commit and push everything:
+
+
+Ran 4 commands
+Ran 4 commands
+
+All changes pushed. Here's a summary of everything that was implemented:
+
+Multi-Stop & Shared Schedule — Implementation Complete
+What was built
+Mode 3 — Multi-Stop (one payer)
+
+Up to 3 geocoded pickup stops with address autocomplete
+One shared final destination
+Full route fare calculated and charged to organizer's PG Card
+Driver sees numbered pickup stops on their incoming request card
+Mode 4 — Shared Schedule (code-based)
+
+Organizer books their own ride → receives a prominent PG-XXXXXX code with one-tap copy
+Code shared with up to 2 friends who each enter it in "Join Schedule"
+Each joiner picks their own pickup and destination
+30% discount fires automatically the moment the first person joins — applied to everyone's fare
+Join window closes when driver accepts; driver earns on 2–3 rides in one trip
+Files changed
+File	What changed
+shared/schema.ts	ride_groups table + groupId, rideType, pickupStops, originalFare, discountAmount on rides
+server/storage.ts	6 new ride group methods: createRideGroup, getRideGroupByCode, getRideGroupById, updateRideGroup, getRidesInGroup, applyGroupDiscount
+server/routes.ts	4 new API routes + driver-accept route updated to close group and apply discount
+client/src/components/MultiStopBookingSheet.tsx	New — 4-step booking sheet (stops → destination → driver → confirm)
+client/src/components/SharedScheduleSheet.tsx	New — 4-step sheet ending with big code display + copy button
+client/src/components/JoinScheduleModal.tsx	New — code lookup → preview → your route → confirm with pre-applied 30% fare
+client/src/pages/RiderDashboard.tsx	New "Multi-Stop", "Share Ride", "Join Schedule" buttons in idle panel
+client/src/components/IncomingRideRequest.tsx	Group badge, numbered pickup stops for multi-stop, slot count for shared schedule
+One step needed on Replit
+Run npm run db:push on your Replit instance to create the ride_groups table and add the new columns to rides.
