@@ -103,6 +103,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.use('/api', generalLimiter);
   app.use('/api/auth/login', authLimiter);
+  app.use('/api/auth/email-login', authLimiter);
   app.use('/api/auth/signup', authLimiter);
   app.use('/api/auth/forgot-password', authLimiter);
   app.use('/api/auth/reset-password', authLimiter);
@@ -1038,8 +1039,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put('/api/vehicles/:vehicleId', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { vehicleId } = req.params;
       const updates = req.body;
+
+      // SECURITY: Ensure the vehicle belongs to this driver before updating
+      const driverProfile = await storage.getDriverProfile(userId);
+      if (!driverProfile) {
+        return res.status(403).json({ message: "Driver profile required" });
+      }
+      const existingVehicles = await storage.getVehiclesByDriverId(driverProfile.id);
+      const owns = existingVehicles.some((v: any) => v.id === vehicleId);
+      if (!owns) {
+        return res.status(403).json({ message: "Not authorized to update this vehicle" });
+      }
       
       const vehicle = await storage.updateVehicle(vehicleId, updates);
       res.json(vehicle);
@@ -1235,7 +1248,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Not authorized to update this ride" });
       }
 
-      const updates = req.body;
+      // SECURITY: Whitelist fields that riders/drivers are allowed to update
+      const RIDER_ALLOWED_FIELDS = ['status', 'pickupInstructions', 'wantsSharedRide'];
+      const DRIVER_ALLOWED_FIELDS = ['status', 'pickupInstructions'];
+      const isRider = ride.riderId === userId;
+      const allowedFields = isRider ? RIDER_ALLOWED_FIELDS : DRIVER_ALLOWED_FIELDS;
+      const updates: Record<string, any> = {};
+      for (const key of allowedFields) {
+        if (req.body[key] !== undefined) updates[key] = req.body[key];
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "No valid fields to update" });
+      }
 
       // Enforce state machine if caller is trying to change status
       if (updates.status && updates.status !== ride.status) {
@@ -1505,11 +1530,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/rides/:rideId', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       const ride = await storage.getRide(rideId);
       
       if (!ride) {
         return res.status(404).json({ message: "Ride not found" });
+      }
+
+      // SECURITY: Only the rider, driver, or an admin may view a ride
+      const user = await storage.getUser(userId);
+      const isParticipant = ride.riderId === userId || ride.driverId === userId;
+      const isAdmin = user?.isAdmin || user?.isSuperAdmin;
+      if (!isParticipant && !isAdmin) {
+        return res.status(403).json({ message: "Not authorized to view this ride" });
       }
       
       res.json(ride);
@@ -1757,7 +1791,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/disputes/ride/:rideId', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
+
+      // SECURITY: Only rider or driver of the ride, or an admin, may see its disputes
+      const ride = await storage.getRide(rideId);
+      if (ride) {
+        const user = await storage.getUser(userId);
+        const isParticipant = ride.riderId === userId || ride.driverId === userId;
+        const isAdmin = user?.isAdmin || user?.isSuperAdmin;
+        if (!isParticipant && !isAdmin) {
+          return res.status(403).json({ message: "Not authorized to view disputes for this ride" });
+        }
+      }
+
       const disputes = await storage.getDisputesByRide(rideId);
       res.json(disputes);
     } catch (error) {
@@ -1925,11 +1972,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { incidentId } = req.params;
       const { location } = req.body;
       
-      if (!location || !location.lat || !location.lng) {
+      if (!location || location.lat === undefined || location.lng === undefined) {
         return res.status(400).json({ message: "Valid location coordinates required" });
       }
+      const chkLat = typeof location.lat === 'number' ? location.lat : parseFloat(location.lat);
+      const chkLng = typeof location.lng === 'number' ? location.lng : parseFloat(location.lng);
+      if (!Number.isFinite(chkLat) || chkLat < -90 || chkLat > 90 ||
+          !Number.isFinite(chkLng) || chkLng < -180 || chkLng > 180) {
+        return res.status(400).json({ message: "Invalid coordinate values" });
+      }
       
-      const updatedIncident = await storage.updateEmergencyIncidentLocation(incidentId, location);
+      const updatedIncident = await storage.updateEmergencyIncidentLocation(incidentId, { lat: chkLat, lng: chkLng });
       
       // Broadcast location update via WebSocket
       broadcast({
@@ -2110,7 +2163,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update emergency incident location (authenticated)
-  app.post('/api/emergency/update-location', async (req: any, res) => {
+  app.post('/api/emergency/update-location', isAuthenticated, async (req: any, res) => {
     try {
       const { lat, lng, incidentId } = req.body;
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -2119,8 +2172,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      if (!lat || !lng) {
+      if (lat === undefined || lng === undefined) {
         return res.status(400).json({ message: "Location coordinates required" });
+      }
+      const numLat = typeof lat === 'number' ? lat : parseFloat(lat);
+      const numLng = typeof lng === 'number' ? lng : parseFloat(lng);
+      if (!Number.isFinite(numLat) || numLat < -90 || numLat > 90 ||
+          !Number.isFinite(numLng) || numLng < -180 || numLng > 180) {
+        return res.status(400).json({ message: "Invalid coordinate values" });
       }
 
       // Get active emergency incident for user
@@ -2397,7 +2456,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { userId } = req.params;
-      const updates = req.body;
+      // SECURITY: Whitelist fields that admins may update on a driver profile
+      const DRIVER_PROFILE_ALLOWED = ['approvalStatus', 'isOnline', 'isVerifiedNeighbor', 'verificationNotes', 'backgroundCheckStatus', 'licenseNumber', 'licenseExpiry', 'insuranceProvider', 'insuranceExpiry'];
+      const rawUpdates = req.body;
+      const updates: Record<string, any> = {};
+      for (const key of DRIVER_PROFILE_ALLOWED) {
+        if (rawUpdates[key] !== undefined) updates[key] = rawUpdates[key];
+      }
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "No valid fields to update" });
+      }
       const profile = await storage.adminUpdateDriverProfile(userId, updates);
       await storage.logAdminAction(adminId, 'update_driver', 'driver_profile', userId, updates);
       res.json(profile);
@@ -2874,7 +2942,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/admin/profits', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const data = { ...req.body, declaredBy: adminId };
+      // SECURITY: Validate profit declaration fields
+      const profitSchema = z.object({
+        totalRevenue: z.number().min(0, "Revenue must be non-negative"),
+        totalExpenses: z.number().min(0, "Expenses must be non-negative"),
+        netProfit: z.number(),
+        distributionPercentage: z.number().min(0).max(100).optional(),
+        notes: z.string().max(1000).optional(),
+        periodStart: z.string().optional(),
+        periodEnd: z.string().optional(),
+      });
+      const parsed = profitSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.errors[0].message });
+      }
+      const data = { ...parsed.data, declaredBy: adminId };
       const declaration = await storage.createProfitDeclaration(data);
       await storage.logAdminAction(adminId, 'create_profit_declaration', 'profit_declaration', declaration.id, data);
       res.json(declaration);
