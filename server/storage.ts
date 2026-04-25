@@ -62,7 +62,7 @@ import {
   type DriverRateCard,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc, sql, or, isNotNull, gt, like, inArray, count, sum, gte, lte } from "drizzle-orm";
+import { eq, and, desc, asc, sql, or, isNull, isNotNull, gt, like, inArray, count, sum, gte, lte } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -234,7 +234,8 @@ export interface IStorage {
   getDriverRides(driverId: string, period: 'today' | 'week' | 'month'): Promise<Ride[]>;
   
   // Scheduled ride operations
-  getOpenScheduledRides(): Promise<any[]>;
+  getOpenScheduledRides(driverCounties?: string[]): Promise<any[]>;
+  updateRideCounty(rideId: string, county: string): Promise<void>;
   getScheduledRidesWithDriver(userId: string): Promise<any[]>;
   claimScheduledRide(rideId: string, driverId: string): Promise<Ride>;
   getDriverUpcomingRides(driverId: string): Promise<any[]>;
@@ -662,8 +663,24 @@ export class DatabaseStorage implements IStorage {
       .orderBy(asc(rides.scheduledAt));
   }
 
-  async getOpenScheduledRides(): Promise<any[]> {
+  async getOpenScheduledRides(driverCounties?: string[]): Promise<any[]> {
     const riderAlias = alias(users, 'rider_user');
+    const baseWhere = and(
+      eq(rides.status, "pending"),
+      isNotNull(rides.scheduledAt),
+      gt(rides.scheduledAt, sql`now()`),
+      sql`${rides.driverId} IS NULL`
+    );
+
+    // If driver has specific county preferences, filter to rides in those counties.
+    // Rides without a recorded county are shown to everyone (county detection may have failed).
+    const countyWhere = driverCounties && driverCounties.length > 0
+      ? and(baseWhere, or(
+          isNull(rides.pickupCounty),
+          inArray(rides.pickupCounty, driverCounties)
+        ))
+      : baseWhere;
+
     return await db
       .select({
         id: rides.id,
@@ -675,6 +692,7 @@ export class DatabaseStorage implements IStorage {
         status: rides.status,
         estimatedFare: rides.estimatedFare,
         scheduledAt: rides.scheduledAt,
+        pickupCounty: rides.pickupCounty,
         createdAt: rides.createdAt,
         rider: {
           id: riderAlias.id,
@@ -685,15 +703,15 @@ export class DatabaseStorage implements IStorage {
       })
       .from(rides)
       .leftJoin(riderAlias, eq(rides.riderId, riderAlias.id))
-      .where(
-        and(
-          eq(rides.status, "pending"),
-          isNotNull(rides.scheduledAt),
-          gt(rides.scheduledAt, sql`now()`),
-          sql`${rides.driverId} IS NULL`
-        )
-      )
+      .where(countyWhere)
       .orderBy(asc(rides.scheduledAt));
+  }
+
+  async updateRideCounty(rideId: string, county: string): Promise<void> {
+    await db
+      .update(rides)
+      .set({ pickupCounty: county, updatedAt: new Date() })
+      .where(eq(rides.id, rideId));
   }
 
   async claimScheduledRide(rideId: string, driverId: string): Promise<Ride> {

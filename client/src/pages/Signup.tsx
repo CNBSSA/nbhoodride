@@ -112,7 +112,7 @@ export default function Signup() {
             Create Your Account
           </CardTitle>
           <CardDescription>
-            Join PG County's community ride-share platform
+            Join Maryland's community ride-share platform
           </CardDescription>
         </CardHeader>
         <CardContent>

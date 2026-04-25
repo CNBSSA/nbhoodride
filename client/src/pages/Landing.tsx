@@ -20,11 +20,11 @@ export default function Landing() {
             {/* Welcome Message */}
             <div className="space-y-3">
               <h2 className="text-xl font-semibold text-foreground">
-                Welcome to PG County's Community Ride-Share
+                Welcome to Maryland's Community Ride-Share
               </h2>
               <p className="text-muted-foreground text-sm leading-relaxed">
-                Connect with trusted neighbors for safe, transparent, and affordable rides 
-                throughout Prince George's County. Your ride from neighbors, by neighbors.
+                Connect with trusted neighbors for safe, transparent, and affordable rides
+                throughout Maryland. Your ride from neighbors, by neighbors.
               </p>
             </div>
 

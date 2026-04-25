@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -10,17 +10,54 @@ import DocumentUploadModal from "@/components/DocumentUploadModal";
 import SafetyPrivacyModal from "@/components/SafetyPrivacyModal";
 import TopUpModal from "@/components/TopUpModal";
 import { isUnauthorizedError } from "@/lib/authUtils";
-import { Bell, BellOff, Plus } from "lucide-react";
+import { Bell, BellOff, Plus, MapPin, ChevronDown, ChevronUp, CheckSquare, Square } from "lucide-react";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
+import { MD_COUNTIES } from "../../../shared/schema";
 
 export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
   const [isSafetyPrivacyModalOpen, setIsSafetyPrivacyModalOpen] = useState(false);
   const { permission, isSubscribed, isSupported, isLoading: pushLoading, subscribe, unsubscribe } = usePushNotifications();
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
+  const [showCountySelector, setShowCountySelector] = useState(false);
+  const [localCounties, setLocalCounties] = useState<string[]>([]);
   const { user, isLoading } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  // Fetch driver county preferences
+  const { data: countyData } = useQuery({
+    queryKey: ["/api/driver/counties"],
+    enabled: !!user?.isDriver,
+    select: (data: any) => (data?.acceptedCounties ?? []) as string[],
+  });
+  const savedCounties: string[] = countyData ?? [];
+
+  // County save mutation
+  const saveCountiesMutation = useMutation({
+    mutationFn: async (counties: string[]) => {
+      await apiRequest("PUT", "/api/driver/counties", { acceptedCounties: counties });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/driver/counties"] });
+      toast({ title: "Counties updated", description: "Your service area has been saved." });
+      setShowCountySelector(false);
+    },
+    onError: () => {
+      toast({ title: "Failed to save", description: "Could not update county preferences.", variant: "destructive" });
+    },
+  });
+
+  function openCountySelector() {
+    setLocalCounties(savedCounties.length > 0 ? [...savedCounties] : [...MD_COUNTIES]);
+    setShowCountySelector(true);
+  }
+
+  function toggleCounty(county: string) {
+    setLocalCounties(prev =>
+      prev.includes(county) ? prev.filter(c => c !== county) : [...prev, county]
+    );
+  }
 
   // Become driver mutation
   const becomeDriverMutation = useMutation({
@@ -261,6 +298,72 @@ export default function Profile() {
             </Button>
           )}
 
+          {user?.isDriver && (
+            <div className="border rounded-xl overflow-hidden">
+              <button
+                className="w-full flex items-center justify-between p-4 text-left hover:bg-muted/50 transition-colors"
+                onClick={() => showCountySelector ? setShowCountySelector(false) : openCountySelector()}
+              >
+                <div className="flex items-center space-x-3">
+                  <MapPin className="text-primary w-5 h-5 shrink-0" />
+                  <div>
+                    <p className="font-medium">Service Counties</p>
+                    <p className="text-sm text-muted-foreground">
+                      {savedCounties.length === 0
+                        ? "All Maryland counties"
+                        : savedCounties.length === 1
+                        ? savedCounties[0]
+                        : `${savedCounties.length} counties selected`}
+                    </p>
+                  </div>
+                </div>
+                {showCountySelector ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+              </button>
+
+              {showCountySelector && (
+                <div className="border-t p-4 space-y-3 bg-background">
+                  <p className="text-xs text-muted-foreground">
+                    Select the counties you want to accept rides in. Leave all selected to cover all of Maryland.
+                  </p>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" className="text-xs" onClick={() => setLocalCounties([...MD_COUNTIES])}>
+                      <CheckSquare className="w-3 h-3 mr-1" /> All
+                    </Button>
+                    <Button size="sm" variant="outline" className="text-xs" onClick={() => setLocalCounties([])}>
+                      <Square className="w-3 h-3 mr-1" /> None
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-1 max-h-64 overflow-y-auto">
+                    {MD_COUNTIES.map(county => (
+                      <label key={county} className="flex items-center space-x-2 py-1 cursor-pointer hover:bg-muted/30 rounded px-1">
+                        <input
+                          type="checkbox"
+                          checked={localCounties.includes(county)}
+                          onChange={() => toggleCounty(county)}
+                          className="rounded"
+                        />
+                        <span className="text-sm">{county}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="flex gap-2 pt-1">
+                    <Button
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => saveCountiesMutation.mutate(localCounties)}
+                      disabled={saveCountiesMutation.isPending}
+                    >
+                      {saveCountiesMutation.isPending ? "Saving…" : "Save"}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setShowCountySelector(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <Button
             variant="outline"
             className="w-full justify-between p-4"
@@ -350,7 +453,7 @@ export default function Profile() {
               <div className="flex items-center space-x-3">
                 <i className="fas fa-award text-2xl" />
                 <div>
-                  <h3 className="font-semibold">Verified PG County Neighbor</h3>
+                  <h3 className="font-semibold">Verified Maryland Neighbor</h3>
                   <p className="text-sm opacity-90">
                     Trusted member since {new Date(user.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
                   </p>
@@ -366,7 +469,7 @@ export default function Profile() {
             <div className="text-center space-y-2">
               <h3 className="font-semibold text-foreground">PG Ride v1.0</h3>
               <p className="text-sm text-muted-foreground">
-                Community rideshare for Prince George's County
+                Community rideshare for Maryland
               </p>
               <div className="flex justify-center space-x-4 text-xs text-muted-foreground">
                 <span>Privacy Policy</span>

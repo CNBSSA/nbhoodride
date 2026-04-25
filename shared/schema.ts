@@ -15,6 +15,36 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// All Maryland counties + Baltimore City (used for driver county preference)
+export const MD_COUNTIES = [
+  "Allegany County",
+  "Anne Arundel County",
+  "Baltimore City",
+  "Baltimore County",
+  "Calvert County",
+  "Caroline County",
+  "Carroll County",
+  "Cecil County",
+  "Charles County",
+  "Dorchester County",
+  "Frederick County",
+  "Garrett County",
+  "Harford County",
+  "Howard County",
+  "Kent County",
+  "Montgomery County",
+  "Prince George's County",
+  "Queen Anne's County",
+  "Somerset County",
+  "St. Mary's County",
+  "Talbot County",
+  "Washington County",
+  "Wicomico County",
+  "Worcester County",
+] as const;
+
+export type MdCounty = typeof MD_COUNTIES[number];
+
 // Session storage table (required for Replit Auth)
 export const sessions = pgTable(
   "sessions",
@@ -68,6 +98,8 @@ export const driverProfiles = pgTable("driver_profiles", {
   approvalStatus: varchar("approval_status").default("pending"),
   discountRate: decimal("discount_rate", { precision: 3, scale: 2 }).default("0.00"),
   currentLocation: jsonb("current_location").$type<{lat: number, lng: number}>(),
+  // Counties this driver accepts rides in. Empty array = all Maryland counties accepted.
+  acceptedCounties: text("accepted_counties").array().notNull().default(sql`ARRAY[]::text[]`),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
@@ -167,6 +199,7 @@ export const rides = pgTable("rides", {
   riderReview: text("rider_review"),
   driverReview: text("driver_review"),
   scheduledAt: timestamp("scheduled_at"),
+  pickupCounty: varchar("pickup_county"),
   sharedRideGroupId: varchar("shared_ride_group_id"),
   wantsSharedRide: boolean("wants_shared_ride").default(false),
   sharedFareDiscount: decimal("shared_fare_discount", { precision: 8, scale: 2 }).default("0.00"),

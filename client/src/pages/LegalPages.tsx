@@ -27,12 +27,12 @@ export function TermsOfService() {
 
           <section>
             <h2 className="font-semibold text-base mb-2">1. About PG Ride</h2>
-            <p>PG Ride ("PG Ride," "we," "us," or "our") is a community-owned, hyper-local rideshare platform exclusively serving Prince George's County, Maryland. By creating an account or using our services, you agree to these Terms of Service.</p>
+            <p>PG Ride ("PG Ride," "we," "us," or "our") is a community-owned rideshare platform serving the state of Maryland. By creating an account or using our services, you agree to these Terms of Service.</p>
           </section>
 
           <section>
             <h2 className="font-semibold text-base mb-2">2. Eligibility</h2>
-            <p>You must be at least 18 years old and a resident of or have a valid reason to travel within Prince George's County. Accounts require administrator approval before becoming active. You must provide accurate information during registration.</p>
+            <p>You must be at least 18 years old and a resident of or have a valid reason to travel within Maryland. Accounts require administrator approval before becoming active. You must provide accurate information during registration.</p>
           </section>
 
           <section>

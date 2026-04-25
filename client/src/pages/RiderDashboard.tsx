@@ -128,7 +128,7 @@ export default function RiderDashboard() {
   const userLocation = {
     lat: currentLat,
     lng: currentLng,
-    address: geocodeData?.address || (location ? "Getting address..." : "Prince George's County, MD"),
+    address: geocodeData?.address || (location ? "Getting address..." : "Maryland, MD"),
   };
 
   const { data: nearbyDrivers = [], isLoading: driversLoading } = useQuery<any[]>({
@@ -581,7 +581,7 @@ export default function RiderDashboard() {
               <div className="text-center">
                 <Search className="w-12 h-12 text-gray-200 mx-auto mb-3" />
                 <p className="text-base font-medium text-gray-400 mb-1">Where are you going?</p>
-                <p className="text-sm text-gray-300">Type any address in PG County, MD</p>
+                <p className="text-sm text-gray-300">Type any address in Maryland</p>
               </div>
             )}
             {destinationAddress.length > 0 && destinationAddress.length < 5 && (
@@ -597,7 +597,7 @@ export default function RiderDashboard() {
               <div className="text-center">
                 <MapPin className="w-8 h-8 text-red-300 mx-auto mb-3" />
                 <p className="text-sm font-medium text-red-400 mb-1">Address not found</p>
-                <p className="text-xs text-gray-400">Try a more specific address in PG County, MD</p>
+                <p className="text-xs text-gray-400">Try a more specific address in Maryland</p>
               </div>
             )}
           </div>

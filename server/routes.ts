@@ -13,6 +13,7 @@ import { stripeService } from "./stripeService";
 import bcrypt from "bcrypt";
 import OpenAI from "openai";
 import rateLimit from "express-rate-limit";
+import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import {
   sendAccountApprovedEmail,
   sendPasswordResetEmail,
@@ -490,6 +491,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error updating driver profile:", error);
       res.status(400).json({ message: "Failed to update driver profile" });
+    }
+  });
+
+  // County preference endpoints
+  app.get('/api/driver/counties', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const profile = await storage.getDriverProfile(userId);
+      res.json({ acceptedCounties: profile?.acceptedCounties ?? [] });
+    } catch (error) {
+      console.error("Error fetching driver counties:", error);
+      res.status(500).json({ message: "Failed to fetch county preferences" });
+    }
+  });
+
+  app.put('/api/driver/counties', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { acceptedCounties } = req.body;
+      if (!Array.isArray(acceptedCounties)) {
+        return res.status(400).json({ message: "acceptedCounties must be an array" });
+      }
+      const profile = await storage.updateDriverProfile(userId, { acceptedCounties });
+      // Refresh in-memory county cache so current WS session uses the new preferences immediately
+      driverCountyCache.set(userId, profile.acceptedCounties ?? []);
+      res.json({ acceptedCounties: profile.acceptedCounties ?? [] });
+    } catch (error) {
+      console.error("Error updating driver counties:", error);
+      res.status(400).json({ message: "Failed to update county preferences" });
     }
   });
 
@@ -1180,8 +1210,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const riderUser = await storage.getUser(userId);
       const isScheduledFuture = ride.scheduledAt && new Date(ride.scheduledAt) > new Date();
 
+      // Determine pickup county for driver-county filtering (non-blocking)
+      let pickupCounty: string | null = null;
+      try {
+        const loc = ride.pickupLocation as { lat: number; lng: number; address: string };
+        pickupCounty = await getCountyFromCoords(loc.lat, loc.lng);
+        if (pickupCounty) {
+          await storage.updateRideCounty(ride.id, pickupCounty);
+        }
+      } catch {
+        // County detection is best-effort; never block ride creation
+      }
+
       if (isScheduledFuture && !ride.driverId) {
-        // Open scheduled ride — broadcast to ALL connected drivers
+        // Open scheduled ride — broadcast to drivers who cover the pickup county
         const payload = JSON.stringify({
           type: 'new_scheduled_ride',
           rideId: ride.id,
@@ -1193,9 +1235,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           estimatedFare: ride.estimatedFare,
           scheduledAt: ride.scheduledAt,
           pickupInstructions: ride.pickupInstructions || '',
+          pickupCounty: pickupCounty || '',
         });
-        activeConnections.forEach((ws) => {
-          if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+        activeConnections.forEach((ws, driverId) => {
+          const counties = driverCountyCache.get(driverId) ?? [];
+          if (driverCoversCounty(counties, pickupCounty) && ws.readyState === WebSocket.OPEN) {
+            ws.send(payload);
+          }
         });
       } else if (ride.driverId && activeConnections.has(ride.driverId)) {
         // Specific driver chosen — notify only them
@@ -1459,8 +1505,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/driver/scheduled-rides', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const profile = await storage.getDriverProfile(userId);
+      const driverCounties = profile?.acceptedCounties ?? [];
       const [open, mine] = await Promise.all([
-        storage.getOpenScheduledRides(),
+        storage.getOpenScheduledRides(driverCounties.length > 0 ? driverCounties : undefined),
         storage.getDriverUpcomingRides(userId),
       ]);
       res.json({ open, mine });
@@ -3542,7 +3590,11 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
   
   const activeConnections = new Map<string, WebSocket>();
-  
+
+  // County preferences per connected driver (userId → acceptedCounties[])
+  // Empty array = accepts all Maryland counties. Cached at join time.
+  const driverCountyCache = new Map<string, string[]>();
+
   // Map to track authenticated userId per WebSocket connection
   const wsAuthenticatedUsers = new WeakMap<WebSocket, string>();
   
@@ -3582,6 +3634,12 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
                   return;
                 }
                 activeConnections.set(message.userId, ws);
+                // Cache driver county preferences for filtered broadcasting
+                if (user.isDriver) {
+                  storage.getDriverProfile(message.userId).then(profile => {
+                    driverCountyCache.set(message.userId, profile?.acceptedCounties ?? []);
+                  }).catch(() => driverCountyCache.set(message.userId, []));
+                }
               }).catch(() => {
                 ws.send(JSON.stringify({ type: 'error', message: 'Authentication failed' }));
                 ws.close();
@@ -3641,10 +3699,11 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     });
     
     ws.on('close', () => {
-      // Remove from active connections
+      // Remove from active connections and clear county cache
       for (const [userId, connection] of Array.from(activeConnections.entries())) {
         if (connection === ws) {
           activeConnections.delete(userId);
+          driverCountyCache.delete(userId);
           break;
         }
       }
