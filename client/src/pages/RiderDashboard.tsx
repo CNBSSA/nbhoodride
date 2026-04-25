@@ -18,7 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import {
   MapPin, Navigation, Bell, Star, Clock, X, Shield, Car,
-  Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign, CalendarClock, UserCheck, Users
+  Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign, CalendarClock, UserCheck, Users, AlertTriangle
 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -85,6 +85,8 @@ export default function RiderDashboard() {
   const [recentlyCompletedRide, setRecentlyCompletedRide] = useState<any>(null);
   const [quickRating, setQuickRating] = useState(0);
   const [quickRatingSubmitted, setQuickRatingSubmitted] = useState(false);
+  // Tracks urgency state per scheduled ride: 'at_risk' | 'no_driver' | 'driver_dropped'
+  const [rideUrgency, setRideUrgency] = useState<Record<string, 'at_risk' | 'no_driver' | 'driver_dropped'>>({});
 
   const destinationInputRef = useRef<HTMLInputElement>(null);
   const lastProcessedMessageRef = useRef<string | null>(null);
@@ -363,8 +365,9 @@ export default function RiderDashboard() {
       refetchActiveRides();
     } else if (lastMessage.type === 'scheduled_ride_claimed') {
       queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
+      setRideUrgency(prev => { const n = {...prev}; delete n[lastMessage.rideId]; return n; });
       toast({
-        title: "Ride Claimed!",
+        title: "Driver Found!",
         description: `${lastMessage.driverName || 'A driver'} has claimed your scheduled ride. You're all set!`,
       });
       navigator.vibrate?.([200, 100, 200]);
@@ -373,6 +376,33 @@ export default function RiderDashboard() {
       toast({
         title: "Ride Reminder",
         description: lastMessage.message || "Your scheduled ride is in 30 minutes.",
+      });
+      navigator.vibrate?.([300, 100, 300]);
+    } else if (lastMessage.type === 'scheduled_ride_at_risk') {
+      setRideUrgency(prev => ({ ...prev, [lastMessage.rideId]: 'at_risk' }));
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
+      toast({
+        title: "Looking for Your Driver",
+        description: lastMessage.message || "We're urgently notifying available drivers.",
+        variant: "destructive",
+      });
+      navigator.vibrate?.([200, 100, 200, 100, 200]);
+    } else if (lastMessage.type === 'scheduled_ride_no_driver') {
+      setRideUrgency(prev => ({ ...prev, [lastMessage.rideId]: 'no_driver' }));
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
+      toast({
+        title: "No Driver Found Yet",
+        description: lastMessage.message || "You can cancel this ride at no charge.",
+        variant: "destructive",
+      });
+      navigator.vibrate?.([400, 200, 400]);
+    } else if (lastMessage.type === 'scheduled_ride_driver_dropped') {
+      setRideUrgency(prev => ({ ...prev, [lastMessage.rideId]: 'driver_dropped' }));
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
+      toast({
+        title: "Driver Went Offline",
+        description: lastMessage.message || "We're finding you a new driver right away.",
+        variant: "destructive",
       });
       navigator.vibrate?.([300, 100, 300]);
     }
@@ -679,35 +709,80 @@ export default function RiderDashboard() {
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1">
                   <CalendarClock className="w-3.5 h-3.5" /> Upcoming Scheduled Rides
                 </p>
-                {scheduledRides.map((ride: any) => (
-                  <div
-                    key={ride.id}
-                    className="flex items-start justify-between bg-orange-50 rounded-xl p-3 border border-orange-100"
-                    data-testid={`scheduled-ride-${ride.id}`}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-bold text-orange-700">
-                        {ride.scheduledAt ? format(new Date(ride.scheduledAt), "EEE, MMM d 'at' h:mm a") : ''}
-                      </p>
-                      <p className="text-xs text-gray-600 truncate mt-0.5">
-                        → {ride.destinationLocation?.address || 'Destination'}
-                      </p>
-                      <div className="mt-1 flex items-center gap-1">
-                        {ride.driver?.firstName ? (
-                          <span className="text-xs text-green-700 font-semibold flex items-center gap-1">
-                            <UserCheck className="w-3 h-3" />
-                            {ride.driver.firstName} {ride.driver.lastName?.[0] || ''}.
-                          </span>
-                        ) : (
-                          <span className="text-xs text-gray-400 italic">Waiting for a driver to claim…</span>
-                        )}
+                {scheduledRides.map((ride: any) => {
+                  const urgency = rideUrgency[ride.id];
+                  const hasDriver = !!ride.driver?.firstName;
+                  const minsAway = ride.scheduledAt
+                    ? Math.round((new Date(ride.scheduledAt).getTime() - Date.now()) / 60000)
+                    : null;
+
+                  const cardStyle = urgency === 'no_driver'
+                    ? "bg-red-50 border-red-200"
+                    : urgency === 'at_risk' || urgency === 'driver_dropped'
+                    ? "bg-amber-50 border-amber-200"
+                    : hasDriver
+                    ? "bg-green-50 border-green-200"
+                    : "bg-orange-50 border-orange-100";
+
+                  return (
+                    <div
+                      key={ride.id}
+                      className={`flex items-start justify-between rounded-xl p-3 border ${cardStyle}`}
+                      data-testid={`scheduled-ride-${ride.id}`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <p className="text-xs font-bold text-gray-800">
+                            {ride.scheduledAt ? format(new Date(ride.scheduledAt), "EEE, MMM d 'at' h:mm a") : ''}
+                          </p>
+                          {minsAway !== null && minsAway <= 120 && (
+                            <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-full ${
+                              minsAway <= 15 ? 'bg-red-100 text-red-700' :
+                              minsAway <= 60 ? 'bg-amber-100 text-amber-700' :
+                              'bg-blue-100 text-blue-700'
+                            }`}>
+                              {minsAway < 1 ? 'Now' : `${minsAway}m`}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-600 truncate">
+                          → {ride.destinationLocation?.address || 'Destination'}
+                        </p>
+                        <div className="mt-1.5 flex items-center gap-1">
+                          {urgency === 'no_driver' ? (
+                            <span className="text-xs text-red-700 font-semibold flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3" />
+                              No driver found — cancel is free
+                            </span>
+                          ) : urgency === 'at_risk' ? (
+                            <span className="text-xs text-amber-700 font-semibold flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3" />
+                              Urgently finding your driver…
+                            </span>
+                          ) : urgency === 'driver_dropped' ? (
+                            <span className="text-xs text-amber-700 font-semibold flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3" />
+                              Driver went offline — finding a new one…
+                            </span>
+                          ) : hasDriver ? (
+                            <span className="text-xs text-green-700 font-semibold flex items-center gap-1">
+                              <UserCheck className="w-3 h-3" />
+                              {ride.driver.firstName} {ride.driver.lastName?.[0] || ''}. confirmed
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400 italic flex items-center gap-1">
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              Waiting for a driver to claim…
+                            </span>
+                          )}
+                        </div>
                       </div>
+                      <span className="text-xs font-bold text-gray-700 ml-2 shrink-0">
+                        ${parseFloat(ride.estimatedFare || '0').toFixed(2)}
+                      </span>
                     </div>
-                    <span className="text-xs font-bold text-gray-700 ml-2 shrink-0">
-                      ${parseFloat(ride.estimatedFare || '0').toFixed(2)}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

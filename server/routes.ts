@@ -3731,6 +3731,51 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
         if (connection === ws) {
           activeConnections.delete(userId);
           driverCountyCache.delete(userId);
+
+          // Fix 2: if this driver had a claimed scheduled ride within 2h, unclaim and re-broadcast
+          storage.getClaimedScheduledRidesForDriver(userId, 120).then(async (claimedRides) => {
+            for (const ride of claimedRides) {
+              try {
+                const unclaimed = await storage.unclaimScheduledRide(ride.id);
+                if (!unclaimed) continue;
+
+                // Tell the rider their driver dropped off
+                if (ride.riderId && activeConnections.has(ride.riderId)) {
+                  const riderWs = activeConnections.get(ride.riderId);
+                  if (riderWs?.readyState === WebSocket.OPEN) {
+                    riderWs.send(JSON.stringify({
+                      type: 'scheduled_ride_driver_dropped',
+                      rideId: ride.id,
+                      message: 'Your driver went offline. We\'re finding you a new one right away.',
+                    }));
+                  }
+                }
+
+                // Re-broadcast to all online drivers who cover the pickup county
+                const rebroadcast = JSON.stringify({
+                  type: 'new_scheduled_ride',
+                  rideId: ride.id,
+                  riderId: ride.riderId,
+                  riderName: 'Rider',
+                  pickupAddress: (ride.pickupLocation as any)?.address || '',
+                  destinationAddress: (ride.destinationLocation as any)?.address || '',
+                  estimatedFare: ride.estimatedFare,
+                  scheduledAt: ride.scheduledAt,
+                  pickupCounty: ride.pickupCounty || '',
+                  urgent: true,
+                  urgentReason: 'driver_dropped',
+                });
+                activeConnections.forEach((driverWs, driverId) => {
+                  if (driverId === userId) return;
+                  const counties = driverCountyCache.get(driverId) ?? [];
+                  if (driverCoversCounty(counties, ride.pickupCounty) && driverWs.readyState === WebSocket.OPEN) {
+                    driverWs.send(rebroadcast);
+                  }
+                });
+              } catch { /* non-fatal */ }
+            }
+          }).catch(() => {});
+
           break;
         }
       }
@@ -3746,41 +3791,132 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     });
   }
 
-  // ── Pre-ride reminder: fires every minute, sends alerts 30 min before scheduled rides ──
+  // ── Scheduled ride monitor: fires every minute ──
+  // Handles: 30-min reminders, T-60/15/5 escalations, midnight county cleanup
   setInterval(async () => {
     try {
       const { db: dbInst } = await import("./db");
-      const { rides: ridesT, users: usersT } = await import("@shared/schema");
-      const { and: _and, eq: _eq, isNotNull: _isNotNull, gte: _gte, lte: _lte, isNull: _isNull, sql: _sql } = await import("drizzle-orm");
+      const { rides: ridesT, driverProfiles: dp } = await import("@shared/schema");
+      const { and: _and, isNotNull: _isNotNull, isNull: _isNull, gte: _gte, lte: _lte, sql: _sql } = await import("drizzle-orm");
 
       const now = new Date();
-      const windowStart = new Date(now.getTime() + 28 * 60 * 1000); // 28 min from now
-      const windowEnd   = new Date(now.getTime() + 32 * 60 * 1000); // 32 min from now
 
-      const upcomingRides = await dbInst
-        .select()
-        .from(ridesT)
-        .where(
-          _and(
-            _isNotNull(ridesT.scheduledAt),
-            _gte(ridesT.scheduledAt, windowStart),
-            _lte(ridesT.scheduledAt, windowEnd),
-            _sql`${ridesT.status} IN ('pending', 'accepted')`
-          )
-        );
-
-      // Midnight cleanup: clear daily county sessions if it's past midnight (00:00–00:01 window)
+      // ── Midnight cleanup ──
       if (now.getHours() === 0 && now.getMinutes() === 0) {
-        const { db: dbInst2 } = await import("./db");
-        const { driverProfiles: dp } = await import("@shared/schema");
-        await dbInst2
-          .update(dp)
-          .set({ dailyCounties: null, dailySessionStart: null });
-        // Also clear in-memory cache — drivers must re-select counties when going online today
+        await dbInst.update(dp).set({ dailyCounties: null, dailySessionStart: null });
         driverCountyCache.clear();
       }
 
-      for (const ride of upcomingRides) {
+      // Helper: fetch unclaimed scheduled rides in a time window (minutes from now)
+      const unclaimedInWindow = async (minFrom: number, minTo: number) => {
+        return await dbInst
+          .select()
+          .from(ridesT)
+          .where(
+            _and(
+              _isNotNull(ridesT.scheduledAt),
+              _gte(ridesT.scheduledAt, new Date(now.getTime() + minFrom * 60 * 1000)),
+              _lte(ridesT.scheduledAt, new Date(now.getTime() + minTo   * 60 * 1000)),
+              _isNull(ridesT.driverId),
+              _sql`${ridesT.status} = 'pending'`
+            )
+          );
+      };
+
+      // Helper: fetch ALL scheduled rides (claimed or not) in a time window
+      const allInWindow = async (minFrom: number, minTo: number) => {
+        return await dbInst
+          .select()
+          .from(ridesT)
+          .where(
+            _and(
+              _isNotNull(ridesT.scheduledAt),
+              _gte(ridesT.scheduledAt, new Date(now.getTime() + minFrom * 60 * 1000)),
+              _lte(ridesT.scheduledAt, new Date(now.getTime() + minTo   * 60 * 1000)),
+              _sql`${ridesT.status} IN ('pending', 'accepted')`
+            )
+          );
+      };
+
+      // ── T-60 min: re-broadcast unclaimed rides to all online drivers (urgency = medium) ──
+      const at60 = await unclaimedInWindow(58, 62);
+      for (const ride of at60) {
+        const payload = JSON.stringify({
+          type: 'new_scheduled_ride',
+          rideId: ride.id,
+          riderId: ride.riderId,
+          riderName: 'Rider',
+          pickupAddress: (ride.pickupLocation as any)?.address || '',
+          destinationAddress: (ride.destinationLocation as any)?.address || '',
+          estimatedFare: ride.estimatedFare,
+          scheduledAt: ride.scheduledAt,
+          pickupCounty: ride.pickupCounty || '',
+          urgent: true,
+          urgentReason: 'no_driver_60min',
+        });
+        activeConnections.forEach((ws, driverId) => {
+          const counties = driverCountyCache.get(driverId) ?? [];
+          if (driverCoversCounty(counties, ride.pickupCounty) && ws.readyState === WebSocket.OPEN) {
+            ws.send(payload);
+          }
+        });
+      }
+
+      // ── T-15 min: re-broadcast unclaimed + warn rider ──
+      const at15 = await unclaimedInWindow(13, 17);
+      for (const ride of at15) {
+        const payload = JSON.stringify({
+          type: 'new_scheduled_ride',
+          rideId: ride.id,
+          riderId: ride.riderId,
+          riderName: 'Rider',
+          pickupAddress: (ride.pickupLocation as any)?.address || '',
+          destinationAddress: (ride.destinationLocation as any)?.address || '',
+          estimatedFare: ride.estimatedFare,
+          scheduledAt: ride.scheduledAt,
+          pickupCounty: ride.pickupCounty || '',
+          urgent: true,
+          urgentReason: 'no_driver_15min',
+        });
+        activeConnections.forEach((ws, driverId) => {
+          const counties = driverCountyCache.get(driverId) ?? [];
+          if (driverCoversCounty(counties, ride.pickupCounty) && ws.readyState === WebSocket.OPEN) {
+            ws.send(payload);
+          }
+        });
+        // Warn the rider
+        if (ride.riderId && activeConnections.has(ride.riderId)) {
+          const riderWs = activeConnections.get(ride.riderId);
+          if (riderWs?.readyState === WebSocket.OPEN) {
+            riderWs.send(JSON.stringify({
+              type: 'scheduled_ride_at_risk',
+              rideId: ride.id,
+              message: 'No driver has claimed your ride yet. We\'re urgently notifying available drivers.',
+              minutesAway: 15,
+            }));
+          }
+        }
+      }
+
+      // ── T-5 min: last-chance alert to rider if still unclaimed ──
+      const at5 = await unclaimedInWindow(3, 7);
+      for (const ride of at5) {
+        if (ride.riderId && activeConnections.has(ride.riderId)) {
+          const riderWs = activeConnections.get(ride.riderId);
+          if (riderWs?.readyState === WebSocket.OPEN) {
+            riderWs.send(JSON.stringify({
+              type: 'scheduled_ride_no_driver',
+              rideId: ride.id,
+              message: 'We haven\'t found a driver yet. You can cancel this ride with no charge.',
+              minutesAway: 5,
+            }));
+          }
+        }
+      }
+
+      // ── T-30 min: standard reminder to rider + driver ──
+      const at30 = await allInWindow(28, 32);
+      for (const ride of at30) {
         const formattedTime = ride.scheduledAt
           ? new Date(ride.scheduledAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
           : '';
@@ -3792,20 +3928,17 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
           pickupAddress: (ride.pickupLocation as any)?.address || '',
           destinationAddress: (ride.destinationLocation as any)?.address || '',
         });
-
-        // Notify rider
         if (ride.riderId && activeConnections.has(ride.riderId)) {
           const riderWs = activeConnections.get(ride.riderId);
-          if (riderWs && riderWs.readyState === WebSocket.OPEN) riderWs.send(reminderMsg);
+          if (riderWs?.readyState === WebSocket.OPEN) riderWs.send(reminderMsg);
         }
-        // Notify driver if claimed
         if (ride.driverId && activeConnections.has(ride.driverId)) {
           const driverWs = activeConnections.get(ride.driverId);
-          if (driverWs && driverWs.readyState === WebSocket.OPEN) driverWs.send(reminderMsg);
+          if (driverWs?.readyState === WebSocket.OPEN) driverWs.send(reminderMsg);
         }
       }
     } catch (err) {
-      console.error("Reminder interval error:", err);
+      console.error("Scheduled ride monitor error:", err);
     }
   }, 60 * 1000);
 

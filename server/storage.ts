@@ -243,6 +243,8 @@ export interface IStorage {
   updateRideCounty(rideId: string, county: string): Promise<void>;
   getScheduledRidesWithDriver(userId: string): Promise<any[]>;
   claimScheduledRide(rideId: string, driverId: string): Promise<Ride>;
+  unclaimScheduledRide(rideId: string): Promise<Ride | null>;
+  getClaimedScheduledRidesForDriver(driverId: string, withinMinutes: number): Promise<any[]>;
   getDriverUpcomingRides(driverId: string): Promise<any[]>;
 
   // Driver ride management operations
@@ -766,6 +768,31 @@ export class DatabaseStorage implements IStorage {
 
     if (!updated) throw new Error("Ride was just claimed by another driver");
     return updated;
+  }
+
+  async unclaimScheduledRide(rideId: string): Promise<Ride | null> {
+    const [updated] = await db
+      .update(rides)
+      .set({ driverId: null, status: "pending", updatedAt: new Date() })
+      .where(eq(rides.id, rideId))
+      .returning();
+    return updated ?? null;
+  }
+
+  async getClaimedScheduledRidesForDriver(driverId: string, withinMinutes: number): Promise<any[]> {
+    const cutoff = new Date(Date.now() + withinMinutes * 60 * 1000);
+    return await db
+      .select()
+      .from(rides)
+      .where(
+        and(
+          eq(rides.driverId, driverId),
+          isNotNull(rides.scheduledAt),
+          lte(rides.scheduledAt, cutoff),
+          gt(rides.scheduledAt, sql`now()`),
+          sql`${rides.status} IN ('pending', 'accepted')`
+        )
+      );
   }
 
   async getDriverUpcomingRides(driverId: string): Promise<any[]> {

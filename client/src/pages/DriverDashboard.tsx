@@ -251,12 +251,16 @@ export default function DriverDashboard() {
       const scheduledTime = lastMessage.scheduledAt
         ? format(new Date(lastMessage.scheduledAt), "MMM d 'at' h:mm a")
         : '';
+      const isUrgent = !!lastMessage.urgent;
       toast({
-        title: "New Scheduled Ride Available",
-        description: `${lastMessage.riderName || 'A rider'} needs a driver for ${scheduledTime}. Claim it before another driver does!`,
+        title: isUrgent ? "⚠ Urgent: Rider Needs a Driver!" : "New Scheduled Ride Available",
+        description: isUrgent
+          ? `A rider has no driver yet for ${scheduledTime}. Claim it now!`
+          : `${lastMessage.riderName || 'A rider'} needs a driver for ${scheduledTime}. Claim it before another driver does!`,
+        variant: isUrgent ? "destructive" : "default",
       });
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate([100, 50, 100]);
+        navigator.vibrate(isUrgent ? [300, 100, 300, 100, 300] : [100, 50, 100]);
       }
     } else if (lastMessage.type === 'scheduled_ride_taken') {
       refetchScheduledRides();
@@ -421,14 +425,28 @@ export default function DriverDashboard() {
               <CalendarClock className="w-5 h-5" />
               Scheduled Rides to Claim ({openScheduledRides.length})
             </h3>
-            {openScheduledRides.map((ride: any) => (
-              <Card key={ride.id} className="border-blue-200" data-testid={`open-scheduled-ride-${ride.id}`}>
+            {openScheduledRides.map((ride: any) => {
+              const minsAway = ride.scheduledAt
+                ? Math.round((new Date(ride.scheduledAt).getTime() - Date.now()) / 60000)
+                : null;
+              const isUrgent = minsAway !== null && minsAway <= 120;
+              const isCritical = minsAway !== null && minsAway <= 15;
+
+              return (
+              <Card key={ride.id} className={isCritical ? "border-red-400 bg-red-50" : isUrgent ? "border-amber-400 bg-amber-50" : "border-blue-200"} data-testid={`open-scheduled-ride-${ride.id}`}>
                 <CardContent className="p-4 space-y-2">
                   <div className="flex items-center justify-between">
-                    <Badge variant="outline" className="border-blue-400 text-blue-700">
-                      <Clock className="w-3 h-3 mr-1" />
-                      {ride.scheduledAt ? format(new Date(ride.scheduledAt), "MMM d 'at' h:mm a") : ''}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className={isCritical ? "border-red-500 text-red-700" : isUrgent ? "border-amber-500 text-amber-700" : "border-blue-400 text-blue-700"}>
+                        <Clock className="w-3 h-3 mr-1" />
+                        {ride.scheduledAt ? format(new Date(ride.scheduledAt), "MMM d 'at' h:mm a") : ''}
+                      </Badge>
+                      {minsAway !== null && minsAway <= 120 && (
+                        <Badge className={isCritical ? "bg-red-600 text-white" : "bg-amber-500 text-white"}>
+                          {isCritical ? `${minsAway}m — URGENT` : `${minsAway}m away`}
+                        </Badge>
+                      )}
+                    </div>
                     <span className="font-semibold text-green-700">${parseFloat(ride.estimatedFare || '0').toFixed(2)}</span>
                   </div>
                   <div className="flex items-start gap-2 text-sm">
@@ -454,7 +472,8 @@ export default function DriverDashboard() {
                   </Button>
                 </CardContent>
               </Card>
-            ))}
+              );
+            })}
           </div>
         )}
 
