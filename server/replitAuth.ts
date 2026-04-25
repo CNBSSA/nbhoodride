@@ -5,14 +5,15 @@ import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
 
-// Replit Auth is optional — only active when REPLIT_DOMAINS is set.
-// On Railway (and other non-Replit hosts) the app uses its own email/password
-// auth exclusively. getSession() and isAuthenticated always work regardless.
+// Replit Auth is optional — only active when REPL_ID is present (i.e. running
+// on Replit). On Railway, RAILWAY_PUBLIC_DOMAIN is set but REPL_ID is not, so
+// this flag stays false and the app falls back to email/password auth, avoiding
+// the "clientId must be a non-empty string" crash from openid-client.
 //
 // RAILWAY_PUBLIC_DOMAIN is Railway's built-in variable for the service's public
 // domain. REPLIT_DOMAINS is kept as a fallback for Replit-hosted deployments.
 const REPLIT_AUTH_ENABLED =
-  !!process.env.RAILWAY_PUBLIC_DOMAIN || !!process.env.REPLIT_DOMAINS;
+  (!!process.env.RAILWAY_PUBLIC_DOMAIN || !!process.env.REPLIT_DOMAINS) && !!process.env.REPL_ID;
 
 // openid-client and openid-client/passport are Replit-specific packages that
 // validate REPLIT_DOMAINS at import time. We load them lazily so they are only
