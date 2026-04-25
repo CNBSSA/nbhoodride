@@ -44,6 +44,17 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Run database migrations on startup
+  try {
+    console.log('Running database migrations...');
+    const { execSync } = await import('child_process');
+    execSync('npm run db:push', { stdio: 'inherit' });
+    console.log('Database migrations completed successfully');
+  } catch (error) {
+    console.error('Database migration failed:', error);
+    // Don't exit - the app can still run, just without tables
+  }
+
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
