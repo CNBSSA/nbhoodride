@@ -11,7 +11,7 @@ import { nanoid } from "nanoid";
 import twilio from "twilio";
 import { stripeService } from "./stripeService";
 import bcrypt from "bcrypt";
-import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import rateLimit from "express-rate-limit";
 import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import {
@@ -31,10 +31,17 @@ import {
   insertEmergencyIncidentSchema,
 } from "@shared/schema";
 
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+// Lazy Anthropic client — instantiated on first use so the server starts
+// successfully even when ANTHROPIC_API_KEY is not yet configured.
+let _anthropic: Anthropic | null = null;
+function getAnthropicClient(): Anthropic {
+  if (!_anthropic) {
+    _anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+    });
+  }
+  return _anthropic;
+}
 
 // Extend Express session type to include testUserId and regular userId
 declare module "express-session" {
@@ -3240,18 +3247,24 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
-      const stream = await openai.chat.completions.create({
-        model: "gpt-5.2",
-        messages: chatHistory,
-        stream: true,
-        max_completion_tokens: 1024,
+      // Anthropic separates the system prompt from the conversation messages.
+      const systemPrompt = chatHistory.find((m) => m.role === "system")?.content ?? "";
+      const anthropicMessages = chatHistory
+        .filter((m) => m.role !== "system")
+        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+
+      const anthropicStream = getAnthropicClient().messages.stream({
+        model: "claude-opus-4-5",
+        system: systemPrompt,
+        messages: anthropicMessages,
+        max_tokens: 1024,
       });
 
       let fullResponse = "";
 
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content || "";
-        if (delta) {
+      for await (const chunk of anthropicStream) {
+        if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
+          const delta = chunk.delta.text;
           fullResponse += delta;
           res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
         }
@@ -3581,14 +3594,14 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       
       const faqPrompt = `Based on a ride-share platform's AI assistant conversations, generate 5-8 frequently asked questions with clear, helpful answers. Focus on common user questions about rides, payments, safety, and the platform. Format as JSON array: [{"question": "...", "answer": "...", "category": "rides|payments|safety|platform|drivers"}]`;
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-5.2",
-        messages: [{ role: "system", content: faqPrompt }],
-        max_completion_tokens: 2048,
-        response_format: { type: "json_object" },
+      const response = await getAnthropicClient().messages.create({
+        model: "claude-opus-4-5",
+        system: faqPrompt,
+        messages: [{ role: "user", content: "Generate the FAQ list now." }],
+        max_tokens: 2048,
       });
 
-      const content = response.choices[0]?.message?.content || '{"faqs":[]}';
+      const content = (response.content[0]?.type === "text" ? response.content[0].text : null) || '{"faqs":[]}';
       const parsed = JSON.parse(content);
       const faqs = parsed.faqs || parsed;
 
