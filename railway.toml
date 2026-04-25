@@ -3,6 +3,7 @@ builder = "nixpacks"
 buildCommand = "npm run build"
 
 [deploy]
+preDeployCommand = "npm run db:push"
 startCommand = "npm run start"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
