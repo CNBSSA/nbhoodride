@@ -1,6 +1,3 @@
-import * as client from "openid-client";
-import { Strategy, type VerifyFunction } from "openid-client/passport";
-
 import passport from "passport";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
@@ -11,10 +8,35 @@ import { storage } from "./storage";
 // Replit Auth is optional — only active when REPLIT_DOMAINS is set.
 // On Railway (and other non-Replit hosts) the app uses its own email/password
 // auth exclusively. getSession() and isAuthenticated always work regardless.
-const REPLIT_AUTH_ENABLED = !!process.env.REPLIT_DOMAINS;
+//
+// RAILWAY_PUBLIC_DOMAIN is Railway's built-in variable for the service's public
+// domain. REPLIT_DOMAINS is kept as a fallback for Replit-hosted deployments.
+const REPLIT_AUTH_ENABLED =
+  !!process.env.RAILWAY_PUBLIC_DOMAIN || !!process.env.REPLIT_DOMAINS;
+
+// openid-client and openid-client/passport are Replit-specific packages that
+// validate REPLIT_DOMAINS at import time. We load them lazily so they are only
+// required when Replit/Railway OIDC auth is actually in use.
+let _oidcClient: typeof import("openid-client") | null = null;
+let _oidcStrategy: typeof import("openid-client/passport") | null = null;
+
+async function getOidcClient() {
+  if (!_oidcClient) {
+    _oidcClient = await import("openid-client");
+  }
+  return _oidcClient;
+}
+
+async function getOidcStrategy() {
+  if (!_oidcStrategy) {
+    _oidcStrategy = await import("openid-client/passport");
+  }
+  return _oidcStrategy;
+}
 
 const getOidcConfig = memoize(
   async () => {
+    const client = await getOidcClient();
     return await client.discovery(
       new URL(process.env.ISSUER_URL ?? "https://replit.com/oidc"),
       process.env.REPL_ID!
@@ -46,10 +68,7 @@ export function getSession() {
   });
 }
 
-function updateUserSession(
-  user: any,
-  tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers
-) {
+function updateUserSession(user: any, tokens: any) {
   user.claims = tokens.claims();
   user.access_token = tokens.access_token;
   user.refresh_token = tokens.refresh_token;
@@ -66,6 +85,19 @@ async function upsertUser(claims: any) {
   });
 }
 
+// Resolve the list of domains to register OIDC strategies for.
+// Prefer RAILWAY_PUBLIC_DOMAIN (Railway's built-in variable); fall back to the
+// comma-separated REPLIT_DOMAINS list for Replit-hosted deployments.
+function getAuthDomains(): string[] {
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+    return [process.env.RAILWAY_PUBLIC_DOMAIN];
+  }
+  if (process.env.REPLIT_DOMAINS) {
+    return process.env.REPLIT_DOMAINS.split(",");
+  }
+  return [];
+}
+
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
   app.use(getSession());
@@ -73,25 +105,26 @@ export async function setupAuth(app: Express) {
   app.use(passport.session());
 
   if (!REPLIT_AUTH_ENABLED) {
-    // Not on Replit — Replit OIDC routes are skipped. Email/password auth handles everything.
+    // Not on Replit/Railway — OIDC routes are skipped. Email/password auth handles everything.
     passport.serializeUser((user: Express.User, cb) => cb(null, user));
     passport.deserializeUser((user: Express.User, cb) => cb(null, user));
     return;
   }
 
+  // Lazily load openid-client packages only when OIDC auth is active.
+  const client = await getOidcClient();
+  const { Strategy } = await getOidcStrategy();
+
   const config = await getOidcConfig();
 
-  const verify: VerifyFunction = async (
-    tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers,
-    verified: passport.AuthenticateCallback
-  ) => {
+  const verify = async (tokens: any, verified: passport.AuthenticateCallback) => {
     const user = {};
     updateUserSession(user, tokens);
     await upsertUser(tokens.claims());
     verified(null, user);
   };
 
-  for (const domain of process.env.REPLIT_DOMAINS!.split(",")) {
+  for (const domain of getAuthDomains()) {
     const strategy = new Strategy(
       {
         name: `replitauth:${domain}`,
@@ -157,6 +190,7 @@ export const isAuthenticated: RequestHandler = async (req: any, res, next) => {
   }
 
   try {
+    const client = await getOidcClient();
     const config = await getOidcConfig();
     const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
     updateUserSession(user, tokenResponse);
