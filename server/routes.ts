@@ -526,13 +526,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/driver/toggle-status', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const { isOnline } = req.body;
-      
+      const { isOnline, dailyCounties } = req.body;
+
       await storage.toggleDriverOnlineStatus(userId, isOnline);
+
+      if (isOnline && Array.isArray(dailyCounties)) {
+        // Start daily session with the counties the driver selected
+        await storage.startDriverDailySession(userId, dailyCounties);
+        driverCountyCache.set(userId, dailyCounties);
+      } else if (!isOnline) {
+        // End daily session when driver goes offline
+        await storage.endDriverDailySession(userId);
+        driverCountyCache.delete(userId);
+      }
+
       res.json({ success: true });
     } catch (error) {
       console.error("Error toggling driver status:", error);
       res.status(500).json({ message: "Failed to update status" });
+    }
+  });
+
+  app.get('/api/driver/daily-session', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const session = await storage.getDriverDailySession(userId);
+      res.json(session ?? { dailyCounties: null, dailySessionStart: null });
+    } catch (error) {
+      console.error("Error fetching daily session:", error);
+      res.status(500).json({ message: "Failed to fetch daily session" });
     }
   });
 
@@ -3635,9 +3657,14 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
                 }
                 activeConnections.set(message.userId, ws);
                 // Cache driver county preferences for filtered broadcasting
+                // Use daily session counties if active, otherwise fall back to permanent prefs
                 if (user.isDriver) {
-                  storage.getDriverProfile(message.userId).then(profile => {
-                    driverCountyCache.set(message.userId, profile?.acceptedCounties ?? []);
+                  storage.getDriverProfile(message.userId).then(async profile => {
+                    const session = await storage.getDriverDailySession(message.userId).catch(() => null);
+                    const counties = (session?.dailyCounties?.length ? session.dailyCounties : null)
+                      ?? profile?.acceptedCounties
+                      ?? [];
+                    driverCountyCache.set(message.userId, counties);
                   }).catch(() => driverCountyCache.set(message.userId, []));
                 }
               }).catch(() => {
@@ -3741,6 +3768,17 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
             _sql`${ridesT.status} IN ('pending', 'accepted')`
           )
         );
+
+      // Midnight cleanup: clear daily county sessions if it's past midnight (00:00–00:01 window)
+      if (now.getHours() === 0 && now.getMinutes() === 0) {
+        const { db: dbInst2 } = await import("./db");
+        const { driverProfiles: dp } = await import("@shared/schema");
+        await dbInst2
+          .update(dp)
+          .set({ dailyCounties: null, dailySessionStart: null });
+        // Also clear in-memory cache — drivers must re-select counties when going online today
+        driverCountyCache.clear();
+      }
 
       for (const ride of upcomingRides) {
         const formattedTime = ride.scheduledAt

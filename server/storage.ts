@@ -233,6 +233,11 @@ export interface IStorage {
   getDriverEarnings(driverId: string, period: 'today' | 'week' | 'month'): Promise<{fare: number, tips: number, total: number, rideCount: number}>;
   getDriverRides(driverId: string, period: 'today' | 'week' | 'month'): Promise<Ride[]>;
   
+  // Daily county session
+  startDriverDailySession(userId: string, counties: string[]): Promise<void>;
+  endDriverDailySession(userId: string): Promise<void>;
+  getDriverDailySession(userId: string): Promise<{ dailyCounties: string[] | null, dailySessionStart: Date | null } | null>;
+
   // Scheduled ride operations
   getOpenScheduledRides(driverCounties?: string[]): Promise<any[]>;
   updateRideCounty(rideId: string, county: string): Promise<void>;
@@ -712,6 +717,33 @@ export class DatabaseStorage implements IStorage {
       .update(rides)
       .set({ pickupCounty: county, updatedAt: new Date() })
       .where(eq(rides.id, rideId));
+  }
+
+  async startDriverDailySession(userId: string, counties: string[]): Promise<void> {
+    const profile = await db.select().from(driverProfiles).where(eq(driverProfiles.userId, userId)).limit(1);
+    if (!profile.length) return;
+    await db
+      .update(driverProfiles)
+      .set({ dailyCounties: counties, dailySessionStart: new Date(), updatedAt: new Date() })
+      .where(eq(driverProfiles.userId, userId));
+  }
+
+  async endDriverDailySession(userId: string): Promise<void> {
+    const profile = await db.select().from(driverProfiles).where(eq(driverProfiles.userId, userId)).limit(1);
+    if (!profile.length) return;
+    await db
+      .update(driverProfiles)
+      .set({ dailyCounties: null, dailySessionStart: null, updatedAt: new Date() })
+      .where(eq(driverProfiles.userId, userId));
+  }
+
+  async getDriverDailySession(userId: string): Promise<{ dailyCounties: string[] | null, dailySessionStart: Date | null } | null> {
+    const [profile] = await db
+      .select({ dailyCounties: driverProfiles.dailyCounties, dailySessionStart: driverProfiles.dailySessionStart })
+      .from(driverProfiles)
+      .where(eq(driverProfiles.userId, userId))
+      .limit(1);
+    return profile ?? null;
   }
 
   async claimScheduledRide(rideId: string, driverId: string): Promise<Ride> {

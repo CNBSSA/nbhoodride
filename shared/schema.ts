@@ -100,6 +100,9 @@ export const driverProfiles = pgTable("driver_profiles", {
   currentLocation: jsonb("current_location").$type<{lat: number, lng: number}>(),
   // Counties this driver accepts rides in. Empty array = all Maryland counties accepted.
   acceptedCounties: text("accepted_counties").array().notNull().default(sql`ARRAY[]::text[]`),
+  // Daily session — cleared when driver goes offline or at midnight
+  dailyCounties: text("daily_counties").array(),
+  dailySessionStart: timestamp("daily_session_start"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [

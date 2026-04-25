@@ -12,6 +12,7 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 import IncomingRideRequest from "@/components/IncomingRideRequest";
 import { ActiveRideCard } from "@/components/ActiveRideCard";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import CountySelectionSheet from "@/components/CountySelectionSheet";
 import { Link } from "wouter";
 import { format } from "date-fns";
 import { BarChart3, Bell, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote } from "lucide-react";
@@ -20,6 +21,8 @@ import PayoutModal from "@/components/PayoutModal";
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
   const [showPayoutModal, setShowPayoutModal] = useState(false);
+  const [showCountySheet, setShowCountySheet] = useState(false);
+  const [todayCounties, setTodayCounties] = useState<string[]>([]);
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -95,17 +98,23 @@ export default function DriverDashboard() {
     },
   });
 
+  // Permanent county preferences (for pre-filling the daily selection sheet)
+  const { data: countyPrefs } = useQuery<{ acceptedCounties: string[] }>({
+    queryKey: ["/api/driver/counties"],
+    enabled: !!user?.isDriver,
+  });
+
   // Toggle driver status
   const toggleStatusMutation = useMutation({
-    mutationFn: async (isOnline: boolean) => {
-      const response = await apiRequest('POST', '/api/driver/toggle-status', { isOnline });
+    mutationFn: async ({ isOnline, dailyCounties }: { isOnline: boolean; dailyCounties?: string[] }) => {
+      const response = await apiRequest('POST', '/api/driver/toggle-status', { isOnline, dailyCounties });
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       toast({
-        title: isOnline ? "You're Online" : "You're Offline",
-        description: isOnline ? "You'll start receiving ride requests" : "You won't receive ride requests",
+        title: vars.isOnline ? "You're Online" : "You're Offline",
+        description: vars.isOnline ? "You'll start receiving ride requests" : "You won't receive ride requests",
       });
     },
     onError: () => {
@@ -119,18 +128,26 @@ export default function DriverDashboard() {
   });
 
   const handleToggleStatus = (checked: boolean) => {
-    setIsOnline(checked);
-    trackFeatureUsed("driver_toggle_online");
-    toggleStatusMutation.mutate(checked);
-    
-    // Start/stop GPS tracking when going online/offline
     if (checked) {
-      startWatching();
-      // Reset throttle timer when going online to ensure immediate location update
-      lastLocationUpdateRef.current = 0;
+      // Show county selection before going online
+      setShowCountySheet(true);
     } else {
+      setIsOnline(false);
+      setTodayCounties([]);
+      trackFeatureUsed("driver_toggle_offline");
+      toggleStatusMutation.mutate({ isOnline: false });
       stopWatching();
     }
+  };
+
+  const handleCountyConfirm = (counties: string[]) => {
+    setShowCountySheet(false);
+    setIsOnline(true);
+    setTodayCounties(counties);
+    trackFeatureUsed("driver_toggle_online");
+    toggleStatusMutation.mutate({ isOnline: true, dailyCounties: counties });
+    startWatching();
+    lastLocationUpdateRef.current = 0;
   };
 
   // Update location ref whenever location changes
@@ -205,6 +222,13 @@ export default function DriverDashboard() {
       setIsOnline(user.driverProfile.isOnline);
       if (user.driverProfile.isOnline) {
         startWatching();
+        // Restore today's county session from DB
+        apiRequest('GET', '/api/driver/daily-session')
+          .then(r => r.json())
+          .then(session => {
+            if (session?.dailyCounties?.length) setTodayCounties(session.dailyCounties);
+          })
+          .catch(() => {});
       }
     }
   }, [user?.driverProfile?.isOnline]);
@@ -278,6 +302,12 @@ export default function DriverDashboard() {
 
   return (
     <>
+      <CountySelectionSheet
+        open={showCountySheet}
+        defaultCounties={countyPrefs?.acceptedCounties ?? []}
+        onConfirm={handleCountyConfirm}
+        onCancel={() => setShowCountySheet(false)}
+      />
       <header className="bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-green-600 rounded-xl flex items-center justify-center">
@@ -319,6 +349,20 @@ export default function DriverDashboard() {
                 </span>
               </div>
             </div>
+            {/* Today's active counties */}
+            {isOnline && todayCounties.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-gray-100 flex items-start gap-2">
+                <MapPin className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-gray-600 mb-1">
+                    Accepting rides in {todayCounties.length === 25 ? "all Maryland counties" : `${todayCounties.length} ${todayCounties.length === 1 ? "county" : "counties"}`}
+                  </p>
+                  <p className="text-xs text-gray-400 truncate">
+                    {todayCounties.slice(0, 5).join(", ")}{todayCounties.length > 5 ? ` +${todayCounties.length - 5} more` : ""}
+                  </p>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
