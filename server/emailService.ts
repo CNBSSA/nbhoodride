@@ -3,6 +3,11 @@ import nodemailer from "nodemailer";
 const FROM_ADDRESS = process.env.GMAIL_FROM || "thrynovaproduction@gmail.com";
 const FROM_NAME = "PG Ride";
 
+// The public URL of this deployment — used in email CTAs.
+// Set APP_URL in Railway → Variables (e.g. https://pgride-xyz.up.railway.app).
+// Falls back to the Replit URL if not set (development only).
+const APP_URL = (process.env.APP_URL || "https://pg-county-community-ride-share.replit.app").replace(/\/$/, "");
+
 function createTransport() {
   const pass = process.env.GMAIL_APP_PASSWORD;
   if (!pass) {
@@ -74,8 +79,8 @@ function baseTemplate(content: string): string {
       </div>
       <div class="footer">
         <p>PG Ride · Prince George's County, Maryland<br/>
-        <a href="https://pg-county-community-ride-share.replit.app/terms">Terms of Service</a> &nbsp;·&nbsp;
-        <a href="https://pg-county-community-ride-share.replit.app/privacy">Privacy Policy</a></p>
+        <a href="${APP_URL}/terms">Terms of Service</a> &nbsp;·&nbsp;
+        <a href="${APP_URL}/privacy">Privacy Policy</a></p>
         <p style="margin-top:8px;">You're receiving this because you have a PG Ride account.</p>
       </div>
     </div>
@@ -111,7 +116,7 @@ export async function sendAccountApprovedEmail(user: {
         </div>
       </div>
       <p>Your first 4 rides each come with a $5 discount automatically — no code needed. Just open the app and book!</p>
-      <a href="https://pg-county-community-ride-share.replit.app" class="btn">Open PG Ride</a>
+      <a href="${APP_URL}" class="btn">Open PG Ride</a>
       <p style="font-size:13px; color:#6b7280; margin-top:8px;">No surge pricing · Community-owned · PG County only</p>
     `)
   );
@@ -197,7 +202,7 @@ export async function sendRideAcceptedEmail(params: {
         </div>
       </div>
       <p>Open the app to track your driver in real time and use the SOS button if you ever need emergency help.</p>
-      <a href="https://pg-county-community-ride-share.replit.app" class="btn">Track My Ride</a>
+      <a href="${APP_URL}" class="btn">Track My Ride</a>
     `)
   );
 }
@@ -261,7 +266,7 @@ export async function sendRideReceiptEmail(params: {
         </div>
       </div>
       <p>Charged to your Virtual PG Card. You can add funds anytime from your Profile page.</p>
-      <a href="https://pg-county-community-ride-share.replit.app" class="btn">Leave a Rating</a>
+      <a href="${APP_URL}" class="btn">Leave a Rating</a>
     `)
   );
 }
