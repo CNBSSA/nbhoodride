@@ -3,6 +3,16 @@ import helmet from "helmet";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
+// Ensure crashes are always visible in Railway logs
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION — process will exit:', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('UNHANDLED REJECTION — process will exit:', reason);
+  process.exit(1);
+});
+
 const app = express();
 
 // CRITICAL: Health check endpoint MUST be first for deployment health checks
@@ -69,4 +79,7 @@ app.use((req, res, next) => {
   }, () => {
     log(`serving on port ${port}`);
   });
-})();
+})().catch((err) => {
+  console.error('Fatal startup error:', err);
+  process.exit(1);
+});
