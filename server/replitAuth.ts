@@ -47,6 +47,12 @@ const getOidcConfig = memoize(
 );
 
 export function getSession() {
+  if (!process.env.SESSION_SECRET) {
+    throw new Error(
+      "SESSION_SECRET is required. " +
+      "Go to Railway → Variables and add: SESSION_SECRET=<random 64-char hex string>"
+    );
+  }
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
   const pgStore = connectPg(session);
   const sessionStore = new pgStore({
