@@ -1,0 +1,186 @@
+{
+  "id": "0000_initial_schema",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.sessions": {
+      "name": "sessions",
+      "schema": "",
+      "columns": {
+        "sid": { "name": "sid", "type": "varchar", "primaryKey": true, "notNull": true },
+        "sess": { "name": "sess", "type": "jsonb", "primaryKey": false, "notNull": true },
+        "expire": { "name": "expire", "type": "timestamp", "primaryKey": false, "notNull": true }
+      },
+      "indexes": {
+        "IDX_session_expire": { "name": "IDX_session_expire", "columns": [{ "expression": "expire", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "email": { "name": "email", "type": "varchar", "primaryKey": false, "notNull": false },
+        "password": { "name": "password", "type": "varchar", "primaryKey": false, "notNull": false },
+        "first_name": { "name": "first_name", "type": "varchar", "primaryKey": false, "notNull": false },
+        "last_name": { "name": "last_name", "type": "varchar", "primaryKey": false, "notNull": false },
+        "profile_image_url": { "name": "profile_image_url", "type": "varchar", "primaryKey": false, "notNull": false },
+        "phone": { "name": "phone", "type": "varchar", "primaryKey": false, "notNull": false },
+        "is_driver": { "name": "is_driver", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_verified": { "name": "is_verified", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_admin": { "name": "is_admin", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_super_admin": { "name": "is_super_admin", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_approved": { "name": "is_approved", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "approved_by": { "name": "approved_by", "type": "varchar", "primaryKey": false, "notNull": false },
+        "is_suspended": { "name": "is_suspended", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "rating": { "name": "rating", "type": "numeric(3, 2)", "primaryKey": false, "notNull": false, "default": "'5.00'" },
+        "total_rides": { "name": "total_rides", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "emergency_contact": { "name": "emergency_contact", "type": "varchar", "primaryKey": false, "notNull": false },
+        "stripe_customer_id": { "name": "stripe_customer_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "stripe_payment_method_id": { "name": "stripe_payment_method_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "virtual_card_balance": { "name": "virtual_card_balance", "type": "numeric(10, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "promo_rides_remaining": { "name": "promo_rides_remaining", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "password_reset_token": { "name": "password_reset_token", "type": "varchar", "primaryKey": false, "notNull": false },
+        "password_reset_expiry": { "name": "password_reset_expiry", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "users_email_unique": { "name": "users_email_unique", "nullsNotDistinct": false, "columns": ["email"] }
+      }
+    },
+    "public.driver_profiles": {
+      "name": "driver_profiles",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "user_id": { "name": "user_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "license_number": { "name": "license_number", "type": "varchar", "primaryKey": false, "notNull": false },
+        "license_image_url": { "name": "license_image_url", "type": "varchar", "primaryKey": false, "notNull": false },
+        "insurance_image_url": { "name": "insurance_image_url", "type": "varchar", "primaryKey": false, "notNull": false },
+        "is_online": { "name": "is_online", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_verified_neighbor": { "name": "is_verified_neighbor", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_suspended": { "name": "is_suspended", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "approval_status": { "name": "approval_status", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'pending'" },
+        "discount_rate": { "name": "discount_rate", "type": "numeric(3, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "current_location": { "name": "current_location", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "accepted_counties": { "name": "accepted_counties", "type": "text[]", "primaryKey": false, "notNull": true, "default": "ARRAY[]::text[]" },
+        "daily_counties": { "name": "daily_counties", "type": "text[]", "primaryKey": false, "notNull": false },
+        "daily_session_start": { "name": "daily_session_start", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {
+        "idx_driver_profiles_user_id": { "name": "idx_driver_profiles_user_id", "columns": [{ "expression": "user_id", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} },
+        "idx_driver_profiles_is_online": { "name": "idx_driver_profiles_is_online", "columns": [{ "expression": "is_online", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} }
+      },
+      "foreignKeys": {
+        "driver_profiles_user_id_users_id_fk": { "name": "driver_profiles_user_id_users_id_fk", "tableFrom": "driver_profiles", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.vehicles": {
+      "name": "vehicles",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "driver_profile_id": { "name": "driver_profile_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "make": { "name": "make", "type": "varchar", "primaryKey": false, "notNull": true },
+        "model": { "name": "model", "type": "varchar", "primaryKey": false, "notNull": true },
+        "year": { "name": "year", "type": "integer", "primaryKey": false, "notNull": true },
+        "color": { "name": "color", "type": "varchar", "primaryKey": false, "notNull": true },
+        "license_plate": { "name": "license_plate", "type": "varchar", "primaryKey": false, "notNull": true },
+        "photos": { "name": "photos", "type": "jsonb", "primaryKey": false, "notNull": false, "default": "'[]'" },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "vehicles_driver_profile_id_driver_profiles_id_fk": { "name": "vehicles_driver_profile_id_driver_profiles_id_fk", "tableFrom": "vehicles", "tableTo": "driver_profiles", "columnsFrom": ["driver_profile_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.rides": {
+      "name": "rides",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "rider_id": { "name": "rider_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "driver_id": { "name": "driver_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "pickup_location": { "name": "pickup_location", "type": "jsonb", "primaryKey": false, "notNull": true },
+        "destination_location": { "name": "destination_location", "type": "jsonb", "primaryKey": false, "notNull": true },
+        "pickup_instructions": { "name": "pickup_instructions", "type": "text", "primaryKey": false, "notNull": false },
+        "status": { "name": "status", "type": "ride_status", "primaryKey": false, "notNull": false, "default": "'pending'" },
+        "payment_method": { "name": "payment_method", "type": "payment_method", "primaryKey": false, "notNull": false, "default": "'cash'" },
+        "estimated_fare": { "name": "estimated_fare", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "actual_fare": { "name": "actual_fare", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "distance": { "name": "distance", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "duration": { "name": "duration", "type": "integer", "primaryKey": false, "notNull": false },
+        "tip_amount": { "name": "tip_amount", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "payment_status": { "name": "payment_status", "type": "payment_status", "primaryKey": false, "notNull": false, "default": "'pending_payment'" },
+        "stripe_payment_intent_id": { "name": "stripe_payment_intent_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "refunded_amount": { "name": "refunded_amount", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "cancellation_fee": { "name": "cancellation_fee", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "cancellation_reason": { "name": "cancellation_reason", "type": "text", "primaryKey": false, "notNull": false },
+        "driver_traveled_distance": { "name": "driver_traveled_distance", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "driver_traveled_time": { "name": "driver_traveled_time", "type": "integer", "primaryKey": false, "notNull": false },
+        "route_path": { "name": "route_path", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "cash_received_at": { "name": "cash_received_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "paid_by": { "name": "paid_by", "type": "varchar", "primaryKey": false, "notNull": false },
+        "rider_rating": { "name": "rider_rating", "type": "integer", "primaryKey": false, "notNull": false },
+        "driver_rating": { "name": "driver_rating", "type": "integer", "primaryKey": false, "notNull": false },
+        "rider_review": { "name": "rider_review", "type": "text", "primaryKey": false, "notNull": false },
+        "driver_review": { "name": "driver_review", "type": "text", "primaryKey": false, "notNull": false },
+        "scheduled_at": { "name": "scheduled_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "pickup_county": { "name": "pickup_county", "type": "varchar", "primaryKey": false, "notNull": false },
+        "shared_ride_group_id": { "name": "shared_ride_group_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "wants_shared_ride": { "name": "wants_shared_ride", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "shared_fare_discount": { "name": "shared_fare_discount", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "group_id": { "name": "group_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "ride_type": { "name": "ride_type", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'solo'" },
+        "pickup_stops": { "name": "pickup_stops", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "original_fare": { "name": "original_fare", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "group_discount_amount": { "name": "group_discount_amount", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "promo_discount_applied": { "name": "promo_discount_applied", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "accepted_at": { "name": "accepted_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "started_at": { "name": "started_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "completed_at": { "name": "completed_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {
+        "idx_rides_rider_id": { "name": "idx_rides_rider_id", "columns": [{ "expression": "rider_id", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} },
+        "idx_rides_driver_id": { "name": "idx_rides_driver_id", "columns": [{ "expression": "driver_id", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} },
+        "idx_rides_status": { "name": "idx_rides_status", "columns": [{ "expression": "status", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} },
+        "idx_rides_created_at": { "name": "idx_rides_created_at", "columns": [{ "expression": "created_at", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} }
+      },
+      "foreignKeys": {
+        "rides_rider_id_users_id_fk": { "name": "rides_rider_id_users_id_fk", "tableFrom": "rides", "tableTo": "users", "columnsFrom": ["rider_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "rides_driver_id_users_id_fk": { "name": "rides_driver_id_users_id_fk", "tableFrom": "rides", "tableTo": "users", "columnsFrom": ["driver_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "rides_paid_by_users_id_fk": { "name": "rides_paid_by_users_id_fk", "tableFrom": "rides", "tableTo": "users", "columnsFrom": ["paid_by"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    }
+  },
+  "enums": {
+    "public.ride_status": { "name": "ride_status", "schema": "public", "values": ["pending", "accepted", "driver_arriving", "in_progress", "completed", "cancelled"] },
+    "public.payment_status": { "name": "payment_status", "schema": "public", "values": ["pending_payment", "authorized", "paid_card", "paid_cash", "cancelled_with_fee", "cancelled", "disputed"] },
+    "public.payment_method": { "name": "payment_method", "schema": "public", "values": ["cash", "card"] },
+    "public.ownership_status": { "name": "ownership_status", "schema": "public", "values": ["none", "ad_hoc", "lifetime"] },
+    "public.share_cert_status": { "name": "share_cert_status", "schema": "public", "values": ["active", "revoked", "transferred"] },
+    "public.profit_decl_status": { "name": "profit_decl_status", "schema": "public", "values": ["draft", "declared", "distributed"] }
+  },
+  "schemas": {},
+  "sequences": {},
+  "_meta": { "columns": {}, "schemas": {}, "tables": {} }
+}
