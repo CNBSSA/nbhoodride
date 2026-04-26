@@ -6,7 +6,12 @@ const FROM_NAME = "PG Ride";
 // The public URL of this deployment — used in email CTAs.
 // Set APP_URL in Railway → Variables (e.g. https://pgride-xyz.up.railway.app).
 // Falls back to the Replit URL if not set (development only).
-const APP_URL = (process.env.APP_URL || "https://pg-county-community-ride-share.replit.app").replace(/\/$/, "");
+// Resolve the app URL: explicit APP_URL > Railway auto-domain > Replit fallback
+const APP_URL = (
+  process.env.APP_URL ||
+  (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null) ||
+  "https://pg-county-community-ride-share.replit.app"
+).replace(/\/$/, "");
 
 function createTransport() {
   const pass = process.env.GMAIL_APP_PASSWORD;
