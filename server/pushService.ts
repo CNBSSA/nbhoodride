@@ -2,7 +2,10 @@ import webpush from "web-push";
 
 const VAPID_PUBLIC_KEY  = process.env.VAPID_PUBLIC_KEY  || "";
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
-const VAPID_EMAIL       = process.env.VAPID_EMAIL       || "mailto:admin@pgride.com";
+const rawVapidEmail     = process.env.VAPID_EMAIL       || "mailto:admin@pgride.com";
+const VAPID_EMAIL       = rawVapidEmail.startsWith("mailto:") || rawVapidEmail.startsWith("https://")
+  ? rawVapidEmail
+  : `mailto:${rawVapidEmail}`;
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
