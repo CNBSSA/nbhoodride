@@ -72,7 +72,8 @@ async function ensureSuperAdminSetup() {
     const setupToken = process.env.SUPER_ADMIN_SETUP_TOKEN;
     if (!setupToken) return;
 
-    const existing = await storage.getUserByEmail('thrynovainsights@gmail.com');
+    const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'thrynovainsights@gmail.com';
+    const existing = await storage.getUserByEmail(superAdminEmail);
     if (existing && !existing.isSuperAdmin) {
       await storage.adminUpdateUser(existing.id, { isSuperAdmin: true, isAdmin: true, isApproved: true, isVerified: true });
       console.log('Super Admin account activated for existing user');
@@ -145,7 +146,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Invalid setup token" });
       }
 
-      const existing = await storage.getUserByEmail('thrynovainsights@gmail.com');
+      const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'thrynovainsights@gmail.com';
+    const existing = await storage.getUserByEmail(superAdminEmail);
       if (existing) {
         if (!existing.isSuperAdmin) {
           const hashedPassword = await bcrypt.hash(password, 10);
@@ -639,7 +641,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           } catch (revertError) {
             console.error("Failed to revert ride status after payment failure:", revertError);
           }
-          return res.status(402).json({ message: `Payment authorization failed: ${error.message}` });
+          return res.status(402).json({ message: "Payment authorization failed. Please try a different payment method." });
         }
       }
       
@@ -888,7 +890,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log(`Virtual card payment processed successfully for ride ${rideId}: actual $${finalFare}, tip $${tipAmount || 0}`);
         } catch (error: any) {
           console.error("Failed to process virtual card payment:", error);
-          throw new Error(`Payment processing failed: ${error.message}`);
+          throw new Error("Payment processing failed. Please try again.");
         }
       }
       
@@ -1459,7 +1461,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true, ride: updatedRide, cancellationFee });
     } catch (error: any) {
       console.error("Error cancelling ride:", error);
-      res.status(500).json({ message: error.message || "Failed to cancel ride" });
+      res.status(500).json({ message: "Failed to cancel ride. Please try again." });
     }
   });
 
@@ -1578,7 +1580,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(ride);
     } catch (error: any) {
       console.error("Error claiming scheduled ride:", error);
-      res.status(409).json({ message: error.message || "Failed to claim ride" });
+      res.status(409).json({ message: "This ride is no longer available." });
     }
   });
 
@@ -1745,7 +1747,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true, customerId, paymentMethodId });
     } catch (error: any) {
       console.error("Error setting up card:", error);
-      res.status(500).json({ message: error.message || "Failed to set up payment method" });
+      res.status(500).json({ message: "Failed to set up payment method. Please try again." });
     }
   });
 
@@ -1806,7 +1808,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ clientSecret: intent.client_secret, amount });
     } catch (error: any) {
       console.error("Error creating top-up intent:", error);
-      res.status(500).json({ message: error.message || "Failed to create payment" });
+      res.status(500).json({ message: "Failed to create payment. Please try again." });
     }
   });
 
@@ -1834,7 +1836,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true, newBalance: updatedUser.virtualCardBalance });
     } catch (error: any) {
       console.error("Error confirming top-up:", error);
-      res.status(500).json({ message: error.message || "Failed to confirm top-up" });
+      res.status(500).json({ message: "Failed to confirm top-up. Please try again." });
     }
   });
 
@@ -3051,7 +3053,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(declaration);
     } catch (error: any) {
       console.error("Error declaring profit:", error);
-      res.status(400).json({ message: error.message || "Failed to declare profit" });
+      res.status(400).json({ message: "Failed to declare profit. Please check your input." });
     }
   });
 
@@ -3063,7 +3065,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(distributions);
     } catch (error: any) {
       console.error("Error distributing profit:", error);
-      res.status(400).json({ message: error.message || "Failed to distribute profit" });
+      res.status(400).json({ message: "Failed to distribute profit. Please try again." });
     }
   });
 
