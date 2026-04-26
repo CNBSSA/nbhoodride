@@ -3635,14 +3635,19 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
   // Map to track authenticated userId per WebSocket connection
   const wsAuthenticatedUsers = new WeakMap<WebSocket, string>();
   
+  // Session middleware initialised once — avoids leaking a new pg.Pool per WS connection
+  const wsSessionMiddleware = getSession();
+
+  wss.on('error', (err) => {
+    console.error('WebSocket server error (non-fatal):', err);
+  });
+
   wss.on('connection', (ws, req) => {
     console.log('WebSocket connection established');
     
-    // Extract session userId from the upgrade request via Express session middleware
-    // The session cookie is available on the upgrade request
-    const sessionMiddleware = getSession();
+    // Reuse the single session middleware instance initialised above
     const fakeRes = { on: () => {}, end: () => {}, setHeader: () => {}, getHeader: () => '' } as any;
-    sessionMiddleware(req as any, fakeRes, () => {
+    wsSessionMiddleware(req as any, fakeRes, () => {
       const session = (req as any).session;
       const authenticatedUserId = session?.userId || session?.testUserId;
       if (authenticatedUserId) {
