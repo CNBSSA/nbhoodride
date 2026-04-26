@@ -106,7 +106,8 @@
     "wouter": "^3.3.5",
     "ws": "^8.18.3",
     "zod": "^3.25.76",
-    "zod-validation-error": "^3.5.4"
+    "zod-validation-error": "^3.5.4",
+    "helmet": "^8.0.0"
   },
   "devDependencies": {
     "@replit/vite-plugin-cartographer": "^0.3.1",
