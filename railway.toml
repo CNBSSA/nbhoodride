@@ -11,4 +11,4 @@ restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
 [deploy.variables]
-RAILPACK_INSTALL_CMD = "npm install"
+RAILPACK_INSTALL_CMD = "npm install --include=dev"
