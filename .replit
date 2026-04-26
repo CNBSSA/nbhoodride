@@ -48,9 +48,9 @@ waitForPort = 5000
 ENABLE_TEST_LOGIN = "true"
 
 [userenv.shared]
-SUPER_ADMIN_SETUP_TOKEN = "ba5ba76b0c165c539251407de1ab02f91272246b6aab0ede3c393d85bf4ce661"
+SUPER_ADMIN_SETUP_TOKEN = "set-in-railway-env-vars"
 GMAIL_FROM = "thrynovaproductions@gmail.com"
 VAPID_PUBLIC_KEY = "BLQ9642NEYrMLw0jzzIhJlYtImvXGnBpBtziDG6iC87JFRcXOukMEbrrQ9-w3K1d9GToq_TTr2KL-b9vT7im-W0"
-VAPID_PRIVATE_KEY = "gyXsZzpTvpgQffeJaR71ketvwxoBRvtgg2QuPwI73L4"
+VAPID_PRIVATE_KEY = "set-in-railway-env-vars"
 VAPID_EMAIL = "mailto:thrynovaproductions@gmail.com"
 VITE_VAPID_PUBLIC_KEY = "BLQ9642NEYrMLw0jzzIhJlYtImvXGnBpBtziDG6iC87JFRcXOukMEbrrQ9-w3K1d9GToq_TTr2KL-b9vT7im-W0"
