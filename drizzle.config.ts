@@ -11,4 +11,6 @@ export default defineConfig({
   dbCredentials: {
     url: process.env.DATABASE_URL,
   },
+  // Exclude sessions table — connect-pg-simple manages it with createTableIfMissing
+  tablesFilter: ["!sessions"],
 });
