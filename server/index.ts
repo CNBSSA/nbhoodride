@@ -1,17 +1,18 @@
 import express, { type Request, Response, NextFunction } from "express";
+import helmet from "helmet";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
 
 // CRITICAL: Health check endpoint MUST be first for deployment health checks
-// This endpoint responds immediately with 200 before any expensive initialization
 app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+app.use(helmet());
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -44,17 +45,6 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  // Run database migrations on startup
-  try {
-    console.log('Running database migrations...');
-    const { execSync } = await import('child_process');
-    execSync('npm run db:push', { stdio: 'inherit' });
-    console.log('Database migrations completed successfully');
-  } catch (error) {
-    console.error('Database migration failed:', error);
-    // Don't exit - the app can still run, just without tables
-  }
-
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -65,19 +55,12 @@ app.use((req, res, next) => {
     console.error("Unhandled error:", err.stack || err);
   });
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
   if (app.get("env") === "development") {
     await setupVite(app, server);
   } else {
     serveStatic(app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || '5000', 10);
   server.listen({
     port,
