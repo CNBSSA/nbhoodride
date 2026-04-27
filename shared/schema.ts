@@ -45,7 +45,7 @@ export const MD_COUNTIES = [
 
 export type MdCounty = typeof MD_COUNTIES[number];
 
-// Session storage table (required for Replit Auth)
+// Session storage table (required for session-based auth)
 export const sessions = pgTable(
   "sessions",
   {
@@ -56,7 +56,7 @@ export const sessions = pgTable(
   (table) => [index("IDX_session_expire").on(table.expire)],
 );
 
-// User storage table (required for Replit Auth)
+// User storage table
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: varchar("email").unique(),
