@@ -268,8 +268,12 @@ export default function Profile() {
                 <div>
                   <h3 className="font-semibold text-foreground">Driver Account Active</h3>
                   <p className="text-sm text-muted-foreground">
-                    {user?.driverProfile?.isVerifiedNeighbor 
+                    {user?.driverProfile?.isVerifiedNeighbor
                       ? "Verified Neighbor • Ready to drive"
+                      : (user?.driverProfile as any)?.approvalStatus === 'background_check_pending'
+                      ? "Background check in progress — we'll email you when done"
+                      : (user?.driverProfile as any)?.approvalStatus === 'rejected'
+                      ? "Background check could not be cleared — contact support"
                       : "Documents under review"}
                   </p>
                 </div>

@@ -2,7 +2,7 @@ import Stripe from "stripe";
 
 // Stripe is optional — only initialised when STRIPE_SECRET_KEY is set.
 // Without it the app starts normally; payment endpoints return 503.
-let stripe: Stripe | null = null;
+export let stripe: Stripe | null = null;
 
 if (process.env.STRIPE_SECRET_KEY) {
   stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {

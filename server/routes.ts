@@ -9,7 +9,7 @@ import { ObjectPermission } from "./objectAcl";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import twilio from "twilio";
-import { stripeService } from "./stripeService";
+import { stripeService, stripe } from "./stripeService";
 import bcrypt from "bcrypt";
 import Anthropic from "@anthropic-ai/sdk";
 import rateLimit from "express-rate-limit";
@@ -610,9 +610,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { rideId } = req.params;
       
       const ride = await storage.acceptRide(rideId, userId);
-      
+      const rider = await storage.getUser(ride.riderId);
+
       if (ride.paymentMethod === 'card') {
-        const rider = await storage.getUser(ride.riderId);
+        {
         const rawFare = parseFloat(ride.estimatedFare || "0");
 
         // Apply $5 promo discount if rider has promo rides remaining
@@ -643,8 +644,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           return res.status(402).json({ message: "Payment authorization failed. Please try a different payment method." });
         }
+        } // end card block
       }
-      
+
       const driverUser = await storage.getUser(userId);
       const rideAcceptedMessage = {
         type: 'ride_accepted',
@@ -677,8 +679,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           riderFirstName: rider.firstName,
           driverName: rideAcceptedMessage.driverName,
           driverPhone: driverUser?.phone,
-          pickupAddress: ride.pickupAddress,
-          destinationAddress: ride.destinationAddress,
+          pickupAddress: (ride.pickupLocation as any)?.address ?? null,
+          destinationAddress: (ride.destinationLocation as any)?.address ?? null,
           estimatedFare: ride.estimatedFare,
           promoDiscount: ride.promoDiscountApplied,
         }).catch(console.error);
@@ -948,8 +950,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             driverName: driverForEmail
               ? `${driverForEmail.firstName || ''} ${driverForEmail.lastName?.[0] || ''}.`.trim()
               : 'Your driver',
-            pickupAddress: ride.pickupAddress,
-            destinationAddress: ride.destinationAddress,
+            pickupAddress: (ride.pickupLocation as any)?.address ?? null,
+            destinationAddress: (ride.destinationLocation as any)?.address ?? null,
             actualFare: ride.actualFare,
             promoDiscountApplied: ride.promoDiscountApplied,
             completedAt: ride.completedAt,
@@ -2545,6 +2547,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (Object.keys(updates).length === 0) {
         return res.status(400).json({ message: "No valid fields to update" });
       }
+
+      // If admin sets approvalStatus → approved AND Checkr is configured, trigger background check
+      if (updates.approvalStatus === 'approved' && process.env.CHECKR_API_KEY) {
+        const targetUser = await storage.getUser(userId);
+        if (targetUser) {
+          try {
+            const authHeader = `Basic ${Buffer.from(process.env.CHECKR_API_KEY + ':').toString('base64')}`;
+            const candidateRes = await fetch('https://api.checkr.com/v1/candidates', {
+              method: 'POST',
+              headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: targetUser.email, first_name: targetUser.firstName, last_name: targetUser.lastName }),
+            });
+            if (candidateRes.ok) {
+              const candidate = await candidateRes.json() as any;
+              const reportRes = await fetch('https://api.checkr.com/v1/reports', {
+                method: 'POST',
+                headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ candidate_id: candidate.id, package: 'tasker_standard' }),
+              });
+              if (reportRes.ok) {
+                const report = await reportRes.json() as any;
+                await storage.adminUpdateDriverProfile(userId, {
+                  checkrCandidateId: candidate.id,
+                  checkrReportId: report.id,
+                  approvalStatus: 'background_check_pending',
+                } as any);
+                await storage.logAdminAction(adminId, 'initiate_background_check', 'driver_profile', userId, { candidateId: candidate.id });
+                return res.json({ message: 'Background check initiated', approvalStatus: 'background_check_pending' });
+              }
+            }
+          } catch (checkrErr) {
+            console.error('Checkr API error (falling through to manual approval):', checkrErr);
+          }
+        }
+      }
+
       const profile = await storage.adminUpdateDriverProfile(userId, updates);
       await storage.logAdminAction(adminId, 'update_driver', 'driver_profile', userId, updates);
       res.json(profile);
@@ -3620,6 +3658,93 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       res.status(500).json({ message: "Failed to generate FAQs" });
     }
   });
+
+  // ── STRIPE WEBHOOK ──────────────────────────────────────────────────────────
+  app.post('/api/webhooks/stripe', async (req: any, res) => {
+    if (!stripe) return res.status(503).json({ message: 'Stripe not configured' });
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      console.error('STRIPE_WEBHOOK_SECRET not set — cannot verify webhook');
+      return res.status(500).json({ message: 'Webhook not configured' });
+    }
+    let event: any;
+    try {
+      event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'] as string, webhookSecret);
+    } catch (err: any) {
+      console.error('Stripe webhook signature invalid:', err.message);
+      return res.status(400).json({ message: `Webhook error: ${err.message}` });
+    }
+    try {
+      switch (event.type) {
+        case 'payment_intent.succeeded': {
+          const pi = event.data.object as any;
+          const rideId = pi.metadata?.rideId;
+          if (rideId) {
+            const ride = await storage.getRide(rideId);
+            if (ride && ride.paymentStatus !== 'paid_card') {
+              await storage.updateRide(rideId, { paymentStatus: 'paid_card' });
+            }
+          }
+          break;
+        }
+        case 'payment_intent.payment_failed': {
+          const pi = event.data.object as any;
+          const rideId = pi.metadata?.rideId;
+          if (rideId) {
+            const ride = await storage.getRide(rideId);
+            if (ride && ride.status === 'accepted') {
+              await storage.updateRide(rideId, { status: 'cancelled', cancellationReason: 'Payment failed', paymentStatus: 'cancelled' });
+            }
+          }
+          break;
+        }
+        default: break;
+      }
+      res.json({ received: true });
+    } catch (err) {
+      console.error('Stripe webhook handler error:', err);
+      res.status(500).json({ message: 'Webhook handler error' });
+    }
+  });
+
+  // ── CHECKR WEBHOOK ──────────────────────────────────────────────────────────
+  app.post('/api/webhooks/checkr', async (req: any, res) => {
+    const webhookSecret = process.env.CHECKR_WEBHOOK_SECRET;
+    if (webhookSecret) {
+      const crypto = await import('crypto');
+      const sig = req.headers['x-checkr-signature'] as string;
+      const expected = crypto.createHmac('sha256', webhookSecret).update(req.body).digest('hex');
+      if (sig !== expected) return res.status(400).json({ message: 'Invalid signature' });
+    }
+    let event: any;
+    try { event = JSON.parse(req.body.toString()); } catch { return res.status(400).json({ message: 'Invalid JSON' }); }
+
+    if (event.type === 'report.completed') {
+      const report = event.data?.object;
+      if (report?.id) {
+        const profiles = await storage.getAllDriverProfiles();
+        const profile = profiles.find((p: any) => (p as any).checkrReportId === report.id);
+        if (profile) {
+          if (report.result === 'clear') {
+            await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'approved' } as any);
+            await storage.adminUpdateUser(profile.userId, { isApproved: true });
+            const user = await storage.getUser(profile.userId);
+            if (user) sendAccountApprovedEmail(user).catch(console.error);
+          } else {
+            await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'rejected' } as any);
+            await storage.createSafetyAlert({
+              alertType: 'background_check_failed', severity: 'high', targetUserId: profile.userId,
+              title: 'Driver background check returned non-clear result',
+              description: `Checkr report ${report.id} result: ${report.result}`,
+              data: { reportId: report.id, result: report.result },
+            });
+          }
+        }
+      }
+    }
+    res.json({ received: true });
+  });
+  // ───────────────────────────────────────────────────────────────────────────
 
   const httpServer = createServer(app);
 

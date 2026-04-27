@@ -1,11 +1,8 @@
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
-const FROM_ADDRESS = process.env.GMAIL_FROM || "thrynovaproduction@gmail.com";
+const FROM_ADDRESS = process.env.RESEND_FROM || "noreply@pgride.app";
 const FROM_NAME = "PG Ride";
 
-// The public URL of this deployment — used in email CTAs.
-// Set APP_URL in Railway → Variables (e.g. https://pgride-xyz.up.railway.app).
-// Falls back to the Replit URL if not set (development only).
 // Resolve the app URL: explicit APP_URL > Railway auto-domain > Replit fallback
 const APP_URL = (
   process.env.APP_URL ||
@@ -13,35 +10,26 @@ const APP_URL = (
   "https://pg-county-community-ride-share.replit.app"
 ).replace(/\/$/, "");
 
-function createTransport() {
-  const pass = process.env.GMAIL_APP_PASSWORD;
-  if (!pass) {
-    return null;
-  }
-  return nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: FROM_ADDRESS,
-      pass,
-    },
-  });
-}
+const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
 
 async function sendEmail(to: string, subject: string, html: string): Promise<void> {
-  const transport = createTransport();
-  if (!transport) {
-    console.log(`[EMAIL — not sent, GMAIL_APP_PASSWORD not set]\nTo: ${to}\nSubject: ${subject}`);
+  if (!resend) {
+    console.log(`[EMAIL — not sent, RESEND_API_KEY not set]\nTo: ${to}\nSubject: ${subject}`);
     return;
   }
-  try {
-    await transport.sendMail({
-      from: `"${FROM_NAME}" <${FROM_ADDRESS}>`,
-      to,
-      subject,
-      html,
-    });
-  } catch (err) {
-    console.error(`[EMAIL] Failed to send to ${to}:`, err);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await resend.emails.send({ from: `${FROM_NAME} <${FROM_ADDRESS}>`, to, subject, html });
+      return;
+    } catch (err) {
+      if (attempt === 2) {
+        console.error(`[EMAIL] Failed to send to ${to} after 2 attempts:`, err);
+      } else {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
   }
 }
 

@@ -103,6 +103,9 @@ export const driverProfiles = pgTable("driver_profiles", {
   // Daily session — cleared when driver goes offline or at midnight
   dailyCounties: text("daily_counties").array(),
   dailySessionStart: timestamp("daily_session_start"),
+  // Background check identifiers (Checkr)
+  checkrCandidateId: varchar("checkr_candidate_id"),
+  checkrReportId: varchar("checkr_report_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [

@@ -1650,27 +1650,27 @@ export class DatabaseStorage implements IStorage {
       throw new Error("Amount must be a positive number");
     }
 
-    const [updatedUser] = await db
-      .update(users)
-      .set({
-        virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) - ${amount})`,
-        updatedAt: new Date()
-      })
-      .where(
-        and(
-          eq(users.id, userId),
-          sql`CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) >= ${amount}`
-        )
-      )
-      .returning();
+    // FOR UPDATE lock prevents concurrent requests from both passing the balance check
+    const updatedUser = await db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .for("update");
 
-    if (!updatedUser) {
-      const user = await this.getUser(userId);
-      if (!user) throw new Error("User not found");
-      throw new Error("Insufficient virtual card balance");
-    }
+      if (!locked) throw new Error("User not found");
+      const balance = parseFloat(locked.virtualCardBalance || "0");
+      if (balance < amount) throw new Error("Insufficient virtual card balance");
 
-    // Log immutable ledger entry
+      const [updated] = await tx
+        .update(users)
+        .set({ virtualCardBalance: (balance - amount).toFixed(2), updatedAt: new Date() })
+        .where(eq(users.id, userId))
+        .returning();
+      return updated;
+    });
+
+    // Log immutable ledger entry (outside transaction — log failure doesn't roll back the deduction)
     await this.logWalletTransaction({
       userId,
       amount: -amount,
