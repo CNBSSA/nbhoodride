@@ -805,6 +805,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
+      // Idempotent: if a profile already exists for this user, return it
+      // rather than failing with a duplicate-row / constraint error. The
+      // client's "Get Started" button is safe to press more than once.
+      const existing = await storage.getDriverProfile(userId);
+      if (existing) {
+        await storage.upsertUser({ id: userId, isDriver: true });
+        return res.json(existing);
+      }
+
       // ── Enhanced driver registration validation ──────────────────────────
       // Fields are optional at create-time so the client's two-step flow works
       // ("Get Started" creates a stub profile, then DocumentUploadModal PUTs

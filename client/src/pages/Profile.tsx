@@ -89,7 +89,7 @@ export default function Profile() {
       }
       toast({
         title: "Failed to Create Driver Profile",
-        description: "Please try again or contact support.",
+        description: (error as Error)?.message || "Please try again or contact support.",
         variant: "destructive",
       });
     }
