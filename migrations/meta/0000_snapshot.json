@@ -1,0 +1,759 @@
+{
+  "id": "0000_initial_schema",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "email": { "name": "email", "type": "varchar", "primaryKey": false, "notNull": false, "isUnique": true },
+        "password": { "name": "password", "type": "varchar", "primaryKey": false, "notNull": false },
+        "first_name": { "name": "first_name", "type": "varchar", "primaryKey": false, "notNull": false },
+        "last_name": { "name": "last_name", "type": "varchar", "primaryKey": false, "notNull": false },
+        "profile_image_url": { "name": "profile_image_url", "type": "varchar", "primaryKey": false, "notNull": false },
+        "phone": { "name": "phone", "type": "varchar", "primaryKey": false, "notNull": false },
+        "is_driver": { "name": "is_driver", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_verified": { "name": "is_verified", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_admin": { "name": "is_admin", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_super_admin": { "name": "is_super_admin", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_approved": { "name": "is_approved", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "approved_by": { "name": "approved_by", "type": "varchar", "primaryKey": false, "notNull": false },
+        "is_suspended": { "name": "is_suspended", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "rating": { "name": "rating", "type": "numeric(3, 2)", "primaryKey": false, "notNull": false, "default": "'5.00'" },
+        "total_rides": { "name": "total_rides", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "emergency_contact": { "name": "emergency_contact", "type": "varchar", "primaryKey": false, "notNull": false },
+        "stripe_customer_id": { "name": "stripe_customer_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "stripe_payment_method_id": { "name": "stripe_payment_method_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "virtual_card_balance": { "name": "virtual_card_balance", "type": "numeric(10, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "promo_rides_remaining": { "name": "promo_rides_remaining", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "password_reset_token": { "name": "password_reset_token", "type": "varchar", "primaryKey": false, "notNull": false },
+        "password_reset_expiry": { "name": "password_reset_expiry", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "users_email_unique": { "name": "users_email_unique", "columns": ["email"], "nullsNotDistinct": false }
+      }
+    },
+    "public.driver_profiles": {
+      "name": "driver_profiles",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "user_id": { "name": "user_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "license_number": { "name": "license_number", "type": "varchar", "primaryKey": false, "notNull": false },
+        "license_image_url": { "name": "license_image_url", "type": "varchar", "primaryKey": false, "notNull": false },
+        "insurance_image_url": { "name": "insurance_image_url", "type": "varchar", "primaryKey": false, "notNull": false },
+        "is_online": { "name": "is_online", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_verified_neighbor": { "name": "is_verified_neighbor", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_suspended": { "name": "is_suspended", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "approval_status": { "name": "approval_status", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'pending'" },
+        "discount_rate": { "name": "discount_rate", "type": "numeric(3, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "current_location": { "name": "current_location", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "accepted_counties": { "name": "accepted_counties", "type": "text[]", "primaryKey": false, "notNull": true, "default": "ARRAY[]::text[]" },
+        "daily_counties": { "name": "daily_counties", "type": "text[]", "primaryKey": false, "notNull": false },
+        "daily_session_start": { "name": "daily_session_start", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "checkr_candidate_id": { "name": "checkr_candidate_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "checkr_report_id": { "name": "checkr_report_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {
+        "idx_driver_profiles_user_id": { "name": "idx_driver_profiles_user_id", "columns": [{ "expression": "user_id", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} },
+        "idx_driver_profiles_is_online": { "name": "idx_driver_profiles_is_online", "columns": [{ "expression": "is_online", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} }
+      },
+      "foreignKeys": {
+        "driver_profiles_user_id_users_id_fk": { "name": "driver_profiles_user_id_users_id_fk", "tableFrom": "driver_profiles", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.vehicles": {
+      "name": "vehicles",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "driver_profile_id": { "name": "driver_profile_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "make": { "name": "make", "type": "varchar", "primaryKey": false, "notNull": true },
+        "model": { "name": "model", "type": "varchar", "primaryKey": false, "notNull": true },
+        "year": { "name": "year", "type": "integer", "primaryKey": false, "notNull": true },
+        "color": { "name": "color", "type": "varchar", "primaryKey": false, "notNull": true },
+        "license_plate": { "name": "license_plate", "type": "varchar", "primaryKey": false, "notNull": true },
+        "photos": { "name": "photos", "type": "jsonb", "primaryKey": false, "notNull": false, "default": "'[]'" },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "vehicles_driver_profile_id_driver_profiles_id_fk": { "name": "vehicles_driver_profile_id_driver_profiles_id_fk", "tableFrom": "vehicles", "tableTo": "driver_profiles", "columnsFrom": ["driver_profile_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.rides": {
+      "name": "rides",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "rider_id": { "name": "rider_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "driver_id": { "name": "driver_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "pickup_location": { "name": "pickup_location", "type": "jsonb", "primaryKey": false, "notNull": true },
+        "destination_location": { "name": "destination_location", "type": "jsonb", "primaryKey": false, "notNull": true },
+        "pickup_instructions": { "name": "pickup_instructions", "type": "text", "primaryKey": false, "notNull": false },
+        "status": { "name": "status", "type": "ride_status", "primaryKey": false, "notNull": false, "default": "'pending'" },
+        "payment_method": { "name": "payment_method", "type": "payment_method", "primaryKey": false, "notNull": false, "default": "'cash'" },
+        "estimated_fare": { "name": "estimated_fare", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "actual_fare": { "name": "actual_fare", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "distance": { "name": "distance", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "duration": { "name": "duration", "type": "integer", "primaryKey": false, "notNull": false },
+        "tip_amount": { "name": "tip_amount", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "payment_status": { "name": "payment_status", "type": "payment_status", "primaryKey": false, "notNull": false, "default": "'pending_payment'" },
+        "stripe_payment_intent_id": { "name": "stripe_payment_intent_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "refunded_amount": { "name": "refunded_amount", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "cancellation_fee": { "name": "cancellation_fee", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "cancellation_reason": { "name": "cancellation_reason", "type": "text", "primaryKey": false, "notNull": false },
+        "driver_traveled_distance": { "name": "driver_traveled_distance", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "driver_traveled_time": { "name": "driver_traveled_time", "type": "integer", "primaryKey": false, "notNull": false },
+        "route_path": { "name": "route_path", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "cash_received_at": { "name": "cash_received_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "paid_by": { "name": "paid_by", "type": "varchar", "primaryKey": false, "notNull": false },
+        "rider_rating": { "name": "rider_rating", "type": "integer", "primaryKey": false, "notNull": false },
+        "driver_rating": { "name": "driver_rating", "type": "integer", "primaryKey": false, "notNull": false },
+        "rider_review": { "name": "rider_review", "type": "text", "primaryKey": false, "notNull": false },
+        "driver_review": { "name": "driver_review", "type": "text", "primaryKey": false, "notNull": false },
+        "scheduled_at": { "name": "scheduled_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "pickup_county": { "name": "pickup_county", "type": "varchar", "primaryKey": false, "notNull": false },
+        "shared_ride_group_id": { "name": "shared_ride_group_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "wants_shared_ride": { "name": "wants_shared_ride", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "shared_fare_discount": { "name": "shared_fare_discount", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "group_id": { "name": "group_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "ride_type": { "name": "ride_type", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'solo'" },
+        "pickup_stops": { "name": "pickup_stops", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "original_fare": { "name": "original_fare", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "group_discount_amount": { "name": "group_discount_amount", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "promo_discount_applied": { "name": "promo_discount_applied", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "accepted_at": { "name": "accepted_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "started_at": { "name": "started_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "completed_at": { "name": "completed_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {
+        "idx_rides_rider_id": { "name": "idx_rides_rider_id", "columns": [{ "expression": "rider_id", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} },
+        "idx_rides_driver_id": { "name": "idx_rides_driver_id", "columns": [{ "expression": "driver_id", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} },
+        "idx_rides_status": { "name": "idx_rides_status", "columns": [{ "expression": "status", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} },
+        "idx_rides_created_at": { "name": "idx_rides_created_at", "columns": [{ "expression": "created_at", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} }
+      },
+      "foreignKeys": {
+        "rides_rider_id_users_id_fk": { "name": "rides_rider_id_users_id_fk", "tableFrom": "rides", "tableTo": "users", "columnsFrom": ["rider_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "rides_driver_id_users_id_fk": { "name": "rides_driver_id_users_id_fk", "tableFrom": "rides", "tableTo": "users", "columnsFrom": ["driver_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "rides_paid_by_users_id_fk": { "name": "rides_paid_by_users_id_fk", "tableFrom": "rides", "tableTo": "users", "columnsFrom": ["paid_by"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.shared_ride_groups": {
+      "name": "shared_ride_groups",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "scheduled_at": { "name": "scheduled_at", "type": "timestamp", "primaryKey": false, "notNull": true },
+        "destination_label": { "name": "destination_label", "type": "varchar", "primaryKey": false, "notNull": true },
+        "destination_lat": { "name": "destination_lat", "type": "numeric(10, 6)", "primaryKey": false, "notNull": true },
+        "destination_lng": { "name": "destination_lng", "type": "numeric(10, 6)", "primaryKey": false, "notNull": true },
+        "radius_miles": { "name": "radius_miles", "type": "numeric(4, 2)", "primaryKey": false, "notNull": false, "default": "'2.00'" },
+        "max_riders": { "name": "max_riders", "type": "integer", "primaryKey": false, "notNull": false, "default": 4 },
+        "rider_count": { "name": "rider_count", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "status": { "name": "status", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'open'" },
+        "driver_id": { "name": "driver_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "discount_pct": { "name": "discount_pct", "type": "integer", "primaryKey": false, "notNull": false, "default": 30 },
+        "created_by": { "name": "created_by", "type": "varchar", "primaryKey": false, "notNull": true },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "shared_ride_groups_driver_id_users_id_fk": { "name": "shared_ride_groups_driver_id_users_id_fk", "tableFrom": "shared_ride_groups", "tableTo": "users", "columnsFrom": ["driver_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "shared_ride_groups_created_by_users_id_fk": { "name": "shared_ride_groups_created_by_users_id_fk", "tableFrom": "shared_ride_groups", "tableTo": "users", "columnsFrom": ["created_by"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.ride_groups": {
+      "name": "ride_groups",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "schedule_code": { "name": "schedule_code", "type": "varchar(12)", "primaryKey": false, "notNull": false },
+        "organizer_id": { "name": "organizer_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "group_type": { "name": "group_type", "type": "varchar", "primaryKey": false, "notNull": true },
+        "shared_destination": { "name": "shared_destination", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "max_slots": { "name": "max_slots", "type": "integer", "primaryKey": false, "notNull": false, "default": 3 },
+        "filled_slots": { "name": "filled_slots", "type": "integer", "primaryKey": false, "notNull": false, "default": 1 },
+        "status": { "name": "status", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'open'" },
+        "driver_id": { "name": "driver_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "discount_active": { "name": "discount_active", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "scheduled_at": { "name": "scheduled_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ride_groups_organizer_id_users_id_fk": { "name": "ride_groups_organizer_id_users_id_fk", "tableFrom": "ride_groups", "tableTo": "users", "columnsFrom": ["organizer_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "ride_groups_driver_id_users_id_fk": { "name": "ride_groups_driver_id_users_id_fk", "tableFrom": "ride_groups", "tableTo": "users", "columnsFrom": ["driver_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ride_groups_schedule_code_unique": { "name": "ride_groups_schedule_code_unique", "columns": ["schedule_code"], "nullsNotDistinct": false }
+      }
+    },
+    "public.push_subscriptions": {
+      "name": "push_subscriptions",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "user_id": { "name": "user_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "endpoint": { "name": "endpoint", "type": "text", "primaryKey": false, "notNull": true },
+        "p256dh": { "name": "p256dh", "type": "text", "primaryKey": false, "notNull": true },
+        "auth": { "name": "auth", "type": "text", "primaryKey": false, "notNull": true },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "push_subscriptions_user_id_users_id_fk": { "name": "push_subscriptions_user_id_users_id_fk", "tableFrom": "push_subscriptions", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "push_subscriptions_endpoint_unique": { "name": "push_subscriptions_endpoint_unique", "columns": ["endpoint"], "nullsNotDistinct": false }
+      }
+    },
+    "public.payout_requests": {
+      "name": "payout_requests",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "driver_id": { "name": "driver_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "amount": { "name": "amount", "type": "numeric(10, 2)", "primaryKey": false, "notNull": true },
+        "payout_method": { "name": "payout_method", "type": "varchar", "primaryKey": false, "notNull": true },
+        "payout_details": { "name": "payout_details", "type": "varchar", "primaryKey": false, "notNull": true },
+        "status": { "name": "status", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'pending'" },
+        "admin_note": { "name": "admin_note", "type": "text", "primaryKey": false, "notNull": false },
+        "processed_by": { "name": "processed_by", "type": "varchar", "primaryKey": false, "notNull": false },
+        "processed_at": { "name": "processed_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "payout_requests_driver_id_users_id_fk": { "name": "payout_requests_driver_id_users_id_fk", "tableFrom": "payout_requests", "tableTo": "users", "columnsFrom": ["driver_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "payout_requests_processed_by_users_id_fk": { "name": "payout_requests_processed_by_users_id_fk", "tableFrom": "payout_requests", "tableTo": "users", "columnsFrom": ["processed_by"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.disputes": {
+      "name": "disputes",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "ride_id": { "name": "ride_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "reporter_id": { "name": "reporter_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "issue_type": { "name": "issue_type", "type": "varchar", "primaryKey": false, "notNull": true },
+        "description": { "name": "description", "type": "text", "primaryKey": false, "notNull": true },
+        "status": { "name": "status", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'pending'" },
+        "resolution": { "name": "resolution", "type": "text", "primaryKey": false, "notNull": false },
+        "resolved_by": { "name": "resolved_by", "type": "varchar", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "disputes_ride_id_rides_id_fk": { "name": "disputes_ride_id_rides_id_fk", "tableFrom": "disputes", "tableTo": "rides", "columnsFrom": ["ride_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "disputes_reporter_id_users_id_fk": { "name": "disputes_reporter_id_users_id_fk", "tableFrom": "disputes", "tableTo": "users", "columnsFrom": ["reporter_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "disputes_resolved_by_users_id_fk": { "name": "disputes_resolved_by_users_id_fk", "tableFrom": "disputes", "tableTo": "users", "columnsFrom": ["resolved_by"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.emergency_incidents": {
+      "name": "emergency_incidents",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "user_id": { "name": "user_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "ride_id": { "name": "ride_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "incident_type": { "name": "incident_type", "type": "varchar", "primaryKey": false, "notNull": true },
+        "location": { "name": "location", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "description": { "name": "description", "type": "text", "primaryKey": false, "notNull": false },
+        "status": { "name": "status", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'active'" },
+        "share_token": { "name": "share_token", "type": "varchar", "primaryKey": false, "notNull": false },
+        "emergency_contact_alerted": { "name": "emergency_contact_alerted", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "last_location_update": { "name": "last_location_update", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "emergency_incidents_user_id_users_id_fk": { "name": "emergency_incidents_user_id_users_id_fk", "tableFrom": "emergency_incidents", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "emergency_incidents_ride_id_rides_id_fk": { "name": "emergency_incidents_ride_id_rides_id_fk", "tableFrom": "emergency_incidents", "tableTo": "rides", "columnsFrom": ["ride_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "emergency_incidents_share_token_unique": { "name": "emergency_incidents_share_token_unique", "columns": ["share_token"], "nullsNotDistinct": false }
+      }
+    },
+    "public.driver_weekly_hours": {
+      "name": "driver_weekly_hours",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "driver_id": { "name": "driver_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "week_start": { "name": "week_start", "type": "date", "primaryKey": false, "notNull": true },
+        "total_minutes": { "name": "total_minutes", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "ride_count": { "name": "ride_count", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "qualifies_week": { "name": "qualifies_week", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "driver_weekly_hours_driver_id_users_id_fk": { "name": "driver_weekly_hours_driver_id_users_id_fk", "tableFrom": "driver_weekly_hours", "tableTo": "users", "columnsFrom": ["driver_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.driver_ownership": {
+      "name": "driver_ownership",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "driver_id": { "name": "driver_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "status": { "name": "status", "type": "ownership_status", "primaryKey": false, "notNull": false, "default": "'none'" },
+        "total_qualifying_weeks": { "name": "total_qualifying_weeks", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "total_lifetime_minutes": { "name": "total_lifetime_minutes", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "year1_minutes": { "name": "year1_minutes", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "year2_minutes": { "name": "year2_minutes", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "year3_minutes": { "name": "year3_minutes", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "year4_minutes": { "name": "year4_minutes", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "year5_minutes": { "name": "year5_minutes", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "tracking_start_date": { "name": "tracking_start_date", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "ad_hoc_qualification_date": { "name": "ad_hoc_qualification_date", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "lifetime_qualification_date": { "name": "lifetime_qualification_date", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "grace_deadline": { "name": "grace_deadline", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "rating_at_qualification": { "name": "rating_at_qualification", "type": "numeric(3, 2)", "primaryKey": false, "notNull": false },
+        "background_check_status": { "name": "background_check_status", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'pending'" },
+        "background_check_date": { "name": "background_check_date", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "has_adverse_record": { "name": "has_adverse_record", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "violation_notes": { "name": "violation_notes", "type": "text", "primaryKey": false, "notNull": false },
+        "removed_from_driving": { "name": "removed_from_driving", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "removal_reason": { "name": "removal_reason", "type": "text", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "driver_ownership_driver_id_users_id_fk": { "name": "driver_ownership_driver_id_users_id_fk", "tableFrom": "driver_ownership", "tableTo": "users", "columnsFrom": ["driver_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "driver_ownership_driver_id_unique": { "name": "driver_ownership_driver_id_unique", "columns": ["driver_id"], "nullsNotDistinct": false }
+      }
+    },
+    "public.share_certificates": {
+      "name": "share_certificates",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "owner_id": { "name": "owner_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "ownership_id": { "name": "ownership_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "certificate_number": { "name": "certificate_number", "type": "varchar", "primaryKey": false, "notNull": true },
+        "share_percentage": { "name": "share_percentage", "type": "numeric(8, 4)", "primaryKey": false, "notNull": false },
+        "status": { "name": "status", "type": "share_cert_status", "primaryKey": false, "notNull": false, "default": "'active'" },
+        "issued_at": { "name": "issued_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "revoked_at": { "name": "revoked_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "revoke_reason": { "name": "revoke_reason", "type": "text", "primaryKey": false, "notNull": false },
+        "transferred_to": { "name": "transferred_to", "type": "varchar", "primaryKey": false, "notNull": false },
+        "transferred_at": { "name": "transferred_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "share_certificates_owner_id_users_id_fk": { "name": "share_certificates_owner_id_users_id_fk", "tableFrom": "share_certificates", "tableTo": "users", "columnsFrom": ["owner_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "share_certificates_ownership_id_driver_ownership_id_fk": { "name": "share_certificates_ownership_id_driver_ownership_id_fk", "tableFrom": "share_certificates", "tableTo": "driver_ownership", "columnsFrom": ["ownership_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "share_certificates_transferred_to_users_id_fk": { "name": "share_certificates_transferred_to_users_id_fk", "tableFrom": "share_certificates", "tableTo": "users", "columnsFrom": ["transferred_to"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "share_certificates_certificate_number_unique": { "name": "share_certificates_certificate_number_unique", "columns": ["certificate_number"], "nullsNotDistinct": false }
+      }
+    },
+    "public.ownership_rebalance_log": {
+      "name": "ownership_rebalance_log",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "event_type": { "name": "event_type", "type": "varchar", "primaryKey": false, "notNull": true },
+        "triggered_by": { "name": "triggered_by", "type": "varchar", "primaryKey": false, "notNull": false },
+        "affected_driver_id": { "name": "affected_driver_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "previous_snapshot": { "name": "previous_snapshot", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "new_snapshot": { "name": "new_snapshot", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "total_active_owners": { "name": "total_active_owners", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "driver_pool_percentage": { "name": "driver_pool_percentage", "type": "numeric(5, 2)", "primaryKey": false, "notNull": false, "default": "'49.00'" },
+        "notes": { "name": "notes", "type": "text", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ownership_rebalance_log_triggered_by_users_id_fk": { "name": "ownership_rebalance_log_triggered_by_users_id_fk", "tableFrom": "ownership_rebalance_log", "tableTo": "users", "columnsFrom": ["triggered_by"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "ownership_rebalance_log_affected_driver_id_users_id_fk": { "name": "ownership_rebalance_log_affected_driver_id_users_id_fk", "tableFrom": "ownership_rebalance_log", "tableTo": "users", "columnsFrom": ["affected_driver_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.profit_declarations": {
+      "name": "profit_declarations",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "fiscal_year": { "name": "fiscal_year", "type": "integer", "primaryKey": false, "notNull": true },
+        "total_revenue": { "name": "total_revenue", "type": "numeric(12, 2)", "primaryKey": false, "notNull": false },
+        "total_expenses": { "name": "total_expenses", "type": "numeric(12, 2)", "primaryKey": false, "notNull": false },
+        "net_profit": { "name": "net_profit", "type": "numeric(12, 2)", "primaryKey": false, "notNull": false },
+        "distributable_profit": { "name": "distributable_profit", "type": "numeric(12, 2)", "primaryKey": false, "notNull": false },
+        "status": { "name": "status", "type": "profit_decl_status", "primaryKey": false, "notNull": false, "default": "'draft'" },
+        "declared_by": { "name": "declared_by", "type": "varchar", "primaryKey": false, "notNull": false },
+        "declared_at": { "name": "declared_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "distributed_at": { "name": "distributed_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "board_notes": { "name": "board_notes", "type": "text", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "profit_declarations_declared_by_users_id_fk": { "name": "profit_declarations_declared_by_users_id_fk", "tableFrom": "profit_declarations", "tableTo": "users", "columnsFrom": ["declared_by"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.profit_distributions": {
+      "name": "profit_distributions",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "declaration_id": { "name": "declaration_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "owner_id": { "name": "owner_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "share_percentage": { "name": "share_percentage", "type": "numeric(8, 4)", "primaryKey": false, "notNull": false },
+        "ownership_type": { "name": "ownership_type", "type": "ownership_status", "primaryKey": false, "notNull": false },
+        "amount": { "name": "amount", "type": "numeric(12, 2)", "primaryKey": false, "notNull": false },
+        "status": { "name": "status", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'pending'" },
+        "paid_at": { "name": "paid_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "payment_method": { "name": "payment_method", "type": "varchar", "primaryKey": false, "notNull": false },
+        "payment_reference": { "name": "payment_reference", "type": "varchar", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "profit_distributions_declaration_id_profit_declarations_id_fk": { "name": "profit_distributions_declaration_id_profit_declarations_id_fk", "tableFrom": "profit_distributions", "tableTo": "profit_declarations", "columnsFrom": ["declaration_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "profit_distributions_owner_id_users_id_fk": { "name": "profit_distributions_owner_id_users_id_fk", "tableFrom": "profit_distributions", "tableTo": "users", "columnsFrom": ["owner_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.admin_activity_log": {
+      "name": "admin_activity_log",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "admin_id": { "name": "admin_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "action": { "name": "action", "type": "varchar", "primaryKey": false, "notNull": true },
+        "target_type": { "name": "target_type", "type": "varchar", "primaryKey": false, "notNull": false },
+        "target_id": { "name": "target_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "details": { "name": "details", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "admin_activity_log_admin_id_users_id_fk": { "name": "admin_activity_log_admin_id_users_id_fk", "tableFrom": "admin_activity_log", "tableTo": "users", "columnsFrom": ["admin_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.wallet_transactions": {
+      "name": "wallet_transactions",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "user_id": { "name": "user_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "amount": { "name": "amount", "type": "numeric(10, 2)", "primaryKey": false, "notNull": true },
+        "balance_after": { "name": "balance_after", "type": "numeric(10, 2)", "primaryKey": false, "notNull": true },
+        "reason": { "name": "reason", "type": "varchar(100)", "primaryKey": false, "notNull": true },
+        "ride_id": { "name": "ride_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "dispute_id": { "name": "dispute_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "performed_by": { "name": "performed_by", "type": "varchar", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": true, "default": "now()" }
+      },
+      "indexes": {
+        "idx_wallet_user_created": { "name": "idx_wallet_user_created", "columns": [{ "expression": "user_id", "isExpression": false, "asc": true, "nulls": "last" }, { "expression": "created_at", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} }
+      },
+      "foreignKeys": {
+        "wallet_transactions_user_id_users_id_fk": { "name": "wallet_transactions_user_id_users_id_fk", "tableFrom": "wallet_transactions", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.conversations": {
+      "name": "conversations",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "user_id": { "name": "user_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "title": { "name": "title", "type": "text", "primaryKey": false, "notNull": true, "default": "'New Chat'" },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "conversations_user_id_users_id_fk": { "name": "conversations_user_id_users_id_fk", "tableFrom": "conversations", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.chat_messages": {
+      "name": "chat_messages",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "conversation_id": { "name": "conversation_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "role": { "name": "role", "type": "varchar", "primaryKey": false, "notNull": true },
+        "content": { "name": "content", "type": "text", "primaryKey": false, "notNull": true },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "chat_messages_conversation_id_conversations_id_fk": { "name": "chat_messages_conversation_id_conversations_id_fk", "tableFrom": "chat_messages", "tableTo": "conversations", "columnsFrom": ["conversation_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.driver_rate_cards": {
+      "name": "driver_rate_cards",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "driver_id": { "name": "driver_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "minimum_fare": { "name": "minimum_fare", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false, "default": "'7.65'" },
+        "base_fare": { "name": "base_fare", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false, "default": "'4.00'" },
+        "per_minute_rate": { "name": "per_minute_rate", "type": "numeric(8, 4)", "primaryKey": false, "notNull": false, "default": "'0.2900'" },
+        "per_mile_rate": { "name": "per_mile_rate", "type": "numeric(8, 4)", "primaryKey": false, "notNull": false, "default": "'0.9000'" },
+        "surge_adjustment": { "name": "surge_adjustment", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "use_suggested": { "name": "use_suggested", "type": "boolean", "primaryKey": false, "notNull": false, "default": true },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "driver_rate_cards_driver_id_users_id_fk": { "name": "driver_rate_cards_driver_id_users_id_fk", "tableFrom": "driver_rate_cards", "tableTo": "users", "columnsFrom": ["driver_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "driver_rate_cards_driver_id_unique": { "name": "driver_rate_cards_driver_id_unique", "columns": ["driver_id"], "nullsNotDistinct": false }
+      }
+    },
+    "public.event_tracking": {
+      "name": "event_tracking",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "user_id": { "name": "user_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "event_type": { "name": "event_type", "type": "varchar", "primaryKey": false, "notNull": true },
+        "event_category": { "name": "event_category", "type": "varchar", "primaryKey": false, "notNull": true },
+        "event_data": { "name": "event_data", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "session_id": { "name": "session_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {
+        "idx_event_type": { "name": "idx_event_type", "columns": [{ "expression": "event_type", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} },
+        "idx_event_category": { "name": "idx_event_category", "columns": [{ "expression": "event_category", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} },
+        "idx_event_created": { "name": "idx_event_created", "columns": [{ "expression": "created_at", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": false, "concurrently": false, "method": "btree", "with": {} }
+      },
+      "foreignKeys": {
+        "event_tracking_user_id_users_id_fk": { "name": "event_tracking_user_id_users_id_fk", "tableFrom": "event_tracking", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.ai_feedback": {
+      "name": "ai_feedback",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "message_id": { "name": "message_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "conversation_id": { "name": "conversation_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "user_id": { "name": "user_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "rating": { "name": "rating", "type": "varchar", "primaryKey": false, "notNull": true },
+        "reason": { "name": "reason", "type": "text", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ai_feedback_message_id_chat_messages_id_fk": { "name": "ai_feedback_message_id_chat_messages_id_fk", "tableFrom": "ai_feedback", "tableTo": "chat_messages", "columnsFrom": ["message_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" },
+        "ai_feedback_conversation_id_conversations_id_fk": { "name": "ai_feedback_conversation_id_conversations_id_fk", "tableFrom": "ai_feedback", "tableTo": "conversations", "columnsFrom": ["conversation_id"], "columnsTo": ["id"], "onDelete": "cascade", "onUpdate": "no action" },
+        "ai_feedback_user_id_users_id_fk": { "name": "ai_feedback_user_id_users_id_fk", "tableFrom": "ai_feedback", "tableTo": "users", "columnsFrom": ["user_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.platform_insights": {
+      "name": "platform_insights",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "insight_type": { "name": "insight_type", "type": "varchar", "primaryKey": false, "notNull": true },
+        "category": { "name": "category", "type": "varchar", "primaryKey": false, "notNull": true },
+        "title": { "name": "title", "type": "text", "primaryKey": false, "notNull": true },
+        "description": { "name": "description", "type": "text", "primaryKey": false, "notNull": false },
+        "data": { "name": "data", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "severity": { "name": "severity", "type": "varchar", "primaryKey": false, "notNull": false, "default": "'info'" },
+        "is_read": { "name": "is_read", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "is_actionable": { "name": "is_actionable", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.faq_entries": {
+      "name": "faq_entries",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "question": { "name": "question", "type": "text", "primaryKey": false, "notNull": true },
+        "answer": { "name": "answer", "type": "text", "primaryKey": false, "notNull": true },
+        "category": { "name": "category", "type": "varchar", "primaryKey": false, "notNull": true },
+        "source_count": { "name": "source_count", "type": "integer", "primaryKey": false, "notNull": false, "default": 1 },
+        "is_published": { "name": "is_published", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" },
+        "updated_at": { "name": "updated_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.demand_heatmap": {
+      "name": "demand_heatmap",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "grid_lat": { "name": "grid_lat", "type": "numeric(10, 6)", "primaryKey": false, "notNull": true },
+        "grid_lng": { "name": "grid_lng", "type": "numeric(10, 6)", "primaryKey": false, "notNull": true },
+        "hour_of_day": { "name": "hour_of_day", "type": "integer", "primaryKey": false, "notNull": true },
+        "day_of_week": { "name": "day_of_week", "type": "integer", "primaryKey": false, "notNull": true },
+        "ride_count": { "name": "ride_count", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "avg_fare": { "name": "avg_fare", "type": "numeric(8, 2)", "primaryKey": false, "notNull": false },
+        "avg_wait_time": { "name": "avg_wait_time", "type": "integer", "primaryKey": false, "notNull": false },
+        "last_updated": { "name": "last_updated", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.driver_scorecard": {
+      "name": "driver_scorecard",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "driver_id": { "name": "driver_id", "type": "varchar", "primaryKey": false, "notNull": true },
+        "total_rides_completed": { "name": "total_rides_completed", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "total_rides_cancelled": { "name": "total_rides_cancelled", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "acceptance_rate": { "name": "acceptance_rate", "type": "numeric(5, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "completion_rate": { "name": "completion_rate", "type": "numeric(5, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "avg_rating": { "name": "avg_rating", "type": "numeric(3, 2)", "primaryKey": false, "notNull": false, "default": "'5.00'" },
+        "avg_response_time": { "name": "avg_response_time", "type": "integer", "primaryKey": false, "notNull": false },
+        "total_earnings": { "name": "total_earnings", "type": "numeric(12, 2)", "primaryKey": false, "notNull": false, "default": "'0.00'" },
+        "peak_hours_worked": { "name": "peak_hours_worked", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "best_zones": { "name": "best_zones", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "dispute_count": { "name": "dispute_count", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "sos_count": { "name": "sos_count", "type": "integer", "primaryKey": false, "notNull": false, "default": 0 },
+        "last_updated": { "name": "last_updated", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "driver_scorecard_driver_id_users_id_fk": { "name": "driver_scorecard_driver_id_users_id_fk", "tableFrom": "driver_scorecard", "tableTo": "users", "columnsFrom": ["driver_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "driver_scorecard_driver_id_unique": { "name": "driver_scorecard_driver_id_unique", "columns": ["driver_id"], "nullsNotDistinct": false }
+      }
+    },
+    "public.safety_alerts": {
+      "name": "safety_alerts",
+      "schema": "",
+      "columns": {
+        "id": { "name": "id", "type": "varchar", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+        "alert_type": { "name": "alert_type", "type": "varchar", "primaryKey": false, "notNull": true },
+        "severity": { "name": "severity", "type": "varchar", "primaryKey": false, "notNull": true },
+        "target_user_id": { "name": "target_user_id", "type": "varchar", "primaryKey": false, "notNull": false },
+        "title": { "name": "title", "type": "text", "primaryKey": false, "notNull": true },
+        "description": { "name": "description", "type": "text", "primaryKey": false, "notNull": false },
+        "data": { "name": "data", "type": "jsonb", "primaryKey": false, "notNull": false },
+        "is_resolved": { "name": "is_resolved", "type": "boolean", "primaryKey": false, "notNull": false, "default": false },
+        "resolved_by": { "name": "resolved_by", "type": "varchar", "primaryKey": false, "notNull": false },
+        "resolved_at": { "name": "resolved_at", "type": "timestamp", "primaryKey": false, "notNull": false },
+        "created_at": { "name": "created_at", "type": "timestamp", "primaryKey": false, "notNull": false, "default": "now()" }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "safety_alerts_target_user_id_users_id_fk": { "name": "safety_alerts_target_user_id_users_id_fk", "tableFrom": "safety_alerts", "tableTo": "users", "columnsFrom": ["target_user_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
+        "safety_alerts_resolved_by_users_id_fk": { "name": "safety_alerts_resolved_by_users_id_fk", "tableFrom": "safety_alerts", "tableTo": "users", "columnsFrom": ["resolved_by"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    }
+  },
+  "enums": {
+    "public.ride_status": {
+      "name": "ride_status",
+      "schema": "public",
+      "values": ["pending", "accepted", "driver_arriving", "in_progress", "completed", "cancelled"]
+    },
+    "public.payment_status": {
+      "name": "payment_status",
+      "schema": "public",
+      "values": ["pending_payment", "authorized", "paid_card", "paid_cash", "cancelled_with_fee", "cancelled", "disputed"]
+    },
+    "public.payment_method": {
+      "name": "payment_method",
+      "schema": "public",
+      "values": ["cash", "card"]
+    },
+    "public.ownership_status": {
+      "name": "ownership_status",
+      "schema": "public",
+      "values": ["none", "ad_hoc", "lifetime"]
+    },
+    "public.share_cert_status": {
+      "name": "share_cert_status",
+      "schema": "public",
+      "values": ["active", "revoked", "transferred"]
+    },
+    "public.profit_decl_status": {
+      "name": "profit_decl_status",
+      "schema": "public",
+      "values": ["draft", "declared", "distributed"]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

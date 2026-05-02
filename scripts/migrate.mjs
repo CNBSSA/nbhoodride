@@ -91,6 +91,8 @@ CREATE TABLE IF NOT EXISTS driver_profiles (
   accepted_counties TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
   daily_counties TEXT[],
   daily_session_start TIMESTAMP,
+  checkr_candidate_id VARCHAR,
+  checkr_report_id VARCHAR,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
