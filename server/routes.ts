@@ -806,16 +806,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
       // ── Enhanced driver registration validation ──────────────────────────
+      // Fields are optional at create-time so the client's two-step flow works
+      // ("Get Started" creates a stub profile, then DocumentUploadModal PUTs
+      // license/insurance URLs). When values ARE provided we still enforce
+      // format. The admin approval flow gates activation on completeness.
       const currentYear = new Date().getFullYear();
       const driverRegistrationSchema = z.object({
         // License
         licenseNumber: z.string()
-          .min(1, "Driver's license number is required")
-          .regex(/^[A-Z0-9\-]{4,20}$/i, "License number must be 4–20 alphanumeric characters"),
-        licenseImageUrl: z.string().min(1, "License document upload is required"),
+          .regex(/^[A-Z0-9\-]{4,20}$/i, "License number must be 4–20 alphanumeric characters")
+          .optional(),
+        licenseImageUrl: z.string().min(1).optional(),
         // Insurance
-        insuranceImageUrl: z.string().min(1, "Insurance document upload is required"),
-        // Vehicle — at least one vehicle must be provided
+        insuranceImageUrl: z.string().min(1).optional(),
+        // Vehicle — optional at create-time
         vehicle: z.object({
           make: z.string().min(1, "Vehicle make is required").max(50),
           model: z.string().min(1, "Vehicle model is required").max(50),
