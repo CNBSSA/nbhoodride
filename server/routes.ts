@@ -31,6 +31,23 @@ import {
   insertDisputeSchema,
   insertEmergencyIncidentSchema,
 } from "@shared/schema";
+import {
+  validateRideRequest,
+  estimateFare,
+  findBestDriver,
+  startAcceptanceTimer,
+  clearAcceptanceTimer,
+  isWithinPickupGeofence,
+  calculateCancellationFee,
+  optimizePickupOrder,
+  getSharedDiscountPct,
+  buildRideReceipt,
+  logRideAudit,
+  buildEmergencySmsBody,
+  isInMarylandBounds,
+  ACCEPTANCE_TIMEOUT_SECONDS,
+  MAX_ASSIGNMENT_ATTEMPTS,
+} from "./rideWorkflowService";
 
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
@@ -981,9 +998,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
-      
+
+      // ── Clear acceptance timeout immediately (driver responded in time) ──
+      clearAcceptanceTimer(rideId);
+
       const ride = await storage.acceptRide(rideId, userId);
       const rider = await storage.getUser(ride.riderId);
+
+      // ── Audit: ride accepted ──
+      await logRideAudit({
+        rideId,
+        event: "ride_accepted",
+        actorId: userId,
+        details: { riderId: ride.riderId, estimatedFare: ride.estimatedFare },
+      });
 
       if (ride.paymentMethod === 'card') {
         {
@@ -1003,6 +1031,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             await storage.consumePromoRide(ride.riderId, promoDiscount, rideId);
           }
           await storage.setRidePaymentAuthorization(rideId, `virtual-${rideId}`);
+
+          await logRideAudit({
+            rideId,
+            event: "payment_authorized",
+            actorId: userId,
+            details: { chargeAmount, promoDiscount, paymentMethod: "virtual_card" },
+          });
         } catch (error: any) {
           console.error("Failed to authorize virtual card payment:", error);
           try {
@@ -1021,14 +1056,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const driverUser = await storage.getUser(userId);
+      const driverProfile = await storage.getDriverProfile(userId);
+      const driverVehicles = driverProfile ? await storage.getVehiclesByDriverId(driverProfile.id) : [];
+      const vehicleDesc = driverVehicles[0]
+        ? `${driverVehicles[0].year} ${driverVehicles[0].make} ${driverVehicles[0].model} - ${driverVehicles[0].color}`
+        : null;
+
       const rideAcceptedMessage = {
         type: 'ride_accepted',
         rideId: ride.id,
         driverId: userId,
         riderId: ride.riderId,
         driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'Your driver',
+        driverPhone: driverUser?.phone,
+        driverRating: driverUser?.rating,
+        vehicle: vehicleDesc,
+        licensePlate: driverVehicles[0]?.licensePlate ?? null,
       };
-      
+
       // Send to driver
       if (activeConnections.has(userId)) {
         const driverWs = activeConnections.get(userId);
@@ -1036,7 +1081,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           driverWs.send(JSON.stringify(rideAcceptedMessage));
         }
       }
-      
+
       // Send to rider
       if (activeConnections.has(ride.riderId)) {
         const riderWs = activeConnections.get(ride.riderId);
@@ -1052,6 +1097,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           riderFirstName: rider.firstName,
           driverName: rideAcceptedMessage.driverName,
           driverPhone: driverUser?.phone,
+          vehicleDescription: vehicleDesc ?? undefined,
           pickupAddress: (ride.pickupLocation as any)?.address ?? null,
           destinationAddress: (ride.destinationLocation as any)?.address ?? null,
           estimatedFare: ride.estimatedFare,
@@ -1131,18 +1177,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
-      
+
       const ride = await storage.startRide(rideId, userId);
-      
+
+      // ── Audit: ride started (pickup confirmed) ──
+      await logRideAudit({
+        rideId,
+        event: "ride_started",
+        actorId: userId,
+        details: { riderId: ride.riderId, startedAt: new Date().toISOString() },
+      });
+
       // Send targeted WebSocket messages to driver and rider only
       const rideStartedMessage = {
         type: 'ride_started',
         rideId: ride.id,
         driverId: userId,
         riderId: ride.riderId,
-        status: 'in_progress'
+        status: 'in_progress',
+        startedAt: ride.startedAt,
       };
-      
+
       // Send to driver
       if (activeConnections.has(userId)) {
         const driverWs = activeConnections.get(userId);
@@ -1150,7 +1205,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           driverWs.send(JSON.stringify(rideStartedMessage));
         }
       }
-      
+
       // Send to rider
       if (activeConnections.has(ride.riderId)) {
         const riderWs = activeConnections.get(ride.riderId);
@@ -1158,7 +1213,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           riderWs.send(JSON.stringify(rideStartedMessage));
         }
       }
-      
+
+      // Push notification to rider — ride has started
+      storage.getPushSubscriptionsByUser(ride.riderId).then((subs) =>
+        sendPushToSubscriptions(subs, {
+          title: "Your Ride Has Started 🚀",
+          body: "You're on your way! Your driver has started the trip.",
+          tag: "ride-started",
+          url: "/",
+        }, (ep) => storage.deletePushSubscription(ep))
+      ).catch(console.error);
+
       res.json(ride);
     } catch (error) {
       console.error("Error starting ride:", error);
@@ -1167,6 +1232,118 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         res.status(500).json({ message: "Failed to start ride" });
       }
+    }
+  });
+
+  // ── Pickup confirmation: driver confirms arrival at pickup location ──
+  app.post('/api/driver/rides/:rideId/confirm-arrival', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const { driverLat, driverLng } = req.body;
+
+      const ride = await storage.getRide(rideId);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+      if (ride.driverId !== userId) return res.status(403).json({ message: "Not authorized" });
+      if (ride.status !== "accepted") {
+        return res.status(400).json({ message: `Cannot confirm arrival for ride in status: ${ride.status}` });
+      }
+
+      // Geofence check (soft — warn but don't block)
+      let withinGeofence = true;
+      if (typeof driverLat === 'number' && typeof driverLng === 'number') {
+        const pickup = ride.pickupLocation as { lat: number; lng: number } | null;
+        if (pickup) {
+          withinGeofence = isWithinPickupGeofence(driverLat, driverLng, pickup.lat, pickup.lng);
+        }
+      }
+
+      // Transition to driver_arriving
+      await storage.updateRide(rideId, { status: "driver_arriving", updatedAt: new Date() } as any);
+
+      await logRideAudit({
+        rideId,
+        event: "driver_arrived_at_pickup",
+        actorId: userId,
+        details: { withinGeofence, driverLat, driverLng },
+      });
+
+      // Notify rider
+      if (activeConnections.has(ride.riderId)) {
+        const riderWs = activeConnections.get(ride.riderId);
+        if (riderWs?.readyState === WebSocket.OPEN) {
+          riderWs.send(JSON.stringify({
+            type: 'driver_arrived',
+            rideId,
+            message: 'Your driver has arrived at the pickup location!',
+            withinGeofence,
+          }));
+        }
+      }
+
+      storage.getPushSubscriptionsByUser(ride.riderId).then((subs) =>
+        sendPushToSubscriptions(subs, {
+          title: "Driver Arrived! 📍",
+          body: "Your driver is at the pickup location. Please head outside.",
+          tag: "driver-arrived",
+          url: "/",
+        }, (ep) => storage.deletePushSubscription(ep))
+      ).catch(console.error);
+
+      res.json({ success: true, withinGeofence, status: "driver_arriving" });
+    } catch (error) {
+      console.error("Error confirming arrival:", error);
+      res.status(500).json({ message: "Failed to confirm arrival" });
+    }
+  });
+
+  // ── Dropoff confirmation: driver confirms arrival at destination ──
+  app.post('/api/driver/rides/:rideId/confirm-dropoff', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const { driverLat, driverLng } = req.body;
+
+      const ride = await storage.getRide(rideId);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+      if (ride.driverId !== userId) return res.status(403).json({ message: "Not authorized" });
+      if (ride.status !== "in_progress") {
+        return res.status(400).json({ message: `Cannot confirm dropoff for ride in status: ${ride.status}` });
+      }
+
+      // Geofence check against destination
+      let withinGeofence = true;
+      if (typeof driverLat === 'number' && typeof driverLng === 'number') {
+        const dest = ride.destinationLocation as { lat: number; lng: number } | null;
+        if (dest) {
+          withinGeofence = isWithinPickupGeofence(driverLat, driverLng, dest.lat, dest.lng, 0.5);
+        }
+      }
+
+      await logRideAudit({
+        rideId,
+        event: "driver_arrived_at_destination",
+        actorId: userId,
+        details: { withinGeofence, driverLat, driverLng },
+      });
+
+      // Notify rider that they've arrived
+      if (activeConnections.has(ride.riderId)) {
+        const riderWs = activeConnections.get(ride.riderId);
+        if (riderWs?.readyState === WebSocket.OPEN) {
+          riderWs.send(JSON.stringify({
+            type: 'arrived_at_destination',
+            rideId,
+            message: 'You have arrived at your destination!',
+            withinGeofence,
+          }));
+        }
+      }
+
+      res.json({ success: true, withinGeofence });
+    } catch (error) {
+      console.error("Error confirming dropoff:", error);
+      res.status(500).json({ message: "Failed to confirm dropoff" });
     }
   });
 
@@ -1228,8 +1405,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       const { actualFare, tipAmount } = completeRideSchema.parse(req.body);
-      
+
       const ride = await storage.completeRide(rideId, userId, actualFare);
+
+      // ── Audit: ride completed ──
+      await logRideAudit({
+        rideId,
+        event: "ride_completed",
+        actorId: userId,
+        details: {
+          riderId: ride.riderId,
+          actualFare: ride.actualFare,
+          tipAmount,
+          driverTraveledDistance: ride.driverTraveledDistance,
+          driverTraveledTime: ride.driverTraveledTime,
+        },
+      });
       
       // If ride uses card payment, process virtual card payment inside a transaction
       if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
@@ -1579,35 +1770,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/rides', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      
+
       // SECURITY: Enforce virtual card as the only payment method
       if (req.body.paymentMethod && req.body.paymentMethod !== 'card') {
         return res.status(400).json({ message: "Only virtual card payment is supported" });
       }
-      
+
+      const pickup = req.body.pickupLocation as { lat: number; lng: number; address: string } | undefined;
+      const destination = req.body.destinationLocation as { lat: number; lng: number; address: string } | undefined;
+
+      if (!pickup || !destination) {
+        return res.status(400).json({ message: "pickupLocation and destinationLocation are required" });
+      }
+
+      // ── Step 1: Validate ride request (service area, distance, rate limit) ──
+      const validation = await validateRideRequest(userId, pickup, destination);
+      if (!validation.valid) {
+        return res.status(400).json({ message: validation.error });
+      }
+
       // Convert numeric fare to string for decimal field
-      const bodyData = { 
+      const bodyData = {
         ...req.body,
-        paymentMethod: 'card' // Force virtual card payment
+        paymentMethod: 'card', // Force virtual card payment
       };
       if (typeof bodyData.estimatedFare === 'number') {
         bodyData.estimatedFare = bodyData.estimatedFare.toString();
       }
-      
+
       const dataToValidate = {
         ...bodyData,
-        riderId: userId
+        riderId: userId,
+        pickupCounty: validation.pickupCounty ?? undefined,
       };
-      
+
       const rideData = insertRideSchema.parse(dataToValidate);
-      
       const ride = await storage.createRide(rideData);
 
-      // Attempt shared-ride matching if the rider opted in
+      // Persist pickup county
+      if (validation.pickupCounty) {
+        await storage.updateRideCounty(ride.id, validation.pickupCounty).catch(() => {});
+      }
+
+      // ── Step 2: Audit log ──
+      await logRideAudit({
+        rideId: ride.id,
+        event: "ride_created",
+        actorId: userId,
+        details: {
+          pickupAddress: pickup.address,
+          destinationAddress: destination.address,
+          distanceMiles: validation.distanceMiles,
+          durationMinutes: validation.durationMinutes,
+          pickupCounty: validation.pickupCounty,
+          rideType: ride.rideType,
+          wantsSharedRide: ride.wantsSharedRide,
+        },
+      });
+
+      // ── Step 3: Shared-ride matching ──
       let matchResult = { matched: false, groupId: undefined as string | undefined, discountAmount: undefined as number | undefined };
       if (ride.wantsSharedRide) {
         try {
           matchResult = await tryMatchSharedRide(ride.id) as typeof matchResult;
+          if (matchResult.matched) {
+            await logRideAudit({
+              rideId: ride.id,
+              event: "shared_ride_matched",
+              details: { groupId: matchResult.groupId, discountAmount: matchResult.discountAmount },
+            });
+          }
         } catch (matchErr) {
           console.error("Shared ride matching error (non-fatal):", matchErr);
         }
@@ -1615,32 +1847,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const riderUser = await storage.getUser(userId);
       const isScheduledFuture = ride.scheduledAt && new Date(ride.scheduledAt) > new Date();
+      const pickupCounty = validation.pickupCounty ?? null;
 
-      // Determine pickup county for driver-county filtering (non-blocking)
-      let pickupCounty: string | null = null;
-      try {
-        const loc = ride.pickupLocation as { lat: number; lng: number; address: string };
-        pickupCounty = await getCountyFromCoords(loc.lat, loc.lng);
-        if (pickupCounty) {
-          await storage.updateRideCounty(ride.id, pickupCounty);
+      // ── Step 4: Auto-assign driver for immediate rides (no driverId specified) ──
+      let assignedDriver: { userId: string; etaMinutes: number } | null = null;
+      if (!isScheduledFuture && !ride.driverId) {
+        try {
+          const bestDriver = await findBestDriver(pickup, pickupCounty, []);
+          if (bestDriver) {
+            await storage.updateRide(ride.id, { driverId: bestDriver.userId });
+            assignedDriver = { userId: bestDriver.userId, etaMinutes: bestDriver.etaMinutes };
+
+            await logRideAudit({
+              rideId: ride.id,
+              event: "driver_auto_assigned",
+              actorId: bestDriver.userId,
+              details: {
+                distanceMiles: bestDriver.distanceMiles,
+                etaMinutes: bestDriver.etaMinutes,
+                rating: bestDriver.rating,
+              },
+            });
+          }
+        } catch (matchErr) {
+          console.error("Auto driver matching error (non-fatal):", matchErr);
         }
-      } catch {
-        // County detection is best-effort; never block ride creation
       }
 
-      if (isScheduledFuture && !ride.driverId) {
+      // Reload ride to get updated driverId
+      const updatedRide = await storage.getRide(ride.id) ?? ride;
+
+      // ── Step 5: Notify driver(s) and start acceptance timer ──
+      if (isScheduledFuture && !updatedRide.driverId) {
         // Open scheduled ride — broadcast to drivers who cover the pickup county
         const payload = JSON.stringify({
           type: 'new_scheduled_ride',
-          rideId: ride.id,
+          rideId: updatedRide.id,
           riderId: userId,
           riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ''}.` : 'Rider',
           riderRating: riderUser?.rating || '5.0',
-          pickupAddress: ride.pickupLocation?.address || '',
-          destinationAddress: ride.destinationLocation?.address || '',
-          estimatedFare: ride.estimatedFare,
-          scheduledAt: ride.scheduledAt,
-          pickupInstructions: ride.pickupInstructions || '',
+          pickupAddress: updatedRide.pickupLocation?.address || '',
+          destinationAddress: updatedRide.destinationLocation?.address || '',
+          estimatedFare: updatedRide.estimatedFare,
+          scheduledAt: updatedRide.scheduledAt,
+          pickupInstructions: updatedRide.pickupInstructions || '',
           pickupCounty: pickupCounty || '',
         });
         activeConnections.forEach((ws, driverId) => {
@@ -1649,35 +1899,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ws.send(payload);
           }
         });
-      } else if (ride.driverId && activeConnections.has(ride.driverId)) {
-        // Specific driver chosen — notify only them
-        const driverWs = activeConnections.get(ride.driverId);
-        if (driverWs && driverWs.readyState === WebSocket.OPEN) {
-          driverWs.send(JSON.stringify({
-            type: isScheduledFuture ? 'new_scheduled_ride' : 'new_ride_request',
-            rideId: ride.id,
-            riderId: userId,
-            riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ''}.` : 'Rider',
-            riderRating: riderUser?.rating || '5.0',
-            pickupAddress: ride.pickupLocation?.address || '',
-            destinationAddress: ride.destinationLocation?.address || '',
-            estimatedFare: ride.estimatedFare,
-            scheduledAt: ride.scheduledAt,
-            pickupInstructions: ride.pickupInstructions || '',
-          }));
+      } else if (updatedRide.driverId) {
+        // Notify the assigned driver
+        const notifyDriverId = updatedRide.driverId;
+        if (activeConnections.has(notifyDriverId)) {
+          const driverWs = activeConnections.get(notifyDriverId);
+          if (driverWs && driverWs.readyState === WebSocket.OPEN) {
+            driverWs.send(JSON.stringify({
+              type: isScheduledFuture ? 'new_scheduled_ride' : 'new_ride_request',
+              rideId: updatedRide.id,
+              riderId: userId,
+              riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ''}.` : 'Rider',
+              riderRating: riderUser?.rating || '5.0',
+              pickupAddress: updatedRide.pickupLocation?.address || '',
+              destinationAddress: updatedRide.destinationLocation?.address || '',
+              estimatedFare: updatedRide.estimatedFare,
+              scheduledAt: updatedRide.scheduledAt,
+              pickupInstructions: updatedRide.pickupInstructions || '',
+              etaMinutes: assignedDriver?.etaMinutes,
+              acceptanceTimeoutSeconds: ACCEPTANCE_TIMEOUT_SECONDS,
+            }));
+          }
         }
-        // Also push — catches the case where the driver's app is closed
-        storage.getPushSubscriptionsByUser(ride.driverId).then((subs) =>
+
+        // Push notification to driver
+        storage.getPushSubscriptionsByUser(notifyDriverId).then((subs) =>
           sendPushToSubscriptions(subs, {
             title: isScheduledFuture ? "New Scheduled Ride 📅" : "New Ride Request! 🚗",
-            body: `${riderUser?.firstName || 'A rider'} needs a ride from ${ride.pickupLocation?.address?.split(',')[0] || 'nearby'}`,
+            body: `${riderUser?.firstName || 'A rider'} needs a ride from ${updatedRide.pickupLocation?.address?.split(',')[0] || 'nearby'}`,
             tag: "new-ride-request",
             url: "/",
           }, (ep) => storage.deletePushSubscription(ep))
         ).catch(console.error);
+
+        // ── Step 6: Start acceptance timeout for immediate rides ──
+        if (!isScheduledFuture) {
+          startAcceptanceTimer(
+            updatedRide.id,
+            notifyDriverId,
+            pickup,
+            pickupCounty,
+            1,
+            // onReassign: notify rider and new driver
+            (newDriverId, etaMinutes) => {
+              // Notify rider of reassignment
+              if (activeConnections.has(userId)) {
+                const riderWs = activeConnections.get(userId);
+                if (riderWs?.readyState === WebSocket.OPEN) {
+                  riderWs.send(JSON.stringify({
+                    type: 'ride_reassigned',
+                    rideId: updatedRide.id,
+                    message: 'Finding you a new driver…',
+                    etaMinutes,
+                  }));
+                }
+              }
+              // Notify new driver
+              if (activeConnections.has(newDriverId)) {
+                const newDriverWs = activeConnections.get(newDriverId);
+                if (newDriverWs?.readyState === WebSocket.OPEN) {
+                  newDriverWs.send(JSON.stringify({
+                    type: 'new_ride_request',
+                    rideId: updatedRide.id,
+                    riderId: userId,
+                    riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ''}.` : 'Rider',
+                    riderRating: riderUser?.rating || '5.0',
+                    pickupAddress: updatedRide.pickupLocation?.address || '',
+                    destinationAddress: updatedRide.destinationLocation?.address || '',
+                    estimatedFare: updatedRide.estimatedFare,
+                    acceptanceTimeoutSeconds: ACCEPTANCE_TIMEOUT_SECONDS,
+                  }));
+                }
+              }
+            },
+            // onCancel: notify rider
+            () => {
+              if (activeConnections.has(userId)) {
+                const riderWs = activeConnections.get(userId);
+                if (riderWs?.readyState === WebSocket.OPEN) {
+                  riderWs.send(JSON.stringify({
+                    type: 'ride_cancelled',
+                    rideId: updatedRide.id,
+                    reason: 'No drivers available in your area right now. Please try again.',
+                  }));
+                }
+              }
+              // Push notification to rider
+              storage.getPushSubscriptionsByUser(userId).then((subs) =>
+                sendPushToSubscriptions(subs, {
+                  title: "No Drivers Available",
+                  body: "We couldn't find a driver for your ride. Please try again.",
+                  tag: "ride-cancelled",
+                  url: "/",
+                }, (ep) => storage.deletePushSubscription(ep))
+              ).catch(console.error);
+            }
+          );
+        }
       }
 
-      res.json({ ...ride, sharedMatch: matchResult });
+      res.json({
+        ...updatedRide,
+        sharedMatch: matchResult,
+        assignedDriver,
+        validation: {
+          distanceMiles: validation.distanceMiles,
+          durationMinutes: validation.durationMinutes,
+          pickupCounty: validation.pickupCounty,
+        },
+      });
     } catch (error) {
       console.error("Error creating ride:", error);
       if (error instanceof z.ZodError) {
@@ -1736,9 +2066,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       const { reason, driverTraveledDistance, driverTraveledTime } = req.body;
-      
+
       const ride = await storage.getRide(rideId);
-      
+
       if (!ride) {
         return res.status(404).json({ message: "Ride not found" });
       }
@@ -1748,84 +2078,95 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized to cancel this ride" });
       }
 
-      // Calculate cancellation fee for card payments
-      let cancellationFee = 0;
-      
-      if (ride.paymentMethod === 'card' && ride.status === 'accepted' && ride.stripePaymentIntentId) {
-        // Smart cancellation fee logic: BOTH conditions must be met
-        const distance = driverTraveledDistance || 0;
-        const time = driverTraveledTime || 0;
-        
-        // $5.00 fee if driver traveled >= 3mi AND >= 5min
-        if (distance >= 3 && time >= 5) {
-          cancellationFee = 5.00;
-        }
-        // $3.50 fee if driver traveled >= 1.5mi AND >= 3min
-        else if (distance >= 1.5 && time >= 3) {
-          cancellationFee = 3.50;
-        }
+      // ── Clear acceptance timer if ride is still pending ──
+      clearAcceptanceTimer(rideId);
 
+      // ── Calculate cancellation fee using workflow service ──
+      const feeResult = calculateCancellationFee(
+        ride.status ?? "pending",
+        driverTraveledDistance || 0,
+        driverTraveledTime || 0
+      );
+      const cancellationFee = feeResult.fee;
+
+      if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
         const estimatedFare = parseFloat(ride.estimatedFare || "0");
-        
-        console.log(`Processing cancellation for ride ${rideId}: Est. fare: $${estimatedFare}, Fee: $${cancellationFee}`);
 
-        // Apply cancellation fee if applicable
+        console.log(`Processing cancellation for ride ${rideId}: Est. fare: ${estimatedFare}, Fee: ${cancellationFee} (${feeResult.reason})`);
+
         if (cancellationFee > 0) {
           // Refund the estimated fare minus the cancellation fee to the rider
           const refundAmount = estimatedFare - cancellationFee;
           if (refundAmount > 0) {
-            await storage.addVirtualCardBalance(ride.riderId, refundAmount);
-            console.log(`Refunded $${refundAmount} to rider after $${cancellationFee} cancellation fee`);
+            await storage.addVirtualCardBalance(ride.riderId, refundAmount, "cancellation_refund", rideId);
+            console.log(`Refunded ${refundAmount} to rider after ${cancellationFee} cancellation fee`);
           }
-          
+
           // Add the cancellation fee to the driver's balance
           if (ride.driverId) {
-            await storage.addVirtualCardBalance(ride.driverId, cancellationFee);
-            console.log(`Added $${cancellationFee} cancellation fee to driver's balance`);
+            await storage.addVirtualCardBalance(ride.driverId, cancellationFee, "cancellation_fee", rideId);
+            console.log(`Added ${cancellationFee} cancellation fee to driver's balance`);
           }
-          
+
           await storage.cancelRideWithFee(
-            rideId, 
-            cancellationFee, 
-            reason || "Ride cancelled", 
+            rideId,
+            cancellationFee,
+            reason || "Ride cancelled",
             driverTraveledDistance,
             driverTraveledTime
           );
         } else {
-          // No fee - refund the full estimated fare to the rider
-          await storage.addVirtualCardBalance(ride.riderId, estimatedFare);
-          console.log(`Refunded full $${estimatedFare} to rider (no cancellation fee)`);
-          
-          await storage.updateRide(rideId, { 
+          // No fee — refund the full estimated fare to the rider
+          await storage.addVirtualCardBalance(ride.riderId, estimatedFare, "cancellation_refund", rideId);
+          console.log(`Refunded full ${estimatedFare} to rider (no cancellation fee)`);
+
+          await storage.updateRide(rideId, {
             status: "cancelled",
             cancellationReason: reason || "Ride cancelled",
-            paymentStatus: "cancelled"
+            paymentStatus: "cancelled",
           });
         }
       } else {
         // No card payment or not applicable for fee
-        await storage.updateRide(rideId, { 
+        await storage.updateRide(rideId, {
           status: "cancelled",
-          cancellationReason: reason || "Ride cancelled"
+          cancellationReason: reason || "Ride cancelled",
         });
       }
 
+      // ── Audit: ride cancelled ──
+      await logRideAudit({
+        rideId,
+        event: "ride_cancelled",
+        actorId: userId,
+        details: {
+          reason: reason || "Ride cancelled",
+          cancellationFee,
+          feeReason: feeResult.reason,
+          cancelledBy: userId === ride.riderId ? "rider" : "driver",
+          driverTraveledDistance,
+          driverTraveledTime,
+        },
+      });
+
       const updatedRide = await storage.getRide(rideId);
-      
+
       // Send WebSocket notification
       const cancelMessage = {
         type: 'ride_cancelled',
         rideId: ride.id,
-        cancellationFee
+        cancellationFee,
+        reason: reason || "Ride cancelled",
+        cancelledBy: userId === ride.riderId ? "rider" : "driver",
       };
-      
+
       if (activeConnections.has(ride.riderId)) {
         const riderWs = activeConnections.get(ride.riderId);
         if (riderWs && riderWs.readyState === WebSocket.OPEN) {
           riderWs.send(JSON.stringify(cancelMessage));
         }
       }
-      
+
       if (ride.driverId && activeConnections.has(ride.driverId)) {
         const driverWs = activeConnections.get(ride.driverId);
         if (driverWs && driverWs.readyState === WebSocket.OPEN) {
@@ -1833,7 +2174,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      res.json({ success: true, ride: updatedRide, cancellationFee });
+      // Push notification to the other party
+      const notifyUserId = userId === ride.riderId ? ride.driverId : ride.riderId;
+      if (notifyUserId) {
+        storage.getPushSubscriptionsByUser(notifyUserId).then((subs) =>
+          sendPushToSubscriptions(subs, {
+            title: "Ride Cancelled",
+            body: cancellationFee > 0
+              ? `Ride cancelled. A ${cancellationFee.toFixed(2)} cancellation fee has been applied.`
+              : "Your ride has been cancelled.",
+            tag: "ride-cancelled",
+            url: "/",
+          }, (ep) => storage.deletePushSubscription(ep))
+        ).catch(console.error);
+      }
+
+      res.json({ success: true, ride: updatedRide, cancellationFee, feeReason: feeResult.reason });
     } catch (error: any) {
       console.error("Error cancelling ride:", error);
       res.status(500).json({ message: "Failed to cancel ride. Please try again." });
@@ -2040,13 +2396,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       await storage.updateRideRating(rideId, userId, rating, review);
-      
+
       // Update the OTHER party's overall rating (not the rater's rating)
       const ratedUserId = isRider ? ride.driverId : ride.riderId;
       if (ratedUserId) {
         await storage.updateUserRating(ratedUserId);
       }
-      
+
+      // ── Audit: rating submitted ──
+      await logRideAudit({
+        rideId,
+        event: "rating_submitted",
+        actorId: userId,
+        details: {
+          rating,
+          review: review ?? null,
+          raterRole: isRider ? "rider" : "driver",
+          ratedUserId,
+        },
+      });
+
       res.json({ success: true });
     } catch (error) {
       console.error("Error submitting rating:", error);
@@ -2373,9 +2742,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
               : "Location: Not available";
             
             const shareUrl = `${req.protocol}://${req.get('host')}/emergency/${shareToken}`;
-            
+
+            const smsBody = buildEmergencySmsBody(
+              user.firstName || 'PG Ride user',
+              description,
+              location ?? null,
+              shareUrl
+            );
+
             await client.messages.create({
-              body: `🚨 EMERGENCY ALERT from ${user.firstName || 'PG Ride user'}\n\n${description}\n\n${locationText}\n\nLive tracking: ${shareUrl}\n\nReply STOP to opt out.`,
+              body: smsBody,
               from: twilioPhoneNumber,
               to: user.emergencyContact
             });
@@ -2466,6 +2842,223 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error creating emergency incident:", error);
       res.status(400).json({ message: "Failed to create emergency incident" });
+    }
+  });
+
+  // ── Service area validation endpoint ──────────────────────────────────────
+  app.post('/api/rides/validate', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { pickupLocation, destinationLocation } = req.body;
+
+      if (!pickupLocation || !destinationLocation) {
+        return res.status(400).json({ message: "pickupLocation and destinationLocation are required" });
+      }
+
+      const result = await validateRideRequest(userId, pickupLocation, destinationLocation);
+      res.json(result);
+    } catch (error) {
+      console.error("Error validating ride request:", error);
+      res.status(500).json({ message: "Failed to validate ride request" });
+    }
+  });
+
+  // ── Full fare estimation with promo/shared discounts ──────────────────────
+  app.post('/api/rides/estimate-fare', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { pickupLocation, destinationLocation, driverId, wantsSharedRide } = req.body;
+
+      if (!pickupLocation || !destinationLocation) {
+        return res.status(400).json({ message: "pickupLocation and destinationLocation are required" });
+      }
+
+      // Calculate straight-line distance then apply road factor
+      const dLat = ((destinationLocation.lat - pickupLocation.lat) * Math.PI) / 180;
+      const dLng = ((destinationLocation.lng - pickupLocation.lng) * Math.PI) / 180;
+      const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos((pickupLocation.lat * Math.PI) / 180) *
+          Math.cos((destinationLocation.lat * Math.PI) / 180) *
+          Math.sin(dLng / 2) ** 2;
+      const straightLineMiles = 3958.8 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      const distanceMiles = straightLineMiles * 1.3;
+      const durationMinutes = Math.max(5, Math.round((distanceMiles / 25) * 60));
+
+      // Get driver rate card if specified
+      let rates;
+      if (driverId) {
+        const rateCard = await storage.getDriverRateCard(driverId);
+        if (rateCard && !rateCard.useSuggested) {
+          rates = {
+            minimumFare: parseFloat(rateCard.minimumFare || "7.65"),
+            baseFare: parseFloat(rateCard.baseFare || "4.00"),
+            perMinuteRate: parseFloat(rateCard.perMinuteRate || "0.2900"),
+            perMileRate: parseFloat(rateCard.perMileRate || "0.9000"),
+            surgeAdjustment: parseFloat(rateCard.surgeAdjustment || "0.00"),
+          };
+        }
+      }
+
+      // Get rider promo status
+      const rider = await storage.getUser(userId);
+      const promoRidesRemaining = rider?.promoRidesRemaining ?? 0;
+
+      const estimate = estimateFare(distanceMiles, durationMinutes, {
+        rates,
+        promoRidesRemaining,
+        wantsSharedRide: !!wantsSharedRide,
+        sharedDiscountPct: 30,
+      });
+
+      res.json({
+        ...estimate,
+        promoRidesRemaining,
+        acceptanceTimeoutSeconds: ACCEPTANCE_TIMEOUT_SECONDS,
+        maxAssignmentAttempts: MAX_ASSIGNMENT_ATTEMPTS,
+      });
+    } catch (error) {
+      console.error("Error estimating fare:", error);
+      res.status(500).json({ message: "Failed to estimate fare" });
+    }
+  });
+
+  // ── Ride receipt endpoint ─────────────────────────────────────────────────
+  app.get('/api/rides/:rideId/receipt', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+
+      const ride = await storage.getRide(rideId);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+
+      // Only rider, driver, or admin may view receipt
+      const user = await storage.getUser(userId);
+      const isParticipant = ride.riderId === userId || ride.driverId === userId;
+      const isAdmin = user?.isAdmin || user?.isSuperAdmin;
+      if (!isParticipant && !isAdmin) {
+        return res.status(403).json({ message: "Not authorized to view this receipt" });
+      }
+
+      if (ride.status !== "completed") {
+        return res.status(400).json({ message: "Receipt is only available for completed rides" });
+      }
+
+      const driverUser = ride.driverId ? await storage.getUser(ride.driverId) : null;
+      const driverName = driverUser
+        ? `${driverUser.firstName || ''} ${driverUser.lastName?.[0] || ''}.`.trim()
+        : "Your driver";
+
+      const receipt = buildRideReceipt(ride as any, driverName);
+      res.json(receipt);
+    } catch (error) {
+      console.error("Error fetching ride receipt:", error);
+      res.status(500).json({ message: "Failed to fetch receipt" });
+    }
+  });
+
+  // ── Shared ride pickup order optimization ─────────────────────────────────
+  app.get('/api/shared-rides/:groupId/pickup-order', isAuthenticated, async (req: any, res) => {
+    try {
+      const { groupId } = req.params;
+      const groupRides = await getSharedGroupRides(groupId);
+
+      if (!groupRides.length) {
+        return res.status(404).json({ message: "Shared ride group not found" });
+      }
+
+      const pickups = groupRides
+        .filter((r) => r.pickupLocation)
+        .map((r) => ({
+          rideId: r.id,
+          lat: (r.pickupLocation as any).lat,
+          lng: (r.pickupLocation as any).lng,
+        }));
+
+      const orderedRideIds = optimizePickupOrder(pickups);
+      const discountPct = getSharedDiscountPct(groupRides.length);
+
+      res.json({
+        groupId,
+        totalRiders: groupRides.length,
+        pickupOrder: orderedRideIds,
+        discountPct,
+        rides: groupRides.map((r) => ({
+          rideId: r.id,
+          riderId: r.riderId,
+          pickupAddress: (r.pickupLocation as any)?.address,
+          estimatedFare: r.estimatedFare,
+          sharedFareDiscount: r.sharedFareDiscount,
+        })),
+      });
+    } catch (error) {
+      console.error("Error optimizing pickup order:", error);
+      res.status(500).json({ message: "Failed to optimize pickup order" });
+    }
+  });
+
+  // ── Ride audit log (admin only) ───────────────────────────────────────────
+  app.get('/api/rides/:rideId/audit', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+
+      const user = await storage.getUser(userId);
+      if (!user?.isAdmin && !user?.isSuperAdmin) {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+
+      const { db: dbInst } = await import("./db");
+      const { adminActivityLog: aal } = await import("@shared/schema");
+      const { eq, and, desc: descOrd } = await import("drizzle-orm");
+
+      const entries = await dbInst
+        .select()
+        .from(aal)
+        .where(and(eq(aal.targetId, rideId), eq(aal.action, "ride_audit")))
+        .orderBy(descOrd(aal.createdAt));
+
+      res.json(entries);
+    } catch (error) {
+      console.error("Error fetching ride audit log:", error);
+      res.status(500).json({ message: "Failed to fetch audit log" });
+    }
+  });
+
+  // ── Find best driver for a location (for pre-booking ETA display) ─────────
+  app.post('/api/rides/find-driver', isAuthenticated, async (req: any, res) => {
+    try {
+      const { pickupLocation } = req.body;
+      if (!pickupLocation?.lat || !pickupLocation?.lng) {
+        return res.status(400).json({ message: "pickupLocation with lat/lng required" });
+      }
+
+      // Validate location is in Maryland
+      if (!isInMarylandBounds(pickupLocation.lat, pickupLocation.lng)) {
+        return res.status(400).json({ message: "Location is outside the Maryland service area" });
+      }
+
+      let pickupCounty: string | null = null;
+      try {
+        pickupCounty = await getCountyFromCoords(pickupLocation.lat, pickupLocation.lng);
+      } catch { /* best-effort */ }
+
+      const bestDriver = await findBestDriver(pickupLocation, pickupCounty, []);
+
+      if (!bestDriver) {
+        return res.json({ available: false, message: "No drivers available in your area" });
+      }
+
+      res.json({
+        available: true,
+        etaMinutes: bestDriver.etaMinutes,
+        distanceMiles: bestDriver.distanceMiles,
+        driverRating: bestDriver.rating,
+        acceptanceTimeoutSeconds: ACCEPTANCE_TIMEOUT_SECONDS,
+      });
+    } catch (error) {
+      console.error("Error finding driver:", error);
+      res.status(500).json({ message: "Failed to find driver" });
     }
   });
 
