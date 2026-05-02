@@ -22,7 +22,7 @@ import { eq, and, isNull, ne, sql, desc } from "drizzle-orm";
 const PICKUP_RADIUS_MILES = 0.75;
 const DEST_RADIUS_MILES   = 1.5;
 const WINDOW_MINUTES      = 10;
-const DISCOUNT_PCT        = 0.30;
+const DISCOUNT_PCT        = 0.30; // 30% for 2-rider match; see getSharedDiscountPct() for dynamic scaling
 
 /** Haversine distance in miles between two lat/lng pairs */
 function haversineMiles(lat1: number, lng1: number, lat2: number, lng2: number): number {
