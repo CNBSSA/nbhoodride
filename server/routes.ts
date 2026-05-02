@@ -128,6 +128,150 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Email/Password Authentication Routes
   // POST /api/auth/signup - Register new user
+
+  // GET /admin/setup - HTML form for resetting the super admin password from a browser
+  app.get('/admin/setup', (_req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Super Admin Setup</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+    }
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-bottom: 0.4rem;
+      color: #f1f5f9;
+    }
+    p.subtitle {
+      font-size: 0.85rem;
+      color: #94a3b8;
+      margin-bottom: 1.75rem;
+    }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.4rem;
+    }
+    input[type="password"] {
+      width: 100%;
+      padding: 0.65rem 0.85rem;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #f1f5f9;
+      font-size: 1rem;
+      margin-bottom: 1.1rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="password"]:focus { border-color: #6366f1; }
+    button {
+      width: 100%;
+      padding: 0.75rem;
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-top: 0.25rem;
+    }
+    button:hover { background: #4f46e5; }
+    button:disabled { background: #475569; cursor: not-allowed; }
+    #msg {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      display: none;
+    }
+    #msg.success { background: #14532d; color: #86efac; border: 1px solid #166534; }
+    #msg.error   { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🔐 Super Admin Setup</h1>
+    <p class="subtitle">Reset the super admin password using your setup token.</p>
+    <form id="setupForm">
+      <label for="token">Setup Token</label>
+      <input type="password" id="token" name="token" placeholder="Enter setup token" autocomplete="off" required />
+      <label for="password">New Password</label>
+      <input type="password" id="password" name="password" placeholder="Min. 8 characters" autocomplete="new-password" required minlength="8" />
+      <button type="submit" id="submitBtn">Reset Password</button>
+    </form>
+    <div id="msg"></div>
+  </div>
+  <script>
+    document.getElementById('setupForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const btn = document.getElementById('submitBtn');
+      const msg = document.getElementById('msg');
+      const token = document.getElementById('token').value.trim();
+      const password = document.getElementById('password').value;
+      btn.disabled = true;
+      btn.textContent = 'Resetting…';
+      msg.style.display = 'none';
+      msg.className = '';
+      try {
+        const res = await fetch('/api/admin/setup-super-admin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, password })
+        });
+        const data = await res.json();
+        msg.style.display = 'block';
+        if (res.ok) {
+          msg.className = 'success';
+          msg.textContent = '✓ ' + (data.message || 'Password reset successfully.');
+          document.getElementById('setupForm').reset();
+        } else {
+          msg.className = 'error';
+          msg.textContent = '✗ ' + (data.message || 'Something went wrong.');
+        }
+      } catch (err) {
+        msg.style.display = 'block';
+        msg.className = 'error';
+        msg.textContent = '✗ Network error — please try again.';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Reset Password';
+      }
+    });
+  </script>
+</body>
+</html>`);
+  });
+
   // Super admin setup - requires setup token and user-provided password
   app.post('/api/admin/setup-super-admin', async (req, res) => {
     try {
