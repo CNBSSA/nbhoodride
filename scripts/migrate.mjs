@@ -71,9 +71,29 @@ CREATE TABLE IF NOT EXISTS users (
   promo_rides_remaining INTEGER DEFAULT 0,
   password_reset_token VARCHAR,
   password_reset_expiry TIMESTAMP,
+  email_verification_token VARCHAR,
+  email_verification_expiry TIMESTAMP,
+  email_verified_at TIMESTAMP,
+  registration_completed_at TIMESTAMP,
+  terms_accepted_at TIMESTAMP,
+  privacy_accepted_at TIMESTAMP,
+  last_login_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Idempotent column additions for databases created before these columns
+-- existed. Required because CREATE TABLE IF NOT EXISTS above is a no-op on
+-- existing tables, and Drizzle's select() lists every schema column — so any
+-- query against users (login, signup, /api/auth/user) fails with
+-- "column does not exist" if these are missing.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token VARCHAR;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_expiry TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_completed_at TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_accepted_at TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;
 
 -- ── Driver profiles ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS driver_profiles (
