@@ -227,6 +227,7 @@ export interface IStorage {
   getActiveEmergencyIncidents(): Promise<EmergencyIncident[]>;
   getEmergencyIncidentByToken(token: string): Promise<EmergencyIncident | null>;
   updateEmergencyIncident(incidentId: string, updates: Partial<InsertEmergencyIncident>): Promise<EmergencyIncident>;
+  updateEmergencyIncidentLocation(incidentId: string, location: { lat: number; lng: number }): Promise<EmergencyIncident>;
   updateUserEmergencyContact(userId: string, phone: string): Promise<User>;
   
   // Earnings operations
