@@ -56,6 +56,13 @@ CREATE TABLE IF NOT EXISTS "users" (
   "promo_rides_remaining" integer DEFAULT 0,
   "password_reset_token" varchar,
   "password_reset_expiry" timestamp,
+  "email_verification_token" varchar,
+  "email_verification_expiry" timestamp,
+  "email_verified_at" timestamp,
+  "registration_completed_at" timestamp,
+  "terms_accepted_at" timestamp,
+  "privacy_accepted_at" timestamp,
+  "last_login_at" timestamp,
   "created_at" timestamp DEFAULT now(),
   "updated_at" timestamp DEFAULT now()
 );
