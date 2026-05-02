@@ -72,6 +72,50 @@ export class StripeService {
     return paymentIntent;
   }
 
+  // Authorize the rider's saved card for the portion of a ride fare that the
+  // virtual balance can't cover. Manual capture so we can adjust at completion.
+  async authorizeRideShortfall(params: {
+    amount: number;
+    customerId: string;
+    paymentMethodId: string;
+    rideId: string;
+    riderId: string;
+  }): Promise<Stripe.PaymentIntent> {
+    const { amount, customerId, paymentMethodId, rideId, riderId } = params;
+    return await requireStripe().paymentIntents.create({
+      amount: Math.round(amount * 100),
+      currency: "usd",
+      customer: customerId,
+      payment_method: paymentMethodId,
+      capture_method: 'manual',
+      confirm: true,
+      off_session: true,
+      metadata: { rideId, riderId, type: 'ride_authorization' },
+    });
+  }
+
+  // Charge the rider's saved card immediately (off-session) for the leftover
+  // shortfall at ride completion when the original authorization wasn't enough.
+  async chargeRideShortfall(params: {
+    amount: number;
+    customerId: string;
+    paymentMethodId: string;
+    rideId: string;
+    riderId: string;
+  }): Promise<Stripe.PaymentIntent> {
+    const { amount, customerId, paymentMethodId, rideId, riderId } = params;
+    return await requireStripe().paymentIntents.create({
+      amount: Math.round(amount * 100),
+      currency: "usd",
+      customer: customerId,
+      payment_method: paymentMethodId,
+      capture_method: 'automatic',
+      confirm: true,
+      off_session: true,
+      metadata: { rideId, riderId, type: 'ride_settlement' },
+    });
+  }
+
   async capturePaymentIntent(paymentIntentId: string, amountToCapture?: number): Promise<Stripe.PaymentIntent> {
     const captureParams: Stripe.PaymentIntentCaptureParams = {};
     if (amountToCapture !== undefined) {

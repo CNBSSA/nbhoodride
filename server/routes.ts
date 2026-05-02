@@ -822,17 +822,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
+      // Idempotent: if a profile already exists for this user, return it
+      // rather than failing with a duplicate-row / constraint error. The
+      // client's "Get Started" button is safe to press more than once.
+      const existing = await storage.getDriverProfile(userId);
+      if (existing) {
+        await storage.upsertUser({ id: userId, isDriver: true });
+        return res.json(existing);
+      }
+
       // ── Enhanced driver registration validation ──────────────────────────
+      // Fields are optional at create-time so the client's two-step flow works
+      // ("Get Started" creates a stub profile, then DocumentUploadModal PUTs
+      // license/insurance URLs). When values ARE provided we still enforce
+      // format. The admin approval flow gates activation on completeness.
       const currentYear = new Date().getFullYear();
       const driverRegistrationSchema = z.object({
         // License
         licenseNumber: z.string()
-          .min(1, "Driver's license number is required")
-          .regex(/^[A-Z0-9\-]{4,20}$/i, "License number must be 4–20 alphanumeric characters"),
-        licenseImageUrl: z.string().min(1, "License document upload is required"),
+          .regex(/^[A-Z0-9\-]{4,20}$/i, "License number must be 4–20 alphanumeric characters")
+          .optional(),
+        licenseImageUrl: z.string().min(1).optional(),
         // Insurance
-        insuranceImageUrl: z.string().min(1, "Insurance document upload is required"),
-        // Vehicle — at least one vehicle must be provided
+        insuranceImageUrl: z.string().min(1).optional(),
+        // Vehicle — optional at create-time
         vehicle: z.object({
           make: z.string().min(1, "Vehicle make is required").max(50),
           model: z.string().min(1, "Vehicle model is required").max(50),
@@ -1014,7 +1027,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       if (ride.paymentMethod === 'card') {
-        {
         const rawFare = parseFloat(ride.estimatedFare || "0");
 
         // Apply $5 promo discount if rider has promo rides remaining
@@ -1022,24 +1034,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const promoDiscount = promoRemaining > 0 ? Math.min(5, rawFare) : 0;
         const chargeAmount = Math.max(0, rawFare - promoDiscount);
 
+        let virtualDeducted = 0;
+        let stripeAuthAmount = 0;
+        let stripeIntentId: string = `virtual-${rideId}`;
+
         try {
           if (chargeAmount > 0) {
-            await storage.deductVirtualCardBalance(ride.riderId, chargeAmount);
+            // 1. Take what we can from the rider's virtual balance, leave the
+            //    rest for Stripe to authorize.
+            const split = await storage.splitDeductForRide(ride.riderId, chargeAmount, rideId);
+            virtualDeducted = split.virtualDeducted;
+            stripeAuthAmount = split.stripeAmount;
+
+            // 2. If the virtual balance didn't fully cover it, authorize the
+            //    shortfall on the rider's saved Stripe card.
+            if (stripeAuthAmount > 0) {
+              if (!stripeService.isEnabled) {
+                throw new Error("Stripe is not configured. Top up your virtual balance to cover the fare or contact support.");
+              }
+              if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
+                throw new Error("Insufficient virtual balance and no card on file. Please add a card or top up your wallet.");
+              }
+              const intent = await stripeService.authorizeRideShortfall({
+                amount: stripeAuthAmount,
+                customerId: rider.stripeCustomerId,
+                paymentMethodId: rider.stripePaymentMethodId,
+                rideId,
+                riderId: ride.riderId,
+              });
+              stripeIntentId = intent.id;
+            }
           }
-          // Consume one promo ride and record discount applied
+
           if (promoDiscount > 0 && rider) {
             await storage.consumePromoRide(ride.riderId, promoDiscount, rideId);
           }
-          await storage.setRidePaymentAuthorization(rideId, `virtual-${rideId}`);
+          await storage.setRidePaymentAuthorization(rideId, stripeIntentId, virtualDeducted, stripeAuthAmount);
 
           await logRideAudit({
             rideId,
             event: "payment_authorized",
             actorId: userId,
-            details: { chargeAmount, promoDiscount, paymentMethod: "virtual_card" },
+            details: {
+              chargeAmount,
+              promoDiscount,
+              virtualDeducted,
+              stripeAuthAmount,
+              stripeIntentId,
+              paymentMethod: stripeAuthAmount > 0 ? "split_virtual_card" : "virtual_card",
+            },
           });
         } catch (error: any) {
-          console.error("Failed to authorize virtual card payment:", error);
+          console.error("Failed to authorize ride payment:", error);
+
+          // Roll back any virtual deduction we made before the Stripe step failed.
+          if (virtualDeducted > 0) {
+            try {
+              await storage.addVirtualCardBalance(ride.riderId, virtualDeducted, "ride_authorization_refund", rideId);
+            } catch (refundErr) {
+              console.error("Failed to refund virtual balance after Stripe auth failure:", refundErr);
+            }
+          }
+
           try {
             const { db: dbInstance } = await import("./db");
             const { rides: ridesTable } = await import("@shared/schema");
@@ -1050,9 +1106,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           } catch (revertError) {
             console.error("Failed to revert ride status after payment failure:", revertError);
           }
-          return res.status(402).json({ message: "Payment authorization failed. Please try a different payment method." });
+          return res.status(402).json({ message: error?.message || "Payment authorization failed. Please try a different payment method." });
         }
-        } // end card block
       }
 
       const driverUser = await storage.getUser(userId);
@@ -1422,40 +1477,107 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
       });
       
-      // If ride uses card payment, process virtual card payment inside a transaction
+      // If ride uses card payment, settle against the auth taken at accept time.
+      // Virtual portion + Stripe authorization portion together cover what was
+      // promised at accept; here we reconcile to (actualFare + tip).
       if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
         try {
-          const estimatedFare = parseFloat(ride.estimatedFare || "0");
           const finalFare = actualFare ?? parseFloat(ride.actualFare || "0");
-          const totalAmount = finalFare + (tipAmount || 0);
-          const priceDifference = finalFare - estimatedFare;
+          const tip = tipAmount || 0;
+          const finalAmount = Number((finalFare + tip).toFixed(2));
 
-          await db.transaction(async (tx) => {
-            // If actual fare is less than estimated, refund the difference
-            if (priceDifference < 0) {
-              await storage.addVirtualCardBalance(ride.riderId, Math.abs(priceDifference));
+          const virtualAuthorized = parseFloat(ride.virtualAmountAuthorized || "0");
+          const stripeAuthorized = parseFloat(ride.stripeAuthorizedAmount || "0");
+          const totalAuthorized = Number((virtualAuthorized + stripeAuthorized).toFixed(2));
+
+          const hasRealStripeAuth =
+            stripeAuthorized > 0 &&
+            !!ride.stripePaymentIntentId &&
+            !ride.stripePaymentIntentId.startsWith("virtual-");
+
+          const rider = await storage.getUser(ride.riderId);
+
+          // Branch 1: final ≤ virtual already deducted
+          //   → refund the unused virtual; cancel any Stripe auth (no charge).
+          if (finalAmount <= virtualAuthorized) {
+            const refund = Number((virtualAuthorized - finalAmount).toFixed(2));
+            if (refund > 0) {
+              await storage.addVirtualCardBalance(ride.riderId, refund, "ride_refund", rideId);
             }
-            // If actual fare is more than estimated, deduct the difference
-            else if (priceDifference > 0) {
-              await storage.deductVirtualCardBalance(ride.riderId, priceDifference);
+            if (hasRealStripeAuth) {
+              try {
+                await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!);
+              } catch (cancelErr) {
+                console.error(`Failed to cancel Stripe auth ${ride.stripePaymentIntentId} on underage settlement:`, cancelErr);
+              }
             }
-
-            // If there's a tip, deduct it from rider
-            if (tipAmount && tipAmount > 0) {
-              await storage.deductVirtualCardBalance(ride.riderId, tipAmount);
+          }
+          // Branch 2: virtual < final ≤ virtual + Stripe authorization
+          //   → partial-capture only what we still need from the existing Stripe auth.
+          else if (finalAmount <= totalAuthorized) {
+            const stripeNeeded = Number((finalAmount - virtualAuthorized).toFixed(2));
+            if (hasRealStripeAuth && stripeNeeded > 0) {
+              await stripeService.capturePaymentIntent(ride.stripePaymentIntentId!, stripeNeeded);
+            } else if (hasRealStripeAuth && stripeNeeded === 0) {
+              // virtual covered everything despite an authorization — release the hold.
+              try {
+                await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!);
+              } catch (cancelErr) {
+                console.error(`Failed to cancel unused Stripe auth ${ride.stripePaymentIntentId}:`, cancelErr);
+              }
             }
-
-            // Credit driver
-            if (ride.driverId && totalAmount > 0) {
-              await storage.addVirtualCardBalance(ride.driverId, totalAmount);
+          }
+          // Branch 3: final > virtual + Stripe authorization
+          //   → capture full Stripe auth, then charge the extra (virtual first, then a new Stripe PI).
+          else {
+            if (hasRealStripeAuth && stripeAuthorized > 0) {
+              await stripeService.capturePaymentIntent(ride.stripePaymentIntentId!, stripeAuthorized);
             }
+            const overage = Number((finalAmount - totalAuthorized).toFixed(2));
+            if (overage > 0) {
+              const split = await storage.splitDeductForRide(ride.riderId, overage, rideId);
+              if (split.stripeAmount > 0) {
+                if (!stripeService.isEnabled) {
+                  throw new Error("Stripe is not configured; cannot collect overage.");
+                }
+                if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
+                  // Roll back the virtual deduction we just made; surface error.
+                  if (split.virtualDeducted > 0) {
+                    await storage.addVirtualCardBalance(ride.riderId, split.virtualDeducted, "ride_settlement_refund", rideId);
+                  }
+                  throw new Error("Insufficient virtual balance and no card on file to collect overage.");
+                }
+                try {
+                  await stripeService.chargeRideShortfall({
+                    amount: split.stripeAmount,
+                    customerId: rider.stripeCustomerId,
+                    paymentMethodId: rider.stripePaymentMethodId,
+                    rideId,
+                    riderId: ride.riderId,
+                  });
+                } catch (chargeErr) {
+                  // Roll back the virtual portion of the overage; the original
+                  // authorization has already been captured, so we don't undo that.
+                  if (split.virtualDeducted > 0) {
+                    await storage.addVirtualCardBalance(ride.riderId, split.virtualDeducted, "ride_settlement_refund", rideId);
+                  }
+                  throw chargeErr;
+                }
+              }
+            }
+          }
 
-            await storage.captureRidePayment(rideId, actualFare, tipAmount);
-          });
+          // Driver still gets credited to their virtual balance — admins fulfil
+          // payouts via the existing manual payout-request flow.
+          if (ride.driverId && finalAmount > 0) {
+            await storage.addVirtualCardBalance(ride.driverId, finalAmount, "ride_earnings", rideId);
+          }
 
-          console.log(`Virtual card payment processed successfully for ride ${rideId}: actual $${finalFare}, tip $${tipAmount || 0}`);
+          await storage.captureRidePayment(rideId, actualFare, tipAmount);
+
+          console.log(`Card payment settled for ride ${rideId}: final $${finalAmount} (virtualAuth $${virtualAuthorized}, stripeAuth $${stripeAuthorized})`);
         } catch (error: any) {
-          console.error("Failed to process virtual card payment:", error);
+          console.error("Failed to settle card payment:", error);
           throw new Error("Payment processing failed. Please try again.");
         }
       }
@@ -2090,22 +2212,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const cancellationFee = feeResult.fee;
 
       if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
-        const estimatedFare = parseFloat(ride.estimatedFare || "0");
+        const virtualAuthorized = parseFloat(ride.virtualAmountAuthorized || "0");
+        const stripeAuthorized = parseFloat(ride.stripeAuthorizedAmount || "0");
+        const hasRealStripeAuth =
+          stripeAuthorized > 0 &&
+          !!ride.stripePaymentIntentId &&
+          !ride.stripePaymentIntentId.startsWith("virtual-");
 
-        console.log(`Processing cancellation for ride ${rideId}: Est. fare: ${estimatedFare}, Fee: ${cancellationFee} (${feeResult.reason})`);
+        console.log(`Processing cancellation for ride ${rideId}: virtualAuth $${virtualAuthorized}, stripeAuth $${stripeAuthorized}, fee $${cancellationFee} (${feeResult.reason})`);
 
         if (cancellationFee > 0) {
-          // Refund the estimated fare minus the cancellation fee to the rider
-          const refundAmount = estimatedFare - cancellationFee;
-          if (refundAmount > 0) {
-            await storage.addVirtualCardBalance(ride.riderId, refundAmount, "cancellation_refund", rideId);
-            console.log(`Refunded ${refundAmount} to rider after ${cancellationFee} cancellation fee`);
+          // Settle the fee against the existing authorization, refunding only
+          // the unused portion of the virtual deduction. If the fee exceeds
+          // the virtual portion, capture the difference from Stripe; otherwise
+          // release the full Stripe hold.
+          if (cancellationFee <= virtualAuthorized) {
+            const refund = Number((virtualAuthorized - cancellationFee).toFixed(2));
+            if (refund > 0) {
+              await storage.addVirtualCardBalance(ride.riderId, refund, "cancellation_refund", rideId);
+            }
+            if (hasRealStripeAuth) {
+              try { await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!); }
+              catch (err) { console.error(`Failed to cancel Stripe auth on small-fee cancel:`, err); }
+            }
+          } else {
+            const stripeNeeded = Number((cancellationFee - virtualAuthorized).toFixed(2));
+            if (hasRealStripeAuth && stripeNeeded > 0) {
+              const captureAmount = Math.min(stripeNeeded, stripeAuthorized);
+              await stripeService.capturePaymentIntent(ride.stripePaymentIntentId!, captureAmount);
+            } else if (hasRealStripeAuth) {
+              try { await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!); }
+              catch (err) { console.error(`Failed to cancel Stripe auth on cancel:`, err); }
+            }
           }
 
-          // Add the cancellation fee to the driver's balance
           if (ride.driverId) {
             await storage.addVirtualCardBalance(ride.driverId, cancellationFee, "cancellation_fee", rideId);
-            console.log(`Added ${cancellationFee} cancellation fee to driver's balance`);
+            console.log(`Added $${cancellationFee} cancellation fee to driver's balance`);
           }
 
           await storage.cancelRideWithFee(
@@ -2116,9 +2259,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             driverTraveledTime
           );
         } else {
-          // No fee — refund the full estimated fare to the rider
-          await storage.addVirtualCardBalance(ride.riderId, estimatedFare, "cancellation_refund", rideId);
-          console.log(`Refunded full ${estimatedFare} to rider (no cancellation fee)`);
+          // No fee — release the Stripe authorization and refund the virtual
+          // portion (if any).
+          if (virtualAuthorized > 0) {
+            await storage.addVirtualCardBalance(ride.riderId, virtualAuthorized, "cancellation_refund", rideId);
+            console.log(`Refunded $${virtualAuthorized} virtual to rider (no cancellation fee)`);
+          }
+          if (hasRealStripeAuth) {
+            try { await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!); }
+            catch (err) { console.error(`Failed to cancel Stripe auth on no-fee cancel:`, err); }
+          }
 
           await storage.updateRide(rideId, {
             status: "cancelled",
@@ -4667,6 +4817,18 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
               await storage.updateRide(rideId, { status: 'cancelled', cancellationReason: 'Payment failed', paymentStatus: 'cancelled' });
             }
           }
+          break;
+        }
+        case 'payment_intent.canceled': {
+          const pi = event.data.object as any;
+          const rideId = pi.metadata?.rideId;
+          console.log(`[STRIPE] payment_intent.canceled for ride=${rideId ?? 'unknown'} pi=${pi.id}`);
+          break;
+        }
+        case 'charge.refunded': {
+          const charge = event.data.object as any;
+          const rideId = charge.metadata?.rideId ?? charge.payment_intent?.metadata?.rideId;
+          console.log(`[STRIPE] charge.refunded for ride=${rideId ?? 'unknown'} charge=${charge.id} amount_refunded=${charge.amount_refunded}`);
           break;
         }
         default: break;

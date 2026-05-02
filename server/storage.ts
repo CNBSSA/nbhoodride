@@ -197,13 +197,14 @@ export interface IStorage {
   confirmCashPayment(rideId: string, confirmerId: string, tipAmount?: number): Promise<Ride>;
   getRidesAwaitingPayment(userId: string): Promise<any[]>;
   updateUserStripeInfo(userId: string, stripeCustomerId?: string, stripePaymentMethodId?: string): Promise<User>;
-  setRidePaymentAuthorization(rideId: string, paymentIntentId: string): Promise<Ride>;
+  setRidePaymentAuthorization(rideId: string, paymentIntentId: string, virtualAmount?: number, stripeAmount?: number): Promise<Ride>;
   captureRidePayment(rideId: string, capturedAmount?: number, tipAmount?: number): Promise<Ride>;
   cancelRideWithFee(rideId: string, cancellationFee: number, reason: string, traveledDistance?: number, traveledTime?: number): Promise<Ride>;
-  
+
   // Virtual card operations
   deductVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
   addVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
+  splitDeductForRide(userId: string, totalAmount: number, rideId: string): Promise<{ virtualDeducted: number; stripeAmount: number }>;
   getVirtualCardBalance(userId: string): Promise<number>;
   consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
   logWalletTransaction(data: { userId: string; amount: number; balanceAfter: number; reason: string; rideId?: string; disputeId?: string; performedBy?: string }): Promise<WalletTransaction>;
@@ -1637,17 +1638,25 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async setRidePaymentAuthorization(rideId: string, paymentIntentId: string): Promise<Ride> {
+  async setRidePaymentAuthorization(rideId: string, paymentIntentId: string, virtualAmount?: number, stripeAmount?: number): Promise<Ride> {
+    const updates: any = {
+      stripePaymentIntentId: paymentIntentId,
+      paymentStatus: "authorized",
+      updatedAt: new Date(),
+    };
+    if (virtualAmount !== undefined) {
+      updates.virtualAmountAuthorized = virtualAmount.toFixed(2);
+    }
+    if (stripeAmount !== undefined) {
+      updates.stripeAuthorizedAmount = stripeAmount.toFixed(2);
+    }
+
     const [ride] = await db
       .update(rides)
-      .set({
-        stripePaymentIntentId: paymentIntentId,
-        paymentStatus: "authorized",
-        updatedAt: new Date()
-      })
+      .set(updates)
       .where(eq(rides.id, rideId))
       .returning();
-    
+
     return ride;
   }
 
@@ -1766,6 +1775,56 @@ export class DatabaseStorage implements IStorage {
     });
 
     return updatedUser;
+  }
+
+  async splitDeductForRide(
+    userId: string,
+    totalAmount: number,
+    rideId: string,
+  ): Promise<{ virtualDeducted: number; stripeAmount: number }> {
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+      throw new Error("Amount must be a positive number");
+    }
+
+    // Atomically read balance and deduct min(balance, totalAmount) under a row lock,
+    // matching the locking semantics of deductVirtualCardBalance so concurrent
+    // ride accepts can't double-spend the same virtual balance.
+    const result = await db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .for("update");
+
+      if (!locked) throw new Error("User not found");
+
+      const balance = parseFloat(locked.virtualCardBalance || "0");
+      const virtualDeducted = Math.min(balance, totalAmount);
+      const stripeAmount = Number((totalAmount - virtualDeducted).toFixed(2));
+
+      let balanceAfter = balance;
+      if (virtualDeducted > 0) {
+        balanceAfter = Number((balance - virtualDeducted).toFixed(2));
+        await tx
+          .update(users)
+          .set({ virtualCardBalance: balanceAfter.toFixed(2), updatedAt: new Date() })
+          .where(eq(users.id, userId));
+      }
+
+      return { virtualDeducted, stripeAmount, balanceAfter };
+    });
+
+    if (result.virtualDeducted > 0) {
+      await this.logWalletTransaction({
+        userId,
+        amount: -result.virtualDeducted,
+        balanceAfter: result.balanceAfter,
+        reason: "ride_charge",
+        rideId,
+      });
+    }
+
+    return { virtualDeducted: result.virtualDeducted, stripeAmount: result.stripeAmount };
   }
 
   async getVirtualCardBalance(userId: string): Promise<number> {

@@ -122,6 +122,8 @@ CREATE TABLE IF NOT EXISTS "rides" (
   "tip_amount" numeric(8,2) DEFAULT '0.00',
   "payment_status" payment_status DEFAULT 'pending_payment',
   "stripe_payment_intent_id" varchar,
+  "virtual_amount_authorized" numeric(8,2) DEFAULT '0.00',
+  "stripe_authorized_amount" numeric(8,2) DEFAULT '0.00',
   "refunded_amount" numeric(8,2),
   "cancellation_fee" numeric(8,2),
   "cancellation_reason" text,

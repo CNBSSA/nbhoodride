@@ -202,6 +202,8 @@ export const rides = pgTable("rides", {
   tipAmount: decimal("tip_amount", { precision: 8, scale: 2 }).default("0.00"),
   paymentStatus: paymentStatusEnum("payment_status").default("pending_payment"),
   stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+  virtualAmountAuthorized: decimal("virtual_amount_authorized", { precision: 8, scale: 2 }).default("0.00"),
+  stripeAuthorizedAmount: decimal("stripe_authorized_amount", { precision: 8, scale: 2 }).default("0.00"),
   refundedAmount: decimal("refunded_amount", { precision: 8, scale: 2 }),
   cancellationFee: decimal("cancellation_fee", { precision: 8, scale: 2 }),
   cancellationReason: text("cancellation_reason"),

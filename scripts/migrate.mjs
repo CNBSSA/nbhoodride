@@ -150,6 +150,8 @@ CREATE TABLE IF NOT EXISTS rides (
   tip_amount DECIMAL(8,2) DEFAULT 0.00,
   payment_status payment_status DEFAULT 'pending_payment',
   stripe_payment_intent_id VARCHAR,
+  virtual_amount_authorized DECIMAL(8,2) DEFAULT 0.00,
+  stripe_authorized_amount DECIMAL(8,2) DEFAULT 0.00,
   refunded_amount DECIMAL(8,2),
   cancellation_fee DECIMAL(8,2),
   cancellation_reason TEXT,
@@ -183,6 +185,12 @@ CREATE INDEX IF NOT EXISTS idx_rides_rider_id ON rides (rider_id);
 CREATE INDEX IF NOT EXISTS idx_rides_driver_id ON rides (driver_id);
 CREATE INDEX IF NOT EXISTS idx_rides_status ON rides (status);
 CREATE INDEX IF NOT EXISTS idx_rides_created_at ON rides (created_at);
+
+-- Idempotent column additions for the rides table — required so the
+-- virtual+Stripe split payment flow has somewhere to record how much was
+-- authorized from each source at ride accept time.
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS virtual_amount_authorized DECIMAL(8,2) DEFAULT 0.00;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS stripe_authorized_amount DECIMAL(8,2) DEFAULT 0.00;
 
 -- ── Shared ride groups ───────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS shared_ride_groups (
