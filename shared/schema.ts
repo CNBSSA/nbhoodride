@@ -81,6 +81,16 @@ export const users = pgTable("users", {
   promoRidesRemaining: integer("promo_rides_remaining").default(0),
   passwordResetToken: varchar("password_reset_token"),
   passwordResetExpiry: timestamp("password_reset_expiry"),
+  // Email verification
+  emailVerificationToken: varchar("email_verification_token"),
+  emailVerificationExpiry: timestamp("email_verification_expiry"),
+  emailVerifiedAt: timestamp("email_verified_at"),
+  // Registration & consent tracking
+  registrationCompletedAt: timestamp("registration_completed_at"),
+  termsAcceptedAt: timestamp("terms_accepted_at"),
+  privacyAcceptedAt: timestamp("privacy_accepted_at"),
+  // Activity tracking
+  lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

@@ -155,6 +155,10 @@ export interface IStorage {
   updatePassword(userId: string, hashedPassword: string): Promise<void>;
   setPasswordResetToken(email: string, token: string, expiry: Date): Promise<void>;
   getUserByResetToken(token: string): Promise<User | undefined>;
+  setEmailVerificationToken(userId: string, token: string, expiry: Date): Promise<void>;
+  getUserByVerificationToken(token: string): Promise<User | undefined>;
+  markEmailVerified(userId: string): Promise<User>;
+  updateLastLogin(userId: string): Promise<void>;
   
   deleteUser(userId: string): Promise<void>;
   deleteDriverProfile(userId: string): Promise<void>;
@@ -315,7 +319,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.email, email));
+    // Case-insensitive lookup to prevent duplicate accounts with different casing
+    const [user] = await db.select().from(users).where(
+      sql`LOWER(${users.email}) = LOWER(${email})`
+    );
     return user;
   }
 
@@ -387,6 +394,52 @@ export class DatabaseStorage implements IStorage {
         )
       );
     return user;
+  }
+
+  async setEmailVerificationToken(userId: string, token: string, expiry: Date): Promise<void> {
+    await db
+      .update(users)
+      .set({
+        emailVerificationToken: token,
+        emailVerificationExpiry: expiry,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
+  }
+
+  async getUserByVerificationToken(token: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(
+        and(
+          eq(users.emailVerificationToken, token),
+          sql`${users.emailVerificationExpiry} > NOW()`
+        )
+      );
+    return user;
+  }
+
+  async markEmailVerified(userId: string): Promise<User> {
+    const now = new Date();
+    const [user] = await db
+      .update(users)
+      .set({
+        emailVerificationToken: null,
+        emailVerificationExpiry: null,
+        emailVerifiedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(users.id, userId))
+      .returning();
+    return user;
+  }
+
+  async updateLastLogin(userId: string): Promise<void> {
+    await db
+      .update(users)
+      .set({ lastLoginAt: new Date(), updatedAt: new Date() })
+      .where(eq(users.id, userId));
   }
 
   // Driver operations

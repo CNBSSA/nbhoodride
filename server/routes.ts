@@ -16,6 +16,7 @@ import rateLimit from "express-rate-limit";
 import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import {
   sendAccountApprovedEmail,
+  sendEmailVerificationEmail,
   sendPasswordResetEmail,
   sendRideAcceptedEmail,
   sendRideReceiptEmail,
@@ -116,6 +117,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api/auth/signup', authLimiter);
   app.use('/api/auth/forgot-password', authLimiter);
   app.use('/api/auth/reset-password', authLimiter);
+  app.use('/api/auth/verify-email', authLimiter);
+  app.use('/api/auth/resend-verification', authLimiter);
   app.use('/api/auth/test-login', authLimiter);
   app.use('/api/admin/setup-super-admin', authLimiter);
   app.use('/api/ai', aiLimiter);
@@ -282,7 +285,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const setupSchema = z.object({
         token: z.string().min(1),
-        password: z.string().min(8, "Password must be at least 8 characters"),
+        password: z.string().min(1, "Password is required"),
       });
       const { token, password } = setupSchema.parse(req.body);
 
@@ -290,11 +293,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Invalid setup token" });
       }
 
+      // Enforce complexity for super admin password too
+      const { valid: pwValid, feedback: pwFeedback } = validatePasswordComplexity(password);
+      if (!pwValid) {
+        return res.status(400).json({ message: `Password must contain: ${pwFeedback.join(", ")}.` });
+      }
+
       const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'thrynovainsights@gmail.com';
     const existing = await storage.getUserByEmail(superAdminEmail);
       if (existing) {
         if (!existing.isSuperAdmin) {
-          const hashedPassword = await bcrypt.hash(password, 10);
+          const hashedPassword = await bcrypt.hash(password, 12);
           await storage.adminUpdateUser(existing.id, { isSuperAdmin: true, isAdmin: true, isApproved: true, isVerified: true });
           await storage.updatePassword(existing.id, hashedPassword);
           return res.json({ message: "Existing account upgraded to Super Admin" });
@@ -302,7 +311,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ message: "Super Admin already exists" });
       }
 
-      const hashedPassword = await bcrypt.hash(password, 10);
+      const hashedPassword = await bcrypt.hash(password, 12);
       await storage.createUser({
         email: 'thrynovainsights@gmail.com',
         password: hashedPassword,
@@ -324,61 +333,221 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ── Password complexity helper ──────────────────────────────────────────────
+  function validatePasswordComplexity(password: string): { valid: boolean; feedback: string[] } {
+    const feedback: string[] = [];
+    if (password.length < 8) feedback.push("at least 8 characters");
+    if (!/[A-Z]/.test(password)) feedback.push("at least 1 uppercase letter (A-Z)");
+    if (!/[a-z]/.test(password)) feedback.push("at least 1 lowercase letter (a-z)");
+    if (!/[0-9]/.test(password)) feedback.push("at least 1 number (0-9)");
+    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) feedback.push("at least 1 special character (!@#$%^&* etc.)");
+    return { valid: feedback.length === 0, feedback };
+  }
+
+  // ── Disposable email domain blocklist ──────────────────────────────────────
+  const DISPOSABLE_EMAIL_DOMAINS = new Set([
+    "mailinator.com", "guerrillamail.com", "tempmail.com", "throwaway.email",
+    "yopmail.com", "sharklasers.com", "guerrillamailblock.com", "grr.la",
+    "guerrillamail.info", "guerrillamail.biz", "guerrillamail.de", "guerrillamail.net",
+    "guerrillamail.org", "spam4.me", "trashmail.com", "trashmail.me", "trashmail.net",
+    "dispostable.com", "mailnull.com", "spamgourmet.com", "spamgourmet.net",
+    "spamgourmet.org", "maildrop.cc", "discard.email", "fakeinbox.com",
+    "tempinbox.com", "getairmail.com", "filzmail.com", "throwam.com",
+    "tempr.email", "discard.email", "spamhereplease.com", "spamthisplease.com",
+    "10minutemail.com", "10minutemail.net", "10minutemail.org",
+    "20minutemail.com", "mytrashmail.com", "mailnesia.com",
+  ]);
+
+  function isDisposableEmail(email: string): boolean {
+    const domain = email.split("@")[1]?.toLowerCase();
+    return domain ? DISPOSABLE_EMAIL_DOMAINS.has(domain) : false;
+  }
+
+  // ── Phone normalizer ───────────────────────────────────────────────────────
+  function normalizePhone(raw: string): string {
+    // Strip everything except digits
+    const digits = raw.replace(/\D/g, "");
+    // Accept 10-digit US numbers or 11-digit with leading 1
+    if (digits.length === 11 && digits.startsWith("1")) {
+      return `+1${digits.slice(1)}`;
+    }
+    if (digits.length === 10) {
+      return `+1${digits}`;
+    }
+    return raw; // return as-is if unrecognised — validation will catch it
+  }
+
   app.post('/api/auth/signup', async (req, res) => {
+    const ip = req.ip ?? "unknown";
     try {
       const signupSchema = z.object({
         email: z.string().email("Invalid email address"),
-        password: z.string().min(8, "Password must be at least 8 characters"),
-        firstName: z.string().min(1, "First name is required"),
-        lastName: z.string().min(1, "Last name is required"),
-        phone: z.string().optional()
+        password: z.string().min(1, "Password is required"),
+        firstName: z.string().min(1, "First name is required").max(50, "First name too long"),
+        lastName: z.string().min(1, "Last name is required").max(50, "Last name too long"),
+        phone: z.string().optional(),
+        termsAccepted: z.boolean().refine(v => v === true, {
+          message: "You must accept the Terms of Service to register",
+        }),
+        privacyAccepted: z.boolean().refine(v => v === true, {
+          message: "You must accept the Privacy Policy to register",
+        }),
       });
 
-      const { email, password, firstName, lastName, phone } = signupSchema.parse(req.body);
+      const { email, password, firstName, lastName, phone, termsAccepted, privacyAccepted } =
+        signupSchema.parse(req.body);
 
-      // Check if user already exists
-      const existingUser = await storage.getUserByEmail(email);
-      if (existingUser) {
-        return res.status(400).json({ message: "Email already registered" });
+      // ── Password complexity ──────────────────────────────────────────────
+      const { valid: passwordValid, feedback: passwordFeedback } = validatePasswordComplexity(password);
+      if (!passwordValid) {
+        console.log(`[AUDIT] signup_failed ip=${ip} email=${email} reason=weak_password`);
+        return res.status(400).json({
+          message: `Password must contain: ${passwordFeedback.join(", ")}.`,
+          passwordRequirements: {
+            minLength: 8,
+            requireUppercase: true,
+            requireLowercase: true,
+            requireNumber: true,
+            requireSpecialChar: true,
+            missing: passwordFeedback,
+          },
+        });
       }
 
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 10);
+      // ── Disposable email check ───────────────────────────────────────────
+      if (isDisposableEmail(email)) {
+        console.log(`[AUDIT] signup_failed ip=${ip} email=${email} reason=disposable_email`);
+        return res.status(400).json({ message: "Please use a permanent email address. Temporary/disposable email addresses are not accepted." });
+      }
+
+      // ── Phone validation & normalisation ────────────────────────────────
+      let normalizedPhone: string | undefined;
+      if (phone && phone.trim() !== "") {
+        const digits = phone.replace(/\D/g, "");
+        const validLength =
+          (digits.length === 10) ||
+          (digits.length === 11 && digits.startsWith("1"));
+        if (!validLength) {
+          return res.status(400).json({ message: "Phone number must be a valid 10-digit US number (e.g. 301-555-1234)." });
+        }
+        normalizedPhone = normalizePhone(phone);
+      }
+
+      // ── Case-insensitive duplicate email check ───────────────────────────
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        // Don't reveal whether the account exists — generic message
+        console.log(`[AUDIT] signup_failed ip=${ip} email=${email} reason=duplicate_email`);
+        return res.status(400).json({ message: "An account with this email address already exists. Please log in or use a different email." });
+      }
+
+      // ── Hash password ────────────────────────────────────────────────────
+      const hashedPassword = await bcrypt.hash(password, 12);
+
+      // ── Consent timestamps ───────────────────────────────────────────────
+      const now = new Date();
 
       const user = await storage.createUser({
-        email,
+        email: email.toLowerCase(),
         password: hashedPassword,
         firstName,
         lastName,
-        phone,
+        phone: normalizedPhone,
         isApproved: false,
         virtualCardBalance: "20.00",
         promoRidesRemaining: 4,
+        termsAcceptedAt: termsAccepted ? now : undefined,
+        privacyAcceptedAt: privacyAccepted ? now : undefined,
+        registrationCompletedAt: now,
       });
 
+      // ── Email verification token ─────────────────────────────────────────
+      const verificationToken = nanoid(40);
+      const verificationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      await storage.setEmailVerificationToken(user.id, verificationToken, verificationExpiry);
+
+      // ── Audit log ────────────────────────────────────────────────────────
+      console.log(`[AUDIT] signup_success ip=${ip} userId=${user.id} email=${user.email}`);
+
+      // ── Emails (fire-and-forget) ─────────────────────────────────────────
+      sendEmailVerificationEmail(user.email!, user.firstName, verificationToken).catch(console.error);
       sendSignupPendingEmail({ email: user.email, firstName: user.firstName }).catch(console.error);
 
-      res.json({ 
-        message: "Account created! Your account is pending approval by an administrator. You will be able to log in once approved.",
+      res.json({
+        message: "Account created! Please check your email to verify your address. Your account will also need administrator approval before you can log in.",
         pendingApproval: true,
+        emailVerificationSent: true,
         user: {
           id: user.id,
           email: user.email,
           firstName: user.firstName,
           lastName: user.lastName,
-        }
+        },
       });
     } catch (error) {
       console.error("Signup error:", error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0].message });
       }
+      console.log(`[AUDIT] signup_error ip=${ip} error=${String(error)}`);
       res.status(500).json({ message: "Signup failed" });
+    }
+  });
+
+  // POST /api/auth/verify-email - Verify email address with token
+  app.post('/api/auth/verify-email', async (req, res) => {
+    try {
+      const schema = z.object({ token: z.string().min(1, "Verification token is required") });
+      const { token } = schema.parse(req.body);
+
+      const user = await storage.getUserByVerificationToken(token);
+      if (!user) {
+        return res.status(400).json({ message: "Invalid or expired verification link. Please request a new one." });
+      }
+
+      await storage.markEmailVerified(user.id);
+      console.log(`[AUDIT] email_verified userId=${user.id} email=${user.email}`);
+
+      res.json({
+        message: "Email verified successfully! Your account is now pending administrator approval.",
+        emailVerified: true,
+      });
+    } catch (error) {
+      console.error("Email verification error:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      res.status(500).json({ message: "Email verification failed" });
+    }
+  });
+
+  // POST /api/auth/resend-verification - Resend email verification
+  app.post('/api/auth/resend-verification', authLimiter, async (req, res) => {
+    try {
+      const schema = z.object({ email: z.string().email("Invalid email address") });
+      const { email } = schema.parse(req.body);
+
+      const user = await storage.getUserByEmail(email);
+      // Always return success to avoid revealing whether the email exists
+      if (!user || user.emailVerifiedAt) {
+        return res.json({ message: "If the email exists and is unverified, a new verification link has been sent." });
+      }
+
+      const verificationToken = nanoid(40);
+      const verificationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await storage.setEmailVerificationToken(user.id, verificationToken, verificationExpiry);
+      sendEmailVerificationEmail(user.email!, user.firstName, verificationToken).catch(console.error);
+
+      res.json({ message: "If the email exists and is unverified, a new verification link has been sent." });
+    } catch (error) {
+      console.error("Resend verification error:", error);
+      res.status(500).json({ message: "Failed to resend verification email" });
     }
   });
 
   // POST /api/auth/email-login - Login with email and password
   app.post('/api/auth/email-login', async (req, res) => {
+    const ip = req.ip ?? "unknown";
     try {
       const loginSchema = z.object({
         email: z.string().email("Invalid email address"),
@@ -387,31 +556,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { email, password } = loginSchema.parse(req.body);
 
-      // Find user by email
+      // Find user by email (case-insensitive)
       const user = await storage.getUserByEmail(email);
       if (!user || !user.password) {
+        console.log(`[AUDIT] login_failed ip=${ip} email=${email} reason=user_not_found`);
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
       // Verify password
       const isValidPassword = await bcrypt.compare(password, user.password);
       if (!isValidPassword) {
+        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=wrong_password`);
         return res.status(401).json({ message: "Invalid email or password" });
-      }
-
-      // Check if user is approved (admins and super admins skip this check)
-      if (!user.isApproved && !user.isAdmin && !user.isSuperAdmin) {
-        return res.status(403).json({ message: "Your account is pending approval by an administrator. Please check back later." });
       }
 
       // Check if suspended
       if (user.isSuspended) {
+        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=suspended`);
         return res.status(403).json({ message: "Your account has been suspended. Please contact support." });
       }
 
-      // Set session
+      // Check if user is approved (admins and super admins skip this check)
+      if (!user.isApproved && !user.isAdmin && !user.isSuperAdmin) {
+        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=pending_approval`);
+        return res.status(403).json({ message: "Your account is pending approval by an administrator. Please check back later." });
+      }
+
+      // Set session and record last login
       req.session.userId = user.id;
-      
+      storage.updateLastLogin(user.id).catch(console.error);
+
+      console.log(`[AUDIT] login_success ip=${ip} userId=${user.id} email=${email}`);
+
       res.json({ 
         message: "Login successful",
         user: {
@@ -428,6 +604,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0].message });
       }
+      console.log(`[AUDIT] login_error ip=${ip} error=${String(error)}`);
       res.status(500).json({ message: "Login failed" });
     }
   });
@@ -475,10 +652,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const resetPasswordSchema = z.object({
         token: z.string().min(1, "Reset token is required"),
-        newPassword: z.string().min(8, "Password must be at least 8 characters")
+        newPassword: z.string().min(1, "New password is required")
       });
 
       const { token, newPassword } = resetPasswordSchema.parse(req.body);
+
+      // Enforce password complexity on reset
+      const { valid: passwordValid, feedback: passwordFeedback } = validatePasswordComplexity(newPassword);
+      if (!passwordValid) {
+        return res.status(400).json({
+          message: `Password must contain: ${passwordFeedback.join(", ")}.`,
+          passwordRequirements: { missing: passwordFeedback },
+        });
+      }
 
       // Find user by reset token
       const user = await storage.getUserByResetToken(token);
@@ -487,10 +673,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Hash new password
-      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      const hashedPassword = await bcrypt.hash(newPassword, 12);
 
       // Update password and clear reset token
       await storage.updatePassword(user.id, hashedPassword);
+      console.log(`[AUDIT] password_reset userId=${user.id} email=${user.email}`);
 
       res.json({ message: "Password reset successful" });
     } catch (error) {
@@ -617,19 +804,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/driver/profile', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+
+      // ── Enhanced driver registration validation ──────────────────────────
+      const currentYear = new Date().getFullYear();
+      const driverRegistrationSchema = z.object({
+        // License
+        licenseNumber: z.string()
+          .min(1, "Driver's license number is required")
+          .regex(/^[A-Z0-9\-]{4,20}$/i, "License number must be 4–20 alphanumeric characters"),
+        licenseImageUrl: z.string().min(1, "License document upload is required"),
+        // Insurance
+        insuranceImageUrl: z.string().min(1, "Insurance document upload is required"),
+        // Vehicle — at least one vehicle must be provided
+        vehicle: z.object({
+          make: z.string().min(1, "Vehicle make is required").max(50),
+          model: z.string().min(1, "Vehicle model is required").max(50),
+          year: z.number()
+            .int("Vehicle year must be a whole number")
+            .min(1990, "Vehicle must be 1990 or newer")
+            .max(currentYear + 1, `Vehicle year cannot exceed ${currentYear + 1}`),
+          color: z.string().min(1, "Vehicle color is required").max(30),
+          licensePlate: z.string()
+            .min(1, "License plate is required")
+            .regex(/^[A-Z0-9\- ]{2,10}$/i, "License plate must be 2–10 alphanumeric characters"),
+        }).optional(),
+      }).passthrough(); // allow other insertDriverProfileSchema fields through
+
+      const validatedDriverData = driverRegistrationSchema.parse(req.body);
+
       const profileData = insertDriverProfileSchema.parse({
         ...req.body,
         userId
       });
       
       const profile = await storage.createDriverProfile(profileData);
+
+      // Create vehicle record if vehicle data was provided
+      if (validatedDriverData.vehicle) {
+        const vehicleData = insertVehicleSchema.parse({
+          ...validatedDriverData.vehicle,
+          driverProfileId: profile.id,
+        });
+        await storage.createVehicle(vehicleData);
+      }
       
       // Update user to mark as driver
       await storage.upsertUser({ id: userId, isDriver: true });
+
+      console.log(`[AUDIT] driver_profile_created userId=${userId} licenseNumber=${validatedDriverData.licenseNumber}`);
       
       res.json(profile);
     } catch (error) {
       console.error("Error creating driver profile:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
       res.status(400).json({ message: "Failed to create driver profile" });
     }
   });
@@ -2470,7 +2699,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const createAdminSchema = z.object({
         email: z.string().email(),
-        password: z.string().min(8),
+        password: z.string().min(1, "Password is required"),
         firstName: z.string().min(1),
         lastName: z.string().min(1),
       });
@@ -2485,7 +2714,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Email already registered" });
       }
 
-      const hashedPassword = await bcrypt.hash(password, 10);
+      const { valid: pwValid, feedback: pwFeedback } = validatePasswordComplexity(password);
+      if (!pwValid) {
+        return res.status(400).json({ message: `Password must contain: ${pwFeedback.join(", ")}.` });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 12);
       const user = await storage.createUser({
         email,
         password: hashedPassword,
