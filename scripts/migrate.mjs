@@ -534,6 +534,13 @@ CREATE TABLE IF NOT EXISTS safety_alerts (
   resolved_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- ── Idempotent constraints ────────────────────────────────────────────────────
+-- Ensure one driver profile per user — prevents duplicate rows from concurrent
+-- "Get Started" clicks or retries.
+DO $$ BEGIN
+  ALTER TABLE driver_profiles ADD CONSTRAINT driver_profiles_user_id_unique UNIQUE (user_id);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 `;
 
 async function migrate() {
