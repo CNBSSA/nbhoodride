@@ -885,11 +885,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.json(profile);
     } catch (error) {
-      console.error("Error creating driver profile:", error instanceof Error ? error.message : error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error("Error creating driver profile:", errMsg, error);
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0].message });
       }
-      res.status(500).json({ message: "Failed to create driver profile. Please try again." });
+      // Surface the actual error message so the client toast can show it,
+      // making deploy-state vs validation issues distinguishable.
+      res.status(500).json({ message: `Failed to create driver profile: ${errMsg}` });
     }
   });
 
