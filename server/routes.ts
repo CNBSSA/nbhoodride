@@ -5024,7 +5024,17 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
             await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'approved' } as any);
             await storage.adminUpdateUser(profile.userId, { isApproved: true });
             const user = await storage.getUser(profile.userId);
-            if (user) sendAccountApprovedEmail(user).catch(console.error);
+            // R-M5: send the DRIVER approved email (not the rider one). Drivers
+            // need the driver-specific guidance about going online, payouts,
+            // and ratings — the rider approval email mentions promo rides
+            // which doesn't apply here.
+            if (user?.email) {
+              sendDriverApprovedEmail({
+                email: user.email,
+                firstName: user.firstName,
+              }).catch((err) => console.error("Failed to send driver-approved email after Checkr clear:", err));
+            }
+            console.log(`[AUDIT] driver_approved source=checkr_webhook userId=${profile.userId} reportId=${report.id}`);
           } else {
             await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'rejected' } as any);
             await storage.createSafetyAlert({
@@ -5033,6 +5043,18 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
               description: `Checkr report ${report.id} result: ${report.result}`,
               data: { reportId: report.id, result: report.result },
             });
+            // R-M5: notify the driver that their application was not
+            // approved. We don't expose the Checkr result detail (PII /
+            // FCRA-sensitive); just point them at support.
+            const user = await storage.getUser(profile.userId);
+            if (user?.email) {
+              sendSignupRejectedEmail({
+                email: user.email,
+                firstName: user.firstName,
+                reason: "Our background check service returned a result that prevents us from approving your driver application at this time. Please contact support if you believe this is an error or to request more information.",
+              }).catch((err) => console.error("Failed to send rejection email after Checkr non-clear result:", err));
+            }
+            console.log(`[AUDIT] driver_rejected source=checkr_webhook userId=${profile.userId} reportId=${report.id} result=${report.result}`);
           }
         }
       }
