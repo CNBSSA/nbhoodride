@@ -102,6 +102,9 @@ export const driverProfiles = pgTable("driver_profiles", {
   licenseNumber: varchar("license_number"),
   licenseImageUrl: varchar("license_image_url"),
   insuranceImageUrl: varchar("insurance_image_url"),
+  // Vehicle photos uploaded during onboarding before a vehicles row is created
+  // (vehicle make/model/year/etc are captured separately during admin review).
+  vehiclePhotoUrls: jsonb("vehicle_photo_urls").$type<string[]>().default([]),
   isOnline: boolean("is_online").default(false),
   isVerifiedNeighbor: boolean("is_verified_neighbor").default(false),
   isSuspended: boolean("is_suspended").default(false),

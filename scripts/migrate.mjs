@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS driver_profiles (
   license_number VARCHAR,
   license_image_url VARCHAR,
   insurance_image_url VARCHAR,
+  vehicle_photo_urls JSONB DEFAULT '[]'::jsonb,
   is_online BOOLEAN DEFAULT false,
   is_verified_neighbor BOOLEAN DEFAULT false,
   is_suspended BOOLEAN DEFAULT false,
@@ -118,6 +119,10 @@ CREATE TABLE IF NOT EXISTS driver_profiles (
 );
 CREATE INDEX IF NOT EXISTS idx_driver_profiles_user_id ON driver_profiles (user_id);
 CREATE INDEX IF NOT EXISTS idx_driver_profiles_is_online ON driver_profiles (is_online);
+
+-- Idempotent column addition for existing DBs predating R-C2. Holds vehicle
+-- photo URLs uploaded during onboarding before a vehicles row exists.
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_photo_urls JSONB DEFAULT '[]'::jsonb;
 
 -- ── Vehicles ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vehicles (
