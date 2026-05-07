@@ -127,9 +127,17 @@ CREATE INDEX IF NOT EXISTS idx_driver_profiles_user_id ON driver_profiles (user_
 CREATE INDEX IF NOT EXISTS idx_driver_profiles_is_online ON driver_profiles (is_online);
 CREATE INDEX IF NOT EXISTS idx_driver_profiles_approval_status ON driver_profiles (approval_status);
 
--- Idempotent column addition for existing DBs predating R-C2. Holds vehicle
--- photo URLs uploaded during onboarding before a vehicles row exists.
+-- Idempotent column additions for driver_profiles. CREATE TABLE IF NOT EXISTS
+-- is a no-op on existing tables, so any column added after the table was first
+-- created in production has to also be backfilled with ALTER TABLE ADD COLUMN
+-- IF NOT EXISTS or Drizzle's select() will fail with "column does not exist".
+-- This block covers everything that's not part of the original create.
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_photo_urls JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS accepted_counties TEXT[] NOT NULL DEFAULT ARRAY[]::text[];
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS daily_counties TEXT[];
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS daily_session_start TIMESTAMP;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS checkr_candidate_id VARCHAR;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS checkr_report_id VARCHAR;
 
 -- ── Vehicles ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vehicles (
