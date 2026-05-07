@@ -66,6 +66,10 @@ export const users = pgTable("users", {
   profileImageUrl: varchar("profile_image_url"),
   phone: varchar("phone"),
   isDriver: boolean("is_driver").default(false),
+  // Admin-granted "trusted community member" badge surfaced as ✓ Verified on
+  // the profile (client/src/pages/Profile.tsx). Distinct from emailVerifiedAt
+  // (the timestamp of the email-click verification step at signup) — the
+  // audit flagged this as a confusing pair, so flagging the difference here.
   isVerified: boolean("is_verified").default(false),
   isAdmin: boolean("is_admin").default(false),
   isSuperAdmin: boolean("is_super_admin").default(false),
