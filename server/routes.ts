@@ -23,6 +23,7 @@ import {
   sendRideAcceptedEmail,
   sendRideReceiptEmail,
   sendSignupPendingEmail,
+  sendSignupRejectedEmail,
 } from "./emailService";
 import { sendPushToSubscriptions } from "./pushService";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
@@ -3569,6 +3570,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Revoke user approval (admin or super admin)
+  // Reject a pending signup with a reason (R-M3). Marks the user suspended
+  // and emails the user with the reason. Use this instead of just leaving
+  // a signup hanging in the pending state.
+  app.post('/api/admin/users/:userId/reject', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { userId } = req.params;
+      const adminId = req.adminUser.id;
+      const schema = z.object({
+        reason: z.string().min(1, "Reason is required").max(500, "Reason is too long"),
+      });
+      const { reason } = schema.parse(req.body);
+
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      if (targetUser.isSuperAdmin) return res.status(403).json({ message: "Cannot reject super admin" });
+      if (targetUser.isAdmin && !req.adminUser.isSuperAdmin) {
+        return res.status(403).json({ message: "Only super admin can reject other admins" });
+      }
+      if (targetUser.isApproved) {
+        return res.status(400).json({ message: "User is already approved. Use revoke-approval instead." });
+      }
+
+      const user = await storage.adminUpdateUser(userId, {
+        isApproved: false,
+        isSuspended: true,
+      });
+      await storage.logAdminAction(adminId, 'reject_signup', 'user', userId, {
+        email: targetUser.email,
+        reason,
+      });
+      console.log(`[AUDIT] signup_rejected adminId=${adminId} userId=${userId} email=${targetUser.email}`);
+
+      sendSignupRejectedEmail({
+        email: targetUser.email,
+        firstName: targetUser.firstName,
+        reason,
+      }).catch((err) => console.error("Failed to send signup-rejected email:", err));
+
+      res.json(user);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Error rejecting signup:", error);
+      res.status(500).json({ message: "Failed to reject signup" });
+    }
+  });
+
   app.post('/api/admin/users/:userId/revoke-approval', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const { userId } = req.params;
