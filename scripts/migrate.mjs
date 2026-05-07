@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS users (
   terms_accepted_at TIMESTAMP,
   privacy_accepted_at TIMESTAMP,
   last_login_at TIMESTAMP,
+  failed_login_attempts INTEGER DEFAULT 0,
+  lockout_until TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -95,6 +97,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_completed_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_accepted_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;
+-- R-L5: per-account login throttling
+ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS lockout_until TIMESTAMP;
 
 -- ── Driver profiles ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS driver_profiles (
