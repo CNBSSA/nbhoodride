@@ -95,6 +95,13 @@ export const users = pgTable("users", {
   privacyAcceptedAt: timestamp("privacy_accepted_at"),
   // Activity tracking
   lastLoginAt: timestamp("last_login_at"),
+  // Per-account login throttling (R-L5). failedLoginAttempts increments on
+  // each wrong password and resets on success; once it crosses the threshold
+  // (5) we set lockoutUntil and refuse logins until that timestamp passes.
+  // IP-based rate limiting (authLimiter) protects the endpoint; this protects
+  // a specific account from credential-stuffing across IPs.
+  failedLoginAttempts: integer("failed_login_attempts").default(0),
+  lockoutUntil: timestamp("lockout_until"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [

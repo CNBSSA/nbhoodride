@@ -620,10 +620,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
+      // R-L5: per-account lockout. If a previous lockout is still in effect,
+      // refuse without even checking the password — protects against credential
+      // stuffing across multiple IPs (the IP-based authLimiter only protects
+      // a single IP).
+      const LOGIN_LOCKOUT_THRESHOLD = 5;
+      const LOGIN_LOCKOUT_MINUTES = 15;
+      if (user.lockoutUntil && new Date(user.lockoutUntil) > new Date()) {
+        const minutesLeft = Math.ceil((new Date(user.lockoutUntil).getTime() - Date.now()) / 60000);
+        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=account_locked minutesLeft=${minutesLeft}`);
+        return res.status(429).json({
+          message: `Too many failed login attempts. Try again in ${minutesLeft} minute${minutesLeft === 1 ? '' : 's'}.`,
+          accountLocked: true,
+          retryAfterMinutes: minutesLeft,
+        });
+      }
+
       // Verify password
       const isValidPassword = await bcrypt.compare(password, user.password);
       if (!isValidPassword) {
-        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=wrong_password`);
+        // Record the failed attempt; lock the account if we've crossed the threshold.
+        const { attempts, lockoutUntil } = await storage.recordFailedLogin(user.id, {
+          threshold: LOGIN_LOCKOUT_THRESHOLD,
+          lockoutMinutes: LOGIN_LOCKOUT_MINUTES,
+        });
+        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=wrong_password attempts=${attempts}${lockoutUntil ? ' lockedUntil=' + lockoutUntil.toISOString() : ''}`);
+        if (lockoutUntil) {
+          return res.status(429).json({
+            message: `Too many failed login attempts. Account locked for ${LOGIN_LOCKOUT_MINUTES} minutes.`,
+            accountLocked: true,
+            retryAfterMinutes: LOGIN_LOCKOUT_MINUTES,
+          });
+        }
         return res.status(401).json({ message: "Invalid email or password" });
       }
 

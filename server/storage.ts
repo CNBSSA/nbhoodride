@@ -159,6 +159,7 @@ export interface IStorage {
   getUserByVerificationToken(token: string): Promise<User | undefined>;
   markEmailVerified(userId: string): Promise<User>;
   updateLastLogin(userId: string): Promise<void>;
+  recordFailedLogin(userId: string, opts: { threshold: number; lockoutMinutes: number }): Promise<{ attempts: number; lockoutUntil: Date | null }>;
   
   deleteUser(userId: string): Promise<void>;
   deleteDriverProfile(userId: string): Promise<void>;
@@ -438,10 +439,36 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateLastLogin(userId: string): Promise<void> {
+    // Successful login also clears the lockout counter (R-L5).
     await db
       .update(users)
-      .set({ lastLoginAt: new Date(), updatedAt: new Date() })
+      .set({
+        lastLoginAt: new Date(),
+        failedLoginAttempts: 0,
+        lockoutUntil: null,
+        updatedAt: new Date(),
+      })
       .where(eq(users.id, userId));
+  }
+
+  // R-L5: bump the failed-login counter for a user and, once we've crossed
+  // the threshold, set lockoutUntil. Returns the new attempt count and the
+  // resulting lockout time (or null) so the route can branch.
+  async recordFailedLogin(userId: string, opts: { threshold: number; lockoutMinutes: number }): Promise<{ attempts: number; lockoutUntil: Date | null }> {
+    const [u] = await db.select().from(users).where(eq(users.id, userId));
+    const next = (u?.failedLoginAttempts ?? 0) + 1;
+    const lockoutUntil = next >= opts.threshold
+      ? new Date(Date.now() + opts.lockoutMinutes * 60 * 1000)
+      : null;
+    await db
+      .update(users)
+      .set({
+        failedLoginAttempts: next,
+        lockoutUntil,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId));
+    return { attempts: next, lockoutUntil };
   }
 
   // Driver operations
