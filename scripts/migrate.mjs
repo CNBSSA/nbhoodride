@@ -78,9 +78,12 @@ CREATE TABLE IF NOT EXISTS users (
   terms_accepted_at TIMESTAMP,
   privacy_accepted_at TIMESTAMP,
   last_login_at TIMESTAMP,
+  failed_login_attempts INTEGER DEFAULT 0,
+  lockout_until TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_users_created_at ON users (created_at);
 
 -- Idempotent column additions for databases created before these columns
 -- existed. Required because CREATE TABLE IF NOT EXISTS above is a no-op on
@@ -94,6 +97,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_completed_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_accepted_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;
+-- R-L5: per-account login throttling
+ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS lockout_until TIMESTAMP;
 
 -- ── Driver profiles ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS driver_profiles (
@@ -119,10 +125,19 @@ CREATE TABLE IF NOT EXISTS driver_profiles (
 );
 CREATE INDEX IF NOT EXISTS idx_driver_profiles_user_id ON driver_profiles (user_id);
 CREATE INDEX IF NOT EXISTS idx_driver_profiles_is_online ON driver_profiles (is_online);
+CREATE INDEX IF NOT EXISTS idx_driver_profiles_approval_status ON driver_profiles (approval_status);
 
--- Idempotent column addition for existing DBs predating R-C2. Holds vehicle
--- photo URLs uploaded during onboarding before a vehicles row exists.
+-- Idempotent column additions for driver_profiles. CREATE TABLE IF NOT EXISTS
+-- is a no-op on existing tables, so any column added after the table was first
+-- created in production has to also be backfilled with ALTER TABLE ADD COLUMN
+-- IF NOT EXISTS or Drizzle's select() will fail with "column does not exist".
+-- This block covers everything that's not part of the original create.
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS vehicle_photo_urls JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS accepted_counties TEXT[] NOT NULL DEFAULT ARRAY[]::text[];
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS daily_counties TEXT[];
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS daily_session_start TIMESTAMP;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS checkr_candidate_id VARCHAR;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS checkr_report_id VARCHAR;
 
 -- ── Vehicles ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vehicles (

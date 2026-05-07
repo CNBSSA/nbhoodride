@@ -66,6 +66,10 @@ export const users = pgTable("users", {
   profileImageUrl: varchar("profile_image_url"),
   phone: varchar("phone"),
   isDriver: boolean("is_driver").default(false),
+  // Admin-granted "trusted community member" badge surfaced as ✓ Verified on
+  // the profile (client/src/pages/Profile.tsx). Distinct from emailVerifiedAt
+  // (the timestamp of the email-click verification step at signup) — the
+  // audit flagged this as a confusing pair, so flagging the difference here.
   isVerified: boolean("is_verified").default(false),
   isAdmin: boolean("is_admin").default(false),
   isSuperAdmin: boolean("is_super_admin").default(false),
@@ -91,9 +95,18 @@ export const users = pgTable("users", {
   privacyAcceptedAt: timestamp("privacy_accepted_at"),
   // Activity tracking
   lastLoginAt: timestamp("last_login_at"),
+  // Per-account login throttling (R-L5). failedLoginAttempts increments on
+  // each wrong password and resets on success; once it crosses the threshold
+  // (5) we set lockoutUntil and refuse logins until that timestamp passes.
+  // IP-based rate limiting (authLimiter) protects the endpoint; this protects
+  // a specific account from credential-stuffing across IPs.
+  failedLoginAttempts: integer("failed_login_attempts").default(0),
+  lockoutUntil: timestamp("lockout_until"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => [
+  index("idx_users_created_at").on(table.createdAt),
+]);
 
 // Driver profiles
 export const driverProfiles = pgTable("driver_profiles", {
@@ -124,6 +137,7 @@ export const driverProfiles = pgTable("driver_profiles", {
 }, (table) => [
   index("idx_driver_profiles_user_id").on(table.userId),
   index("idx_driver_profiles_is_online").on(table.isOnline),
+  index("idx_driver_profiles_approval_status").on(table.approvalStatus),
 ]);
 
 // Vehicle information

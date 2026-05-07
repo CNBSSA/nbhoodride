@@ -93,7 +93,15 @@ async function ensureSuperAdminSetup() {
     const setupToken = process.env.SUPER_ADMIN_SETUP_TOKEN;
     if (!setupToken) return;
 
-    const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'thrynovainsights@gmail.com';
+    // R-L4: SUPER_ADMIN_EMAIL must be explicit. Removing the previous
+    // hardcoded "thrynovainsights@gmail.com" fallback so the email isn't
+    // baked into the codebase. Operators must set this in env.
+    const superAdminEmail = process.env.SUPER_ADMIN_EMAIL;
+    if (!superAdminEmail) {
+      console.warn('[setup] SUPER_ADMIN_EMAIL not set — skipping super admin auto-setup. Set it in env to enable.');
+      return;
+    }
+
     const existing = await storage.getUserByEmail(superAdminEmail);
     if (existing && !existing.isSuperAdmin) {
       await storage.adminUpdateUser(existing.id, { isSuperAdmin: true, isAdmin: true, isApproved: true, isVerified: true });
@@ -328,8 +336,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: `Password must contain: ${pwFeedback.join(", ")}.` });
       }
 
-      const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'thrynovainsights@gmail.com';
-    const existing = await storage.getUserByEmail(superAdminEmail);
+      // R-L4: SUPER_ADMIN_EMAIL is now required, no hardcoded fallback.
+      const superAdminEmail = process.env.SUPER_ADMIN_EMAIL;
+      if (!superAdminEmail) {
+        return res.status(500).json({
+          message: "Super admin setup not available: SUPER_ADMIN_EMAIL is not configured. Set it in Railway → Variables.",
+        });
+      }
+      const existing = await storage.getUserByEmail(superAdminEmail);
       if (existing) {
         if (!existing.isSuperAdmin) {
           const hashedPassword = await bcrypt.hash(password, 12);
@@ -342,7 +356,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const hashedPassword = await bcrypt.hash(password, 12);
       await storage.createUser({
-        email: 'thrynovainsights@gmail.com',
+        email: superAdminEmail,
         password: hashedPassword,
         firstName: 'Super',
         lastName: 'Admin',
@@ -606,10 +620,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
+      // R-L5: per-account lockout. If a previous lockout is still in effect,
+      // refuse without even checking the password — protects against credential
+      // stuffing across multiple IPs (the IP-based authLimiter only protects
+      // a single IP).
+      const LOGIN_LOCKOUT_THRESHOLD = 5;
+      const LOGIN_LOCKOUT_MINUTES = 15;
+      if (user.lockoutUntil && new Date(user.lockoutUntil) > new Date()) {
+        const minutesLeft = Math.ceil((new Date(user.lockoutUntil).getTime() - Date.now()) / 60000);
+        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=account_locked minutesLeft=${minutesLeft}`);
+        return res.status(429).json({
+          message: `Too many failed login attempts. Try again in ${minutesLeft} minute${minutesLeft === 1 ? '' : 's'}.`,
+          accountLocked: true,
+          retryAfterMinutes: minutesLeft,
+        });
+      }
+
       // Verify password
       const isValidPassword = await bcrypt.compare(password, user.password);
       if (!isValidPassword) {
-        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=wrong_password`);
+        // Record the failed attempt; lock the account if we've crossed the threshold.
+        const { attempts, lockoutUntil } = await storage.recordFailedLogin(user.id, {
+          threshold: LOGIN_LOCKOUT_THRESHOLD,
+          lockoutMinutes: LOGIN_LOCKOUT_MINUTES,
+        });
+        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=wrong_password attempts=${attempts}${lockoutUntil ? ' lockedUntil=' + lockoutUntil.toISOString() : ''}`);
+        if (lockoutUntil) {
+          return res.status(429).json({
+            message: `Too many failed login attempts. Account locked for ${LOGIN_LOCKOUT_MINUTES} minutes.`,
+            accountLocked: true,
+            retryAfterMinutes: LOGIN_LOCKOUT_MINUTES,
+          });
+        }
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
@@ -3475,7 +3517,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ADMIN ROUTES
   // ============================================================
 
-  const SUPER_ADMIN_EMAIL = 'thrynovainsights@gmail.com';
+  // R-L4: Super admin email comes from env, no hardcoded fallback. If unset,
+  // the second-factor email-match check in isSuperAdminAuth degrades to
+  // "isSuperAdmin flag only" (still secure — the flag is admin-set in DB).
+  const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL;
 
   const isAdminOrSessionAuth = async (req: any, res: any, next: any) => {
     const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -3490,7 +3535,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     const user = await storage.getUser(userId);
-    if (!user?.isSuperAdmin || user.email !== SUPER_ADMIN_EMAIL) return res.status(403).json({ message: "Super admin access required" });
+    if (!user?.isSuperAdmin) return res.status(403).json({ message: "Super admin access required" });
+    // Defense in depth: if SUPER_ADMIN_EMAIL is configured, require an exact
+    // match. If not configured (R-L4 made it optional), the isSuperAdmin
+    // flag in the DB is the only gate.
+    if (SUPER_ADMIN_EMAIL && user.email !== SUPER_ADMIN_EMAIL) {
+      return res.status(403).json({ message: "Super admin access required" });
+    }
     req.adminUser = user;
     next();
   };
