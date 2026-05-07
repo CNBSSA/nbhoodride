@@ -536,6 +536,43 @@ CREATE TABLE IF NOT EXISTS safety_alerts (
 );
 
 -- ── Idempotent constraints ────────────────────────────────────────────────────
+-- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
+-- the ALTER TABLE below throws "could not create unique index — Key (user_id)
+-- is duplicated" if any user already has multiple rows from earlier double-
+-- clicks of "Get Started" while strict validation was rejecting them. Railway
+-- then aborts the preDeployCommand and the new code never reaches production.
+-- Keeps the oldest row per user_id; cascades the cleanup to vehicles that
+-- referenced any of the to-be-deleted profile rows.
+DO $$
+DECLARE
+  duplicate_user_ids INTEGER;
+BEGIN
+  SELECT COUNT(*) INTO duplicate_user_ids
+  FROM (SELECT user_id FROM driver_profiles GROUP BY user_id HAVING COUNT(*) > 1) t;
+
+  IF duplicate_user_ids > 0 THEN
+    RAISE NOTICE '[migrate] Deduping % user(s) with multiple driver_profiles rows', duplicate_user_ids;
+
+    DELETE FROM vehicles WHERE driver_profile_id IN (
+      SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY user_id ORDER BY created_at ASC NULLS LAST, id ASC
+        ) AS rn
+        FROM driver_profiles
+      ) t WHERE t.rn > 1
+    );
+
+    DELETE FROM driver_profiles WHERE id IN (
+      SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY user_id ORDER BY created_at ASC NULLS LAST, id ASC
+        ) AS rn
+        FROM driver_profiles
+      ) t WHERE t.rn > 1
+    );
+  END IF;
+END $$;
+
 -- Ensure one driver profile per user — prevents duplicate rows from concurrent
 -- "Get Started" clicks or retries.
 DO $$ BEGIN

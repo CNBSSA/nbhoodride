@@ -866,8 +866,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...req.body,
         userId
       });
-      
-      const profile = await storage.createDriverProfile(profileData);
+
+      let profile;
+      try {
+        profile = await storage.createDriverProfile(profileData);
+      } catch (insertErr: any) {
+        // Defensive: if a profile already exists for this user (e.g. concurrent
+        // double-click, or the idempotency check raced), fall back to the
+        // existing row instead of surfacing the unique-constraint error as 500.
+        const code = insertErr?.code ?? insertErr?.cause?.code;
+        const msg = String(insertErr?.message ?? "");
+        if (code === "23505" || /unique|duplicate key/i.test(msg)) {
+          const fallback = await storage.getDriverProfile(userId);
+          if (fallback) {
+            await storage.upsertUser({ id: userId, isDriver: true });
+            return res.json(fallback);
+          }
+        }
+        throw insertErr;
+      }
 
       // Create vehicle record if vehicle data was provided
       if (validatedDriverData.vehicle) {
@@ -877,12 +894,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
         await storage.createVehicle(vehicleData);
       }
-      
+
       // Update user to mark as driver
       await storage.upsertUser({ id: userId, isDriver: true });
 
       console.log(`[AUDIT] driver_profile_created userId=${userId} licenseNumber=${validatedDriverData.licenseNumber}`);
-      
+
       res.json(profile);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
