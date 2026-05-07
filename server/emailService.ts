@@ -13,9 +13,38 @@ const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 
+// Loud startup warning if email isn't configured. In production this is
+// almost always a misconfiguration (signup flow advertises "check your email"
+// but nothing goes out). In dev/test we log once and move on.
+if (!resend) {
+  const msg =
+    "[EMAIL] RESEND_API_KEY is not set. Outbound email will fail. " +
+    "Set RESEND_API_KEY (and RESEND_FROM) in Railway → Variables.";
+  if (process.env.NODE_ENV === "production") {
+    console.error(`\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n${msg}\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n`);
+  } else {
+    console.warn(msg);
+  }
+}
+
+export class EmailNotConfiguredError extends Error {
+  constructor() {
+    super("Email service is not configured. RESEND_API_KEY is missing.");
+    this.name = "EmailNotConfiguredError";
+  }
+}
+
 async function sendEmail(to: string, subject: string, html: string): Promise<void> {
   if (!resend) {
-    console.log(`[EMAIL — not sent, RESEND_API_KEY not set]\nTo: ${to}\nSubject: ${subject}`);
+    // In production, fail loudly so the calling route surfaces the issue
+    // instead of silently succeeding while the user waits for an email that
+    // will never arrive. In dev, keep the old log-and-no-op behaviour so
+    // local development without a Resend key still works.
+    if (process.env.NODE_ENV === "production") {
+      console.error(`[EMAIL] Refusing to send (RESEND_API_KEY missing): to=${to} subject=${subject}`);
+      throw new EmailNotConfiguredError();
+    }
+    console.log(`[EMAIL — not sent in dev, RESEND_API_KEY not set]\nTo: ${to}\nSubject: ${subject}`);
     return;
   }
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -25,6 +54,9 @@ async function sendEmail(to: string, subject: string, html: string): Promise<voi
     } catch (err) {
       if (attempt === 2) {
         console.error(`[EMAIL] Failed to send to ${to} after 2 attempts:`, err);
+        // Bubble the failure up so endpoints can decide whether to mark the
+        // request as a soft success (fire-and-forget) or a hard failure.
+        throw err;
       } else {
         await new Promise(r => setTimeout(r, 2000));
       }
