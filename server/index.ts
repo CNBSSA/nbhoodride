@@ -3,6 +3,7 @@ import helmet from "helmet";
 import cors from "cors";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { csrfMiddleware } from "./csrfProtection";
 
 // Ensure crashes are always visible in Railway logs
 process.on('uncaughtException', (err) => {
@@ -33,6 +34,11 @@ app.use('/api/webhooks', express.raw({ type: 'application/json' }));
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
+
+// CSRF: issues a token cookie on safe requests, validates X-CSRF-Token on
+// mutating /api/* (except webhooks). Mounted after body parsing so the JSON
+// 403 response can be written cleanly.
+app.use(csrfMiddleware);
 
 app.use((req, res, next) => {
   const start = Date.now();

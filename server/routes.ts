@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { db } from "./db";
 import { setupAuth, isAuthenticated, getSession } from "./replitAuth";
+import { csrfTokenEndpoint } from "./csrfProtection";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
 import { z } from "zod";
@@ -140,6 +141,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api/auth/test-login', authLimiter);
   app.use('/api/admin/setup-super-admin', authLimiter);
   app.use('/api/ai', aiLimiter);
+
+  // CSRF: client can ping this once at boot to make sure a token cookie is
+  // in place before its first state-changing request. The actual token issuance
+  // is handled by the global csrfMiddleware in server/index.ts.
+  app.get('/api/csrf', csrfTokenEndpoint);
 
   // Auth middleware
   await setupAuth(app);
