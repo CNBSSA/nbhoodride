@@ -114,6 +114,43 @@ export async function sendAccountApprovedEmail(user: {
   );
 }
 
+// 1b. Driver approved — sent when admin transitions driver_profile.approval_status
+// to "approved" (post-background-check, post-document-review).
+export async function sendDriverApprovedEmail(user: {
+  email: string | null;
+  firstName: string | null;
+}): Promise<void> {
+  if (!user.email) return;
+  const name = user.firstName || "there";
+
+  await sendEmail(
+    user.email,
+    "You're cleared to drive on PG Ride 🚗",
+    baseTemplate(`
+      <p>Hi ${name},</p>
+      <p>Your PG Ride driver application has been approved! You can now go online and start accepting ride requests in your service area.</p>
+      <div class="card">
+        <div class="card-row">
+          <span class="card-label">Status</span>
+          <span class="card-value"><span class="badge">Approved</span></span>
+        </div>
+        <div class="card-row">
+          <span class="card-label">Next step</span>
+          <span class="card-value">Open the app, toggle "Online", pick your counties</span>
+        </div>
+      </div>
+      <p>A few quick reminders before your first ride:</p>
+      <ul style="color:#374151; font-size:14px; line-height:1.6; padding-left:20px;">
+        <li>Keep your license, insurance, and registration current — we'll prompt you to re-upload before they expire.</li>
+        <li>Earnings credit to your driver wallet after each ride; cash out anytime via the Payouts screen.</li>
+        <li>Drive safely and follow community guidelines — your rating affects how often you get matched.</li>
+      </ul>
+      <a href="${APP_URL}" class="btn">Open PG Ride</a>
+      <p style="font-size:13px; color:#6b7280; margin-top:8px;">Welcome to the team — drive safe.</p>
+    `)
+  );
+}
+
 // 2. Password reset
 export async function sendPasswordResetEmail(
   email: string,

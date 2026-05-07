@@ -16,6 +16,7 @@ import rateLimit from "express-rate-limit";
 import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import {
   sendAccountApprovedEmail,
+  sendDriverApprovedEmail,
   sendEmailVerificationEmail,
   sendPasswordResetEmail,
   sendRideAcceptedEmail,
@@ -3724,8 +3725,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Capture the prior approval state so we only fire the approved-email
+      // on a real transition (admin saving the form repeatedly shouldn't spam).
+      const priorProfile = updates.approvalStatus === 'approved'
+        ? await storage.getDriverProfile(userId)
+        : null;
+      const wasApproved = priorProfile?.approvalStatus === 'approved';
+
       const profile = await storage.adminUpdateDriverProfile(userId, updates);
       await storage.logAdminAction(adminId, 'update_driver', 'driver_profile', userId, updates);
+
+      if (updates.approvalStatus === 'approved' && !wasApproved) {
+        const targetUser = await storage.getUser(userId);
+        if (targetUser?.email) {
+          sendDriverApprovedEmail({
+            email: targetUser.email,
+            firstName: targetUser.firstName,
+          }).catch((err) => console.error("Failed to send driver-approved email:", err));
+        }
+        console.log(`[AUDIT] driver_approved adminId=${adminId} userId=${userId}`);
+      }
+
       res.json(profile);
     } catch (error) {
       console.error("Error updating driver:", error);
