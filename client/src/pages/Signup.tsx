@@ -14,6 +14,8 @@ export default function Signup() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [pendingApproval, setPendingApproval] = useState(false);
   const [, setLocation] = useLocation();
@@ -31,6 +33,15 @@ export default function Signup() {
       return;
     }
 
+    if (!termsAccepted || !privacyAccepted) {
+      toast({
+        title: "Consent Required",
+        description: "You must accept the Terms of Service and Privacy Policy to sign up.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsLoading(true);
 
     try {
@@ -39,7 +50,15 @@ export default function Signup() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password, firstName, lastName, phone }),
+        body: JSON.stringify({
+          email,
+          password,
+          firstName,
+          lastName,
+          phone,
+          termsAccepted,
+          privacyAccepted,
+        }),
         credentials: 'include',
       });
 
@@ -197,10 +216,47 @@ export default function Signup() {
               />
             </div>
 
-            <Button 
-              type="submit" 
+            <div className="space-y-2 pt-2">
+              <label className="flex items-start gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 rounded border-input cursor-pointer"
+                  checked={termsAccepted}
+                  onChange={(e) => setTermsAccepted(e.target.checked)}
+                  required
+                  data-testid="checkbox-terms"
+                />
+                <span className="text-muted-foreground">
+                  I agree to the{" "}
+                  <a href="/terms" className="underline text-primary" target="_blank" rel="noopener noreferrer">
+                    Terms of Service
+                  </a>
+                  .
+                </span>
+              </label>
+              <label className="flex items-start gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 rounded border-input cursor-pointer"
+                  checked={privacyAccepted}
+                  onChange={(e) => setPrivacyAccepted(e.target.checked)}
+                  required
+                  data-testid="checkbox-privacy"
+                />
+                <span className="text-muted-foreground">
+                  I agree to the{" "}
+                  <a href="/privacy" className="underline text-primary" target="_blank" rel="noopener noreferrer">
+                    Privacy Policy
+                  </a>
+                  .
+                </span>
+              </label>
+            </div>
+
+            <Button
+              type="submit"
               className="w-full"
-              disabled={isLoading}
+              disabled={isLoading || !termsAccepted || !privacyAccepted}
               data-testid="button-signup"
             >
               {isLoading ? 'Creating Account...' : 'Sign Up'}
@@ -218,14 +274,8 @@ export default function Signup() {
             </p>
           </div>
 
-          <div className="mt-4 text-xs text-center text-muted-foreground">
-            <p>
-              By signing up, you agree to our{" "}
-              <a href="/terms" className="underline text-primary" target="_blank">Terms of Service</a>
-              {" "}and{" "}
-              <a href="/privacy" className="underline text-primary" target="_blank">Privacy Policy</a>.
-            </p>
-            <p className="mt-2 text-green-700 dark:text-green-400 font-medium">
+          <div className="mt-4 text-xs text-center">
+            <p className="text-green-700 dark:text-green-400 font-medium">
               🎉 New riders get $20 in Virtual PG Card credit + 4 rides with $5 off each!
             </p>
           </div>

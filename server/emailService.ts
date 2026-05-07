@@ -13,9 +13,38 @@ const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 
+// Loud startup warning if email isn't configured. In production this is
+// almost always a misconfiguration (signup flow advertises "check your email"
+// but nothing goes out). In dev/test we log once and move on.
+if (!resend) {
+  const msg =
+    "[EMAIL] RESEND_API_KEY is not set. Outbound email will fail. " +
+    "Set RESEND_API_KEY (and RESEND_FROM) in Railway → Variables.";
+  if (process.env.NODE_ENV === "production") {
+    console.error(`\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n${msg}\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n`);
+  } else {
+    console.warn(msg);
+  }
+}
+
+export class EmailNotConfiguredError extends Error {
+  constructor() {
+    super("Email service is not configured. RESEND_API_KEY is missing.");
+    this.name = "EmailNotConfiguredError";
+  }
+}
+
 async function sendEmail(to: string, subject: string, html: string): Promise<void> {
   if (!resend) {
-    console.log(`[EMAIL — not sent, RESEND_API_KEY not set]\nTo: ${to}\nSubject: ${subject}`);
+    // In production, fail loudly so the calling route surfaces the issue
+    // instead of silently succeeding while the user waits for an email that
+    // will never arrive. In dev, keep the old log-and-no-op behaviour so
+    // local development without a Resend key still works.
+    if (process.env.NODE_ENV === "production") {
+      console.error(`[EMAIL] Refusing to send (RESEND_API_KEY missing): to=${to} subject=${subject}`);
+      throw new EmailNotConfiguredError();
+    }
+    console.log(`[EMAIL — not sent in dev, RESEND_API_KEY not set]\nTo: ${to}\nSubject: ${subject}`);
     return;
   }
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -25,6 +54,9 @@ async function sendEmail(to: string, subject: string, html: string): Promise<voi
     } catch (err) {
       if (attempt === 2) {
         console.error(`[EMAIL] Failed to send to ${to} after 2 attempts:`, err);
+        // Bubble the failure up so endpoints can decide whether to mark the
+        // request as a soft success (fire-and-forget) or a hard failure.
+        throw err;
       } else {
         await new Promise(r => setTimeout(r, 2000));
       }
@@ -110,6 +142,43 @@ export async function sendAccountApprovedEmail(user: {
       <p>Your first 4 rides each come with a $5 discount automatically — no code needed. Just open the app and book!</p>
       <a href="${APP_URL}" class="btn">Open PG Ride</a>
       <p style="font-size:13px; color:#6b7280; margin-top:8px;">No surge pricing · Community-owned · PG County only</p>
+    `)
+  );
+}
+
+// 1b. Driver approved — sent when admin transitions driver_profile.approval_status
+// to "approved" (post-background-check, post-document-review).
+export async function sendDriverApprovedEmail(user: {
+  email: string | null;
+  firstName: string | null;
+}): Promise<void> {
+  if (!user.email) return;
+  const name = user.firstName || "there";
+
+  await sendEmail(
+    user.email,
+    "You're cleared to drive on PG Ride 🚗",
+    baseTemplate(`
+      <p>Hi ${name},</p>
+      <p>Your PG Ride driver application has been approved! You can now go online and start accepting ride requests in your service area.</p>
+      <div class="card">
+        <div class="card-row">
+          <span class="card-label">Status</span>
+          <span class="card-value"><span class="badge">Approved</span></span>
+        </div>
+        <div class="card-row">
+          <span class="card-label">Next step</span>
+          <span class="card-value">Open the app, toggle "Online", pick your counties</span>
+        </div>
+      </div>
+      <p>A few quick reminders before your first ride:</p>
+      <ul style="color:#374151; font-size:14px; line-height:1.6; padding-left:20px;">
+        <li>Keep your license, insurance, and registration current — we'll prompt you to re-upload before they expire.</li>
+        <li>Earnings credit to your driver wallet after each ride; cash out anytime via the Payouts screen.</li>
+        <li>Drive safely and follow community guidelines — your rating affects how often you get matched.</li>
+      </ul>
+      <a href="${APP_URL}" class="btn">Open PG Ride</a>
+      <p style="font-size:13px; color:#6b7280; margin-top:8px;">Welcome to the team — drive safe.</p>
     `)
   );
 }

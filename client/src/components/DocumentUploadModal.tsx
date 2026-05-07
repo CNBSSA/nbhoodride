@@ -25,10 +25,17 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
 
   const submitDocumentsMutation = useMutation({
     mutationFn: async (documents: UploadedDocument[]) => {
-      // Update driver profile with document URLs
+      // Vehicle photos arrive as types vehicle-0..vehicle-3; collect them in
+      // slot order (front/side/interior/back) and persist alongside license
+      // and insurance so the admin reviewer can see the full submission.
+      const vehiclePhotoUrls = ['vehicle-0', 'vehicle-1', 'vehicle-2', 'vehicle-3']
+        .map((type) => documents.find((d) => d.type === type)?.url)
+        .filter((url): url is string => Boolean(url));
+
       const response = await apiRequest('PUT', '/api/driver/profile', {
-        licenseImageUrl: documents.find(d => d.type === 'license')?.url,
-        insuranceImageUrl: documents.find(d => d.type === 'insurance')?.url,
+        licenseImageUrl: documents.find((d) => d.type === 'license')?.url,
+        insuranceImageUrl: documents.find((d) => d.type === 'insurance')?.url,
+        vehiclePhotoUrls,
       });
       return response.json();
     },
