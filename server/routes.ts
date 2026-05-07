@@ -3728,6 +3728,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No valid fields to update" });
       }
 
+      // Pre-approval doc-presence guard (R-M2). Before flipping a driver to
+      // "approved" we require the basic onboarding deliverables to exist:
+      // license image, insurance image, and at least one vehicle row OR at
+      // least one stashed vehicle photo URL on the driver_profile. Prevents
+      // an admin from approving a half-onboarded driver with a misclick.
+      if (updates.approvalStatus === 'approved') {
+        const profile = await storage.getDriverProfile(userId);
+        if (!profile) {
+          return res.status(400).json({ message: "Driver profile not found." });
+        }
+        const missing: string[] = [];
+        if (!profile.licenseImageUrl) missing.push("license image");
+        if (!profile.insuranceImageUrl) missing.push("insurance image");
+        const stashedVehiclePhotos = (profile as any).vehiclePhotoUrls;
+        const hasVehiclePhotos = Array.isArray(stashedVehiclePhotos) && stashedVehiclePhotos.length > 0;
+        let hasVehicleRow = false;
+        try {
+          const vehicles = await storage.getVehiclesByDriverId(profile.id);
+          hasVehicleRow = (vehicles?.length ?? 0) > 0;
+        } catch {
+          hasVehicleRow = false;
+        }
+        if (!hasVehiclePhotos && !hasVehicleRow) missing.push("vehicle photos / vehicle record");
+        if (missing.length > 0) {
+          return res.status(400).json({
+            message: `Cannot approve: driver onboarding is incomplete (missing: ${missing.join(", ")}).`,
+            missing,
+          });
+        }
+      }
+
       // If admin sets approvalStatus → approved AND Checkr is configured, trigger background check
       if (updates.approvalStatus === 'approved' && process.env.CHECKR_API_KEY) {
         const targetUser = await storage.getUser(userId);
