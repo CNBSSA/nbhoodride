@@ -97,7 +97,9 @@ export const users = pgTable("users", {
   lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => [
+  index("idx_users_created_at").on(table.createdAt),
+]);
 
 // Driver profiles
 export const driverProfiles = pgTable("driver_profiles", {
@@ -128,6 +130,7 @@ export const driverProfiles = pgTable("driver_profiles", {
 }, (table) => [
   index("idx_driver_profiles_user_id").on(table.userId),
   index("idx_driver_profiles_is_online").on(table.isOnline),
+  index("idx_driver_profiles_approval_status").on(table.approvalStatus),
 ]);
 
 // Vehicle information

@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_users_created_at ON users (created_at);
 
 -- Idempotent column additions for databases created before these columns
 -- existed. Required because CREATE TABLE IF NOT EXISTS above is a no-op on
@@ -119,6 +120,7 @@ CREATE TABLE IF NOT EXISTS driver_profiles (
 );
 CREATE INDEX IF NOT EXISTS idx_driver_profiles_user_id ON driver_profiles (user_id);
 CREATE INDEX IF NOT EXISTS idx_driver_profiles_is_online ON driver_profiles (is_online);
+CREATE INDEX IF NOT EXISTS idx_driver_profiles_approval_status ON driver_profiles (approval_status);
 
 -- Idempotent column addition for existing DBs predating R-C2. Holds vehicle
 -- photo URLs uploaded during onboarding before a vehicles row exists.
