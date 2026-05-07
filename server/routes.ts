@@ -490,6 +490,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const verificationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
       await storage.setEmailVerificationToken(user.id, verificationToken, verificationExpiry);
 
+      // ── Welcome bonus ledger entry (R-M1) ────────────────────────────────
+      // Mirror the $20 starting balance set on the user row above into the
+      // wallet_transactions ledger so we have an auditable record of the
+      // credit. Without this, the balance exists but with no transaction
+      // history, which makes reconciliation impossible after the first
+      // ride/topup.
+      const startingBalance = parseFloat(user.virtualCardBalance || "20.00");
+      await storage.logWalletTransaction({
+        userId: user.id,
+        amount: startingBalance,
+        balanceAfter: startingBalance,
+        reason: "welcome_bonus",
+      }).catch((err) => console.error("Failed to log welcome bonus ledger entry:", err));
+
       // ── Audit log ────────────────────────────────────────────────────────
       console.log(`[AUDIT] signup_success ip=${ip} userId=${user.id} email=${user.email}`);
 
