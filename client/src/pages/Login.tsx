@@ -11,12 +11,44 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [verificationRequired, setVerificationRequired] = useState<{ email: string } | null>(null);
+  const [resending, setResending] = useState(false);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+
+  const handleResendVerification = async () => {
+    if (!verificationRequired) return;
+    setResending(true);
+    try {
+      const response = await fetch('/api/auth/resend-verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: verificationRequired.email }),
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.message || 'Could not resend verification email');
+      }
+      toast({
+        title: 'Verification email sent',
+        description: `If an unverified account exists for ${verificationRequired.email}, a fresh link has been sent.`,
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Resend failed',
+        description: error.message || 'Please try again in a moment.',
+        variant: 'destructive',
+      });
+    } finally {
+      setResending(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setVerificationRequired(null);
 
     try {
       const response = await fetch('/api/auth/email-login', {
@@ -29,15 +61,24 @@ export default function Login() {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Login failed');
+        const error = await response.json().catch(() => ({}));
+        if (error?.emailVerificationRequired && error.email) {
+          setVerificationRequired({ email: error.email });
+          toast({
+            title: 'Verify your email',
+            description: error.message || 'Please click the link in your inbox to finish signing up.',
+            variant: 'destructive',
+          });
+          return;
+        }
+        throw new Error(error?.message || 'Login failed');
       }
 
       const data = await response.json();
-      
+
       // Invalidate auth cache to refresh authentication state
       await queryClient.invalidateQueries({ queryKey: ['/api/auth/user'] });
-      
+
       toast({
         title: "Login Successful!",
         description: `Welcome back, ${data.user.firstName}!`,
@@ -72,6 +113,24 @@ export default function Login() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {verificationRequired && (
+            <div className="mb-4 rounded-md border border-orange-200 bg-orange-50 p-3 text-sm dark:border-orange-900 dark:bg-orange-950" data-testid="banner-verify-email">
+              <p className="text-orange-900 dark:text-orange-200">
+                Your email <span className="font-semibold">{verificationRequired.email}</span> isn't verified yet. Check your inbox for the link, or resend it below.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-2"
+                disabled={resending}
+                onClick={handleResendVerification}
+                data-testid="button-resend-verification"
+              >
+                {resending ? 'Sending...' : 'Resend verification email'}
+              </Button>
+            </div>
+          )}
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>

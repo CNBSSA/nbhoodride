@@ -594,6 +594,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Your account has been suspended. Please contact support." });
       }
 
+      // Email verification gate (R-H1).
+      // Only enforced for users who went through the new signup flow
+      // (registrationCompletedAt set). Pre-existing accounts created before
+      // verification was wired in are exempt. Admins/super admins bypass.
+      const requiresEmailVerification =
+        !!user.registrationCompletedAt &&
+        !user.emailVerifiedAt &&
+        !user.isAdmin &&
+        !user.isSuperAdmin;
+      if (requiresEmailVerification) {
+        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=email_not_verified`);
+        return res.status(403).json({
+          message: "Please verify your email before logging in. Check your inbox for the verification link.",
+          emailVerificationRequired: true,
+          email: user.email,
+        });
+      }
+
       // Check if user is approved (admins and super admins skip this check)
       if (!user.isApproved && !user.isAdmin && !user.isSuperAdmin) {
         console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=pending_approval`);
