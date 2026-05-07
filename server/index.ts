@@ -15,6 +15,40 @@ process.on('unhandledRejection', (reason) => {
   process.exit(1);
 });
 
+// Startup env-var sanity check. Fails fast on missing essentials in production
+// and warns loudly on missing-but-recoverable ones. Same RESEND warning lives
+// in emailService.ts; we surface a consolidated banner here too.
+function checkEnv() {
+  const isProd = process.env.NODE_ENV === "production";
+  const required: string[] = ["DATABASE_URL", "SESSION_SECRET"];
+  const recommendedInProd: { name: string; why: string }[] = [
+    { name: "ALLOWED_ORIGINS", why: "without it, CORS is fully disabled — browser clients on a different origin can't reach the API" },
+    { name: "APP_URL", why: "email links will fall back to req.host which can be wrong behind Railway's proxy" },
+    { name: "RESEND_API_KEY", why: "all transactional email (verification, approvals, receipts) will fail" },
+    { name: "RESEND_FROM", why: "Resend will reject sends without a verified sender" },
+  ];
+
+  const missingRequired = required.filter((k) => !process.env[k]);
+  if (missingRequired.length > 0) {
+    console.error(`[startup] Missing required env vars: ${missingRequired.join(", ")}. The app cannot start safely.`);
+    if (isProd) process.exit(1);
+  }
+
+  if (isProd) {
+    const missingRecommended = recommendedInProd.filter((k) => !process.env[k.name]);
+    if (missingRecommended.length > 0) {
+      console.warn("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+      console.warn("[startup] Production env vars MISSING — features will silently degrade:");
+      for (const { name, why } of missingRecommended) {
+        console.warn(`  - ${name}: ${why}`);
+      }
+      console.warn("Set these in Railway → Variables.");
+      console.warn("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+    }
+  }
+}
+checkEnv();
+
 const app = express();
 
 // CRITICAL: Health check endpoint MUST be first for deployment health checks
