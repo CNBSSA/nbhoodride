@@ -146,6 +146,41 @@ export async function sendAccountApprovedEmail(user: {
   );
 }
 
+// 1c. Signup rejected — sent when an admin rejects a pending signup with a
+// reason. Account is also marked is_suspended on the server side; this email
+// is the user-facing explanation.
+export async function sendSignupRejectedEmail(user: {
+  email: string | null;
+  firstName: string | null;
+  reason: string;
+}): Promise<void> {
+  if (!user.email) return;
+  const name = user.firstName || "there";
+  // Defang the admin-supplied reason — user-controlled string, must not be
+  // injected as raw HTML.
+  const escapedReason = user.reason
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  await sendEmail(
+    user.email,
+    "Update on your PG Ride application",
+    baseTemplate(`
+      <p>Hi ${name},</p>
+      <p>Thanks for your interest in PG Ride. Unfortunately we're not able to approve your account at this time.</p>
+      <div class="card" style="background:#fef2f2; border-color:#fecaca;">
+        <div class="card-row">
+          <span class="card-label">Reason from our team</span>
+        </div>
+        <p style="color:#374151; font-size:14px; line-height:1.6; margin: 8px 0 0;">${escapedReason}</p>
+      </div>
+      <p>If you believe this was a mistake or you'd like to provide additional information, please reply to this email or contact our support team.</p>
+      <p style="font-size:13px; color:#6b7280; margin-top:8px;">PG Ride · Prince George's County, Maryland</p>
+    `)
+  );
+}
+
 // 1b. Driver approved — sent when admin transitions driver_profile.approval_status
 // to "approved" (post-background-check, post-document-review).
 export async function sendDriverApprovedEmail(user: {

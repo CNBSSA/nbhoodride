@@ -17,6 +17,16 @@ export default function Signup() {
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Mirror of server-side validatePasswordComplexity. Used both for the
+  // live checklist UI and to gate the submit button so the user can't
+  // submit a password the server will reject anyway.
+  const passwordRulesMet =
+    password.length >= 8 &&
+    /[A-Z]/.test(password) &&
+    /[a-z]/.test(password) &&
+    /[0-9]/.test(password) &&
+    /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
   const [pendingApproval, setPendingApproval] = useState(false);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -193,13 +203,45 @@ export default function Signup() {
               <Input
                 id="password"
                 type="password"
-                placeholder="Minimum 8 characters"
+                placeholder="At least 8 chars · 1 of each: A·a·1·!"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
                 data-testid="input-password"
               />
+              {/* Live mirror of the server's password complexity rule
+                  (server/routes.ts validatePasswordComplexity). Stays grey
+                  until the user starts typing, then ticks green per match. */}
+              {(() => {
+                const rules = [
+                  { ok: password.length >= 8, label: 'At least 8 characters' },
+                  { ok: /[A-Z]/.test(password), label: 'One uppercase letter (A–Z)' },
+                  { ok: /[a-z]/.test(password), label: 'One lowercase letter (a–z)' },
+                  { ok: /[0-9]/.test(password), label: 'One number (0–9)' },
+                  { ok: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password), label: 'One special character (!@#$%^&* etc.)' },
+                ];
+                return (
+                  <ul className="text-xs space-y-1 mt-1" aria-label="Password requirements">
+                    {rules.map((rule) => (
+                      <li
+                        key={rule.label}
+                        data-testid={`pw-rule-${rule.ok ? 'ok' : 'pending'}`}
+                        className={
+                          password.length === 0
+                            ? 'text-muted-foreground'
+                            : rule.ok
+                              ? 'text-green-700 dark:text-green-400'
+                              : 'text-muted-foreground'
+                        }
+                      >
+                        <span aria-hidden="true">{password.length === 0 ? '○' : rule.ok ? '✓' : '○'}</span>{' '}
+                        {rule.label}
+                      </li>
+                    ))}
+                  </ul>
+                );
+              })()}
             </div>
 
             <div className="space-y-2">
@@ -256,7 +298,7 @@ export default function Signup() {
             <Button
               type="submit"
               className="w-full"
-              disabled={isLoading || !termsAccepted || !privacyAccepted}
+              disabled={isLoading || !termsAccepted || !privacyAccepted || !passwordRulesMet || password !== confirmPassword}
               data-testid="button-signup"
             >
               {isLoading ? 'Creating Account...' : 'Sign Up'}

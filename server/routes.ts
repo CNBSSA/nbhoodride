@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { db } from "./db";
 import { setupAuth, isAuthenticated, getSession } from "./replitAuth";
+import { csrfTokenEndpoint } from "./csrfProtection";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
 import { z } from "zod";
@@ -22,6 +23,7 @@ import {
   sendRideAcceptedEmail,
   sendRideReceiptEmail,
   sendSignupPendingEmail,
+  sendSignupRejectedEmail,
 } from "./emailService";
 import { sendPushToSubscriptions } from "./pushService";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
@@ -139,7 +141,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api/auth/resend-verification', authLimiter);
   app.use('/api/auth/test-login', authLimiter);
   app.use('/api/admin/setup-super-admin', authLimiter);
+  // R-M4: rate-limit driver profile creation. POST creates the row;
+  // PUT updates document URLs after upload. Both share the same auth
+  // limiter to prevent abuse / accidental loops from a buggy client.
+  app.use('/api/driver/profile', authLimiter);
   app.use('/api/ai', aiLimiter);
+
+  // CSRF: client can ping this once at boot to make sure a token cookie is
+  // in place before its first state-changing request. The actual token issuance
+  // is handled by the global csrfMiddleware in server/index.ts.
+  app.get('/api/csrf', csrfTokenEndpoint);
 
   // Auth middleware
   await setupAuth(app);
@@ -484,6 +495,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const verificationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
       await storage.setEmailVerificationToken(user.id, verificationToken, verificationExpiry);
 
+      // ── Welcome bonus ledger entry (R-M1) ────────────────────────────────
+      // Mirror the $20 starting balance set on the user row above into the
+      // wallet_transactions ledger so we have an auditable record of the
+      // credit. Without this, the balance exists but with no transaction
+      // history, which makes reconciliation impossible after the first
+      // ride/topup.
+      const startingBalance = parseFloat(user.virtualCardBalance || "20.00");
+      await storage.logWalletTransaction({
+        userId: user.id,
+        amount: startingBalance,
+        balanceAfter: startingBalance,
+        reason: "welcome_bonus",
+      }).catch((err) => console.error("Failed to log welcome bonus ledger entry:", err));
+
       // ── Audit log ────────────────────────────────────────────────────────
       console.log(`[AUDIT] signup_success ip=${ip} userId=${user.id} email=${user.email}`);
 
@@ -592,6 +617,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (user.isSuspended) {
         console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=suspended`);
         return res.status(403).json({ message: "Your account has been suspended. Please contact support." });
+      }
+
+      // Email verification gate (R-H1).
+      // Only enforced for users who went through the new signup flow
+      // (registrationCompletedAt set). Pre-existing accounts created before
+      // verification was wired in are exempt. Admins/super admins bypass.
+      const requiresEmailVerification =
+        !!user.registrationCompletedAt &&
+        !user.emailVerifiedAt &&
+        !user.isAdmin &&
+        !user.isSuperAdmin;
+      if (requiresEmailVerification) {
+        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=email_not_verified`);
+        return res.status(403).json({
+          message: "Please verify your email before logging in. Check your inbox for the verification link.",
+          emailVerificationRequired: true,
+          email: user.email,
+        });
       }
 
       // Check if user is approved (admins and super admins skip this check)
@@ -3531,6 +3574,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Revoke user approval (admin or super admin)
+  // Reject a pending signup with a reason (R-M3). Marks the user suspended
+  // and emails the user with the reason. Use this instead of just leaving
+  // a signup hanging in the pending state.
+  app.post('/api/admin/users/:userId/reject', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { userId } = req.params;
+      const adminId = req.adminUser.id;
+      const schema = z.object({
+        reason: z.string().min(1, "Reason is required").max(500, "Reason is too long"),
+      });
+      const { reason } = schema.parse(req.body);
+
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      if (targetUser.isSuperAdmin) return res.status(403).json({ message: "Cannot reject super admin" });
+      if (targetUser.isAdmin && !req.adminUser.isSuperAdmin) {
+        return res.status(403).json({ message: "Only super admin can reject other admins" });
+      }
+      if (targetUser.isApproved) {
+        return res.status(400).json({ message: "User is already approved. Use revoke-approval instead." });
+      }
+
+      const user = await storage.adminUpdateUser(userId, {
+        isApproved: false,
+        isSuspended: true,
+      });
+      await storage.logAdminAction(adminId, 'reject_signup', 'user', userId, {
+        email: targetUser.email,
+        reason,
+      });
+      console.log(`[AUDIT] signup_rejected adminId=${adminId} userId=${userId} email=${targetUser.email}`);
+
+      sendSignupRejectedEmail({
+        email: targetUser.email,
+        firstName: targetUser.firstName,
+        reason,
+      }).catch((err) => console.error("Failed to send signup-rejected email:", err));
+
+      res.json(user);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Error rejecting signup:", error);
+      res.status(500).json({ message: "Failed to reject signup" });
+    }
+  });
+
   app.post('/api/admin/users/:userId/revoke-approval', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const { userId } = req.params;
@@ -3688,6 +3779,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       if (Object.keys(updates).length === 0) {
         return res.status(400).json({ message: "No valid fields to update" });
+      }
+
+      // Pre-approval doc-presence guard (R-M2). Before flipping a driver to
+      // "approved" we require the basic onboarding deliverables to exist:
+      // license image, insurance image, and at least one vehicle row OR at
+      // least one stashed vehicle photo URL on the driver_profile. Prevents
+      // an admin from approving a half-onboarded driver with a misclick.
+      if (updates.approvalStatus === 'approved') {
+        const profile = await storage.getDriverProfile(userId);
+        if (!profile) {
+          return res.status(400).json({ message: "Driver profile not found." });
+        }
+        const missing: string[] = [];
+        if (!profile.licenseImageUrl) missing.push("license image");
+        if (!profile.insuranceImageUrl) missing.push("insurance image");
+        const stashedVehiclePhotos = (profile as any).vehiclePhotoUrls;
+        const hasVehiclePhotos = Array.isArray(stashedVehiclePhotos) && stashedVehiclePhotos.length > 0;
+        let hasVehicleRow = false;
+        try {
+          const vehicles = await storage.getVehiclesByDriverId(profile.id);
+          hasVehicleRow = (vehicles?.length ?? 0) > 0;
+        } catch {
+          hasVehicleRow = false;
+        }
+        if (!hasVehiclePhotos && !hasVehicleRow) missing.push("vehicle photos / vehicle record");
+        if (missing.length > 0) {
+          return res.status(400).json({
+            message: `Cannot approve: driver onboarding is incomplete (missing: ${missing.join(", ")}).`,
+            missing,
+          });
+        }
       }
 
       // If admin sets approvalStatus → approved AND Checkr is configured, trigger background check
@@ -4902,7 +5024,17 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
             await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'approved' } as any);
             await storage.adminUpdateUser(profile.userId, { isApproved: true });
             const user = await storage.getUser(profile.userId);
-            if (user) sendAccountApprovedEmail(user).catch(console.error);
+            // R-M5: send the DRIVER approved email (not the rider one). Drivers
+            // need the driver-specific guidance about going online, payouts,
+            // and ratings — the rider approval email mentions promo rides
+            // which doesn't apply here.
+            if (user?.email) {
+              sendDriverApprovedEmail({
+                email: user.email,
+                firstName: user.firstName,
+              }).catch((err) => console.error("Failed to send driver-approved email after Checkr clear:", err));
+            }
+            console.log(`[AUDIT] driver_approved source=checkr_webhook userId=${profile.userId} reportId=${report.id}`);
           } else {
             await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'rejected' } as any);
             await storage.createSafetyAlert({
@@ -4911,6 +5043,18 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
               description: `Checkr report ${report.id} result: ${report.result}`,
               data: { reportId: report.id, result: report.result },
             });
+            // R-M5: notify the driver that their application was not
+            // approved. We don't expose the Checkr result detail (PII /
+            // FCRA-sensitive); just point them at support.
+            const user = await storage.getUser(profile.userId);
+            if (user?.email) {
+              sendSignupRejectedEmail({
+                email: user.email,
+                firstName: user.firstName,
+                reason: "Our background check service returned a result that prevents us from approving your driver application at this time. Please contact support if you believe this is an error or to request more information.",
+              }).catch((err) => console.error("Failed to send rejection email after Checkr non-clear result:", err));
+            }
+            console.log(`[AUDIT] driver_rejected source=checkr_webhook userId=${profile.userId} reportId=${report.id} result=${report.result}`);
           }
         }
       }
