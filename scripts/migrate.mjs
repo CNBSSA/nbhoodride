@@ -580,9 +580,25 @@ END $$;
 
 -- Ensure one driver profile per user — prevents duplicate rows from concurrent
 -- "Get Started" clicks or retries.
+--
+-- Look up the constraint in pg_catalog instead of relying on EXCEPTION WHEN
+-- duplicate_object: ALTER TABLE … ADD CONSTRAINT … UNIQUE first creates the
+-- backing unique index, and that step raises sqlstate 42P07 (duplicate_table,
+-- because indexes are relations) when the index already exists — not 42710
+-- (duplicate_object). The previous handler caught only 42710, so re-runs of
+-- this migration aborted with an unhandled 42P07. That's the bug that's
+-- blocked every Railway deploy since May 3.
 DO $$ BEGIN
-  ALTER TABLE driver_profiles ADD CONSTRAINT driver_profiles_user_id_unique UNIQUE (user_id);
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'driver_profiles_user_id_unique'
+      AND conrelid = 'driver_profiles'::regclass
+  ) THEN
+    ALTER TABLE driver_profiles
+      ADD CONSTRAINT driver_profiles_user_id_unique UNIQUE (user_id);
+  END IF;
+END $$;
 `;
 
 async function migrate() {
