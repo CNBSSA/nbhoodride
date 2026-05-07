@@ -141,6 +141,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api/auth/resend-verification', authLimiter);
   app.use('/api/auth/test-login', authLimiter);
   app.use('/api/admin/setup-super-admin', authLimiter);
+  // R-M4: rate-limit driver profile creation. POST creates the row;
+  // PUT updates document URLs after upload. Both share the same auth
+  // limiter to prevent abuse / accidental loops from a buggy client.
+  app.use('/api/driver/profile', authLimiter);
   app.use('/api/ai', aiLimiter);
 
   // CSRF: client can ping this once at boot to make sure a token cookie is
