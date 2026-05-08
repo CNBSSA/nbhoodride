@@ -117,13 +117,20 @@ export default function DriverDashboard() {
         description: vars.isOnline ? "You'll start receiving ride requests" : "You won't receive ride requests",
       });
     },
-    onError: () => {
+    onError: (error: any) => {
+      // Surface the actual server message instead of a generic "Please try
+      // again" — same pattern as the driver-profile fix in PR #20. If the
+      // toggle silently fails (CSRF, validation, anything) the driver could
+      // see the optimistic UI flicker on, then off, with no idea why.
       toast({
         title: "Status Update Failed",
-        description: "Unable to update your status. Please try again.",
+        description: error?.message || "Unable to update your status. Please try again.",
         variant: "destructive",
       });
-      setIsOnline(!isOnline); // Revert the toggle
+      // Re-sync from the server's truth instead of guessing with !isOnline,
+      // which was racing the optimistic update and could land on the wrong
+      // value depending on timing.
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
     }
   });
 
