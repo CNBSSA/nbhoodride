@@ -186,6 +186,7 @@ function UsersPanel() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard"] });
       toast({ title: "User updated" });
     },
+    onError: (err: any) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
   });
 
   const approveUser = useMutation({
@@ -497,6 +498,10 @@ function DriversPanel() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       toast({ title: "Driver updated" });
     },
+    // Surface the real server error (e.g. R-M2 "Cannot approve: missing
+    // license image, insurance image, vehicle photos") so the admin sees
+    // why the button "didn't work" instead of nothing happening.
+    onError: (err: any) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
   });
 
   const deleteDriverProfile = useMutation({
@@ -928,6 +933,7 @@ function DisputesPanel() {
       setResolution("");
       toast({ title: "Dispute resolved" });
     },
+    onError: (err: any) => toast({ title: "Resolve failed", description: err.message, variant: "destructive" }),
   });
 
   if (isLoading) return <div data-testid="loading-disputes">Loading disputes...</div>;
@@ -1180,6 +1186,7 @@ function ProfitsPanel() {
       setShowCreateForm(false);
       toast({ title: "Profit declaration created" });
     },
+    onError: (err: any) => toast({ title: "Create failed", description: err.message, variant: "destructive" }),
   });
 
   const declareProfit = useMutation({
@@ -1190,6 +1197,7 @@ function ProfitsPanel() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/profits"] });
       toast({ title: "Profit declared for board approval" });
     },
+    onError: (err: any) => toast({ title: "Declare failed", description: err.message, variant: "destructive" }),
   });
 
   const distributeProfit = useMutation({
@@ -1200,6 +1208,7 @@ function ProfitsPanel() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/profits"] });
       toast({ title: "Profits distributed to owners" });
     },
+    onError: (err: any) => toast({ title: "Distribute failed", description: err.message, variant: "destructive" }),
   });
 
   if (isLoading) return <div data-testid="loading-profits">Loading profits...</div>;
