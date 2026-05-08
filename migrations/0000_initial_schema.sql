@@ -56,9 +56,25 @@ CREATE TABLE IF NOT EXISTS "users" (
   "promo_rides_remaining" integer DEFAULT 0,
   "password_reset_token" varchar,
   "password_reset_expiry" timestamp,
+  "email_verification_token" varchar,
+  "email_verification_expiry" timestamp,
+  "email_verified_at" timestamp,
+  "registration_completed_at" timestamp,
+  "terms_accepted_at" timestamp,
+  "privacy_accepted_at" timestamp,
+  "last_login_at" timestamp,
   "created_at" timestamp DEFAULT now(),
   "updated_at" timestamp DEFAULT now()
 );
+
+-- Idempotent column adds for existing deployments (registration security hardening)
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "email_verification_token" varchar;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "email_verification_expiry" timestamp;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "email_verified_at" timestamp;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "registration_completed_at" timestamp;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "terms_accepted_at" timestamp;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "privacy_accepted_at" timestamp;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_login_at" timestamp;
 
 -- ── Driver profiles ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS "driver_profiles" (

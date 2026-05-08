@@ -805,17 +805,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
-      // ── Enhanced driver registration validation ──────────────────────────
+      // ── Driver registration validation ───────────────────────────────────
+      // The onboarding flow is two-step: (1) create the empty profile shell when the
+      // user clicks "Become a Driver", (2) upload license/insurance/vehicle docs via
+      // the documents modal (which calls PUT /api/driver/profile). Therefore the
+      // license/insurance/vehicle fields are validated for *format* when present,
+      // but are not required at shell-creation time. Required-field enforcement
+      // happens at admin approval time.
       const currentYear = new Date().getFullYear();
       const driverRegistrationSchema = z.object({
-        // License
         licenseNumber: z.string()
-          .min(1, "Driver's license number is required")
-          .regex(/^[A-Z0-9\-]{4,20}$/i, "License number must be 4–20 alphanumeric characters"),
-        licenseImageUrl: z.string().min(1, "License document upload is required"),
-        // Insurance
-        insuranceImageUrl: z.string().min(1, "Insurance document upload is required"),
-        // Vehicle — at least one vehicle must be provided
+          .regex(/^[A-Z0-9\-]{4,20}$/i, "License number must be 4–20 alphanumeric characters")
+          .optional(),
+        licenseImageUrl: z.string().optional(),
+        insuranceImageUrl: z.string().optional(),
         vehicle: z.object({
           make: z.string().min(1, "Vehicle make is required").max(50),
           model: z.string().min(1, "Vehicle model is required").max(50),

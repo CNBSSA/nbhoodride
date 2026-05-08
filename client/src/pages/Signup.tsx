@@ -39,7 +39,17 @@ export default function Signup() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password, firstName, lastName, phone }),
+        body: JSON.stringify({
+          email,
+          password,
+          firstName,
+          lastName,
+          phone,
+          // The notice below the form ("By signing up, you agree to our…")
+          // makes acceptance an explicit pre-condition of submitting.
+          termsAccepted: true,
+          privacyAccepted: true,
+        }),
         credentials: 'include',
       });
 
@@ -174,13 +184,16 @@ export default function Signup() {
               <Input
                 id="password"
                 type="password"
-                placeholder="Minimum 8 characters"
+                placeholder="8+ chars, mix upper/lower, number, symbol"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
                 data-testid="input-password"
               />
+              <p className="text-xs text-muted-foreground">
+                Must include uppercase, lowercase, a number, and a special character.
+              </p>
             </div>
 
             <div className="space-y-2">

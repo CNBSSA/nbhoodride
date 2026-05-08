@@ -506,6 +506,17 @@ CREATE TABLE IF NOT EXISTS safety_alerts (
   resolved_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- ── Idempotent column adds for registration security hardening (commit 5a3a9de) ─
+-- These columns were added in shared/schema.ts but never migrated, breaking signup,
+-- email verification, and login last-login updates against an existing DB.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token VARCHAR;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_expiry TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_completed_at TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_accepted_at TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;
 `;
 
 async function migrate() {
