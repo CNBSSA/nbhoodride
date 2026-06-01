@@ -402,6 +402,22 @@ CREATE TABLE IF NOT EXISTS profit_distributions (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- AH-062: enforce one distribution row per (declaration, owner). With this
+-- in place a re-run of distributeProfits() after a partial crash can't
+-- silently insert duplicate payouts. Wrapped in pg_constraint check so the
+-- migration is safe to re-run.
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'profit_distributions_declaration_owner_unique'
+      AND conrelid = 'profit_distributions'::regclass
+  ) THEN
+    ALTER TABLE profit_distributions
+      ADD CONSTRAINT profit_distributions_declaration_owner_unique
+      UNIQUE (declaration_id, owner_id);
+  END IF;
+END $$;
+
 -- ── Admin activity log ───────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS admin_activity_log (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -426,6 +442,51 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_wallet_user_created ON wallet_transactions (user_id, created_at);
+
+-- AH-061: enforce wallet_transactions immutability at the DB level so the
+-- ledger can be trusted as an audit source for disputes and equity. The
+-- application code already treats it as append-only, but a stray admin
+-- query or bug could rewrite history. Block UPDATE and DELETE with a
+-- trigger that raises an exception — the only acceptable correction is a
+-- compensating entry (a new row with the opposite sign).
+CREATE OR REPLACE FUNCTION prevent_wallet_transaction_modification()
+RETURNS TRIGGER AS $body$
+BEGIN
+  RAISE EXCEPTION 'wallet_transactions is append-only — % is not allowed (write a compensating entry instead)', TG_OP;
+END;
+$body$ LANGUAGE plpgsql;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'wallet_transactions_no_update'
+  ) THEN
+    CREATE TRIGGER wallet_transactions_no_update
+      BEFORE UPDATE ON wallet_transactions
+      FOR EACH ROW EXECUTE FUNCTION prevent_wallet_transaction_modification();
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'wallet_transactions_no_delete'
+  ) THEN
+    CREATE TRIGGER wallet_transactions_no_delete
+      BEFORE DELETE ON wallet_transactions
+      FOR EACH ROW EXECUTE FUNCTION prevent_wallet_transaction_modification();
+  END IF;
+END $$;
+
+-- ── Processed webhook events (AH-065 idempotency log) ──────────────────────
+CREATE TABLE IF NOT EXISTS processed_webhook_events (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider VARCHAR NOT NULL,
+  event_id VARCHAR NOT NULL,
+  event_type VARCHAR,
+  processed_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  CONSTRAINT processed_webhook_events_unique UNIQUE (provider, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_processed_webhook_provider_event
+  ON processed_webhook_events (provider, event_id);
 
 -- ── Conversations ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS conversations (

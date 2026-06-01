@@ -448,7 +448,14 @@ export const profitDistributions = pgTable("profit_distributions", {
   paymentMethod: varchar("payment_method"),
   paymentReference: varchar("payment_reference"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => [
+  // AH-062: a given (declaration, owner) pair must be unique so a re-invoked
+  // distributeProfits() can't insert duplicates. Combined with a transaction
+  // wrapper and an explicit duplicate check this makes the function safe to
+  // retry after a partial crash.
+  index("idx_profit_distributions_declaration_owner_unique")
+    .on(table.declarationId, table.ownerId),
+]);
 
 // Admin activity log - audit trail for admin actions
 export const adminActivityLog = pgTable("admin_activity_log", {
@@ -474,6 +481,23 @@ export const walletTransactions = pgTable("wallet_transactions", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("idx_wallet_user_created").on(table.userId, table.createdAt),
+]);
+
+// AH-065: idempotency log for incoming webhooks. Stripe (and Checkr) retry
+// delivery on any non-2xx response or network timeout; without this table
+// a successful-but-slow handler could be invoked multiple times and apply
+// the same state transition repeatedly (e.g. paying a driver twice on
+// charge.refunded). Unique constraint on (provider, event_id) makes the
+// INSERT itself the locking primitive — try-insert-then-process means a
+// duplicate gets rejected before any side effects fire.
+export const processedWebhookEvents = pgTable("processed_webhook_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  provider: varchar("provider").notNull(), // 'stripe' | 'checkr'
+  eventId: varchar("event_id").notNull(),
+  eventType: varchar("event_type"),
+  processedAt: timestamp("processed_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_processed_webhook_provider_event").on(table.provider, table.eventId),
 ]);
 
 // ============================================================

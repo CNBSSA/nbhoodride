@@ -25,6 +25,7 @@ import {
   pushSubscriptions,
   rideGroups,
   walletTransactions,
+  processedWebhookEvents,
   type PayoutRequest,
   type InsertPayoutRequest,
   type PushSubscription,
@@ -210,6 +211,10 @@ export interface IStorage {
   consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
   logWalletTransaction(data: { userId: string; amount: number; balanceAfter: number; reason: string; rideId?: string; disputeId?: string; performedBy?: string }): Promise<WalletTransaction>;
   getWalletTransactions(userId: string, limit?: number): Promise<WalletTransaction[]>;
+  // AH-065 webhook idempotency. Returns true if the (provider, eventId) was
+  // newly recorded; false if it was already present. Callers should only
+  // proceed with side effects when the return is true.
+  claimWebhookEvent(provider: string, eventId: string, eventType?: string): Promise<boolean>;
   
   // Push subscription operations
   savePushSubscription(userId: string, sub: { endpoint: string; p256dh: string; auth: string }): Promise<PushSubscription>;
@@ -1887,6 +1892,27 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
+  // AH-065: try to claim a webhook event. The unique constraint on
+  // (provider, event_id) means a duplicate INSERT throws — we catch it and
+  // return false so the caller can skip processing. If the INSERT succeeds,
+  // return true; the caller is the first to process this event.
+  async claimWebhookEvent(provider: string, eventId: string, eventType?: string): Promise<boolean> {
+    try {
+      await db.insert(processedWebhookEvents).values({
+        provider,
+        eventId,
+        eventType,
+      });
+      return true;
+    } catch (err: any) {
+      // Postgres unique_violation = 23505
+      if (err?.code === "23505" || /unique/i.test(String(err?.message ?? ""))) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
   async consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void> {
     // Decrement promoRidesRemaining by 1 (floor at 0) and record discount on the ride
     await db.update(users)
@@ -2544,45 +2570,101 @@ export class DatabaseStorage implements IStorage {
   }
 
   async distributeProfits(declarationId: string): Promise<ProfitDistribution[]> {
+    // AH-062: previously this method:
+    //   (a) ran the insert loop outside any transaction, so a mid-loop crash
+    //       left half the owners paid and the other half not, and the
+    //       declaration still in "declared" status,
+    //   (b) had no idempotency — a re-invocation (e.g. admin double-click
+    //       or a retried API call) would insert a fresh row for every
+    //       owner, double-paying everyone.
+    //
+    // This rewrite:
+    //   - Returns the existing distributions if the declaration is already
+    //     "distributed" (true short-circuit).
+    //   - Aggregates per-owner so an owner holding multiple certs gets one
+    //     row, not N.
+    //   - Wraps the inserts + status flip in a single db.transaction so a
+    //     mid-flight error rolls the whole thing back.
+    //   - Relies on the unique (declaration_id, owner_id) constraint added
+    //     to profit_distributions as a defence-in-depth: even if two
+    //     concurrent invocations race past the status check, the second
+    //     one's INSERT will fail and the transaction will roll back rather
+    //     than double-paying.
     const [declaration] = await db.select().from(profitDeclarations).where(eq(profitDeclarations.id, declarationId));
     if (!declaration) throw new Error("Declaration not found");
-    if (declaration.status !== "declared") throw new Error("Must be declared before distributing");
+
+    if (declaration.status === "distributed") {
+      return await this.getProfitDistributions(declarationId);
+    }
+    if (declaration.status !== "declared") {
+      throw new Error("Must be declared before distributing");
+    }
 
     const distributableProfit = parseFloat(declaration.distributableProfit || "0");
     const activeOwners = await this.getAllOwners();
     const activeCerts = await this.getShareCertificates();
 
-    const distributions: ProfitDistribution[] = [];
-
-    // Owner (platform) gets 51%
-    const platformShare = distributableProfit * 0.51;
-
-    // Driver pool (49%) distributed according to share certificates
+    // Aggregate per-owner: multiple certs for the same owner combine into
+    // a single distribution row (amount + share percentage summed).
+    const perOwner = new Map<string, { sharePercent: number; amount: number; ownershipType: string }>();
     for (const cert of activeCerts) {
       const sharePercent = parseFloat(cert.sharePercentage || "0");
-      const amount = (distributableProfit * sharePercent / 100).toFixed(2);
-
-      const owner = activeOwners.find(o => o.driverId === cert.ownerId);
-
-      const [dist] = await db.insert(profitDistributions).values({
-        declarationId,
-        ownerId: cert.ownerId,
-        sharePercentage: cert.sharePercentage,
-        ownershipType: owner?.status || "ad_hoc",
-        amount,
-        status: "pending",
-      }).returning();
-      distributions.push(dist);
+      const amount = distributableProfit * sharePercent / 100;
+      const owner = activeOwners.find((o) => o.driverId === cert.ownerId);
+      const prev = perOwner.get(cert.ownerId) ?? { sharePercent: 0, amount: 0, ownershipType: owner?.status || "ad_hoc" };
+      perOwner.set(cert.ownerId, {
+        sharePercent: prev.sharePercent + sharePercent,
+        amount: prev.amount + amount,
+        ownershipType: prev.ownershipType,
+      });
     }
 
-    // Update declaration status
-    await db.update(profitDeclarations).set({
-      status: "distributed",
-      distributedAt: new Date(),
-      updatedAt: new Date()
-    }).where(eq(profitDeclarations.id, declarationId));
+    return await db.transaction(async (tx) => {
+      // Re-read inside the transaction with FOR UPDATE so concurrent
+      // invocations serialise on this row instead of racing the status check.
+      const [locked] = await tx
+        .select()
+        .from(profitDeclarations)
+        .where(eq(profitDeclarations.id, declarationId))
+        .for("update");
+      if (!locked) throw new Error("Declaration not found");
+      if (locked.status === "distributed") {
+        return await tx
+          .select()
+          .from(profitDistributions)
+          .where(eq(profitDistributions.declarationId, declarationId));
+      }
+      if (locked.status !== "declared") {
+        throw new Error("Must be declared before distributing");
+      }
 
-    return distributions;
+      const inserted: ProfitDistribution[] = [];
+      for (const [ownerId, info] of Array.from(perOwner.entries())) {
+        const [dist] = await tx
+          .insert(profitDistributions)
+          .values({
+            declarationId,
+            ownerId,
+            sharePercentage: info.sharePercent.toFixed(4),
+            ownershipType: info.ownershipType as any,
+            amount: info.amount.toFixed(2),
+            status: "pending",
+          })
+          .returning();
+        inserted.push(dist);
+      }
+
+      await tx
+        .update(profitDeclarations)
+        .set({
+          status: "distributed",
+          distributedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(profitDeclarations.id, declarationId));
+
+      return inserted;
+    });
   }
 
   async getProfitDistributions(declarationId: string): Promise<ProfitDistribution[]> {
