@@ -26,13 +26,24 @@ const payoutSchema = z.object({
   payoutDetails: z.string().min(3, "Please enter your payout details"),
 });
 
+// AH-060: Stripe Connect drivers only need to pick an amount — the
+// destination bank is already linked. Separate schema so the form
+// validator doesn't demand method/details that don't apply.
+const stripePayoutSchema = z.object({
+  amount: z.string().refine((v) => !isNaN(parseFloat(v)) && parseFloat(v) >= 5, {
+    message: "Minimum payout amount is $5.00",
+  }),
+});
+
 type PayoutFormValues = z.infer<typeof payoutSchema>;
+type StripePayoutFormValues = z.infer<typeof stripePayoutSchema>;
 
 const METHOD_LABELS: Record<string, string> = {
   zelle: "Zelle (phone or email)",
   cashapp: "Cash App ($cashtag)",
   paypal: "PayPal (email)",
   check: "Check (mailing address)",
+  stripe_connect: "Bank transfer (Stripe)",
 };
 
 const STATUS_BADGE: Record<string, { label: string; className: string }> = {
@@ -46,9 +57,13 @@ interface PayoutModalProps {
   open: boolean;
   onClose: () => void;
   availableBalance: number;
+  // AH-060: when true the driver has a verified Stripe Connect account and
+  // payouts go via Stripe Transfer (instant submit, lands in 1–2 business
+  // days). When false we keep the original manual queue.
+  useStripeConnect?: boolean;
 }
 
-export default function PayoutModal({ open, onClose, availableBalance }: PayoutModalProps) {
+export default function PayoutModal({ open, onClose, availableBalance, useStripeConnect = false }: PayoutModalProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [view, setView] = useState<"form" | "history">("form");
@@ -63,8 +78,16 @@ export default function PayoutModal({ open, onClose, availableBalance }: PayoutM
     defaultValues: { amount: "", payoutMethod: undefined, payoutDetails: "" },
   });
 
+  const stripeForm = useForm<StripePayoutFormValues>({
+    resolver: zodResolver(stripePayoutSchema),
+    defaultValues: { amount: "" },
+  });
+
   const mutation = useMutation({
-    mutationFn: async (values: PayoutFormValues) => {
+    // Both flows hit the same server endpoint; the server decides Stripe vs
+    // manual based on the driver's connect status. We just don't send the
+    // method/details fields for Connect drivers — server ignores them anyway.
+    mutationFn: async (values: PayoutFormValues | StripePayoutFormValues) => {
       const res = await apiRequest("POST", "/api/driver/payout-requests", values);
       if (!res.ok) {
         const err = await res.json();
@@ -76,8 +99,14 @@ export default function PayoutModal({ open, onClose, availableBalance }: PayoutM
       queryClient.invalidateQueries({ queryKey: ["/api/driver/payout-requests"] });
       queryClient.invalidateQueries({ queryKey: ["/api/virtual-card/balance"] });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-      toast({ title: "Payout Requested", description: "We'll process your payout within 1–2 business days." });
+      toast({
+        title: useStripeConnect ? "Transfer started" : "Payout Requested",
+        description: useStripeConnect
+          ? "Your payout is on the way. Stripe usually deposits the funds in 1–2 business days."
+          : "We'll process your payout within 1–2 business days.",
+      });
       form.reset();
+      stripeForm.reset();
       setView("history");
     },
     onError: (error: any) => {
@@ -93,7 +122,7 @@ export default function PayoutModal({ open, onClose, availableBalance }: PayoutM
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <DollarSign className="w-5 h-5 text-green-600" />
-            Request Payout
+            {useStripeConnect ? "Transfer to Bank" : "Request Payout"}
           </DialogTitle>
         </DialogHeader>
 
@@ -130,6 +159,80 @@ export default function PayoutModal({ open, onClose, availableBalance }: PayoutM
               <p className="font-medium">Minimum payout is $5.00</p>
               <p className="text-sm">Complete more rides to accumulate earnings.</p>
             </div>
+          ) : useStripeConnect ? (
+            // AH-060 Stripe Connect flow: amount only. Destination bank is
+            // already linked through Stripe's hosted onboarding.
+            <Form {...stripeForm}>
+              <form onSubmit={stripeForm.handleSubmit((v) => mutation.mutate(v))} className="space-y-4">
+                {PRESETS.length > 0 && (
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1 block">Quick amounts</Label>
+                    <div className="flex gap-2">
+                      {PRESETS.map((p) => (
+                        <Button
+                          key={p}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => stripeForm.setValue("amount", String(p))}
+                          data-testid={`button-preset-${p}`}
+                        >
+                          ${p}
+                        </Button>
+                      ))}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => stripeForm.setValue("amount", availableBalance.toFixed(2))}
+                        data-testid="button-preset-max"
+                      >
+                        All (${availableBalance.toFixed(2)})
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <FormField
+                  control={stripeForm.control}
+                  name="amount"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Transfer Amount ($)</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          type="number"
+                          step="0.01"
+                          min="5"
+                          max={availableBalance}
+                          placeholder="0.00"
+                          data-testid="input-payout-amount"
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <p className="text-xs text-muted-foreground">
+                  Funds will be transferred to the bank account you linked
+                  through Stripe. Most banks post the deposit within 1–2
+                  business days. Stripe will send your 1099-NEC in January.
+                </p>
+
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={mutation.isPending}
+                  data-testid="button-submit-payout"
+                >
+                  {mutation.isPending ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Sending…</>
+                  ) : "Transfer to Bank"}
+                </Button>
+              </form>
+            </Form>
           ) : (
             <Form {...form}>
               <form onSubmit={form.handleSubmit((v) => mutation.mutate(v))} className="space-y-4">
@@ -277,7 +380,11 @@ export default function PayoutModal({ open, onClose, availableBalance }: PayoutM
                       <Badge className={badge.className}>{badge.label}</Badge>
                     </div>
                     <p className="text-sm text-muted-foreground capitalize">
-                      {METHOD_LABELS[req.payoutMethod] || req.payoutMethod} — {req.payoutDetails}
+                      {METHOD_LABELS[req.payoutMethod] || req.payoutMethod}
+                      {/* For Stripe Connect, payoutDetails is the acct_… id —
+                          not useful to drivers. Hide it; the bank account
+                          they linked is the destination either way. */}
+                      {req.payoutMethod !== "stripe_connect" && ` — ${req.payoutDetails}`}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {req.createdAt ? format(new Date(req.createdAt), "MMM d, yyyy 'at' h:mm a") : ""}

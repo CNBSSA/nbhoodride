@@ -315,12 +315,20 @@ export const payoutRequests = pgTable("payout_requests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   driverId: varchar("driver_id").notNull().references(() => users.id),
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
-  payoutMethod: varchar("payout_method").notNull(), // 'zelle' | 'cashapp' | 'paypal' | 'check'
-  payoutDetails: varchar("payout_details").notNull(), // phone/email/address for payout
+  // payoutMethod is one of: 'zelle' | 'cashapp' | 'paypal' | 'check' (manual
+  // legacy flow) or 'stripe_connect' (AH-060). When stripe_connect, payoutDetails
+  // holds the acct_… id at request time for admin-side traceability, and the
+  // transfer is tracked via stripeTransferId below.
+  payoutMethod: varchar("payout_method").notNull(),
+  payoutDetails: varchar("payout_details").notNull(),
   status: varchar("status").default("pending"), // 'pending' | 'processing' | 'paid' | 'rejected'
   adminNote: text("admin_note"),
   processedBy: varchar("processed_by").references(() => users.id),
   processedAt: timestamp("processed_at"),
+  // AH-060: Stripe Transfer reference for stripe_connect payouts. Lets admin
+  // reconcile against the Stripe dashboard and lets the transfer.* webhook
+  // handlers find the originating payout request by tr_… id.
+  stripeTransferId: varchar("stripe_transfer_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

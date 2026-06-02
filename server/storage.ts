@@ -225,7 +225,8 @@ export interface IStorage {
   createPayoutRequest(request: InsertPayoutRequest): Promise<PayoutRequest>;
   getDriverPayoutRequests(driverId: string): Promise<PayoutRequest[]>;
   getAllPayoutRequests(): Promise<(PayoutRequest & { driverName: string; driverEmail: string })[]>;
-  updatePayoutRequest(id: string, updates: { status: string; adminNote?: string; processedBy?: string }): Promise<PayoutRequest>;
+  updatePayoutRequest(id: string, updates: { status: string; adminNote?: string; processedBy?: string; stripeTransferId?: string }): Promise<PayoutRequest>;
+  getPayoutRequestByStripeTransferId(transferId: string): Promise<PayoutRequest | undefined>;
 
   // AH-060: Stripe Connect (driver payouts + 1099-NEC) operations.
   // setStripeConnectAccountId is called once per driver after Stripe returns
@@ -1008,7 +1009,7 @@ export class DatabaseStorage implements IStorage {
 
   async updatePayoutRequest(
     id: string,
-    updates: { status: string; adminNote?: string; processedBy?: string }
+    updates: { status: string; adminNote?: string; processedBy?: string; stripeTransferId?: string }
   ): Promise<PayoutRequest> {
     const [record] = await db
       .update(payoutRequests)
@@ -1016,10 +1017,21 @@ export class DatabaseStorage implements IStorage {
         status: updates.status,
         ...(updates.adminNote !== undefined && { adminNote: updates.adminNote }),
         ...(updates.processedBy && { processedBy: updates.processedBy, processedAt: new Date() }),
+        ...(updates.stripeTransferId !== undefined && { stripeTransferId: updates.stripeTransferId }),
         updatedAt: new Date(),
       })
       .where(eq(payoutRequests.id, id))
       .returning();
+    return record;
+  }
+
+  // AH-060: locate the originating payout request from a Stripe transfer.*
+  // webhook so we can mark it paid / rejected / reverse the ledger as needed.
+  async getPayoutRequestByStripeTransferId(transferId: string): Promise<PayoutRequest | undefined> {
+    const [record] = await db
+      .select()
+      .from(payoutRequests)
+      .where(eq(payoutRequests.stripeTransferId, transferId));
     return record;
   }
 

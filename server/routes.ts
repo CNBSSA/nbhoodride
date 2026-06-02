@@ -4235,16 +4235,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Driver: submit new payout request
+  // Driver: submit new payout request.
+  //
+  // Two flows live here. A driver with stripeConnectPayoutsEnabled goes
+  // through Stripe — the transfer is sync, so the request is born 'paid'
+  // and the driver sees the money land in 1–2 business days. A driver
+  // without Connect (legacy or new before they finish onboarding) goes
+  // through the original manual queue (Zelle / CashApp / PayPal / check)
+  // — admin processes by hand.
+  //
+  // The deduct → create-row → transfer order matters: balance is debited
+  // first under the FOR UPDATE row lock so two simultaneous requests can't
+  // both pass the balance check. If the Stripe transfer then fails, we
+  // refund the balance via a compensating ledger entry (AH-061 immutability
+  // rule means we never UPDATE/DELETE wallet_transactions).
   app.post('/api/driver/payout-requests', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ message: "User not found" });
 
-      const { amount, payoutMethod, payoutDetails } = req.body;
-      if (!amount || !payoutMethod || !payoutDetails) {
+      const { amount, payoutMethod, payoutDetails } = req.body ?? {};
+      const useConnect = !!user.stripeConnectAccountId && user.stripeConnectPayoutsEnabled === true;
+
+      // Manual flow still requires method + details; Connect flow ignores them.
+      if (!useConnect && (!amount || !payoutMethod || !payoutDetails)) {
         return res.status(400).json({ message: "amount, payoutMethod, and payoutDetails are required" });
+      }
+      if (!amount) {
+        return res.status(400).json({ message: "amount is required" });
       }
       const numAmount = parseFloat(amount);
       if (isNaN(numAmount) || numAmount < 5) {
@@ -4255,15 +4274,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Payout amount exceeds available balance" });
       }
 
-      // Deduct balance immediately and create request
-      await storage.deductVirtualCardBalance(userId, numAmount);
+      // Deduct balance + create request row in both flows. Ledger entry is
+      // appended atomically by deductVirtualCardBalance.
+      await storage.deductVirtualCardBalance(userId, numAmount, "payout", undefined, userId);
       const request = await storage.createPayoutRequest({
         driverId: userId,
         amount: numAmount.toFixed(2),
-        payoutMethod,
-        payoutDetails,
+        payoutMethod: useConnect ? 'stripe_connect' : payoutMethod,
+        payoutDetails: useConnect ? user.stripeConnectAccountId! : payoutDetails,
       });
-      res.json(request);
+
+      if (!useConnect) {
+        return res.json(request);
+      }
+
+      // Stripe Connect path — fire the Transfer with the request id as
+      // idempotency key. A retry (network blip, duplicate POST) returns the
+      // same Transfer from Stripe rather than creating a second one.
+      try {
+        const transfer = await stripeConnectService.createTransfer({
+          amountCents: Math.round(numAmount * 100),
+          destinationAccountId: user.stripeConnectAccountId!,
+          idempotencyKey: request.id,
+          description: `PG Ride payout ${request.id}`,
+          metadata: {
+            payoutRequestId: request.id,
+            driverId: userId,
+          },
+        });
+        const updated = await storage.updatePayoutRequest(request.id, {
+          status: 'paid',
+          processedBy: userId,
+          stripeTransferId: transfer.id,
+        });
+        await storage.logAdminAction(userId, 'stripe_payout_paid', 'payout_request', request.id, {
+          transferId: transfer.id,
+          amount: numAmount.toFixed(2),
+        });
+        return res.json(updated);
+      } catch (err: any) {
+        // Stripe rejected the transfer (insufficient platform balance,
+        // account locked, etc.). Credit the wallet balance back via a
+        // compensating ledger entry (NOT an UPDATE — AH-061 trigger blocks
+        // that) and mark the request rejected so the driver sees a clear
+        // failure state in the history view.
+        console.error('[STRIPE] Transfer failed for payout', request.id, err?.message);
+        await storage.addVirtualCardBalance(userId, numAmount, "payout_refund", undefined, userId);
+        await storage.updatePayoutRequest(request.id, {
+          status: 'rejected',
+          adminNote: `Stripe transfer failed: ${err?.message ?? 'unknown error'}`,
+        });
+        return res.status(502).json({
+          message: 'Payout could not be sent right now. Your balance has been restored — please try again later.',
+        });
+      }
     } catch (error) {
       console.error("Error creating payout request:", error);
       res.status(500).json({ message: "Failed to submit payout request" });
@@ -5202,6 +5266,46 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
             onboardingCompleted: account.details_submitted === true,
           });
           console.log(`[STRIPE] account.updated userId=${userId} payouts=${account.payouts_enabled} charges=${account.charges_enabled} submitted=${account.details_submitted}`);
+          break;
+        }
+        // AH-060: payout-side transfer lifecycle. The transfer is created
+        // synchronously in the POST /api/driver/payout-requests handler, so
+        // these webhooks are belt-and-braces in case Stripe's API call
+        // succeeded but our follow-up DB write failed, or for the rare
+        // transfer.reversed case where Stripe pulls the money back after
+        // delivery (chargeback on the underlying funds, fraud review).
+        case 'transfer.created': {
+          const transfer = event.data.object as any;
+          const existing = await storage.getPayoutRequestByStripeTransferId(transfer.id);
+          if (existing && existing.status !== 'paid') {
+            await storage.updatePayoutRequest(existing.id, {
+              status: 'paid',
+              stripeTransferId: transfer.id,
+            });
+          }
+          console.log(`[STRIPE] transfer.created transferId=${transfer.id} payoutRequest=${existing?.id ?? 'unknown'}`);
+          break;
+        }
+        case 'transfer.reversed':
+        case 'transfer.failed': {
+          const transfer = event.data.object as any;
+          const existing = await storage.getPayoutRequestByStripeTransferId(transfer.id);
+          if (existing && existing.status !== 'rejected') {
+            // Compensating credit. Use the recorded request id so audit logs
+            // can trace the refund back to the originating payout.
+            await storage.addVirtualCardBalance(
+              existing.driverId,
+              parseFloat(existing.amount),
+              "payout_refund",
+              undefined,
+              existing.driverId,
+            );
+            await storage.updatePayoutRequest(existing.id, {
+              status: 'rejected',
+              adminNote: `Stripe transfer ${event.type.replace('transfer.', '')}: ${transfer.failure_message ?? transfer.id}`,
+            });
+            console.log(`[STRIPE] ${event.type} reversed payoutRequest=${existing.id} amount=${existing.amount}`);
+          }
           break;
         }
         default: break;

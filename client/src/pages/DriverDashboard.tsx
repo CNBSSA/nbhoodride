@@ -709,6 +709,7 @@ export default function DriverDashboard() {
         open={showPayoutModal}
         onClose={() => setShowPayoutModal(false)}
         availableBalance={parseFloat(user?.virtualCardBalance || '0')}
+        useStripeConnect={connectStatus?.payoutsEnabled === true}
       />
     </>
   );

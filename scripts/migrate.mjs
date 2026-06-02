@@ -290,9 +290,13 @@ CREATE TABLE IF NOT EXISTS payout_requests (
   admin_note TEXT,
   processed_by VARCHAR REFERENCES users(id),
   processed_at TIMESTAMP,
+  stripe_transfer_id VARCHAR,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- AH-060: backfill for prod DBs that pre-date the Stripe Connect flow.
+ALTER TABLE payout_requests ADD COLUMN IF NOT EXISTS stripe_transfer_id VARCHAR;
 
 -- ── Disputes ─────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS disputes (
