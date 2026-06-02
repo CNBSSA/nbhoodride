@@ -5,6 +5,7 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { setupAuth, isAuthenticated, getSession } from "./replitAuth";
 import { csrfTokenEndpoint } from "./csrfProtection";
+import * as passwordPolicy from "./passwordPolicy";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
 import { z } from "zod";
@@ -376,16 +377,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ── Password complexity helper ──────────────────────────────────────────────
-  function validatePasswordComplexity(password: string): { valid: boolean; feedback: string[] } {
-    const feedback: string[] = [];
-    if (password.length < 8) feedback.push("at least 8 characters");
-    if (!/[A-Z]/.test(password)) feedback.push("at least 1 uppercase letter (A-Z)");
-    if (!/[a-z]/.test(password)) feedback.push("at least 1 lowercase letter (a-z)");
-    if (!/[0-9]/.test(password)) feedback.push("at least 1 number (0-9)");
-    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) feedback.push("at least 1 special character (!@#$%^&* etc.)");
-    return { valid: feedback.length === 0, feedback };
-  }
+  // Password complexity helper now lives in ./passwordPolicy so it's
+  // importable from tests. Closure-scoped re-export kept for in-file usage.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const validatePasswordComplexity = passwordPolicy.validatePasswordComplexity;
 
   // ── Disposable email domain blocklist ──────────────────────────────────────
   const DISPOSABLE_EMAIL_DOMAINS = new Set([
@@ -5008,6 +5003,20 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       console.error('Stripe webhook signature invalid:', err.message);
       return res.status(400).json({ message: `Webhook error: ${err.message}` });
     }
+
+    // AH-065: webhook idempotency. Stripe retries delivery on any non-2xx
+    // response or timeout — without this check, payment_intent.succeeded /
+    // charge.refunded handlers can fire multiple times on the same event,
+    // causing duplicate ride state transitions or double-paid refunds.
+    // claimWebhookEvent returns true if this is the first time we see the
+    // event id (atomic INSERT on a unique constraint); false if it was
+    // already recorded. On false we return 200 so Stripe stops retrying.
+    const claimed = await storage.claimWebhookEvent('stripe', event.id, event.type);
+    if (!claimed) {
+      console.log(`[STRIPE] webhook ${event.id} (${event.type}) already processed — skipping`);
+      return res.json({ received: true, duplicate: true });
+    }
+
     try {
       switch (event.type) {
         case 'payment_intent.succeeded': {
@@ -5055,15 +5064,35 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
 
   // ── CHECKR WEBHOOK ──────────────────────────────────────────────────────────
   app.post('/api/webhooks/checkr', async (req: any, res) => {
+    // AH-063: fail closed when CHECKR_WEBHOOK_SECRET is missing. The previous
+    // behavior was to silently skip signature verification, which meant any
+    // unauthenticated POST to this endpoint could flip drivers between
+    // approved/rejected. If the secret isn't configured, refuse to process
+    // anything — same posture as the Stripe webhook.
     const webhookSecret = process.env.CHECKR_WEBHOOK_SECRET;
-    if (webhookSecret) {
-      const crypto = await import('crypto');
-      const sig = req.headers['x-checkr-signature'] as string;
-      const expected = crypto.createHmac('sha256', webhookSecret).update(req.body).digest('hex');
-      if (sig !== expected) return res.status(400).json({ message: 'Invalid signature' });
+    if (!webhookSecret) {
+      console.error('CHECKR_WEBHOOK_SECRET not set — refusing to process Checkr webhook');
+      return res.status(503).json({ message: 'Checkr webhook not configured' });
     }
+    const crypto = await import('crypto');
+    const sig = req.headers['x-checkr-signature'] as string;
+    if (!sig) return res.status(400).json({ message: 'Missing signature' });
+    const expected = crypto.createHmac('sha256', webhookSecret).update(req.body).digest('hex');
+    if (sig !== expected) return res.status(400).json({ message: 'Invalid signature' });
+
     let event: any;
     try { event = JSON.parse(req.body.toString()); } catch { return res.status(400).json({ message: 'Invalid JSON' }); }
+
+    // AH-065: idempotency for Checkr too. Checkr's webhook spec doesn't
+    // guarantee single delivery either; the report.completed handler flips
+    // approvalStatus and sends emails, both should fire exactly once.
+    if (event.id) {
+      const claimed = await storage.claimWebhookEvent('checkr', event.id, event.type);
+      if (!claimed) {
+        console.log(`[CHECKR] webhook ${event.id} (${event.type}) already processed — skipping`);
+        return res.json({ received: true, duplicate: true });
+      }
+    }
 
     if (event.type === 'report.completed') {
       const report = event.data?.object;
