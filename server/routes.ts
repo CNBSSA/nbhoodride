@@ -5,6 +5,7 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { setupAuth, isAuthenticated, getSession } from "./replitAuth";
 import { csrfTokenEndpoint } from "./csrfProtection";
+import * as passwordPolicy from "./passwordPolicy";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
 import { z } from "zod";
@@ -376,16 +377,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ── Password complexity helper ──────────────────────────────────────────────
-  function validatePasswordComplexity(password: string): { valid: boolean; feedback: string[] } {
-    const feedback: string[] = [];
-    if (password.length < 8) feedback.push("at least 8 characters");
-    if (!/[A-Z]/.test(password)) feedback.push("at least 1 uppercase letter (A-Z)");
-    if (!/[a-z]/.test(password)) feedback.push("at least 1 lowercase letter (a-z)");
-    if (!/[0-9]/.test(password)) feedback.push("at least 1 number (0-9)");
-    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) feedback.push("at least 1 special character (!@#$%^&* etc.)");
-    return { valid: feedback.length === 0, feedback };
-  }
+  // Password complexity helper now lives in ./passwordPolicy so it's
+  // importable from tests. Closure-scoped re-export kept for in-file usage.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const validatePasswordComplexity = passwordPolicy.validatePasswordComplexity;
 
   // ── Disposable email domain blocklist ──────────────────────────────────────
   const DISPOSABLE_EMAIL_DOMAINS = new Set([
