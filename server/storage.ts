@@ -227,6 +227,18 @@ export interface IStorage {
   getAllPayoutRequests(): Promise<(PayoutRequest & { driverName: string; driverEmail: string })[]>;
   updatePayoutRequest(id: string, updates: { status: string; adminNote?: string; processedBy?: string }): Promise<PayoutRequest>;
 
+  // AH-060: Stripe Connect (driver payouts + 1099-NEC) operations.
+  // setStripeConnectAccountId is called once per driver after Stripe returns
+  // a new acct_… id from accounts.create. updateStripeConnectStatus runs from
+  // the account.updated webhook to mirror Stripe's capability flags into the DB
+  // so UI gates don't need a live Stripe roundtrip on every page load.
+  setStripeConnectAccountId(userId: string, accountId: string): Promise<User>;
+  updateStripeConnectStatus(userId: string, status: {
+    payoutsEnabled: boolean;
+    chargesEnabled: boolean;
+    onboardingCompleted: boolean;
+  }): Promise<User>;
+
   // Dispute operations
   createDispute(dispute: InsertDispute): Promise<Dispute>;
   getDisputesByRide(rideId: string): Promise<Dispute[]>;
@@ -1009,6 +1021,51 @@ export class DatabaseStorage implements IStorage {
       .where(eq(payoutRequests.id, id))
       .returning();
     return record;
+  }
+
+  // AH-060: Stripe Connect account linkage. The acct_… id is set once and is
+  // immutable from our side — if a driver's Stripe account is rejected /
+  // closed, we leave the id in place (audit trail) and they restart onboarding
+  // which creates a new id, overwriting this field.
+  async setStripeConnectAccountId(userId: string, accountId: string): Promise<User> {
+    const [updated] = await db
+      .update(users)
+      .set({ stripeConnectAccountId: accountId, updatedAt: new Date() })
+      .where(eq(users.id, userId))
+      .returning();
+    if (!updated) throw new Error("User not found");
+    return updated;
+  }
+
+  // AH-060: mirror Stripe's account capability flags into the DB. Called from
+  // the account.updated webhook AND from the polling endpoint, so it must be
+  // idempotent. onboardingCompleted true sets the timestamp; once set it's
+  // never cleared (even if requirements re-open later — the user has finished
+  // the initial flow, that fact doesn't change).
+  async updateStripeConnectStatus(userId: string, status: {
+    payoutsEnabled: boolean;
+    chargesEnabled: boolean;
+    onboardingCompleted: boolean;
+  }): Promise<User> {
+    const [current] = await db.select().from(users).where(eq(users.id, userId));
+    if (!current) throw new Error("User not found");
+
+    const onboardingCompletedAt =
+      status.onboardingCompleted && !current.stripeConnectOnboardingCompletedAt
+        ? new Date()
+        : current.stripeConnectOnboardingCompletedAt;
+
+    const [updated] = await db
+      .update(users)
+      .set({
+        stripeConnectPayoutsEnabled: status.payoutsEnabled,
+        stripeConnectChargesEnabled: status.chargesEnabled,
+        stripeConnectOnboardingCompletedAt: onboardingCompletedAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId))
+      .returning();
+    return updated;
   }
 
   // Dispute operations

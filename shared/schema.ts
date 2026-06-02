@@ -102,6 +102,16 @@ export const users = pgTable("users", {
   // a specific account from credential-stuffing across IPs.
   failedLoginAttempts: integer("failed_login_attempts").default(0),
   lockoutUntil: timestamp("lockout_until"),
+  // AH-060: Stripe Connect Express account for driver payouts + 1099-NEC.
+  // Stripe collects W-9s during Express onboarding and e-files 1099-NECs at
+  // year-end on behalf of the platform. stripeConnectAccountId is the only
+  // PII-adjacent field we store — the TIN/SSN itself stays inside Stripe.
+  // payoutsEnabled / chargesEnabled mirror Stripe's account capability flags
+  // so the UI can gate "Transfer to bank" without re-fetching from Stripe.
+  stripeConnectAccountId: varchar("stripe_connect_account_id").unique(),
+  stripeConnectOnboardingCompletedAt: timestamp("stripe_connect_onboarding_completed_at"),
+  stripeConnectPayoutsEnabled: boolean("stripe_connect_payouts_enabled").default(false),
+  stripeConnectChargesEnabled: boolean("stripe_connect_charges_enabled").default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [

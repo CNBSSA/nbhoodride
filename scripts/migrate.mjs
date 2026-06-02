@@ -80,6 +80,10 @@ CREATE TABLE IF NOT EXISTS users (
   last_login_at TIMESTAMP,
   failed_login_attempts INTEGER DEFAULT 0,
   lockout_until TIMESTAMP,
+  stripe_connect_account_id VARCHAR UNIQUE,
+  stripe_connect_onboarding_completed_at TIMESTAMP,
+  stripe_connect_payouts_enabled BOOLEAN DEFAULT false,
+  stripe_connect_charges_enabled BOOLEAN DEFAULT false,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -100,6 +104,25 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;
 -- R-L5: per-account login throttling
 ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS lockout_until TIMESTAMP;
+-- AH-060: Stripe Connect Express for driver payouts and 1099-NEC compliance.
+-- account_id is unique once set; ALTER TABLE adds the column, the constraint
+-- block below adds the UNIQUE index conditionally so the migration is rerunnable.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_connect_account_id VARCHAR;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_connect_onboarding_completed_at TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_connect_payouts_enabled BOOLEAN DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_connect_charges_enabled BOOLEAN DEFAULT false;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'users_stripe_connect_account_id_unique'
+      AND conrelid = 'users'::regclass
+  ) THEN
+    ALTER TABLE users
+      ADD CONSTRAINT users_stripe_connect_account_id_unique
+      UNIQUE (stripe_connect_account_id);
+  END IF;
+END $$;
 
 -- ── Driver profiles ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS driver_profiles (
