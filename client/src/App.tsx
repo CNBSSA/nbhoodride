@@ -18,6 +18,7 @@ import ResetPassword from "@/pages/ResetPassword";
 import AdminDashboard from "@/pages/AdminDashboard";
 import DriverInsights from "@/pages/DriverInsights";
 import DriverRateCard from "@/pages/DriverRateCard";
+import StripeConnectReturn from "@/pages/StripeConnectReturn";
 import { TermsOfService, PrivacyPolicy } from "@/pages/LegalPages";
 import NotFound from "@/pages/not-found";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
@@ -60,6 +61,7 @@ function Router() {
           <Route path="/admin" component={AdminDashboard} />
           <Route path="/driver/insights" component={DriverInsights} />
           <Route path="/driver/rate-card" component={DriverRateCard} />
+          <Route path="/driver/connect/return" component={StripeConnectReturn} />
         </>
       )}
       <Route component={NotFound} />

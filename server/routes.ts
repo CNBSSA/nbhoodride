@@ -12,6 +12,7 @@ import { z } from "zod";
 import { nanoid } from "nanoid";
 import twilio from "twilio";
 import { stripeService, stripe } from "./stripeService";
+import { stripeConnectService } from "./stripeConnectService";
 import bcrypt from "bcrypt";
 import Anthropic from "@anthropic-ai/sdk";
 import rateLimit from "express-rate-limit";
@@ -4307,6 +4308,127 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ── STRIPE CONNECT (AH-060: 1099-NEC + W-9 via Express) ───────────────────
+  //
+  // Three driver-facing endpoints. The driver clicks "Set up payouts" →
+  // POST /api/driver/connect/onboard returns a single-use Stripe URL → app
+  // redirects the browser there → Stripe hosts the entire W-9 / bank flow →
+  // Stripe sends the driver back to /driver/connect/return on success or
+  // abandonment. That SPA page calls GET /api/driver/connect/status and
+  // either confirms the account is live or offers a "Resume setup" button
+  // that hits onboard again to mint a fresh link.
+  //
+  // Why a fresh link each time: account-link URLs expire in ~5 min and are
+  // single-use. Caching one would leave the user on a dead URL after a
+  // back-button or refresh. Cheap call, so re-mint every click.
+
+  function connectReturnUrl(): string {
+    // Mirror emailService's APP_URL resolution: explicit APP_URL beats
+    // Railway's auto-domain. Strip trailing slash so we don't end up with
+    // //driver/... in the link.
+    const base = (
+      process.env.APP_URL ||
+      (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "")
+    ).replace(/\/$/, "");
+    if (!base) {
+      throw new Error("APP_URL (or RAILWAY_PUBLIC_DOMAIN) must be set so Stripe knows where to redirect after onboarding");
+    }
+    return `${base}/driver/connect/return`;
+  }
+
+  // Driver: create or refresh a Stripe Connect onboarding link.
+  app.post('/api/driver/connect/onboard', isAuthenticated, async (req: any, res) => {
+    if (!stripe) return res.status(503).json({ message: 'Stripe is not configured' });
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: 'User not found' });
+      if (!user.isDriver) {
+        return res.status(403).json({ message: 'Only drivers can set up Stripe Connect' });
+      }
+      if (!user.isApproved) {
+        // R-M2 gates payouts on admin approval. Don't let unapproved drivers
+        // start Stripe identity verification — Stripe holds onto the data
+        // and a later admin rejection becomes awkward to unwind.
+        return res.status(403).json({ message: 'Your driver account must be approved before payouts can be set up' });
+      }
+      if (!user.email) {
+        // Stripe Express requires an email for the account holder. Every
+        // signup path requires email — this is defensive.
+        return res.status(400).json({ message: 'A verified email address is required' });
+      }
+
+      let accountId = user.stripeConnectAccountId;
+      if (!accountId) {
+        const account = await stripeConnectService.createExpressAccount({
+          userId,
+          email: user.email,
+          firstName: user.firstName ?? undefined,
+          lastName: user.lastName ?? undefined,
+        });
+        accountId = account.id;
+        await storage.setStripeConnectAccountId(userId, accountId);
+        await storage.logAdminAction(userId, 'stripe_connect_account_created', 'user', userId, { accountId });
+      }
+
+      const url = connectReturnUrl();
+      const link = await stripeConnectService.createAccountLink({
+        accountId,
+        // Use the same SPA route for both refresh and return — the page
+        // checks the live account state and decides what to show. Stripe's
+        // docs recommend this pattern.
+        refreshUrl: url,
+        returnUrl: url,
+      });
+      res.json({ url: link.url, accountId });
+    } catch (error: any) {
+      console.error('Error creating Connect onboarding link:', error);
+      res.status(500).json({ message: error?.message || 'Failed to start payout setup' });
+    }
+  });
+
+  // Driver: read live Connect status. UI polls this after returning from
+  // Stripe until payoutsEnabled is true, then unlocks "Transfer to bank".
+  app.get('/api/driver/connect/status', isAuthenticated, async (req: any, res) => {
+    if (!stripe) return res.status(503).json({ message: 'Stripe is not configured' });
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: 'User not found' });
+
+      if (!user.stripeConnectAccountId) {
+        return res.json({
+          connectAccountId: null,
+          payoutsEnabled: false,
+          chargesEnabled: false,
+          onboardingCompleted: false,
+          requirementsCurrentlyDue: [],
+        });
+      }
+
+      // Fetch live from Stripe and mirror into DB so the webhook isn't the
+      // only path that updates the flags (covers the case where the user
+      // returns to the app before account.updated has been delivered).
+      const status = await stripeConnectService.retrieveAccount(user.stripeConnectAccountId);
+      await storage.updateStripeConnectStatus(userId, {
+        payoutsEnabled: status.payoutsEnabled,
+        chargesEnabled: status.chargesEnabled,
+        onboardingCompleted: status.detailsSubmitted,
+      });
+
+      res.json({
+        connectAccountId: user.stripeConnectAccountId,
+        payoutsEnabled: status.payoutsEnabled,
+        chargesEnabled: status.chargesEnabled,
+        onboardingCompleted: status.detailsSubmitted,
+        requirementsCurrentlyDue: status.requirementsCurrentlyDue,
+      });
+    } catch (error: any) {
+      console.error('Error reading Connect status:', error);
+      res.status(500).json({ message: 'Failed to read payout setup status' });
+    }
+  });
+
   // Financial summary
   app.get('/api/admin/finances', isAdminOrSessionAuth, async (req: any, res) => {
     try {
@@ -5051,6 +5173,35 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
           const charge = event.data.object as any;
           const rideId = charge.metadata?.rideId ?? charge.payment_intent?.metadata?.rideId;
           console.log(`[STRIPE] charge.refunded for ride=${rideId ?? 'unknown'} charge=${charge.id} amount_refunded=${charge.amount_refunded}`);
+          break;
+        }
+        // AH-060: Connect lifecycle. account.updated fires whenever a driver
+        // submits more onboarding info, links a bank, completes identity
+        // verification, or has a capability flipped. We mirror Stripe's
+        // payouts_enabled/charges_enabled into our DB so UI gating doesn't
+        // need a live API roundtrip on every page render. The driver row is
+        // located via metadata.userId set at account creation time; we never
+        // trust the webhook's claim alone without that linkage.
+        case 'account.updated': {
+          const account = event.data.object as any;
+          const userId = account.metadata?.userId;
+          if (!userId) {
+            console.log(`[STRIPE] account.updated for ${account.id} — no userId in metadata, ignoring`);
+            break;
+          }
+          const user = await storage.getUser(userId);
+          if (!user || user.stripeConnectAccountId !== account.id) {
+            // Defends against a spoofed metadata.userId — only accept the
+            // update if the user record actually points back at this account.
+            console.log(`[STRIPE] account.updated user/account mismatch userId=${userId} account=${account.id}, ignoring`);
+            break;
+          }
+          await storage.updateStripeConnectStatus(userId, {
+            payoutsEnabled: account.payouts_enabled === true,
+            chargesEnabled: account.charges_enabled === true,
+            onboardingCompleted: account.details_submitted === true,
+          });
+          console.log(`[STRIPE] account.updated userId=${userId} payouts=${account.payouts_enabled} charges=${account.charges_enabled} submitted=${account.details_submitted}`);
           break;
         }
         default: break;

@@ -17,6 +17,7 @@ import { Link } from "wouter";
 import { format } from "date-fns";
 import { BarChart3, Bell, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote } from "lucide-react";
 import PayoutModal from "@/components/PayoutModal";
+import StripeConnectOnboardingCard from "@/components/StripeConnectOnboardingCard";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
@@ -51,6 +52,19 @@ export default function DriverDashboard() {
   const { data: weekEarnings } = useQuery<{fare: number, tips: number, total: number, rideCount: number}>({
     queryKey: ["/api/driver/earnings/week"],
     enabled: !!user?.isDriver,
+  });
+
+  // AH-060: Stripe Connect status for the onboarding card + payout gating.
+  // Only fetched once approved; unapproved drivers can't start onboarding yet.
+  const { data: connectStatus } = useQuery<{
+    connectAccountId: string | null;
+    payoutsEnabled: boolean;
+    chargesEnabled: boolean;
+    onboardingCompleted: boolean;
+    requirementsCurrentlyDue: string[];
+  }>({
+    queryKey: ["/api/driver/connect/status"],
+    enabled: !!user?.isDriver && !!user?.isApproved,
   });
 
   const { data: todayTrips = [] } = useQuery<any[]>({
@@ -533,6 +547,11 @@ export default function DriverDashboard() {
             </CardContent>
           </Card>
         </div>
+
+        {/* AH-060: Stripe Connect onboarding prompt — shown to approved drivers
+            who haven't completed Stripe verification yet. Disappears once
+            payouts_enabled flips to true via the account.updated webhook. */}
+        <StripeConnectOnboardingCard status={connectStatus} />
 
         {/* Payout Card */}
         <Card className="border-green-200 dark:border-green-800">
