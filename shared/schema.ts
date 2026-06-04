@@ -1,6 +1,7 @@
 import { sql, relations } from 'drizzle-orm';
 import {
   index,
+  uniqueIndex,
   jsonb,
   pgTable,
   timestamp,
@@ -470,8 +471,12 @@ export const profitDistributions = pgTable("profit_distributions", {
   // AH-062: a given (declaration, owner) pair must be unique so a re-invoked
   // distributeProfits() can't insert duplicates. Combined with a transaction
   // wrapper and an explicit duplicate check this makes the function safe to
-  // retry after a partial crash.
-  index("idx_profit_distributions_declaration_owner_unique")
+  // retry after a partial crash. uniqueIndex (not index) so the Drizzle
+  // declaration matches the real DB constraint installed by migrate.mjs —
+  // before, schema.ts named the index "unique" but only created a regular
+  // index, which would have left fresh dev DBs created via drizzle-kit push
+  // without the uniqueness enforcement.
+  uniqueIndex("idx_profit_distributions_declaration_owner_unique")
     .on(table.declarationId, table.ownerId),
 ]);
 

@@ -5333,7 +5333,16 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     const sig = req.headers['x-checkr-signature'] as string;
     if (!sig) return res.status(400).json({ message: 'Missing signature' });
     const expected = crypto.createHmac('sha256', webhookSecret).update(req.body).digest('hex');
-    if (sig !== expected) return res.status(400).json({ message: 'Invalid signature' });
+    // Constant-time comparison. The naive `!==` does byte-by-byte early-exit,
+    // which leaks signature bytes through response-time differences and lets
+    // a high-rate attacker forge HMAC prefixes incrementally. timingSafeEqual
+    // throws on length-mismatch, so we explicit-check length first and treat
+    // mismatch as an invalid signature (same status as the equality failure).
+    const sigBuf = Buffer.from(sig, 'hex');
+    const expectedBuf = Buffer.from(expected, 'hex');
+    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      return res.status(400).json({ message: 'Invalid signature' });
+    }
 
     let event: any;
     try { event = JSON.parse(req.body.toString()); } catch { return res.status(400).json({ message: 'Invalid JSON' }); }
@@ -5341,12 +5350,16 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     // AH-065: idempotency for Checkr too. Checkr's webhook spec doesn't
     // guarantee single delivery either; the report.completed handler flips
     // approvalStatus and sends emails, both should fire exactly once.
-    if (event.id) {
-      const claimed = await storage.claimWebhookEvent('checkr', event.id, event.type);
-      if (!claimed) {
-        console.log(`[CHECKR] webhook ${event.id} (${event.type}) already processed — skipping`);
-        return res.json({ received: true, duplicate: true });
-      }
+    // event.id is required by Checkr's contract — if it's missing, the
+    // payload is malformed (or a future API change). Refuse to process
+    // rather than bypass the idempotency check.
+    if (!event.id) {
+      return res.status(400).json({ message: 'Missing event id' });
+    }
+    const claimed = await storage.claimWebhookEvent('checkr', event.id, event.type);
+    if (!claimed) {
+      console.log(`[CHECKR] webhook ${event.id} (${event.type}) already processed — skipping`);
+      return res.json({ received: true, duplicate: true });
     }
 
     if (event.type === 'report.completed') {
