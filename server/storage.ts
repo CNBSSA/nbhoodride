@@ -2643,6 +2643,11 @@ export class DatabaseStorage implements IStorage {
     return declaration;
   }
 
+  async getProfitDeclaration(id: string): Promise<ProfitDeclaration | undefined> {
+    const [record] = await db.select().from(profitDeclarations).where(eq(profitDeclarations.id, id));
+    return record;
+  }
+
   async getProfitDeclarations(): Promise<ProfitDeclaration[]> {
     return await db.select().from(profitDeclarations).orderBy(desc(profitDeclarations.fiscalYear));
   }

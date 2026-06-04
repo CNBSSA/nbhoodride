@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { MapPin, Plus, X, Navigation, DollarSign, Shield, Loader2, CheckCircle, Trash2 } from "lucide-react";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { GeocodeCandidate } from "@/hooks/useGeocode";
+import { estimateRouteForWaypoints } from "@shared/geo";
 
 interface Stop {
   address: string;
@@ -35,27 +36,15 @@ interface MultiStopBookingSheetProps {
 
 const MAX_STOPS = 3;
 
-function haversineMiles(lat1: number, lng1: number, lat2: number, lng2: number) {
-  const R = 3958.8;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function estimateFareForRoute(stops: Stop[], dest: Stop): number {
-  // Sum haversine distances between consecutive stops including final destination
-  const allPoints = stops.filter((s) => s.lat !== null);
+// Same $2.50 + $1.50/mi + $0.30/min formula as the other modals, summed
+// over multi-stop waypoints via the shared route estimator.
+function estimateFareForRoute(stops: Stop[], _dest: Stop): number {
+  const allPoints = stops
+    .filter((s) => s.lat !== null && s.lng !== null)
+    .map((s) => ({ lat: s.lat!, lng: s.lng! }));
   if (allPoints.length < 2) return 0;
-  let dist = 0;
-  for (let i = 0; i < allPoints.length - 1; i++) {
-    dist += haversineMiles(allPoints[i].lat!, allPoints[i].lng!, allPoints[i + 1].lat!, allPoints[i + 1].lng!);
-  }
-  const roadDist = dist * 1.3;
-  const duration = Math.round((roadDist / 25) * 60);
-  return Math.max(5, 2.5 + roadDist * 1.5 + duration * 0.3);
+  const { distanceMiles, durationMinutes } = estimateRouteForWaypoints(allPoints);
+  return Math.max(5, 2.5 + distanceMiles * 1.5 + durationMinutes * 0.3);
 }
 
 export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLocation }: MultiStopBookingSheetProps) {
@@ -206,6 +195,7 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
                       value={stop.address}
                       onChange={(v) => updateStop(index, v)}
                       onSelect={(c) => pickStop(index, c)}
+                      resolvedLabel={stop.lat !== null ? stop.address : undefined}
                       placeholder={`Stop ${index + 1} address`}
                       className="flex-1 [&_input]:text-sm"
                       testId={`input-stop-${index}`}
@@ -232,6 +222,7 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
                 value={destination.address}
                 onChange={(v) => setDestination({ address: v, lat: null, lng: null })}
                 onSelect={pickDestination}
+                resolvedLabel={destination.lat !== null ? destination.address : undefined}
                 placeholder="Where is everyone going?"
                 testId="input-multistop-destination"
               />

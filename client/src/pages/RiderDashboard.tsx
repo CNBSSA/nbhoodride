@@ -15,6 +15,7 @@ import SOSModal from "@/components/SOSModal";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { GeocodeCandidate } from "@/hooks/useGeocode";
+import { estimateRouteMetrics } from "@shared/geo";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -195,13 +196,9 @@ export default function RiderDashboard() {
     }
     setDestCoords({ lat: c.lat, lng: c.lng });
     setDestinationAddress(c.label);
-    const dLat = (c.lat - userLocation.lat) * Math.PI / 180;
-    const dLng = (c.lng - userLocation.lng) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(c.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-    const dist = Math.round(3959 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
-    const dur = Math.round((dist / 25) * 60);
-    setEstimatedDistance(dist);
-    setEstimatedDuration(dur);
+    const { distanceMiles, durationMinutes } = estimateRouteMetrics(userLocation, { lat: c.lat, lng: c.lng });
+    setEstimatedDistance(distanceMiles);
+    setEstimatedDuration(durationMinutes);
     setPanel("drivers");
   }
 
@@ -567,6 +564,7 @@ export default function RiderDashboard() {
                 onSelect={handleDestinationPick}
                 placeholder="Where are you going?"
                 autoFocus
+                resolvedLabel={destCoords ? destinationAddress : undefined}
                 className="[&_input]:h-12 [&_input]:rounded-2xl [&_input]:font-medium [&_input]:border-gray-200 [&_input]:focus:border-blue-400"
                 testId="input-destination"
               />

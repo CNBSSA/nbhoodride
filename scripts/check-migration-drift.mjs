@@ -86,6 +86,86 @@ const LIVE_TABLES = new Set([
   "safety_alerts",
 ]);
 
+// ── Parse uniqueness declarations ─────────────────────────────────────────
+//
+// Catches the AH-062 / AH-066 bug class where schema.ts declares
+// `index("foo_unique")` (a regular non-unique index whose name HAPPENS to
+// say "unique") while migrate.mjs adds a real UNIQUE constraint via
+// CREATE UNIQUE INDEX or ALTER TABLE ADD CONSTRAINT ... UNIQUE. The DB
+// has the constraint, prod is correct — but a dev environment synced via
+// drizzle-kit push gets only the non-unique index, defeating the very
+// invariant the constraint is meant to enforce (idempotency / duplicate
+// rejection).
+//
+// We canonicalize each declaration as a stable signature and require the
+// schema/migrate signatures to agree.
+
+function parseSchemaIndexes(src) {
+  // Match index("name") and uniqueIndex("name") calls. We capture the
+  // builder kind (index vs uniqueIndex) and the index name. This is the
+  // Drizzle-side surface that drizzle-kit push would emit.
+  const indexes = []; // { kind: "index"|"uniqueIndex", name }
+  const idxRegex = /\b(index|uniqueIndex)\(\s*"([^"]+)"\s*\)/g;
+  let m;
+  while ((m = idxRegex.exec(src))) {
+    indexes.push({ kind: m[1], name: m[2] });
+  }
+  return indexes;
+}
+
+function parseMigrateIndexes(src) {
+  // Extract the SQL block.
+  const sqlMatch = src.match(/const SQL = `([\s\S]*?)`;/);
+  if (!sqlMatch) return [];
+  const sql = sqlMatch[1];
+
+  const indexes = []; // { kind: "index"|"uniqueIndex", name }
+
+  // CREATE [UNIQUE] INDEX [IF NOT EXISTS] name ON ...
+  const ciRegex = /CREATE\s+(UNIQUE\s+)?INDEX(?:\s+IF NOT EXISTS)?\s+"?([a-z_][a-z0-9_]*)"?\s+ON\b/gi;
+  let m;
+  while ((m = ciRegex.exec(sql))) {
+    const isUnique = !!m[1];
+    indexes.push({ kind: isUnique ? "uniqueIndex" : "index", name: m[2] });
+  }
+
+  // ALTER TABLE ... ADD CONSTRAINT name UNIQUE (...). Treated as a unique
+  // index for drift-checking purposes (Drizzle's uniqueIndex covers either
+  // representation).
+  const acRegex = /ADD\s+CONSTRAINT\s+"?([a-z_][a-z0-9_]*)"?\s+UNIQUE\b/gi;
+  while ((m = acRegex.exec(sql))) {
+    indexes.push({ kind: "uniqueIndex", name: m[1] });
+  }
+
+  return indexes;
+}
+
+function checkIndexKindDrift(schemaIndexes, migrateIndexes) {
+  // Group by name from both sides. Mismatched kinds (index in one, unique
+  // in the other) are the bug we're hunting.
+  const byName = new Map(); // name → { schema: kind|null, migrate: kind|null }
+  for (const { name, kind } of schemaIndexes) {
+    const entry = byName.get(name) ?? { schema: null, migrate: null };
+    entry.schema = kind;
+    byName.set(name, entry);
+  }
+  for (const { name, kind } of migrateIndexes) {
+    const entry = byName.get(name) ?? { schema: null, migrate: null };
+    entry.migrate = kind;
+    byName.set(name, entry);
+  }
+  const mismatches = [];
+  for (const [name, { schema, migrate }] of byName) {
+    // Only flag when both sides declare the index AND disagree on uniqueness.
+    // Missing-from-one-side is not part of this check (some indexes only
+    // live in one place legitimately).
+    if (schema && migrate && schema !== migrate) {
+      mismatches.push({ name, schema, migrate });
+    }
+  }
+  return mismatches;
+}
+
 // ── Parse shared/schema.ts ────────────────────────────────────────────────
 function parseSchema(src) {
   const tables = new Map();
@@ -173,6 +253,9 @@ function main() {
 
   const schemaTables = parseSchema(schemaSrc);
   const { createTables, alters } = parseMigrate(migrateSrc);
+  const schemaIndexes = parseSchemaIndexes(schemaSrc);
+  const migrateIndexes = parseMigrateIndexes(migrateSrc);
+  const indexMismatches = checkIndexKindDrift(schemaIndexes, migrateIndexes);
 
   const baseline = loadBaseline();
   const legacy = baseline.legacy || {};
@@ -230,9 +313,21 @@ function main() {
     return;
   }
 
-  if (missingFromMigrate.length === 0 && missingAlter.length === 0) {
-    console.log(`[migration-drift] OK — schema.ts and migrate.mjs are in sync (${schemaTables.size} tables checked).`);
+  if (missingFromMigrate.length === 0 && missingAlter.length === 0 && indexMismatches.length === 0) {
+    console.log(`[migration-drift] OK — schema.ts and migrate.mjs are in sync (${schemaTables.size} tables checked, ${schemaIndexes.length} schema indexes).`);
     return;
+  }
+
+  if (indexMismatches.length > 0) {
+    console.error("[migration-drift] ❌ Index uniqueness mismatch between schema.ts and migrate.mjs:");
+    console.error("(Caused production bugs AH-062 and AH-066 — schema said index(), migrate.mjs created UNIQUE.");
+    console.error(" A fresh dev DB synced via drizzle-kit push would skip the UNIQUE, silently breaking idempotency.)");
+    for (const { name, schema, migrate } of indexMismatches) {
+      console.error(`  - ${name}: schema=${schema}, migrate=${migrate}`);
+    }
+    console.error("");
+    console.error("Fix: change shared/schema.ts to match migrate.mjs (usually uniqueIndex(...) when migrate.mjs has UNIQUE).");
+    console.error("");
   }
 
   if (missingFromMigrate.length > 0) {

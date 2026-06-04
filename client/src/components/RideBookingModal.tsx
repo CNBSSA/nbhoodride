@@ -12,6 +12,7 @@ import { MapPin, Navigation, User, DollarSign, CheckCircle, ChevronRight, Star, 
 import { Switch } from "@/components/ui/switch";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { GeocodeCandidate } from "@/hooks/useGeocode";
+import { estimateRouteMetrics } from "@shared/geo";
 
 interface Driver {
   id: string;
@@ -174,16 +175,10 @@ export default function RideBookingModal({
       setFareEstimate(null);
       return;
     }
-    const R = 3959;
-    const dLat = (destCoords.lat - userLocation.lat) * Math.PI / 180;
-    const dLng = (destCoords.lng - userLocation.lng) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(destCoords.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-    const straightLineDist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    const distance = Math.round(straightLineDist * 1.3 * 10) / 10;
-    const duration = Math.round((distance / 25) * 60);
-    setEstimatedDistance(distance);
-    setEstimatedDuration(duration);
-    calculateFare(distance, duration, selectedDriverRef.current || undefined);
+    const { distanceMiles, durationMinutes } = estimateRouteMetrics(userLocation, destCoords);
+    setEstimatedDistance(distanceMiles);
+    setEstimatedDuration(durationMinutes);
+    calculateFare(distanceMiles, durationMinutes, selectedDriverRef.current || undefined);
   }, [destCoords, userLocation.lat, userLocation.lng, calculateFare]);
 
   function handleDestinationPick(c: GeocodeCandidate | null) {
@@ -321,6 +316,7 @@ export default function RideBookingModal({
                     value={destinationAddress}
                     onChange={setDestinationAddress}
                     onSelect={handleDestinationPick}
+                    resolvedLabel={destCoords ? destinationAddress : undefined}
                     placeholder="Where are you going?"
                     className="[&_input]:h-9 [&_input]:text-sm [&_input]:bg-white dark:[&_input]:bg-gray-800"
                     testId="input-destination"

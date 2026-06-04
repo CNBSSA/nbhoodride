@@ -504,6 +504,11 @@ DO $$ BEGIN
 END $$;
 
 -- ── Processed webhook events (AH-065 idempotency log) ──────────────────────
+-- Uniqueness on (provider, event_id) is what makes claimWebhookEvent's
+-- onConflictDoNothing INSERT atomic — duplicate deliveries collide and
+-- return no rows. The CONSTRAINT below provides this in production; on a
+-- fresh dev DB synced via `drizzle-kit push`, the matching uniqueIndex
+-- declaration in shared/schema.ts creates the same enforcement.
 CREATE TABLE IF NOT EXISTS processed_webhook_events (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
   provider VARCHAR NOT NULL,
@@ -512,7 +517,12 @@ CREATE TABLE IF NOT EXISTS processed_webhook_events (
   processed_at TIMESTAMP DEFAULT NOW() NOT NULL,
   CONSTRAINT processed_webhook_events_unique UNIQUE (provider, event_id)
 );
-CREATE INDEX IF NOT EXISTS idx_processed_webhook_provider_event
+-- AH-066: matches Drizzle's `uniqueIndex("idx_processed_webhook_provider_event")`
+-- so the drift checker sees both sides as unique. Prod DBs created before
+-- this change already have a non-unique index under this name PLUS the
+-- CONSTRAINT above, so they're correct; IF NOT EXISTS makes this a no-op
+-- on those DBs. Fresh DBs get the UNIQUE index outright.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_processed_webhook_provider_event
   ON processed_webhook_events (provider, event_id);
 
 -- ── Conversations ────────────────────────────────────────────────────────────

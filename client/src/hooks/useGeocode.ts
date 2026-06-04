@@ -24,6 +24,16 @@ export function useGeocodeSuggest(query: string, opts: { minLength?: number; lim
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Guards against setState-on-unmounted-component warnings when the
+  // parent unmounts during an in-flight fetch. Without this, AbortError's
+  // finally still ran setLoading(false) on a dead instance.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -46,13 +56,23 @@ export function useGeocodeSuggest(query: string, opts: { minLength?: number; lim
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const body = (await res.json()) as { candidates: GeocodeCandidate[] };
-        setCandidates(Array.isArray(body.candidates) ? body.candidates : []);
+        if (!ctrl.signal.aborted && mountedRef.current) {
+          setCandidates(Array.isArray(body.candidates) ? body.candidates : []);
+        }
       } catch (err: any) {
         if (err?.name === "AbortError") return;
-        setError(String(err?.message ?? err));
-        setCandidates([]);
+        if (mountedRef.current) {
+          setError(String(err?.message ?? err));
+          setCandidates([]);
+        }
       } finally {
-        setLoading(false);
+        // Only clear loading if THIS request wasn't superseded — otherwise
+        // we'd flicker the spinner off between an aborted fetch and the
+        // next debounced one, and (worse) hit a setState-on-unmounted
+        // warning if the component unmounted while a request was inflight.
+        if (!ctrl.signal.aborted && mountedRef.current) {
+          setLoading(false);
+        }
       }
     }, 350);
     return () => {

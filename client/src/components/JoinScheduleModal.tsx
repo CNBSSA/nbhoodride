@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { X, Search, Users, CheckCircle, Loader2, MapPin, DollarSign } from "lucide-react";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { GeocodeCandidate } from "@/hooks/useGeocode";
+import { estimateRouteMetrics } from "@shared/geo";
 
 interface JoinScheduleModalProps {
   isOpen: boolean;
@@ -15,14 +16,15 @@ interface JoinScheduleModalProps {
   userLocation: { lat: number; lng: number; address: string };
 }
 
+// Same fare formula as SharedScheduleSheet — kept on this side for
+// optimistic preview before the server validates. Uses shared route
+// estimator so constants stay in sync.
 function estimateFare(pickupLat: number, pickupLng: number, destLat: number, destLng: number): number {
-  const R = 3958.8;
-  const dLat = ((destLat - pickupLat) * Math.PI) / 180;
-  const dLng = ((destLng - pickupLng) * Math.PI) / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos((pickupLat * Math.PI) / 180) * Math.cos((destLat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
-  const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3;
-  const duration = Math.round((dist / 25) * 60);
-  return Math.max(5, 2.5 + dist * 1.5 + duration * 0.3);
+  const { distanceMiles, durationMinutes } = estimateRouteMetrics(
+    { lat: pickupLat, lng: pickupLng },
+    { lat: destLat, lng: destLng },
+  );
+  return Math.max(5, 2.5 + distanceMiles * 1.5 + durationMinutes * 0.3);
 }
 
 export default function JoinScheduleModal({ isOpen, onClose, userLocation }: JoinScheduleModalProps) {
@@ -204,7 +206,7 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 mb-1 block">Your Destination</label>
-                  <AddressAutocomplete value={destinationAddress} onChange={setDestinationAddress} onSelect={handleDestinationPick} placeholder="Where are you going?" testId="input-join-destination" />
+                  <AddressAutocomplete value={destinationAddress} onChange={setDestinationAddress} onSelect={handleDestinationPick} resolvedLabel={destCoords ? destinationAddress : undefined} placeholder="Where are you going?" testId="input-join-destination" />
                 </div>
               </div>
             </div>

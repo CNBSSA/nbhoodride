@@ -4515,6 +4515,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // Short-circuit when payouts are already enabled. The StripeConnectReturn
+      // page polls this endpoint every 2s for 30s after onboarding return,
+      // and the driver dashboard hits it on most mounts. Without this guard
+      // we burn 15+ Stripe API calls + 15 row-locking DB writes per session
+      // — even though once payoutsEnabled flips to true there's nothing
+      // left to wait for. The account.updated webhook (and the rare case
+      // of Stripe revoking capabilities) handles changes from this side.
+      if (user.stripeConnectPayoutsEnabled === true) {
+        return res.json({
+          connectAccountId: user.stripeConnectAccountId,
+          payoutsEnabled: true,
+          chargesEnabled: user.stripeConnectChargesEnabled === true,
+          onboardingCompleted: user.stripeConnectOnboardingCompletedAt !== null,
+          requirementsCurrentlyDue: [],
+        });
+      }
+
       // Fetch live from Stripe and mirror into DB so the webhook isn't the
       // only path that updates the flags (covers the case where the user
       // returns to the app before account.updated has been delivered).
@@ -4658,8 +4675,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/admin/profits/:id/distribute', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      // Read declaration status BEFORE distributeProfits so we can tell
+      // a fresh distribution apart from the idempotent short-circuit
+      // (AH-062 silently returns prior distributions on already-
+      // distributed declarations). Without this, every admin re-click
+      // logged a fresh 'distribute_profit' audit entry, polluting the
+      // reconciliation trail.
+      const before = await storage.getProfitDeclaration(req.params.id);
+      const wasAlreadyDistributed = before?.status === 'distributed';
       const distributions = await storage.distributeProfits(req.params.id);
-      await storage.logAdminAction(adminId, 'distribute_profit', 'profit_declaration', req.params.id);
+      if (!wasAlreadyDistributed) {
+        await storage.logAdminAction(adminId, 'distribute_profit', 'profit_declaration', req.params.id);
+      }
       res.json(distributions);
     } catch (error: any) {
       console.error("Error distributing profit:", error);

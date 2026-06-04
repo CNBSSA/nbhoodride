@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { GeocodeCandidate } from "@/hooks/useGeocode";
+import { estimateRouteMetrics } from "@shared/geo";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
@@ -167,16 +168,10 @@ export default function ScheduleRideModal({
       setFareEstimate(null);
       return;
     }
-    const R = 3959;
-    const dLat = (destCoords.lat - userLocation.lat) * Math.PI / 180;
-    const dLng = (destCoords.lng - userLocation.lng) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(destCoords.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-    const straightLineDist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    const distance = Math.round(straightLineDist * 1.3 * 10) / 10;
-    const duration = Math.round((distance / 25) * 60);
-    setEstimatedDistance(distance);
-    setEstimatedDuration(duration);
-    calculateFareMutation.mutate({ distance, duration, driverId: selectedDriver || undefined });
+    const { distanceMiles, durationMinutes } = estimateRouteMetrics(userLocation, destCoords);
+    setEstimatedDistance(distanceMiles);
+    setEstimatedDuration(durationMinutes);
+    calculateFareMutation.mutate({ distance: distanceMiles, duration: durationMinutes, driverId: selectedDriver || undefined });
   }, [destCoords, userLocation.lat, userLocation.lng]);
 
   function handleDestinationPick(c: GeocodeCandidate | null) {
@@ -397,6 +392,7 @@ export default function ScheduleRideModal({
                 value={destinationAddress}
                 onChange={setDestinationAddress}
                 onSelect={handleDestinationPick}
+                resolvedLabel={destCoords ? destinationAddress : undefined}
                 placeholder="Where are you going?"
                 className="flex-1"
                 testId="input-destination"

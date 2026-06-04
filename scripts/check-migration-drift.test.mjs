@@ -89,4 +89,38 @@ describe("check-migration-drift", () => {
     expect(r.stderr).toMatch(/drift_missing_column/);
     expect(r.stderr).toMatch(/missing from scripts\/migrate\.mjs entirely/);
   });
+
+  // AH-066: catch index-uniqueness drift between schema.ts and migrate.mjs.
+  // Same drift class as AH-062 and AH-066 — schema declares uniqueIndex
+  // but the actual migration only creates a non-unique index, defeating
+  // the uniqueness guarantee the application code relies on.
+  it("fails when schema.ts declares uniqueIndex but migrate.mjs's matching CREATE INDEX is non-unique", () => {
+    const FAKE_NAME = "idx_drift_test_kind_mismatch";
+
+    // Add a uniqueIndex with a fresh name inside the users-table index
+    // block in schema.ts. We piggy-back on the existing idx_users_county
+    // line so the AST structure stays valid.
+    const schema = readFileSync(SCHEMA, "utf8");
+    const patchedSchema = schema.replace(
+      /index\("idx_users_created_at"\)\.on\(table\.createdAt\),/,
+      `index("idx_users_created_at").on(table.createdAt),\n  uniqueIndex("${FAKE_NAME}").on(table.email),`,
+    );
+    expect(patchedSchema).not.toEqual(schema);
+    writeFileSync(SCHEMA, patchedSchema, "utf8");
+
+    // Add a NON-UNIQUE matching CREATE INDEX with the same name to
+    // migrate.mjs's SQL block. Disagreement on uniqueness is the drift.
+    const migrate = readFileSync(MIGRATE, "utf8");
+    const patchedMigrate = migrate.replace(
+      /const SQL = `/,
+      `const SQL = \`\nCREATE INDEX IF NOT EXISTS ${FAKE_NAME} ON users (email);\n`,
+    );
+    expect(patchedMigrate).not.toEqual(migrate);
+    writeFileSync(MIGRATE, patchedMigrate, "utf8");
+
+    const r = run();
+    expect(r.status, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
+    expect(r.stderr).toMatch(/Index uniqueness mismatch/);
+    expect(r.stderr).toMatch(new RegExp(FAKE_NAME));
+  });
 });

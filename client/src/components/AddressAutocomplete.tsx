@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Input } from "@/components/ui/input";
 import { Loader2, MapPin, SearchX } from "lucide-react";
 import { useGeocodeSuggest, type GeocodeCandidate } from "@/hooks/useGeocode";
@@ -22,6 +22,16 @@ interface AddressAutocompleteProps {
   disabled?: boolean;
   /** Auto-focus the input on mount. Forwarded to the inner <Input />. */
   autoFocus?: boolean;
+  /**
+   * Label of an already-resolved address (i.e. the parent has destCoords
+   * matching this label from a prior pick). When `value === resolvedLabel`
+   * the component suppresses geocoding and dropdown, treating the address
+   * as confirmed. This makes the component remount-safe — without it, a
+   * remount with destinationAddress preserved but `hasSelection` reset
+   * lets the user pick a DIFFERENT candidate while the parent still
+   * trusts the original coords, silently mismatching (lat,lng) vs label.
+   */
+  resolvedLabel?: string;
 }
 
 /**
@@ -42,18 +52,32 @@ interface AddressAutocompleteProps {
  */
 export const AddressAutocomplete = forwardRef<HTMLInputElement, AddressAutocompleteProps>(
   function AddressAutocomplete(
-    { value, onChange, onSelect, placeholder, className, testId, disabled, autoFocus },
+    { value, onChange, onSelect, placeholder, className, testId, disabled, autoFocus, resolvedLabel },
     ref,
   ) {
     const [open, setOpen] = useState(false);
     const [hasSelection, setHasSelection] = useState(false);
+    // Index of the currently-highlighted suggestion for keyboard navigation.
+    // -1 = no highlight (matches "no aria-activedescendant"). Reset whenever
+    // the suggestion list or open-state changes so a stale index can't
+    // outlive the candidates it pointed at.
+    const [activeIndex, setActiveIndex] = useState(-1);
     const wrapperRef = useRef<HTMLDivElement>(null);
+    const listRef = useRef<HTMLDivElement>(null);
 
-    // When a candidate has been chosen we suppress further geocoding until
-    // the user starts editing again — keeps the dropdown from re-opening
-    // while the value still matches the picked label.
+    // Treat the address as already-resolved when either (a) the user just
+    // picked a candidate this render cycle (hasSelection), or (b) the
+    // parent says it's resolved via resolvedLabel matching value. The
+    // latter survives remounts — without it, navigating away and back
+    // would re-fire suggestions for the still-populated value and let
+    // the user pick a different lat/lng while the parent's destCoords
+    // stays put.
+    const isResolved = hasSelection || (!!resolvedLabel && resolvedLabel === value);
+
+    // When the address is treated as resolved we suppress geocoding so
+    // the dropdown doesn't re-open against the picked value.
     const { candidates, loading } = useGeocodeSuggest(
-      hasSelection || disabled ? "" : value,
+      isResolved || disabled ? "" : value,
     );
 
     useEffect(() => {
@@ -66,12 +90,49 @@ export const AddressAutocomplete = forwardRef<HTMLInputElement, AddressAutocompl
     }, [disabled]);
 
     useEffect(() => {
-      if (!disabled && !hasSelection && candidates.length > 0 && value.trim().length >= 3) {
+      if (!disabled && !isResolved && candidates.length > 0 && value.trim().length >= 3) {
         setOpen(true);
       } else if (candidates.length === 0) {
         setOpen(false);
       }
-    }, [candidates, value, hasSelection, disabled]);
+      // Always reset highlight when the list changes — keep stale indices
+      // out of the picker.
+      setActiveIndex(-1);
+    }, [candidates, value, isResolved, disabled]);
+
+    // Scroll the highlighted option into view (only when the list is open
+    // and the user is navigating with arrow keys).
+    useEffect(() => {
+      if (!open || activeIndex < 0 || !listRef.current) return;
+      const optionEl = listRef.current.children[activeIndex] as HTMLElement | undefined;
+      optionEl?.scrollIntoView({ block: "nearest" });
+    }, [activeIndex, open]);
+
+    function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+      if (disabled || isResolved) return;
+      // Open the dropdown on ArrowDown even before the user has typed enough
+      // to refresh suggestions — matches Uber/Lyft autocomplete UX.
+      if (e.key === "ArrowDown") {
+        if (candidates.length === 0) return;
+        e.preventDefault();
+        if (!open) setOpen(true);
+        setActiveIndex((i) => (i + 1) % candidates.length);
+      } else if (e.key === "ArrowUp") {
+        if (candidates.length === 0) return;
+        e.preventDefault();
+        if (!open) setOpen(true);
+        setActiveIndex((i) => (i <= 0 ? candidates.length - 1 : i - 1));
+      } else if (e.key === "Enter") {
+        if (!open || activeIndex < 0 || activeIndex >= candidates.length) return;
+        e.preventDefault();
+        handlePick(candidates[activeIndex]);
+      } else if (e.key === "Escape") {
+        if (!open) return;
+        e.preventDefault();
+        setOpen(false);
+        setActiveIndex(-1);
+      }
+    }
 
     function handleChange(next: string) {
       onChange(next);
@@ -96,7 +157,11 @@ export const AddressAutocomplete = forwardRef<HTMLInputElement, AddressAutocompl
     // why the Next/Book button is disabled — the exact failure mode
     // reported before this rewrite, just deferred to a different UI state.
     const showEmptyHint =
-      !disabled && !hasSelection && !loading && value.trim().length >= 3 && candidates.length === 0;
+      !disabled && !isResolved && !loading && value.trim().length >= 3 && candidates.length === 0;
+
+    const listboxId = testId ? `${testId}-listbox` : undefined;
+    const activeOptionId =
+      activeIndex >= 0 && testId ? `${testId}-option-${activeIndex}` : undefined;
 
     return (
       <div ref={wrapperRef} className={`relative ${className ?? ""}`}>
@@ -104,10 +169,20 @@ export const AddressAutocomplete = forwardRef<HTMLInputElement, AddressAutocompl
           ref={ref}
           value={value}
           onChange={(e) => handleChange(e.target.value)}
+          onKeyDown={handleKeyDown}
           placeholder={placeholder}
           data-testid={testId}
           disabled={disabled}
           autoFocus={autoFocus}
+          // ARIA combobox pattern so screen readers can announce the
+          // autocomplete and arrow-key navigation. Replaces the
+          // previously-bare <input> that keyboard / SR users couldn't
+          // operate at all.
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={open && candidates.length > 0}
+          aria-controls={open && candidates.length > 0 ? listboxId : undefined}
+          aria-activedescendant={activeOptionId}
           onFocus={() => {
             if (!disabled && candidates.length > 0) setOpen(true);
           }}
@@ -117,21 +192,36 @@ export const AddressAutocomplete = forwardRef<HTMLInputElement, AddressAutocompl
         )}
         {open && candidates.length > 0 && (
           <div
+            ref={listRef}
+            id={listboxId}
+            role="listbox"
             className="absolute z-50 mt-1 w-full bg-white rounded-md shadow-lg border border-gray-200 max-h-60 overflow-y-auto"
             data-testid={testId ? `${testId}-dropdown` : undefined}
           >
-            {candidates.map((c, i) => (
-              <button
-                key={`${c.lat},${c.lng},${i}`}
-                type="button"
-                onClick={() => handlePick(c)}
-                className="w-full text-left px-3 py-2 hover:bg-gray-100 flex items-start gap-2 text-sm"
-                data-testid={testId ? `${testId}-option-${i}` : undefined}
-              >
-                <MapPin className="w-4 h-4 mt-0.5 text-gray-400 flex-shrink-0" />
-                <span className="text-gray-900">{c.label}</span>
-              </button>
-            ))}
+            {candidates.map((c, i) => {
+              const isActive = i === activeIndex;
+              return (
+                <button
+                  key={`${c.lat},${c.lng},${i}`}
+                  id={testId ? `${testId}-option-${i}` : undefined}
+                  type="button"
+                  role="option"
+                  aria-selected={isActive}
+                  onClick={() => handlePick(c)}
+                  // Keyboard arrow navigation moves the highlight; mousing
+                  // over an option also highlights it so the two stay
+                  // visually consistent.
+                  onMouseEnter={() => setActiveIndex(i)}
+                  className={`w-full text-left px-3 py-2 flex items-start gap-2 text-sm ${
+                    isActive ? "bg-gray-100" : "hover:bg-gray-100"
+                  }`}
+                  data-testid={testId ? `${testId}-option-${i}` : undefined}
+                >
+                  <MapPin className="w-4 h-4 mt-0.5 text-gray-400 flex-shrink-0" />
+                  <span className="text-gray-900">{c.label}</span>
+                </button>
+              );
+            })}
           </div>
         )}
         {showEmptyHint && (
