@@ -520,7 +520,12 @@ export const processedWebhookEvents = pgTable("processed_webhook_events", {
   eventType: varchar("event_type"),
   processedAt: timestamp("processed_at").defaultNow().notNull(),
 }, (table) => [
-  index("idx_processed_webhook_provider_event").on(table.provider, table.eventId),
+  // uniqueIndex (not index) so a fresh dev DB synced via drizzle-kit push
+  // matches the UNIQUE constraint installed by migrate.mjs. Without this,
+  // claimWebhookEvent's INSERT silently succeeds on retries and webhook
+  // side effects fire twice. Same drift class as the AH-062 fix on
+  // profit_distributions earlier in this file.
+  uniqueIndex("idx_processed_webhook_provider_event").on(table.provider, table.eventId),
 ]);
 
 // ============================================================

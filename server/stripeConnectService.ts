@@ -67,7 +67,14 @@ export class StripeConnectService {
         transfers: { requested: true },
       },
       business_type: "individual",
-      individual: firstName || lastName ? {
+      // Only pre-fill individual when BOTH names are present. With `||` we'd
+      // send a half-populated block (first_name='Ada', last_name=undefined)
+      // for drivers with one-name records — Stripe's SDK drops undefined,
+      // Stripe API then rejects account creation with invalid_request_error
+      // because last_name is required when individual is set. Falling
+      // through to `undefined` lets the driver fill the missing field
+      // themselves during hosted onboarding instead of being blocked.
+      individual: firstName && lastName ? {
         first_name: firstName,
         last_name: lastName,
         email,

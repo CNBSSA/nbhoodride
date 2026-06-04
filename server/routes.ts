@@ -4325,7 +4325,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Stripe Connect path — fire the Transfer with the request id as
       // idempotency key. A retry (network blip, duplicate POST) returns the
-      // same Transfer from Stripe rather than creating a second one.
+      // same Transfer from Stripe rather than creating a second one. The
+      // payoutRequestId is set in metadata so the transfer.created webhook
+      // can reconcile if our follow-up updatePayoutRequest below fails
+      // (without it, money is on its way to the bank with no DB record
+      // linking the Transfer to the request — driver could double-pay if
+      // admin then processes the still-"pending" row).
       try {
         const transfer = await stripeConnectService.createTransfer({
           amountCents: Math.round(numAmount * 100),
@@ -4337,15 +4342,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
             driverId: userId,
           },
         });
+        // processedBy is null for driver self-service Stripe Connect payouts
+        // (no admin touched this). Previously we wrote userId, which made
+        // the driver self-appear in admin_activity_log as the actor of an
+        // admin-only event, corrupting payout-by-admin audit reports.
         const updated = await storage.updatePayoutRequest(request.id, {
           status: 'paid',
-          processedBy: userId,
+          processedBy: null,
           stripeTransferId: transfer.id,
         });
-        await storage.logAdminAction(userId, 'stripe_payout_paid', 'payout_request', request.id, {
-          transferId: transfer.id,
-          amount: numAmount.toFixed(2),
-        });
+        // No logAdminAction here either — this was a driver self-initiated
+        // payout, not an admin action. The audit trail is the
+        // wallet_transactions ledger entry from deductVirtualCardBalance
+        // above plus the payout_request row itself.
+        console.log(`[AUDIT] stripe_payout_paid source=driver_self_service userId=${userId} requestId=${request.id} transferId=${transfer.id} amount=${numAmount.toFixed(2)}`);
         return res.json(updated);
       } catch (err: any) {
         // Stripe rejected the transfer (insufficient platform balance,
@@ -5311,7 +5321,18 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
         // delivery (chargeback on the underlying funds, fraud review).
         case 'transfer.created': {
           const transfer = event.data.object as any;
-          const existing = await storage.getPayoutRequestByStripeTransferId(transfer.id);
+          // Primary lookup: by stripeTransferId. Works when the synchronous
+          // updatePayoutRequest in /api/driver/payout-requests succeeded.
+          let existing = await storage.getPayoutRequestByStripeTransferId(transfer.id);
+          // Fallback: by transfer.metadata.payoutRequestId. Recovers the
+          // case where the Transfer succeeded but the follow-up DB write
+          // never landed (DB blip between Stripe API and updatePayoutRequest)
+          // — without this, the row stays "pending" forever and an admin
+          // re-processing it would double-pay the driver.
+          if (!existing) {
+            const requestId = transfer.metadata?.payoutRequestId;
+            if (requestId) existing = await storage.getPayoutRequest(requestId);
+          }
           if (existing && existing.status !== 'paid') {
             await storage.updatePayoutRequest(existing.id, {
               status: 'paid',
@@ -5347,6 +5368,13 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       }
       res.json({ received: true });
     } catch (err) {
+      // AH-066: release the idempotency claim so Stripe's retry can
+      // re-process. Without this the claim row is committed but the
+      // handler threw — the retry hits the dedup at line 5236 and the
+      // event is permanently lost.
+      await storage.releaseWebhookEvent('stripe', event.id).catch((rErr) => {
+        console.error('Stripe webhook claim release failed (event will not retry):', rErr);
+      });
       console.error('Stripe webhook handler error:', err);
       res.status(500).json({ message: 'Webhook handler error' });
     }
@@ -5397,52 +5425,64 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       return res.json({ received: true, duplicate: true });
     }
 
-    if (event.type === 'report.completed') {
-      const report = event.data?.object;
-      if (report?.id) {
-        const profiles = await storage.getAllDriverProfiles();
-        const profile = profiles.find((p: any) => (p as any).checkrReportId === report.id);
-        if (profile) {
-          if (report.result === 'clear') {
-            await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'approved' } as any);
-            await storage.adminUpdateUser(profile.userId, { isApproved: true });
-            const user = await storage.getUser(profile.userId);
-            // R-M5: send the DRIVER approved email (not the rider one). Drivers
-            // need the driver-specific guidance about going online, payouts,
-            // and ratings — the rider approval email mentions promo rides
-            // which doesn't apply here.
-            if (user?.email) {
-              sendDriverApprovedEmail({
-                email: user.email,
-                firstName: user.firstName,
-              }).catch((err) => console.error("Failed to send driver-approved email after Checkr clear:", err));
+    // AH-066: wrap the side-effect path in try/catch so we can release the
+    // idempotency claim if a downstream storage.* call throws — otherwise
+    // the next Checkr retry hits the dedup at line 5402 and the driver's
+    // background check result is permanently lost.
+    try {
+      if (event.type === 'report.completed') {
+        const report = event.data?.object;
+        if (report?.id) {
+          const profiles = await storage.getAllDriverProfiles();
+          const profile = profiles.find((p: any) => (p as any).checkrReportId === report.id);
+          if (profile) {
+            if (report.result === 'clear') {
+              await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'approved' } as any);
+              await storage.adminUpdateUser(profile.userId, { isApproved: true });
+              const user = await storage.getUser(profile.userId);
+              // R-M5: send the DRIVER approved email (not the rider one). Drivers
+              // need the driver-specific guidance about going online, payouts,
+              // and ratings — the rider approval email mentions promo rides
+              // which doesn't apply here.
+              if (user?.email) {
+                sendDriverApprovedEmail({
+                  email: user.email,
+                  firstName: user.firstName,
+                }).catch((err) => console.error("Failed to send driver-approved email after Checkr clear:", err));
+              }
+              console.log(`[AUDIT] driver_approved source=checkr_webhook userId=${profile.userId} reportId=${report.id}`);
+            } else {
+              await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'rejected' } as any);
+              await storage.createSafetyAlert({
+                alertType: 'background_check_failed', severity: 'high', targetUserId: profile.userId,
+                title: 'Driver background check returned non-clear result',
+                description: `Checkr report ${report.id} result: ${report.result}`,
+                data: { reportId: report.id, result: report.result },
+              });
+              // R-M5: notify the driver that their application was not
+              // approved. We don't expose the Checkr result detail (PII /
+              // FCRA-sensitive); just point them at support.
+              const user = await storage.getUser(profile.userId);
+              if (user?.email) {
+                sendSignupRejectedEmail({
+                  email: user.email,
+                  firstName: user.firstName,
+                  reason: "Our background check service returned a result that prevents us from approving your driver application at this time. Please contact support if you believe this is an error or to request more information.",
+                }).catch((err) => console.error("Failed to send rejection email after Checkr non-clear result:", err));
+              }
+              console.log(`[AUDIT] driver_rejected source=checkr_webhook userId=${profile.userId} reportId=${report.id} result=${report.result}`);
             }
-            console.log(`[AUDIT] driver_approved source=checkr_webhook userId=${profile.userId} reportId=${report.id}`);
-          } else {
-            await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'rejected' } as any);
-            await storage.createSafetyAlert({
-              alertType: 'background_check_failed', severity: 'high', targetUserId: profile.userId,
-              title: 'Driver background check returned non-clear result',
-              description: `Checkr report ${report.id} result: ${report.result}`,
-              data: { reportId: report.id, result: report.result },
-            });
-            // R-M5: notify the driver that their application was not
-            // approved. We don't expose the Checkr result detail (PII /
-            // FCRA-sensitive); just point them at support.
-            const user = await storage.getUser(profile.userId);
-            if (user?.email) {
-              sendSignupRejectedEmail({
-                email: user.email,
-                firstName: user.firstName,
-                reason: "Our background check service returned a result that prevents us from approving your driver application at this time. Please contact support if you believe this is an error or to request more information.",
-              }).catch((err) => console.error("Failed to send rejection email after Checkr non-clear result:", err));
-            }
-            console.log(`[AUDIT] driver_rejected source=checkr_webhook userId=${profile.userId} reportId=${report.id} result=${report.result}`);
           }
         }
       }
+      res.json({ received: true });
+    } catch (err) {
+      await storage.releaseWebhookEvent('checkr', event.id).catch((rErr) => {
+        console.error('Checkr webhook claim release failed (event will not retry):', rErr);
+      });
+      console.error('Checkr webhook handler error:', err);
+      res.status(500).json({ message: 'Webhook handler error' });
     }
-    res.json({ received: true });
   });
   // ───────────────────────────────────────────────────────────────────────────
 

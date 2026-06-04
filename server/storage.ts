@@ -215,7 +215,10 @@ export interface IStorage {
   // newly recorded; false if it was already present. Callers should only
   // proceed with side effects when the return is true.
   claimWebhookEvent(provider: string, eventId: string, eventType?: string): Promise<boolean>;
-  
+  // AH-066: undo a prior claim so a provider retry can re-process. Used
+  // when the handler's side effects throw after the claim was committed.
+  releaseWebhookEvent(provider: string, eventId: string): Promise<void>;
+
   // Push subscription operations
   savePushSubscription(userId: string, sub: { endpoint: string; p256dh: string; auth: string }): Promise<PushSubscription>;
   getPushSubscriptionsByUser(userId: string): Promise<PushSubscription[]>;
@@ -225,7 +228,11 @@ export interface IStorage {
   createPayoutRequest(request: InsertPayoutRequest): Promise<PayoutRequest>;
   getDriverPayoutRequests(driverId: string): Promise<PayoutRequest[]>;
   getAllPayoutRequests(): Promise<(PayoutRequest & { driverName: string; driverEmail: string })[]>;
-  updatePayoutRequest(id: string, updates: { status: string; adminNote?: string; processedBy?: string; stripeTransferId?: string }): Promise<PayoutRequest>;
+  // processedBy is nullable for driver self-service Stripe Connect payouts
+  // (no admin touched the request — the driver clicked "Transfer to bank"
+  // themselves). Manual / admin-processed flows still write the admin id.
+  updatePayoutRequest(id: string, updates: { status: string; adminNote?: string; processedBy?: string | null; stripeTransferId?: string }): Promise<PayoutRequest>;
+  getPayoutRequest(id: string): Promise<PayoutRequest | undefined>;
   getPayoutRequestByStripeTransferId(transferId: string): Promise<PayoutRequest | undefined>;
 
   // AH-060: Stripe Connect (driver payouts + 1099-NEC) operations.
@@ -1009,19 +1016,30 @@ export class DatabaseStorage implements IStorage {
 
   async updatePayoutRequest(
     id: string,
-    updates: { status: string; adminNote?: string; processedBy?: string; stripeTransferId?: string }
+    updates: { status: string; adminNote?: string; processedBy?: string | null; stripeTransferId?: string }
   ): Promise<PayoutRequest> {
     const [record] = await db
       .update(payoutRequests)
       .set({
         status: updates.status,
         ...(updates.adminNote !== undefined && { adminNote: updates.adminNote }),
-        ...(updates.processedBy && { processedBy: updates.processedBy, processedAt: new Date() }),
+        // processedBy can be explicitly null for driver self-service Stripe
+        // Connect payouts — still set processedAt so the row shows when the
+        // status transition happened, just without an admin actor.
+        ...(updates.processedBy !== undefined && { processedBy: updates.processedBy, processedAt: new Date() }),
         ...(updates.stripeTransferId !== undefined && { stripeTransferId: updates.stripeTransferId }),
         updatedAt: new Date(),
       })
       .where(eq(payoutRequests.id, id))
       .returning();
+    return record;
+  }
+
+  // Look up a payout request by its id. Used by the transfer.created
+  // webhook's metadata-based fallback when the synchronous DB write of
+  // stripeTransferId didn't land — without this we can't recover the row.
+  async getPayoutRequest(id: string): Promise<PayoutRequest | undefined> {
+    const [record] = await db.select().from(payoutRequests).where(eq(payoutRequests.id, id));
     return record;
   }
 
@@ -1961,25 +1979,31 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
-  // AH-065: try to claim a webhook event. The unique constraint on
-  // (provider, event_id) means a duplicate INSERT throws — we catch it and
-  // return false so the caller can skip processing. If the INSERT succeeds,
-  // return true; the caller is the first to process this event.
+  // AH-065: try to claim a webhook event. Atomic via ON CONFLICT DO
+  // NOTHING — if the (provider, event_id) row already exists the INSERT
+  // is a no-op and RETURNING yields zero rows. No exception path, no
+  // error-message regex (which could swallow unrelated DB errors that
+  // happen to mention 'unique'), and no rollback on every duplicate
+  // during a Stripe retry storm.
   async claimWebhookEvent(provider: string, eventId: string, eventType?: string): Promise<boolean> {
-    try {
-      await db.insert(processedWebhookEvents).values({
-        provider,
-        eventId,
-        eventType,
-      });
-      return true;
-    } catch (err: any) {
-      // Postgres unique_violation = 23505
-      if (err?.code === "23505" || /unique/i.test(String(err?.message ?? ""))) {
-        return false;
-      }
-      throw err;
-    }
+    const inserted = await db
+      .insert(processedWebhookEvents)
+      .values({ provider, eventId, eventType })
+      .onConflictDoNothing()
+      .returning({ id: processedWebhookEvents.id });
+    return inserted.length > 0;
+  }
+
+  // AH-066: release a previously-claimed webhook event so a provider retry
+  // can re-process it. Called by the webhook handlers when the side-effect
+  // path throws AFTER the claim has been committed — without release,
+  // Stripe / Checkr retries hit the idempotency dedup and the event is
+  // permanently lost. Best-effort: if the delete itself fails, log but
+  // don't re-throw (the outer handler is already returning 500).
+  async releaseWebhookEvent(provider: string, eventId: string): Promise<void> {
+    await db
+      .delete(processedWebhookEvents)
+      .where(and(eq(processedWebhookEvents.provider, provider), eq(processedWebhookEvents.eventId, eventId)));
   }
 
   async consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void> {

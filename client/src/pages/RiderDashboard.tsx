@@ -556,6 +556,7 @@ export default function RiderDashboard() {
             </button>
             <div className="flex-1 relative">
               <AddressAutocomplete
+                ref={destinationInputRef}
                 value={destinationAddress}
                 onChange={(v) => {
                   setDestinationAddress(v);
@@ -565,6 +566,7 @@ export default function RiderDashboard() {
                 }}
                 onSelect={handleDestinationPick}
                 placeholder="Where are you going?"
+                autoFocus
                 className="[&_input]:h-12 [&_input]:rounded-2xl [&_input]:font-medium [&_input]:border-gray-200 [&_input]:focus:border-blue-400"
                 testId="input-destination"
               />

@@ -12,7 +12,7 @@
 // the user back to the app, but the polling guards against a delayed
 // webhook delivery and gives the SPA something to do other than spin.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -30,7 +30,15 @@ interface ConnectStatus {
 
 export default function StripeConnectReturn() {
   const queryClient = useQueryClient();
-  const [pollCount, setPollCount] = useState(0);
+  // pollCount lives in a ref, not React state — otherwise putting it in
+  // the useEffect deps below caused a render-loop that synchronously
+  // drove it from 0 → 15 in one tick (each setPollCount re-fires the
+  // effect, which immediately bumps again). The display "Still
+  // checking…" vs "Check again" needs a re-render trigger, so we mirror
+  // it in `pollDisplay`, but the *increment* happens only when a real
+  // refetch lands via the query callback.
+  const pollCountRef = useRef(0);
+  const [pollDisplay, setPollDisplay] = useState(0);
 
   const { data: status, isLoading, refetch } = useQuery<ConnectStatus>({
     queryKey: ["/api/driver/connect/status"],
@@ -39,20 +47,19 @@ export default function StripeConnectReturn() {
     refetchInterval: (q) => {
       const data = q.state.data as ConnectStatus | undefined;
       if (data?.payoutsEnabled) return false;
-      if (pollCount >= 15) return false;
+      if (pollCountRef.current >= 15) return false;
+      pollCountRef.current += 1;
+      setPollDisplay(pollCountRef.current);
       return 2000;
     },
   });
 
   useEffect(() => {
-    if (!status?.payoutsEnabled && pollCount < 15) {
-      setPollCount((c) => c + 1);
-    }
     if (status?.payoutsEnabled) {
       // Bust the user query so the dashboard sees the updated flags too.
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
     }
-  }, [status, pollCount, queryClient]);
+  }, [status?.payoutsEnabled, queryClient]);
 
   const resumeMutation = useMutation({
     mutationFn: async () => {
@@ -98,13 +105,13 @@ export default function StripeConnectReturn() {
                 account. You'll be able to request payouts as soon as
                 Stripe finishes.
               </p>
-              {pollCount < 15 ? (
+              {pollDisplay < 15 ? (
                 <p className="text-xs text-muted-foreground flex items-center justify-center gap-2">
                   <Loader2 className="w-3 h-3 animate-spin" />
                   Still checking…
                 </p>
               ) : (
-                <Button variant="outline" onClick={() => { setPollCount(0); refetch(); }}>
+                <Button variant="outline" onClick={() => { pollCountRef.current = 0; setPollDisplay(0); refetch(); }}>
                   Check again
                 </Button>
               )}
