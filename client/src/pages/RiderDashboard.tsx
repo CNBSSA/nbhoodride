@@ -13,6 +13,8 @@ import SharedScheduleSheet from "@/components/SharedScheduleSheet";
 import JoinScheduleModal from "@/components/JoinScheduleModal";
 import SOSModal from "@/components/SOSModal";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
+import type { GeocodeCandidate } from "@/hooks/useGeocode";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -72,7 +74,6 @@ export default function RiderDashboard() {
   const [estimatedDistance, setEstimatedDistance] = useState<number | null>(null);
   const [estimatedDuration, setEstimatedDuration] = useState<number | null>(null);
   const [pickupInstructions, setPickupInstructions] = useState("");
-  const [geocoding, setGeocoding] = useState(false);
   const [calculatingFare, setCalculatingFare] = useState(false);
 
   // ── UI state ──
@@ -180,44 +181,29 @@ export default function RiderDashboard() {
     };
   });
 
-  // ── Geocode destination with debounce ──
-  useEffect(() => {
-    if (destinationAddress.length < 5) {
+  // ── Geocode destination ──
+  // Suggestions are rendered by <AddressAutocomplete>; this handler fires
+  // once the rider picks a candidate. Sets destCoords + computes
+  // distance/duration and advances to the driver-picker panel.
+  function handleDestinationPick(c: GeocodeCandidate | null) {
+    if (!c) {
       setDestCoords(null);
+      setEstimatedDistance(null);
+      setEstimatedDuration(null);
       setFareEstimate(null);
       return;
     }
-    const timer = setTimeout(async () => {
-      setGeocoding(true);
-      try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationAddress)}&limit=1&countrycodes=us`,
-          { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } }
-        );
-        const results = await res.json();
-        if (results.length > 0) {
-          const lat = parseFloat(results[0].lat);
-          const lng = parseFloat(results[0].lon);
-          setDestCoords({ lat, lng });
-          const dLat = (lat - userLocation.lat) * Math.PI / 180;
-          const dLng = (lng - userLocation.lng) * Math.PI / 180;
-          const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-          const dist = Math.round(3959 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
-          const dur = Math.round((dist / 25) * 60);
-          setEstimatedDistance(dist);
-          setEstimatedDuration(dur);
-          setPanel("drivers");
-        } else {
-          setDestCoords(null);
-        }
-      } catch {
-        setDestCoords(null);
-      } finally {
-        setGeocoding(false);
-      }
-    }, 800);
-    return () => clearTimeout(timer);
-  }, [destinationAddress, userLocation.lat, userLocation.lng]);
+    setDestCoords({ lat: c.lat, lng: c.lng });
+    setDestinationAddress(c.label);
+    const dLat = (c.lat - userLocation.lat) * Math.PI / 180;
+    const dLng = (c.lng - userLocation.lng) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(c.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    const dist = Math.round(3959 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
+    const dur = Math.round((dist / 25) * 60);
+    setEstimatedDistance(dist);
+    setEstimatedDuration(dur);
+    setPanel("drivers");
+  }
 
   // ── Calculate fare when driver is selected ──
   useEffect(() => {
@@ -301,7 +287,6 @@ export default function RiderDashboard() {
     setEstimatedDistance(null);
     setEstimatedDuration(null);
     setPickupInstructions("");
-    setGeocoding(false);
     setCalculatingFare(false);
   }, []);
 
@@ -570,29 +555,19 @@ export default function RiderDashboard() {
               <X className="w-5 h-5 text-gray-700" />
             </button>
             <div className="flex-1 relative">
-              <Input
-                ref={destinationInputRef}
+              <AddressAutocomplete
                 value={destinationAddress}
-                onChange={e => {
-                  setDestinationAddress(e.target.value);
+                onChange={(v) => {
+                  setDestinationAddress(v);
                   setSelectedDriverId("");
                   setFareEstimate(null);
                   setDestCoords(null);
                 }}
+                onSelect={handleDestinationPick}
                 placeholder="Where are you going?"
-                className="h-12 rounded-2xl pr-9 font-medium border-gray-200 focus:border-blue-400"
-                autoFocus
-                data-testid="input-destination"
+                className="[&_input]:h-12 [&_input]:rounded-2xl [&_input]:font-medium [&_input]:border-gray-200 [&_input]:focus:border-blue-400"
+                testId="input-destination"
               />
-              {geocoding && <Loader2 className="w-4 h-4 text-blue-500 animate-spin absolute right-3 top-4" />}
-              {destinationAddress && !geocoding && (
-                <button
-                  onClick={() => { setDestinationAddress(""); setDestCoords(null); setFareEstimate(null); }}
-                  className="absolute right-3 top-3.5"
-                >
-                  <X className="w-4 h-4 text-gray-400" />
-                </button>
-              )}
             </div>
           </div>
 
@@ -605,29 +580,17 @@ export default function RiderDashboard() {
             </div>
           </div>
 
-          {/* Results — shows above the keyboard since input is at top */}
+          {/* Empty state below the input. AddressAutocomplete renders its
+              own suggestion dropdown inline beneath the field as the rider
+              types, so we no longer need separate "Finding...", "Keep
+              typing...", or "Address not found" panels — picking a suggestion
+              advances to the drivers panel. */}
           <div className="flex-1 overflow-y-auto px-4 py-6">
             {!destinationAddress && (
               <div className="text-center">
                 <Search className="w-12 h-12 text-gray-200 mx-auto mb-3" />
                 <p className="text-base font-medium text-gray-400 mb-1">Where are you going?</p>
                 <p className="text-sm text-gray-300">Type any address in Maryland</p>
-              </div>
-            )}
-            {destinationAddress.length > 0 && destinationAddress.length < 5 && (
-              <p className="text-center text-gray-400 text-sm">Keep typing...</p>
-            )}
-            {destinationAddress.length >= 5 && geocoding && (
-              <div className="text-center">
-                <Loader2 className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
-                <p className="text-sm text-gray-400">Finding your destination...</p>
-              </div>
-            )}
-            {destinationAddress.length >= 5 && !geocoding && !destCoords && (
-              <div className="text-center">
-                <MapPin className="w-8 h-8 text-red-300 mx-auto mb-3" />
-                <p className="text-sm font-medium text-red-400 mb-1">Address not found</p>
-                <p className="text-xs text-gray-400">Try a more specific address in Maryland</p>
               </div>
             )}
           </div>

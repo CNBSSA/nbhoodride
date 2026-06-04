@@ -7,6 +7,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { MapPin, Plus, X, Navigation, DollarSign, Shield, Loader2, CheckCircle, Trash2 } from "lucide-react";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
+import type { GeocodeCandidate } from "@/hooks/useGeocode";
 
 interface Stop {
   address: string;
@@ -32,20 +34,6 @@ interface MultiStopBookingSheetProps {
 }
 
 const MAX_STOPS = 3;
-
-async function geocode(address: string): Promise<{ lat: number; lng: number } | null> {
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1&countrycodes=us`,
-      { headers: { "User-Agent": "PGRide-Community-Rideshare/1.0" } }
-    );
-    const results = await res.json();
-    if (results.length > 0) return { lat: parseFloat(results[0].lat), lng: parseFloat(results[0].lon) };
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 function haversineMiles(lat1: number, lng1: number, lat2: number, lng2: number) {
   const R = 3958.8;
@@ -79,7 +67,6 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
   const [destination, setDestination] = useState<Stop>({ address: "", lat: null, lng: null });
   const [selectedDriver, setSelectedDriver] = useState("");
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
-  const [geocoding, setGeocoding] = useState(false);
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -116,6 +103,22 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
     setStops((prev) => prev.map((s, i) => (i === index ? { ...s, address, lat: null, lng: null } : s)));
   };
 
+  const pickStop = (index: number, c: GeocodeCandidate | null) => {
+    setStops((prev) =>
+      prev.map((s, i) =>
+        i === index ? { ...s, address: c?.label ?? s.address, lat: c?.lat ?? null, lng: c?.lng ?? null } : s
+      )
+    );
+  };
+
+  const pickDestination = (c: GeocodeCandidate | null) => {
+    setDestination((prev) => ({
+      address: c?.label ?? prev.address,
+      lat: c?.lat ?? null,
+      lng: c?.lng ?? null,
+    }));
+  };
+
   const addStop = () => {
     if (stops.length < MAX_STOPS) {
       setStops((prev) => [...prev, { address: "", lat: null, lng: null }]);
@@ -127,28 +130,18 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
     setStops((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleGeocodeAll = async () => {
-    setGeocoding(true);
-    const geocoded = await Promise.all(
-      stops.map(async (s) => {
-        if (s.lat !== null) return s;
-        const coords = await geocode(s.address);
-        return coords ? { ...s, ...coords } : s;
-      })
-    );
-    const destCoords = destination.lat !== null ? destination : { ...destination, ...(await geocode(destination.address)) };
-    setStops(geocoded);
-    setDestination(destCoords);
-    const allStopsValid = geocoded.every((s) => s.lat !== null && s.address.trim());
-    if (!allStopsValid || !destCoords.lat) {
-      toast({ title: "Address Not Found", description: "Please check all addresses and try again.", variant: "destructive" });
-      setGeocoding(false);
+  // Coords are populated inline as users pick suggestions from each
+  // AddressAutocomplete, so this handler just validates and computes the
+  // fare. No more bulk geocoding step.
+  const handleGeocodeAll = () => {
+    const allStopsValid = stops.every((s) => s.lat !== null && s.address.trim());
+    if (!allStopsValid || destination.lat === null) {
+      toast({ title: "Address Not Found", description: "Pick each stop and the destination from the suggestions.", variant: "destructive" });
       return;
     }
-    const allForFare = [...geocoded, destCoords];
-    const fare = estimateFareForRoute(allForFare, destCoords);
+    const allForFare = [...stops, destination];
+    const fare = estimateFareForRoute(allForFare, destination);
     setFareEstimate(fare);
-    setGeocoding(false);
     setStep(2);
   };
 
@@ -200,14 +193,24 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
                   <div className={`w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white ${index === 0 ? "bg-blue-600" : "bg-orange-500"}`}>
                     {index === 0 ? <Navigation className="w-3 h-3" /> : index + 1}
                   </div>
-                  <Input
-                    value={stop.address}
-                    onChange={(e) => updateStop(index, e.target.value)}
-                    placeholder={index === 0 ? "Your pickup location" : `Stop ${index + 1} address`}
-                    disabled={index === 0}
-                    className="flex-1 text-sm"
-                    data-testid={`input-stop-${index}`}
-                  />
+                  {index === 0 ? (
+                    <Input
+                      value={stop.address}
+                      disabled
+                      placeholder="Your pickup location"
+                      className="flex-1 text-sm"
+                      data-testid={`input-stop-${index}`}
+                    />
+                  ) : (
+                    <AddressAutocomplete
+                      value={stop.address}
+                      onChange={(v) => updateStop(index, v)}
+                      onSelect={(c) => pickStop(index, c)}
+                      placeholder={`Stop ${index + 1} address`}
+                      className="flex-1 [&_input]:text-sm"
+                      testId={`input-stop-${index}`}
+                    />
+                  )}
                   {index > 0 && (
                     <button onClick={() => removeStop(index)} className="text-red-400 p-1" data-testid={`button-remove-stop-${index}`}>
                       <Trash2 className="w-4 h-4" />
@@ -225,11 +228,12 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
               <p className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                 <MapPin className="w-4 h-4 text-red-500" /> Final Destination (shared by all)
               </p>
-              <Input
+              <AddressAutocomplete
                 value={destination.address}
-                onChange={(e) => setDestination({ address: e.target.value, lat: null, lng: null })}
+                onChange={(v) => setDestination({ address: v, lat: null, lng: null })}
+                onSelect={pickDestination}
                 placeholder="Where is everyone going?"
-                data-testid="input-multistop-destination"
+                testId="input-multistop-destination"
               />
             </div>
           )}
@@ -296,8 +300,8 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
 
         <div className="p-4 border-t flex-shrink-0 space-y-2" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom, 1rem))" }}>
           {step === 1 && (
-            <Button onClick={handleGeocodeAll} disabled={geocoding || !destination.address || stops.some((s, i) => i > 0 && !s.address)} className="w-full h-12" data-testid="button-multistop-next">
-              {geocoding ? <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Calculating route...</> : "Next — Calculate Fare"}
+            <Button onClick={handleGeocodeAll} disabled={destination.lat === null || stops.some((s, i) => i > 0 && s.lat === null)} className="w-full h-12" data-testid="button-multistop-next">
+              Next — Calculate Fare
             </Button>
           )}
           {step === 2 && (

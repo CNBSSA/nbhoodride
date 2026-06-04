@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
+import type { GeocodeCandidate } from "@/hooks/useGeocode";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
@@ -155,39 +157,31 @@ export default function ScheduleRideModal({
   const [estimatedDistance, setEstimatedDistance] = useState<number | null>(null);
   const [estimatedDuration, setEstimatedDuration] = useState<number | null>(null);
 
+  // Geocoding moved to <AddressAutocomplete>; this effect runs after the
+  // user picks a candidate (destCoords becomes non-null) to compute the
+  // straight-line distance/duration and trigger the fare calc.
   useEffect(() => {
-    if (destinationAddress.length < 5) return;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationAddress)}&limit=1&countrycodes=us`,
-          { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } }
-        );
-        const results = await res.json();
-        if (results.length > 0) {
-          const lat = parseFloat(results[0].lat);
-          const lng = parseFloat(results[0].lon);
-          setDestCoords({ lat, lng });
-          const R = 3959;
-          const dLat = (lat - userLocation.lat) * Math.PI / 180;
-          const dLng = (lng - userLocation.lng) * Math.PI / 180;
-          const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-          const straightLineDist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-          const distance = Math.round(straightLineDist * 1.3 * 10) / 10;
-          const duration = Math.round((distance / 25) * 60);
-          setEstimatedDistance(distance);
-          setEstimatedDuration(duration);
-          calculateFareMutation.mutate({ distance, duration, driverId: selectedDriver || undefined });
-        }
-      } catch {
-        setDestCoords(null);
-        setEstimatedDistance(null);
-        setEstimatedDuration(null);
-        setFareEstimate(null);
-      }
-    }, 800);
-    return () => clearTimeout(timer);
-  }, [destinationAddress, userLocation.lat, userLocation.lng]);
+    if (!destCoords) {
+      setEstimatedDistance(null);
+      setEstimatedDuration(null);
+      setFareEstimate(null);
+      return;
+    }
+    const R = 3959;
+    const dLat = (destCoords.lat - userLocation.lat) * Math.PI / 180;
+    const dLng = (destCoords.lng - userLocation.lng) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(destCoords.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    const straightLineDist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const distance = Math.round(straightLineDist * 1.3 * 10) / 10;
+    const duration = Math.round((distance / 25) * 60);
+    setEstimatedDistance(distance);
+    setEstimatedDuration(duration);
+    calculateFareMutation.mutate({ distance, duration, driverId: selectedDriver || undefined });
+  }, [destCoords, userLocation.lat, userLocation.lng]);
+
+  function handleDestinationPick(c: GeocodeCandidate | null) {
+    setDestCoords(c ? { lat: c.lat, lng: c.lng } : null);
+  }
 
   useEffect(() => {
     if (selectedDriver && estimatedDistance && estimatedDuration) {
@@ -399,11 +393,13 @@ export default function ScheduleRideModal({
             <label className="text-sm font-medium">Destination</label>
             <div className="flex items-center space-x-2">
               <div className="w-3 h-3 bg-destructive rounded-full" />
-              <Input
+              <AddressAutocomplete
                 value={destinationAddress}
-                onChange={(e) => setDestinationAddress(e.target.value)}
+                onChange={setDestinationAddress}
+                onSelect={handleDestinationPick}
                 placeholder="Where are you going?"
-                data-testid="input-destination"
+                className="flex-1"
+                testId="input-destination"
               />
             </div>
           </div>

@@ -6,25 +6,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { X, Search, Users, CheckCircle, Loader2, MapPin, DollarSign } from "lucide-react";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
+import type { GeocodeCandidate } from "@/hooks/useGeocode";
 
 interface JoinScheduleModalProps {
   isOpen: boolean;
   onClose: () => void;
   userLocation: { lat: number; lng: number; address: string };
-}
-
-async function geocode(address: string): Promise<{ lat: number; lng: number } | null> {
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1&countrycodes=us`,
-      { headers: { "User-Agent": "PGRide-Community-Rideshare/1.0" } }
-    );
-    const results = await res.json();
-    if (results.length > 0) return { lat: parseFloat(results[0].lat), lng: parseFloat(results[0].lon) };
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 function estimateFare(pickupLat: number, pickupLng: number, destLat: number, destLng: number): number {
@@ -44,8 +32,12 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
   const [pickupAddress, setPickupAddress] = useState(userLocation.address);
   const [destinationAddress, setDestinationAddress] = useState("");
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
-  const [geocoding, setGeocoding] = useState(false);
+  const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [joined, setJoined] = useState(false);
+
+  function handleDestinationPick(c: GeocodeCandidate | null) {
+    setDestCoords(c ? { lat: c.lat, lng: c.lng } : null);
+  }
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -87,13 +79,9 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
     previewMutation.mutate(code);
   };
 
-  const handleGeocode = async () => {
-    if (!destinationAddress.trim()) return;
-    setGeocoding(true);
-    const destCoords = await geocode(destinationAddress);
-    setGeocoding(false);
+  const handleGeocode = () => {
     if (!destCoords) {
-      toast({ title: "Address Not Found", description: "Please enter a valid destination.", variant: "destructive" });
+      toast({ title: "Address Not Found", description: "Pick a destination from the suggestions.", variant: "destructive" });
       return;
     }
     const fare = estimateFare(userLocation.lat, userLocation.lng, destCoords.lat, destCoords.lng);
@@ -101,8 +89,7 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
     setStep(3);
   };
 
-  const handleJoin = async () => {
-    const destCoords = await geocode(destinationAddress);
+  const handleJoin = () => {
     if (!destCoords) return;
     joinMutation.mutate({
       scheduleCode: code.trim().toUpperCase(),
@@ -119,6 +106,7 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
     setPickupAddress(userLocation.address);
     setDestinationAddress("");
     setFareEstimate(null);
+    setDestCoords(null);
     setJoined(false);
   };
 
@@ -216,7 +204,7 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 mb-1 block">Your Destination</label>
-                  <Input value={destinationAddress} onChange={(e) => setDestinationAddress(e.target.value)} placeholder="Where are you going?" data-testid="input-join-destination" />
+                  <AddressAutocomplete value={destinationAddress} onChange={setDestinationAddress} onSelect={handleDestinationPick} placeholder="Where are you going?" testId="input-join-destination" />
                 </div>
               </div>
             </div>
@@ -268,8 +256,8 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
           {!joined && step === 2 && (
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setStep(1)} className="flex-1 h-12">Back</Button>
-              <Button onClick={handleGeocode} disabled={geocoding || !destinationAddress.trim()} className="flex-1 h-12 bg-green-600 hover:bg-green-700" data-testid="button-join-next">
-                {geocoding ? <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Checking...</> : "Next — See Fare"}
+              <Button onClick={handleGeocode} disabled={!destCoords} className="flex-1 h-12 bg-green-600 hover:bg-green-700" data-testid="button-join-next">
+                Next — See Fare
               </Button>
             </div>
           )}

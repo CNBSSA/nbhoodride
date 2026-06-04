@@ -29,6 +29,7 @@ import {
 } from "./emailService";
 import { sendPushToSubscriptions } from "./pushService";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
+import { geocodeSuggest, geocodeForward } from "./geocodeService";
 import {
   insertDriverProfileSchema,
   insertVehicleSchema,
@@ -1970,6 +1971,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching nearby drivers:", error);
       res.status(500).json({ message: "Failed to fetch drivers" });
+    }
+  });
+
+  // ── GEOCODING ───────────────────────────────────────────────────────────────
+  // Server-proxied geocoder. Replaces the previous browser-direct fetches to
+  // Nominatim (which violated their UA policy because browsers strip the
+  // User-Agent header) with a proper proxy: real UA, in-memory cache, top-N
+  // candidates instead of limit=1, Mapbox primary with Nominatim fallback.
+  //
+  // Authenticated only — random external traffic shouldn't be able to use the
+  // app's Mapbox quota.
+  app.get('/api/geocode/suggest', isAuthenticated, async (req: any, res) => {
+    const q = (req.query.q as string | undefined) ?? "";
+    const limitRaw = parseInt((req.query.limit as string | undefined) ?? "5", 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 10) : 5;
+    if (q.trim().length < 3) return res.json({ candidates: [] });
+    try {
+      const candidates = await geocodeSuggest(q, limit);
+      res.json({ candidates });
+    } catch (err) {
+      console.error("Geocode suggest error:", err);
+      res.status(500).json({ message: "Geocoding failed" });
+    }
+  });
+
+  app.get('/api/geocode/forward', isAuthenticated, async (req: any, res) => {
+    const q = (req.query.q as string | undefined) ?? "";
+    if (q.trim().length < 3) return res.json({ candidate: null });
+    try {
+      const candidate = await geocodeForward(q);
+      res.json({ candidate });
+    } catch (err) {
+      console.error("Geocode forward error:", err);
+      res.status(500).json({ message: "Geocoding failed" });
     }
   });
 

@@ -10,6 +10,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { MapPin, Navigation, User, DollarSign, CheckCircle, ChevronRight, Star, Shield, Loader2, Users } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
+import type { GeocodeCandidate } from "@/hooks/useGeocode";
 
 interface Driver {
   id: string;
@@ -161,39 +163,32 @@ export default function RideBookingModal({
     calculateFareRef.current({ distance, duration, driverId });
   }, []);
 
+  // Geocoding now lives in <AddressAutocomplete> via the server-proxied
+  // /api/geocode/suggest endpoint. Once the user picks a candidate from the
+  // dropdown, handleDestinationPick below sets destCoords, which this effect
+  // observes to compute distance/duration and trigger the fare calculation.
   useEffect(() => {
-    if (destinationAddress.length < 5) return;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationAddress)}&limit=1&countrycodes=us`,
-          { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } }
-        );
-        const results = await res.json();
-        if (results.length > 0) {
-          const lat = parseFloat(results[0].lat);
-          const lng = parseFloat(results[0].lon);
-          setDestCoords({ lat, lng });
-          const R = 3959;
-          const dLat = (lat - userLocation.lat) * Math.PI / 180;
-          const dLng = (lng - userLocation.lng) * Math.PI / 180;
-          const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-          const straightLineDist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-          const distance = Math.round(straightLineDist * 1.3 * 10) / 10;
-          const duration = Math.round((distance / 25) * 60);
-          setEstimatedDistance(distance);
-          setEstimatedDuration(duration);
-          calculateFare(distance, duration, selectedDriverRef.current || undefined);
-        }
-      } catch {
-        setDestCoords(null);
-        setEstimatedDistance(null);
-        setEstimatedDuration(null);
-        setFareEstimate(null);
-      }
-    }, 800);
-    return () => clearTimeout(timer);
-  }, [destinationAddress, userLocation.lat, userLocation.lng, calculateFare]);
+    if (!destCoords) {
+      setEstimatedDistance(null);
+      setEstimatedDuration(null);
+      setFareEstimate(null);
+      return;
+    }
+    const R = 3959;
+    const dLat = (destCoords.lat - userLocation.lat) * Math.PI / 180;
+    const dLng = (destCoords.lng - userLocation.lng) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(destCoords.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    const straightLineDist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const distance = Math.round(straightLineDist * 1.3 * 10) / 10;
+    const duration = Math.round((distance / 25) * 60);
+    setEstimatedDistance(distance);
+    setEstimatedDuration(duration);
+    calculateFare(distance, duration, selectedDriverRef.current || undefined);
+  }, [destCoords, userLocation.lat, userLocation.lng, calculateFare]);
+
+  function handleDestinationPick(c: GeocodeCandidate | null) {
+    setDestCoords(c ? { lat: c.lat, lng: c.lng } : null);
+  }
 
   useEffect(() => {
     if (selectedDriver && estimatedDistance && estimatedDuration) {
@@ -322,12 +317,13 @@ export default function RideBookingModal({
                 </div>
                 <div>
                   <label className="text-[10px] text-gray-400 uppercase font-semibold">Destination</label>
-                  <Input
+                  <AddressAutocomplete
                     value={destinationAddress}
-                    onChange={(e) => setDestinationAddress(e.target.value)}
+                    onChange={setDestinationAddress}
+                    onSelect={handleDestinationPick}
                     placeholder="Where are you going?"
-                    className="h-9 text-sm bg-white dark:bg-gray-800"
-                    data-testid="input-destination"
+                    className="[&_input]:h-9 [&_input]:text-sm [&_input]:bg-white dark:[&_input]:bg-gray-800"
+                    testId="input-destination"
                   />
                 </div>
               </div>
