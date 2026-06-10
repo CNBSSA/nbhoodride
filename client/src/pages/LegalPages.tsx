@@ -87,7 +87,7 @@ export function TermsOfService() {
 
           <section>
             <h2 className="font-semibold text-base mb-2">13. Contact</h2>
-            <p>For questions about these Terms, contact us at <a href="mailto:support@pgride.app" className="text-primary underline">support@pgride.app</a>.</p>
+            <p>For support, questions and enquiries, contact Thrynova Insights LLC at <a href="mailto:thrynovainsights@gmail.com" className="text-primary underline">thrynovainsights@gmail.com</a> or call <a href="tel:+15712458187" className="text-primary underline">+1 571 245 8187</a>.</p>
           </section>
 
         </div>
@@ -169,7 +169,7 @@ export function PrivacyPolicy() {
 
           <section>
             <h2 className="font-semibold text-base mb-2">8. Your Rights</h2>
-            <p className="text-muted-foreground">Under Maryland and applicable U.S. law, you have the right to: access your personal data, correct inaccurate data, request deletion of your data, opt out of non-essential communications, and receive a copy of your data in a portable format. To exercise these rights, contact us at <a href="mailto:privacy@pgride.app" className="text-primary underline">privacy@pgride.app</a>.</p>
+            <p className="text-muted-foreground">Under Maryland and applicable U.S. law, you have the right to: access your personal data, correct inaccurate data, request deletion of your data, opt out of non-essential communications, and receive a copy of your data in a portable format. To exercise these rights, contact us at <a href="mailto:thrynovainsights@gmail.com" className="text-primary underline">thrynovainsights@gmail.com</a>.</p>
           </section>
 
           <section>
@@ -179,7 +179,7 @@ export function PrivacyPolicy() {
 
           <section>
             <h2 className="font-semibold text-base mb-2">10. Contact</h2>
-            <p className="text-muted-foreground">Questions about your privacy? Email us at <a href="mailto:privacy@pgride.app" className="text-primary underline">privacy@pgride.app</a>.</p>
+            <p className="text-muted-foreground">Questions about your privacy? Email us at <a href="mailto:thrynovainsights@gmail.com" className="text-primary underline">thrynovainsights@gmail.com</a>.</p>
           </section>
 
         </div>
