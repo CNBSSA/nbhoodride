@@ -699,9 +699,19 @@ CREATE TABLE IF NOT EXISTS guardian_links (
   guardian_name VARCHAR NOT NULL,
   share_token VARCHAR NOT NULL UNIQUE,
   active_ride_id VARCHAR REFERENCES rides(id),
-  expires_at TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+  revoked_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW()
 );
+-- Idempotent column additions for guardian_links: revoked_at supports the
+-- DELETE /api/mobility/guardian-links/:id revocation endpoint so a rider
+-- can kill a shared link immediately rather than waiting for the 24h TTL.
+-- expires_at is enforced NOT NULL post-hoc (set a default for any orphan
+-- rows that were created with a NULL before this migration ran).
+ALTER TABLE guardian_links ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP;
+UPDATE guardian_links SET expires_at = COALESCE(expires_at, created_at + INTERVAL '1 day') WHERE expires_at IS NULL;
+ALTER TABLE guardian_links ALTER COLUMN expires_at SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_guardian_links_rider ON guardian_links (rider_user_id);
 
 -- ── Phase C: Trust graph ─────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS trust_edges (

@@ -195,6 +195,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     message: { message: "Too many intent requests, please slow down." },
   });
 
+  // Guardian track endpoint is unauthenticated (family members hit it via
+  // share URL). The token is 128-bit so guessing is impractical, but a
+  // stricter per-IP limit on top of the global one slows enumeration
+  // attempts and keeps a leaked token from being a DoS amplifier.
+  const guardianTrackLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: "Too many tracking requests, please slow down." },
+  });
+
   app.use('/api', generalLimiter);
   app.use('/api/auth/login', authLimiter);
   app.use('/api/auth/email-login', authLimiter);
@@ -5022,34 +5034,107 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     }
   });
 
+  // Guardian share tokens are 16-byte randomBytes hex (32 chars). Lock
+  // the format here so a malformed path returns 404 BEFORE the DB hit,
+  // removing timing/format oracles that could distinguish "invalid
+  // shape" from "valid shape but no row".
+  const GUARDIAN_TOKEN_RE = /^[0-9a-f]{32}$/;
+  // Cap so a misbehaving rider can't spam thousands of active share
+  // links into the system.
+  const GUARDIAN_MAX_ACTIVE_LINKS = 5;
+  // 7 days hard cap; default is still 24h. Long-lived family-track links
+  // are a privacy footgun, so the upper bound stays tight even if the
+  // rider asks for more.
+  const GUARDIAN_MAX_TTL_HOURS = 24 * 7;
+
   app.post('/api/mobility/guardian-links', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const { guardianName } = req.body;
+      const bodySchema = z.object({
+        guardianName: z.string().trim().min(1).max(50).optional(),
+        ttlHours: z.number().int().positive().max(GUARDIAN_MAX_TTL_HOURS).optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid guardian link parameters" });
+      }
+      // Per-user active-link cap. Without this a single account could
+      // mint unlimited tokens and the table grows unbounded.
+      const activeCount = await storage.countActiveGuardianLinks(userId);
+      if (activeCount >= GUARDIAN_MAX_ACTIVE_LINKS) {
+        return res.status(429).json({
+          message: `You already have ${activeCount} active tracking links. Revoke one before sharing another.`,
+        });
+      }
       const activeRides = await storage.getRidesByUser(userId, 5);
       const active = activeRides.find((r) =>
         ["accepted", "driver_arriving", "in_progress"].includes(r.status || ""),
       );
       const token = createGuardianShareToken();
-      const expiresAt = new Date();
-      expiresAt.setHours(expiresAt.getHours() + 24);
-      await storage.createGuardianLink({
+      const ttlHours = parsed.data.ttlHours ?? 24;
+      const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
+      const link = await storage.createGuardianLink({
         riderUserId: userId,
-        guardianName: guardianName || "Family",
+        guardianName: parsed.data.guardianName ?? "Family",
         shareToken: token,
         activeRideId: active?.id,
         expiresAt,
       });
       const baseUrl = process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get("host")}`;
-      res.json({ shareUrl: `${baseUrl}/guardian/${token}`, token });
+      res.json({ id: link.id, shareUrl: `${baseUrl}/guardian/${token}`, token, expiresAt });
     } catch (error) {
       console.error("Error creating guardian link:", error);
       res.status(500).json({ message: "Failed to create guardian link" });
     }
   });
 
-  app.get('/api/guardian/track/:token', async (req, res) => {
+  // List the rider's active guardian links so the UI can show what's
+  // currently shared and let the rider revoke any of them.
+  app.get('/api/mobility/guardian-links', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const links = await storage.listActiveGuardianLinksByRider(userId);
+      // Never return the share_token from the list endpoint — once a link
+      // is created the token only exists on the original share URL. The
+      // list view shows guardianName + expiresAt for the rider's own
+      // bookkeeping, never the secret.
+      res.json(links.map((l) => ({
+        id: l.id,
+        guardianName: l.guardianName,
+        activeRideId: l.activeRideId,
+        expiresAt: l.expiresAt,
+        createdAt: l.createdAt,
+      })));
+    } catch (error) {
+      console.error("Error listing guardian links:", error);
+      res.status(500).json({ message: "Failed to list guardian links" });
+    }
+  });
+
+  // Soft-revoke. After this returns 200 the share URL immediately stops
+  // working — guardians on /guardian/:token see "Link expired or not
+  // found" on their next 15s poll.
+  app.delete('/api/mobility/guardian-links/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const revoked = await storage.revokeGuardianLink(req.params.id, userId);
+      if (!revoked) return res.status(404).json({ message: "Link not found" });
+      res.json({ revoked: true });
+    } catch (error) {
+      console.error("Error revoking guardian link:", error);
+      res.status(500).json({ message: "Failed to revoke guardian link" });
+    }
+  });
+
+  // Public tracking endpoint. Stricter per-IP rate-limit on top of the
+  // global limiter. Token format is validated BEFORE the DB query so
+  // malformed paths can't be used to time-distinguish valid vs invalid
+  // tokens.
+  app.get('/api/guardian/track/:token', guardianTrackLimiter, async (req, res) => {
+    try {
+      if (!GUARDIAN_TOKEN_RE.test(req.params.token)) {
+        return res.status(404).json({ message: "Link expired or not found" });
+      }
       const link = await storage.getGuardianLinkByToken(req.params.token);
       if (!link) return res.status(404).json({ message: "Link expired or not found" });
       if (!link.activeRideId) {
@@ -5057,6 +5142,15 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       }
       const ride = await storage.getRide(link.activeRideId);
       if (!ride) return res.json({ status: "no_active_ride", guardianName: link.guardianName });
+      // Stop returning live ride data once the ride is no longer active.
+      // Previously the endpoint kept emitting pickup + destination
+      // (often the rider's home address) for the full 24h TTL after
+      // the ride ended — privacy violation vs the rider's reasonable
+      // expectation that "family track" means live ride only.
+      const TERMINAL_STATUSES = new Set(["completed", "cancelled", "no_show"]);
+      if (TERMINAL_STATUSES.has(ride.status || "")) {
+        return res.json({ status: "no_active_ride", guardianName: link.guardianName });
+      }
       res.json({
         status: ride.status,
         pickup: ride.pickupLocation,

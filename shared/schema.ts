@@ -800,16 +800,29 @@ export const rideTemplates = pgTable("ride_templates", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-/** Guardian / family tracking share links (B7). */
+/** Guardian / family tracking share links (B7).
+ *
+ * Security model (post-supervisor review):
+ *  - expires_at is NOT NULL. Server-enforced max of 7 days. A nullable
+ *    expiry was a "link lives forever" footgun.
+ *  - revoked_at supports soft-revocation. getGuardianLinkByToken filters
+ *    on (expires_at > now AND revoked_at IS NULL) so a rider can kill
+ *    a shared link immediately without waiting for the 24h TTL.
+ *  - rider_user_id is indexed so the rider can list and revoke their
+ *    own active links cheaply.
+ */
 export const guardianLinks = pgTable("guardian_links", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   riderUserId: varchar("rider_user_id").notNull().references(() => users.id),
   guardianName: varchar("guardian_name").notNull(),
   shareToken: varchar("share_token").notNull().unique(),
   activeRideId: varchar("active_ride_id").references(() => rides.id),
-  expiresAt: timestamp("expires_at"),
+  expiresAt: timestamp("expires_at").notNull(),
+  revokedAt: timestamp("revoked_at"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => [
+  index("idx_guardian_links_rider").on(table.riderUserId),
+]);
 
 /** Rider↔driver trust graph edges (C1). */
 export const trustEdges = pgTable("trust_edges", {
