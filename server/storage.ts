@@ -16,6 +16,7 @@ import {
   chatMessages,
   eventTracking,
   aiFeedback,
+  agentAuditLog,
   platformInsights,
   faqEntries,
   knowledgeChunks,
@@ -51,6 +52,7 @@ import {
   type ChatMessage,
   type EventTracking,
   type AiFeedback,
+  type AgentAuditLog,
   type PlatformInsight,
   type FaqEntry,
   type KnowledgeChunk,
@@ -294,6 +296,14 @@ export interface IStorage {
   getEventStats(startDate: Date, endDate: Date): Promise<{ eventType: string; count: number }[]>;
   submitAiFeedback(data: { messageId: string; conversationId: string; userId: string; rating: string; reason?: string }): Promise<AiFeedback>;
   getAiFeedbackStats(): Promise<{ positive: number; negative: number; total: number }>;
+  createAgentAuditLog(data: {
+    agent: string;
+    action: string;
+    userId?: string;
+    rideId?: string;
+    reasoning?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<AgentAuditLog>;
   createPlatformInsight(data: { insightType: string; category: string; title: string; description?: string; data?: Record<string, any>; severity?: string; isActionable?: boolean }): Promise<PlatformInsight>;
   getPlatformInsights(limit?: number): Promise<PlatformInsight[]>;
   getUnreadInsights(): Promise<PlatformInsight[]>;
@@ -2815,6 +2825,18 @@ export class DatabaseStorage implements IStorage {
     const positive = allFeedback.filter(f => f.rating === 'positive').length;
     const negative = allFeedback.filter(f => f.rating === 'negative').length;
     return { positive, negative, total: allFeedback.length };
+  }
+
+  async createAgentAuditLog(data: {
+    agent: string;
+    action: string;
+    userId?: string;
+    rideId?: string;
+    reasoning?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<AgentAuditLog> {
+    const [row] = await db.insert(agentAuditLog).values(data).returning();
+    return row;
   }
 
   async createPlatformInsight(data: { insightType: string; category: string; title: string; description?: string; data?: Record<string, any>; severity?: string; isActionable?: boolean }): Promise<PlatformInsight> {

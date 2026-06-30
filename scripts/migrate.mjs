@@ -644,6 +644,20 @@ CREATE TABLE IF NOT EXISTS safety_alerts (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- ── Agent audit log (explainable dispatch / agent actions) ───────────────────
+CREATE TABLE IF NOT EXISTS agent_audit_log (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent VARCHAR NOT NULL,
+  action VARCHAR NOT NULL,
+  user_id VARCHAR REFERENCES users(id),
+  ride_id VARCHAR REFERENCES rides(id),
+  reasoning TEXT,
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_audit_ride ON agent_audit_log (ride_id);
+CREATE INDEX IF NOT EXISTS idx_agent_audit_created ON agent_audit_log (created_at);
+
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
 -- the ALTER TABLE below throws "could not create unique index — Key (user_id)

@@ -78,6 +78,7 @@ The full technical expression of this is in **[Part II](#part-ii--ai-native-futu
 | **Document version** | 3.1 (mission-first, AI-native rewrite) |
 | **Last updated** | June 2026 |
 | **Repository** | `nbhoodride` |
+| **Execution tracks** | [`EXECUTION_TRACKS.md`](EXECUTION_TRACKS.md) — autonomous vs gated work |
 | **Supersedes** | All prior planning artifacts including `VISION_AI_NATIVE.md`, marketing brief, and pasted notes |
 | **Two-part structure** | **Part I** = today's operational truth (shipped, deployed, in backlog). **Part II** = the 18–36 month AI-native future. The Founding Promises above govern both. |
 
@@ -1411,4 +1412,4 @@ When these trend right, the quantitative metrics tend to follow. When they don't
 
 ---
 
-*Single source of truth for PG Ride. Part I = operational truth today. Part II = strategic blueprint. Autonomous execution scope: [`EXECUTION_TRACKS.md`](EXECUTION_TRACKS.md). Update this file when roadmap, architecture, or GTM strategy changes.*
+*Single source of truth for PG Ride. Part I = operational truth today. Part II = strategic blueprint. Autonomous execution scope: [`EXECUTION_TRACKS.md`](EXECUTION_TRACKS.md). Update this file when roadmap, architecture, or GTM strategy changes. The calm surface is the product. The agent brain is the moat. The community soul is the reason.*

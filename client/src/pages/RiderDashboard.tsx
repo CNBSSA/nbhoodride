@@ -14,6 +14,7 @@ import JoinScheduleModal from "@/components/JoinScheduleModal";
 import SOSModal from "@/components/SOSModal";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { NotificationBell } from "@/components/NotificationBell";
+import { RideQuickMessages } from "@/components/RideQuickMessages";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -342,7 +343,23 @@ export default function RiderDashboard() {
     if (lastMessage.type !== 'driver_location') lastProcessedMessageRef.current = `${lastMessage.type}-${lastMessage.rideId}`;
 
     if (lastMessage.type === 'driver_location') {
-      setRealtimeDrivers(prev => ({ ...prev, [lastMessage.driverId]: lastMessage.location }));
+      const loc = lastMessage.location ?? (
+        typeof lastMessage.lat === 'number' && typeof lastMessage.lng === 'number'
+          ? { lat: lastMessage.lat, lng: lastMessage.lng }
+          : null
+      );
+      if (loc) {
+        const activeRide = activeRidesRef.current.find((r: any) => r.id === lastMessage.rideId)
+          ?? activeRidesRef.current[0];
+        const driverId = lastMessage.driverId ?? activeRide?.driverId ?? 'active-driver';
+        setRealtimeDrivers(prev => ({ ...prev, [driverId]: loc }));
+      }
+    } else if (lastMessage.type === 'ride_quick_message') {
+      toast({
+        title: lastMessage.fromRole === 'driver' ? 'Driver message' : 'Rider message',
+        description: lastMessage.text,
+      });
+      navigator.vibrate?.([100]);
     } else if (lastMessage.type === 'ride_accepted') {
       refetchActiveRides();
       toast({ title: "Driver Accepted!", description: lastMessage.driverName ? `${lastMessage.driverName} is on the way!` : "Your driver is on the way!" });
@@ -487,6 +504,11 @@ export default function RiderDashboard() {
                 {sharedGroup.discountAmount && (
                   <span className="ml-auto text-green-600 font-bold">-${parseFloat(sharedGroup.discountAmount).toFixed(2)} saved</span>
                 )}
+              </div>
+            )}
+            {['accepted', 'driver_arriving', 'in_progress'].includes(activeRide.status) && (
+              <div className="mt-2">
+                <RideQuickMessages rideId={activeRide.id} role="rider" />
               </div>
             )}
             {(activeRide.status === 'pending' || activeRide.status === 'accepted') && (

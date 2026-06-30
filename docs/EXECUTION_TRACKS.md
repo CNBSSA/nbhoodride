@@ -29,29 +29,75 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 
 ---
 
-## Track A — Autonomous scope
+## Track A — Autonomous scope (from MASTER_PLAN)
 
-### Phase A — Foundation (A1–A8)
+### Phase A — Foundation (A1–A8) — merged [#38](https://github.com/CNBSSA/nbhoodride/pull/38)
 
-See PR #38 (if merged). GCS, WS payloads, audit log, quick messages, insights wiring, `.env.example`.
+| ID | Deliverable | Env vars needed later |
+|----|-------------|------------------------|
+| A1 | GCS object storage (`objectStorage.ts`) | `GCS_BUCKET_NAME` |
+| A2 | WebSocket `driver_location` payload alignment | None |
+| A3 | `agent_audit_log` table + logging on dispatch | None |
+| A4 | Canned ride quick-messages (API + UI) | None |
+| A5 | Safety detect → `platform_insights` wiring | None |
+| A6 | `.env.example` documenting Track B vars | None |
+| A7 | Tests for WS payload + quick messages | None |
+| A8 | MASTER_PLAN / doc hygiene | None |
 
-### Phase A — Continued (A9–A11)
+### Phase A — Continued (A9–A11) — [#39](https://github.com/CNBSSA/nbhoodride/pull/39)
 
 | ID | Deliverable | Notes |
 |----|-------------|-------|
-| A9 | RAG for AI assistant | `knowledge_chunks` + hash embeddings; pgvector extension enabled; reindex admin route |
-| A10 | In-app notification inbox | `in_app_notifications` + bell UI; push mirrored when VAPID set |
-| A11 | FAQ from real chat excerpts | `getRecentUserChatExcerpts` + anonymized prompt |
+| A9 | RAG / pgvector for AI assistant | `knowledge_chunks` + hash embeddings; reindex route |
+| A10 | In-app notification inbox | Bell UI; push when VAPID set |
+| A11 | FAQ from real chat excerpts | Anonymized `chat_messages` prompt |
+
+### Part II — Phase B — Delegative UI (in progress)
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| B1 | `RideSurface` GenUI renderer + schema | Whitelisted component tree |
+| B2 | Orchestrator intent parsing | `POST /api/mobility/intent` |
+| B3 | Home screen intent card | Rider dashboard idle state |
+| B4 | "Same as last time" ride template | From last completed ride |
+| B5 | Autonomy Dial user setting | `user_autonomy_settings` |
+| B6 | Voice booking lane | Web Speech API (browser) |
+| B7 | Guardian Mode v1 | Tracking share links |
+
+### Part II — Later autonomous lanes
+
+| Phase | Agent can build | You provide later |
+|-------|-----------------|-------------------|
+| C — Trust graph | Tables, scoring, dispatch weights | Community org opt-in data |
+| D — Predictive | Forecast workers, coach copy | None for dev |
+| E — Ops agents | Support tool-calling, SMS adapter | Twilio, production keys |
 
 ---
 
 ## Track B — Gated scope (you required)
 
-| Variable | Purpose |
-|----------|---------|
-| `ANTHROPIC_API_KEY` | Live AI + FAQ generation |
-| `VAPID_*` | Web push (in-app inbox works without) |
-| `DATABASE_URL` | Persist notifications + knowledge index |
+### Credentials (Railway → Variables)
+
+| Variable | Purpose | When |
+|----------|---------|------|
+| `DATABASE_URL` | Neon PostgreSQL | Before any deploy |
+| `SESSION_SECRET` | Session signing | Before deploy |
+| `STRIPE_SECRET_KEY` / `VITE_STRIPE_PUBLIC_KEY` | Payments | Before card/top-up live |
+| `ANTHROPIC_API_KEY` | AI assistant + orchestrator | Before AI live |
+| `GCS_BUCKET_NAME` + GCS credentials | Driver documents | Before doc uploads live |
+| `VAPID_*` / `VITE_VAPID_PUBLIC_KEY` | Push notifications | Before push live |
+| `TWILIO_*` | SOS SMS | Optional |
+| `SUPER_ADMIN_SETUP_TOKEN` | Bootstrap super admin | Once, at setup |
+
+### Business decisions
+
+| Item | Decision needed |
+|------|-----------------|
+| AH-060 tax compliance | Path A vs B vs C — MASTER_PLAN §15 |
+| Profit declarations | Board sign-off on amounts |
+| Admin approvals | User/driver approval in production |
+| Marketing launch | Channels, events, spend |
+| PR merge / deploy | Approve merge to `main` + Railway deploy |
 
 ---
 
@@ -59,22 +105,24 @@ See PR #38 (if merged). GCS, WS payloads, audit log, quick messages, insights wi
 
 | Date | Engagement | Track | PR | Post-audit |
 |------|------------|-------|-----|------------|
-| 2026-06-30 | Phase A continued (A9–A11) | A | [#39](https://github.com/CNBSSA/nbhoodride/pull/39) | Pass — see below |
+| 2026-06-30 | Phase A foundation (A1–A8) | A | [#38](https://github.com/CNBSSA/nbhoodride/pull/38) | Pass — merged |
+| 2026-06-30 | Phase A continued (A9–A11) | A | [#39](https://github.com/CNBSSA/nbhoodride/pull/39) | Pass — conflict resolved vs #38 |
+| 2026-06-30 | Phase B delegative UI (B1–B7) | A | TBD | Pending |
 
-### Phase A9–A11 — Post-engagement audit (2026-06-30)
+### Phase A9–A11 — Post-engagement audit
 
 | Gate | Result |
 |------|--------|
-| `npm run check` | Pass — migration drift OK (32 tables), tsc clean |
-| `npm test` | Pass — 18 tests (4 files), incl. RAG embed + FAQ excerpts |
-| Track B vars for live | `ANTHROPIC_API_KEY` (AI/FAQ), `VAPID_*` (push only; inbox works without) |
-
-**Delivered:**
-
-- **A9** — `shared/ragEmbed.ts`, `server/ragService.ts`, `knowledge_chunks` table, RAG injected into AI system prompt, `POST /api/admin/analytics/reindex-knowledge`
-- **A10** — `in_app_notifications` table, notification API, `NotificationBell` on rider/driver dashboards, `deliverUserNotification` unifies in-app + push
-- **A11** — FAQ generation uses anonymized `chat_messages` excerpts; `sourceCount` from excerpt volume
+| `npm run check` | Pass — 32+ tables, tsc clean |
+| `npm test` | Pass — 18 tests |
+| PR #39 conflict | Resolved — merged `main` (#38) with A9–A11; kept both `agent_audit_log` + `knowledge_chunks` + `in_app_notifications` |
 
 ---
+
+## How to read status
+
+- **Code merged, env unset** → Track A done; flip Track B var when ready
+- **Blocked on decision** → Track B; agent documents options only
+- **Green `npm run check` + `npm test`** → Post-engagement audit pass for that PR
 
 *Update this file at the end of every autonomous engagement.*
