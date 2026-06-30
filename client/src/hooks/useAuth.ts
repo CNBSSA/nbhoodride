@@ -19,6 +19,7 @@ interface User {
   totalRides: number;
   emergencyContact?: string;
   virtualCardBalance: string;
+  promoRidesRemaining?: number;
   stripeCustomerId?: string;
   stripePaymentMethodId?: string;
   createdAt: string;

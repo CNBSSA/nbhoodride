@@ -4390,13 +4390,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       // SECURITY: Validate profit declaration fields
       const profitSchema = z.object({
-        totalRevenue: z.number().min(0, "Revenue must be non-negative"),
-        totalExpenses: z.number().min(0, "Expenses must be non-negative"),
-        netProfit: z.number(),
-        distributionPercentage: z.number().min(0).max(100).optional(),
-        notes: z.string().max(1000).optional(),
-        periodStart: z.string().optional(),
-        periodEnd: z.string().optional(),
+        fiscalYear: z.number().int().min(2000).max(2100),
+        totalRevenue: z.string().min(1, "Revenue is required"),
+        totalExpenses: z.string().min(1, "Expenses are required"),
+        netProfit: z.string().min(1, "Net profit is required"),
+        distributableProfit: z.string().min(1, "Distributable profit is required"),
+        boardNotes: z.string().max(1000).optional(),
       });
       const parsed = profitSchema.safeParse(req.body);
       if (!parsed.success) {

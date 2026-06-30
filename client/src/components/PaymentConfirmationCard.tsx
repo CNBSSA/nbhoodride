@@ -30,10 +30,7 @@ export function PaymentConfirmationCard({ ride }: PaymentConfirmationCardProps) 
 
   const confirmPaymentMutation = useMutation({
     mutationFn: async (data: { tipAmount?: number }) => {
-      return await apiRequest(`/api/rides/${ride.id}/confirm-payment`, {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
+      return await apiRequest('POST', `/api/rides/${ride.id}/confirm-payment`, data);
     },
     onMutate: () => {
       setIsSubmitting(true);
@@ -73,7 +70,7 @@ export function PaymentConfirmationCard({ ride }: PaymentConfirmationCardProps) 
 
   const handleConfirmPayment = () => {
     const tipValue = tipAmount ? parseFloat(tipAmount) : undefined;
-    if (tipAmount && (isNaN(tipValue) || tipValue < 0)) {
+    if (tipAmount && (tipValue === undefined || isNaN(tipValue) || tipValue < 0)) {
       toast({
         title: "Invalid Tip Amount",
         description: "Please enter a valid tip amount.",
