@@ -107,7 +107,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 |------|------------|-------|-----|------------|
 | 2026-06-30 | Phase A foundation (A1–A8) | A | [#38](https://github.com/CNBSSA/nbhoodride/pull/38) | Pass — merged |
 | 2026-06-30 | Phase A continued (A9–A11) | A | [#39](https://github.com/CNBSSA/nbhoodride/pull/39) | Pass — conflict resolved vs #38 |
-| 2026-06-30 | Phase B delegative UI (B1–B7) | A | TBD | Pending |
+| 2026-06-30 | Phase B delegative UI (B1–B7) | A | [#40](https://github.com/CNBSSA/nbhoodride/pull/40) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
