@@ -15,6 +15,9 @@ import SOSModal from "@/components/SOSModal";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { NotificationBell } from "@/components/NotificationBell";
 import { RideQuickMessages } from "@/components/RideQuickMessages";
+import { MobilityIntentCard, type IntentResolution } from "@/components/MobilityIntentCard";
+import { RideSurface } from "@/genui/RideSurface";
+import type { RideSurfaceSpec } from "@shared/genui/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -293,6 +296,26 @@ export default function RiderDashboard() {
     },
   });
 
+  const handleMobilityIntent = useCallback((result: IntentResolution) => {
+    if (result.parsed.intentType === "book_ride" && !result.destinationAddress) {
+      setPanel("search");
+      setTimeout(() => destinationInputRef.current?.focus(), 100);
+      return;
+    }
+    if (result.destinationAddress) {
+      setDestinationAddress(result.destinationAddress);
+      if (result.destination) {
+        setDestCoords({ lat: result.destination.lat, lng: result.destination.lng });
+      }
+      trackRideSearch();
+      setPanel("search");
+      if (result.autonomyLevel >= 2 && drivers.length > 0) {
+        setSelectedDriverId(drivers[0]!.userId);
+        setPanel("drivers");
+      }
+    }
+  }, [drivers, trackRideSearch]);
+
   // ── Helpers ──
   const resetBooking = useCallback(() => {
     setPanel("idle");
@@ -428,6 +451,13 @@ export default function RiderDashboard() {
 
   // ── Derived UI values ──
   const activeRide = activeRides[0] || null;
+
+  const { data: rideSurface } = useQuery<RideSurfaceSpec>({
+    queryKey: ["/api/mobility/surface", activeRide?.id],
+    enabled: !!activeRide?.id,
+    refetchInterval: 10000,
+  });
+
   const panelHeight = panel === "idle" ? "h-auto"
     : panel === "drivers" ? "h-[65vh]"
     : "h-[70vh]";
@@ -509,6 +539,16 @@ export default function RiderDashboard() {
             {['accepted', 'driver_arriving', 'in_progress'].includes(activeRide.status) && (
               <div className="mt-2">
                 <RideQuickMessages rideId={activeRide.id} role="rider" />
+              </div>
+            )}
+            {rideSurface && (
+              <div className="mt-2 pt-2 border-t border-gray-100">
+                <RideSurface
+                  spec={rideSurface}
+                  onAction={(action) => {
+                    if (action === "open_sos") setIsSOSModalOpen(true);
+                  }}
+                />
               </div>
             )}
             {(activeRide.status === 'pending' || activeRide.status === 'accepted') && (
@@ -665,7 +705,7 @@ export default function RiderDashboard() {
         }`}
         style={{
           bottom: panel === "idle" ? "calc(64px + env(safe-area-inset-bottom, 0px))" : "0",
-          maxHeight: panel === "idle" ? "160px" : "80vh",
+          maxHeight: panel === "idle" ? "280px" : "80vh",
         }}
       >
         {/* Drag handle */}
@@ -678,9 +718,17 @@ export default function RiderDashboard() {
 
         {/* ── IDLE: "Where to?" bar ── */}
         {panel === "idle" && (
-          <div className="px-4 pb-5 pt-1 flex-shrink-0">
+          <div className="px-4 pb-5 pt-1 flex-shrink-0 space-y-3">
+            <MobilityIntentCard
+              onResolved={handleMobilityIntent}
+              onGuardianShare={(url) => {
+                navigator.clipboard?.writeText(url).catch(() => {});
+                toast({ title: "Link copied", description: "Share with family to track your ride." });
+              }}
+              disabled={!!activeRide}
+            />
             <button
-              className="w-full flex items-center gap-3 bg-gray-100 active:bg-gray-200 transition-colors rounded-2xl px-4 py-4 text-left"
+              className="w-full flex items-center gap-3 bg-gray-100 active:bg-gray-200 transition-colors rounded-2xl px-4 py-3 text-left"
               onClick={() => {
                 trackRideSearch();
                 setPanel("search");

@@ -29,6 +29,15 @@ import {
 import { deliverUserNotification } from "./notificationService";
 import { retrieveKnowledgeContext, syncKnowledgeIndex } from "./ragService";
 import { anonymizeChatExcerpt, buildFaqExcerptBlock } from "@shared/faqExcerpts";
+import {
+  parseMobilityUtterance,
+  recordMobilityIntent,
+  resolveIntentDestination,
+  cacheRideSurface,
+  buildRideSurfaceSpec,
+  createGuardianShareToken,
+} from "./agents/orchestrator";
+import { rideSurfaceSpecSchema } from "@shared/genui/schema";
 import { buildDriverLocationMessage } from "./wsDriverLocation";
 import {
   getQuickMessageText,
@@ -4597,6 +4606,135 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       return BASE_SYSTEM_PROMPT;
     }
   }
+
+  // ── Phase B: Delegative mobility / GenUI ────────────────────────────────────
+  app.get('/api/mobility/autonomy', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const level = await storage.getUserAutonomyLevel(userId);
+      res.json({ autonomyLevel: level });
+    } catch (error) {
+      console.error("Error fetching autonomy:", error);
+      res.status(500).json({ message: "Failed to fetch autonomy settings" });
+    }
+  });
+
+  app.patch('/api/mobility/autonomy', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const level = parseInt(req.body.autonomyLevel, 10);
+      if (Number.isNaN(level) || level < 0 || level > 3) {
+        return res.status(400).json({ message: "autonomyLevel must be 0–3" });
+      }
+      const settings = await storage.setUserAutonomyLevel(userId, level);
+      res.json(settings);
+    } catch (error) {
+      console.error("Error updating autonomy:", error);
+      res.status(500).json({ message: "Failed to update autonomy settings" });
+    }
+  });
+
+  app.get('/api/mobility/ride-template/last', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const last = await storage.getLastCompletedRideForUser(userId);
+      if (!last?.destinationLocation) {
+        return res.json({ hasTemplate: false });
+      }
+      const dest = last.destinationLocation as { address?: string };
+      res.json({ hasTemplate: true, destinationAddress: dest.address });
+    } catch (error) {
+      console.error("Error fetching ride template:", error);
+      res.status(500).json({ message: "Failed to fetch ride template" });
+    }
+  });
+
+  app.post('/api/mobility/intent', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { utterance } = req.body;
+      if (!utterance || typeof utterance !== "string") {
+        return res.status(400).json({ message: "utterance is required" });
+      }
+      const parsed = parseMobilityUtterance(utterance);
+      await recordMobilityIntent(storage, userId, parsed);
+      const resolved = await resolveIntentDestination(storage, userId, parsed);
+      const autonomyLevel = await storage.getUserAutonomyLevel(userId);
+      res.json({ parsed, ...resolved, autonomyLevel });
+    } catch (error) {
+      console.error("Error parsing mobility intent:", error);
+      res.status(500).json({ message: "Failed to parse intent" });
+    }
+  });
+
+  app.get('/api/mobility/surface/:rideId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const ride = await storage.getRide(rideId);
+      if (!ride || (ride.riderId !== userId && ride.driverId !== userId)) {
+        return res.status(404).json({ message: "Ride not found" });
+      }
+      let spec = await storage.getRideSurfaceCache(rideId);
+      if (!spec) {
+        const built = buildRideSurfaceSpec(ride);
+        await storage.upsertRideSurfaceCache(rideId, built);
+        spec = built;
+      }
+      res.json(rideSurfaceSpecSchema.parse(spec));
+    } catch (error) {
+      console.error("Error fetching ride surface:", error);
+      res.status(500).json({ message: "Failed to fetch ride surface" });
+    }
+  });
+
+  app.post('/api/mobility/guardian-links', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { guardianName } = req.body;
+      const activeRides = await storage.getRidesByUser(userId, 5);
+      const active = activeRides.find((r) =>
+        ["accepted", "driver_arriving", "in_progress"].includes(r.status || ""),
+      );
+      const token = createGuardianShareToken();
+      const expiresAt = new Date();
+      expiresAt.setHours(expiresAt.getHours() + 24);
+      await storage.createGuardianLink({
+        riderUserId: userId,
+        guardianName: guardianName || "Family",
+        shareToken: token,
+        activeRideId: active?.id,
+        expiresAt,
+      });
+      const baseUrl = process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get("host")}`;
+      res.json({ shareUrl: `${baseUrl}/guardian/${token}`, token });
+    } catch (error) {
+      console.error("Error creating guardian link:", error);
+      res.status(500).json({ message: "Failed to create guardian link" });
+    }
+  });
+
+  app.get('/api/guardian/track/:token', async (req, res) => {
+    try {
+      const link = await storage.getGuardianLinkByToken(req.params.token);
+      if (!link) return res.status(404).json({ message: "Link expired or not found" });
+      if (!link.activeRideId) {
+        return res.json({ status: "no_active_ride", guardianName: link.guardianName });
+      }
+      const ride = await storage.getRide(link.activeRideId);
+      if (!ride) return res.json({ status: "no_active_ride", guardianName: link.guardianName });
+      res.json({
+        status: ride.status,
+        pickup: ride.pickupLocation,
+        destination: ride.destinationLocation,
+        updatedAt: ride.updatedAt,
+        guardianName: link.guardianName,
+      });
+    } catch (error) {
+      console.error("Error tracking guardian ride:", error);
+      res.status(500).json({ message: "Failed to load tracking" });
+    }
+  });
 
   // ── In-app notification inbox ─────────────────────────────────────────────
   app.get('/api/notifications', isAuthenticated, async (req: any, res) => {

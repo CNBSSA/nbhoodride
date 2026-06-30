@@ -21,6 +21,11 @@ import {
   faqEntries,
   knowledgeChunks,
   inAppNotifications,
+  userAutonomySettings,
+  mobilityIntents,
+  rideSurfaceCache,
+  rideTemplates,
+  guardianLinks,
   demandHeatmap,
   driverScorecard,
   safetyAlerts,
@@ -57,6 +62,10 @@ import {
   type FaqEntry,
   type KnowledgeChunk,
   type InAppNotification,
+  type UserAutonomySettings,
+  type MobilityIntent,
+  type RideTemplate,
+  type GuardianLink,
   type DemandHeatmapEntry,
   type DriverScorecardEntry,
   type SafetyAlert,
@@ -319,6 +328,16 @@ export interface IStorage {
   getUnreadInAppNotificationCount(userId: string): Promise<number>;
   markInAppNotificationRead(userId: string, id: string): Promise<void>;
   markAllInAppNotificationsRead(userId: string): Promise<void>;
+  getUserAutonomyLevel(userId: string): Promise<number>;
+  setUserAutonomyLevel(userId: string, level: number): Promise<UserAutonomySettings>;
+  createMobilityIntent(data: { userId: string; intentType: string; utterance?: string; payload?: Record<string, unknown> }): Promise<MobilityIntent>;
+  getLastCompletedRideForUser(userId: string): Promise<Ride | undefined>;
+  upsertRideSurfaceCache(rideId: string, spec: Record<string, unknown>): Promise<void>;
+  getRideSurfaceCache(rideId: string): Promise<Record<string, unknown> | undefined>;
+  getRideTemplateByLabel(userId: string, label: string): Promise<RideTemplate | undefined>;
+  upsertRideTemplateFromRide(userId: string, label: string, ride: Ride): Promise<RideTemplate>;
+  createGuardianLink(data: { riderUserId: string; guardianName: string; shareToken: string; activeRideId?: string; expiresAt?: Date }): Promise<GuardianLink>;
+  getGuardianLinkByToken(token: string): Promise<GuardianLink | undefined>;
   upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry>;
   getDemandHeatmap(hourOfDay?: number, dayOfWeek?: number): Promise<DemandHeatmapEntry[]>;
   upsertDriverScorecard(driverId: string): Promise<DriverScorecardEntry>;
@@ -2968,6 +2987,105 @@ export class DatabaseStorage implements IStorage {
       .update(inAppNotifications)
       .set({ readAt: new Date() })
       .where(and(eq(inAppNotifications.userId, userId), isNull(inAppNotifications.readAt)));
+  }
+
+  async getUserAutonomyLevel(userId: string): Promise<number> {
+    const [row] = await db.select().from(userAutonomySettings).where(eq(userAutonomySettings.userId, userId));
+    return row?.autonomyLevel ?? 1;
+  }
+
+  async setUserAutonomyLevel(userId: string, level: number): Promise<UserAutonomySettings> {
+    const clamped = Math.max(0, Math.min(3, level));
+    const [row] = await db
+      .insert(userAutonomySettings)
+      .values({ userId, autonomyLevel: clamped })
+      .onConflictDoUpdate({
+        target: userAutonomySettings.userId,
+        set: { autonomyLevel: clamped, updatedAt: new Date() },
+      })
+      .returning();
+    return row;
+  }
+
+  async createMobilityIntent(data: {
+    userId: string;
+    intentType: string;
+    utterance?: string;
+    payload?: Record<string, unknown>;
+  }): Promise<MobilityIntent> {
+    const [row] = await db.insert(mobilityIntents).values(data).returning();
+    return row;
+  }
+
+  async getLastCompletedRideForUser(userId: string): Promise<Ride | undefined> {
+    const [ride] = await db
+      .select()
+      .from(rides)
+      .where(and(eq(rides.riderId, userId), eq(rides.status, "completed")))
+      .orderBy(desc(rides.completedAt))
+      .limit(1);
+    return ride;
+  }
+
+  async upsertRideSurfaceCache(rideId: string, spec: Record<string, unknown>): Promise<void> {
+    await db
+      .insert(rideSurfaceCache)
+      .values({ rideId, spec })
+      .onConflictDoUpdate({
+        target: rideSurfaceCache.rideId,
+        set: { spec, updatedAt: new Date() },
+      });
+  }
+
+  async getRideSurfaceCache(rideId: string): Promise<Record<string, unknown> | undefined> {
+    const [row] = await db.select().from(rideSurfaceCache).where(eq(rideSurfaceCache.rideId, rideId));
+    return row?.spec;
+  }
+
+  async getRideTemplateByLabel(userId: string, label: string): Promise<RideTemplate | undefined> {
+    const [row] = await db
+      .select()
+      .from(rideTemplates)
+      .where(and(eq(rideTemplates.userId, userId), eq(rideTemplates.label, label)))
+      .limit(1);
+    return row;
+  }
+
+  async upsertRideTemplateFromRide(userId: string, label: string, ride: Ride): Promise<RideTemplate> {
+    const dest = ride.destinationLocation as { lat: number; lng: number; address: string };
+    const pickup = ride.pickupLocation as { lat: number; lng: number; address: string } | null;
+    const existing = await this.getRideTemplateByLabel(userId, label);
+    if (existing) {
+      const [updated] = await db
+        .update(rideTemplates)
+        .set({ destination: dest, pickup: pickup ?? undefined })
+        .where(eq(rideTemplates.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db
+      .insert(rideTemplates)
+      .values({ userId, label, destination: dest, pickup: pickup ?? undefined })
+      .returning();
+    return created;
+  }
+
+  async createGuardianLink(data: {
+    riderUserId: string;
+    guardianName: string;
+    shareToken: string;
+    activeRideId?: string;
+    expiresAt?: Date;
+  }): Promise<GuardianLink> {
+    const [row] = await db.insert(guardianLinks).values(data).returning();
+    return row;
+  }
+
+  async getGuardianLinkByToken(token: string): Promise<GuardianLink | undefined> {
+    const [row] = await db.select().from(guardianLinks).where(eq(guardianLinks.shareToken, token));
+    if (!row) return undefined;
+    if (row.expiresAt && row.expiresAt < new Date()) return undefined;
+    return row;
   }
 
   async upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry> {

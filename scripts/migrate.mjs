@@ -658,6 +658,51 @@ CREATE TABLE IF NOT EXISTS agent_audit_log (
 CREATE INDEX IF NOT EXISTS idx_agent_audit_ride ON agent_audit_log (ride_id);
 CREATE INDEX IF NOT EXISTS idx_agent_audit_created ON agent_audit_log (created_at);
 
+-- ── Phase B: Delegative UI ───────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS user_autonomy_settings (
+  user_id VARCHAR PRIMARY KEY REFERENCES users(id),
+  autonomy_level INTEGER NOT NULL DEFAULT 1,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS mobility_intents (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id VARCHAR NOT NULL REFERENCES users(id),
+  intent_type VARCHAR NOT NULL,
+  utterance TEXT,
+  payload JSONB,
+  status VARCHAR DEFAULT 'parsed',
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_mobility_intents_user ON mobility_intents (user_id);
+
+CREATE TABLE IF NOT EXISTS ride_surface_cache (
+  ride_id VARCHAR PRIMARY KEY REFERENCES rides(id) ON DELETE CASCADE,
+  spec JSONB NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS ride_templates (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id VARCHAR NOT NULL REFERENCES users(id),
+  label VARCHAR NOT NULL,
+  pickup JSONB,
+  destination JSONB NOT NULL,
+  is_default BOOLEAN DEFAULT false,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ride_templates_user ON ride_templates (user_id);
+
+CREATE TABLE IF NOT EXISTS guardian_links (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  rider_user_id VARCHAR NOT NULL REFERENCES users(id),
+  guardian_name VARCHAR NOT NULL,
+  share_token VARCHAR NOT NULL UNIQUE,
+  active_ride_id VARCHAR REFERENCES rides(id),
+  expires_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
 -- the ALTER TABLE below throws "could not create unique index — Key (user_id)

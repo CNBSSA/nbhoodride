@@ -761,6 +761,53 @@ export const agentAuditLog = pgTable("agent_audit_log", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/** Autonomy dial — how much the orchestrator can do without confirmation (B5). */
+export const userAutonomySettings = pgTable("user_autonomy_settings", {
+  userId: varchar("user_id").primaryKey().references(() => users.id),
+  autonomyLevel: integer("autonomy_level").default(1).notNull(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Parsed delegative intents from voice/text (B2). */
+export const mobilityIntents = pgTable("mobility_intents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  intentType: varchar("intent_type").notNull(),
+  utterance: text("utterance"),
+  payload: jsonb("payload").$type<Record<string, unknown>>(),
+  status: varchar("status").default("parsed"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Cached GenUI spec per active ride (B1). */
+export const rideSurfaceCache = pgTable("ride_surface_cache", {
+  rideId: varchar("ride_id").primaryKey().references(() => rides.id, { onDelete: "cascade" }),
+  spec: jsonb("spec").$type<Record<string, unknown>>().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Saved ride templates — home, work, repeat (B4). */
+export const rideTemplates = pgTable("ride_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  label: varchar("label").notNull(),
+  pickup: jsonb("pickup").$type<{ lat: number; lng: number; address: string }>(),
+  destination: jsonb("destination").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  isDefault: boolean("is_default").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Guardian / family tracking share links (B7). */
+export const guardianLinks = pgTable("guardian_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  riderUserId: varchar("rider_user_id").notNull().references(() => users.id),
+  guardianName: varchar("guardian_name").notNull(),
+  shareToken: varchar("share_token").notNull().unique(),
+  activeRideId: varchar("active_ride_id").references(() => rides.id),
+  expiresAt: timestamp("expires_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const demandHeatmap = pgTable("demand_heatmap", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   gridLat: decimal("grid_lat", { precision: 10, scale: 6 }).notNull(),
@@ -1014,6 +1061,11 @@ export type PlatformInsight = typeof platformInsights.$inferSelect;
 export type FaqEntry = typeof faqEntries.$inferSelect;
 export type KnowledgeChunk = typeof knowledgeChunks.$inferSelect;
 export type InAppNotification = typeof inAppNotifications.$inferSelect;
+export type UserAutonomySettings = typeof userAutonomySettings.$inferSelect;
+export type MobilityIntent = typeof mobilityIntents.$inferSelect;
+export type RideSurfaceCache = typeof rideSurfaceCache.$inferSelect;
+export type RideTemplate = typeof rideTemplates.$inferSelect;
+export type GuardianLink = typeof guardianLinks.$inferSelect;
 export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
 export type DriverScorecardEntry = typeof driverScorecard.$inferSelect;
 export type SafetyAlert = typeof safetyAlerts.$inferSelect;
