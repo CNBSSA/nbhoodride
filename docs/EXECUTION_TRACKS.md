@@ -75,7 +75,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | C5 | Community anchors (seeded) | PG County churches, Metro, campuses |
 | C6 | Explainable match cards | `ExplainableMatchCard` on rider dashboard |
 
-### Part II — Phase D — Predictive Co-op (in progress)
+### Part II — Phase D — Predictive Co-op — merged [#42](https://github.com/CNBSSA/nbhoodride/pull/42)
 
 | ID | Deliverable | Notes |
 |----|-------------|-------|
@@ -129,6 +129,8 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-06-30 | Phase A foundation (A1–A8) | A | [#38](https://github.com/CNBSSA/nbhoodride/pull/38) | Pass — merged |
 | 2026-06-30 | Phase A continued (A9–A11) | A | [#39](https://github.com/CNBSSA/nbhoodride/pull/39) | Pass — conflict resolved vs #38 |
 | 2026-06-30 | Phase B delegative UI (B1–B7) | A | [#40](https://github.com/CNBSSA/nbhoodride/pull/40) | Pass — see below |
+| 2026-06-30 | Phase C trust graph (C1–C6) | A | [#41](https://github.com/CNBSSA/nbhoodride/pull/41) | Pass — see below |
+| 2026-06-30 | Phase D predictive co-op (D1–D7) | A | [#42](https://github.com/CNBSSA/nbhoodride/pull/42) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
