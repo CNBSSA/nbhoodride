@@ -1126,10 +1126,27 @@ export const insertRideSchema = createInsertSchema(rides).omit({
   updatedAt: true,
 });
 
+// Constrain issueType to a closed enum so the support auto-resolver can't be
+// tricked by a client picking 'duplicate_charge' for unrelated complaints.
+// Previously this was a free varchar — anything went, including invented
+// types that would silently get high-credit treatment.
+const ISSUE_TYPES_FOR_DISPUTE = [
+  "fare_dispute",
+  "short_wait",
+  "wrong_route",
+  "lost_item_minor",
+  "promo_not_applied",
+  "duplicate_charge",
+  "driver_no_show",
+  "safety",
+  "other",
+] as const;
 export const insertDisputeSchema = createInsertSchema(disputes).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+}).extend({
+  issueType: z.enum(ISSUE_TYPES_FOR_DISPUTE),
 });
 
 export const insertEmergencyIncidentSchema = createInsertSchema(emergencyIncidents).omit({

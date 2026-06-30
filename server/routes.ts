@@ -4849,9 +4849,25 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
 
   app.post('/api/support/resolve/:disputeId', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      // Ownership check. Previously this endpoint accepted any authenticated
+      // user's disputeId and ran the auto-resolver, which credits the
+      // dispute's reporter (not the caller). So an attacker could
+      // out-of-band drive arbitrary disputes through auto-resolve — for
+      // example to bypass an admin hold by hot-running the auto-credit
+      // path before the admin gets to it.
+      const dispute = await storage.getDisputeById(req.params.disputeId);
+      if (!dispute) return res.status(404).json({ message: "Dispute not found" });
+      const requester = await storage.getUser(userId);
+      const isOwner = dispute.reporterId === userId;
+      const isAdmin = !!(requester?.isAdmin || requester?.isSuperAdmin);
+      if (!isOwner && !isAdmin) {
+        return res.status(404).json({ message: "Dispute not found" });
+      }
       const result = await tryAutoResolveDispute(storage, req.params.disputeId);
       res.json(result);
     } catch (error) {
+      console.error("Error resolving support request:", error);
       res.status(500).json({ message: "Failed to resolve support request" });
     }
   });
@@ -5704,18 +5720,50 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
 
   app.post('/api/admin/fairness/allocate', isAdminOrSessionAuth, async (req: any, res) => {
     try {
-      const { driverId, amount, reason, rideId, zoneLabel } = req.body;
-      if (!driverId || !amount) return res.status(400).json({ message: "driverId and amount required" });
+      // Per-call cap so a single admin call can't drain the entire pool to
+      // one driver. The previous version accepted any positive amount
+      // ($10,000 was as legal as $5). Even with admin auth, this is a
+      // belt-and-braces guard against a compromised admin session, a UI
+      // typo (extra zeros), or a misbehaving script. $50 matches the
+      // suggestedBonus ceiling in evaluateUndersupply.
+      const bodySchema = z.object({
+        driverId: z.string().min(1),
+        amount: z.coerce.number().positive().max(50),
+        reason: z.string().max(200).optional(),
+        rideId: z.string().optional(),
+        zoneLabel: z.string().max(80).optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({
+          message: "driverId and amount required (amount must be 0–50)",
+        });
+      }
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const result = await allocateDriverBonus(
         storage,
-        driverId,
-        parseFloat(amount),
-        reason ?? "Community bonus — undersupply",
-        rideId,
-        zoneLabel,
+        parsed.data.driverId,
+        parsed.data.amount,
+        parsed.data.reason ?? "Community bonus — undersupply",
+        parsed.data.rideId,
+        parsed.data.zoneLabel,
       );
+      // Attribute the allocation to the admin who triggered it, not just
+      // the receiving driver, so the audit log can answer "who paid out
+      // what" later.
+      if (result.allocated) {
+        await storage.createAgentAuditLog({
+          agent: "pricing_fairness",
+          action: "admin_allocate_bonus",
+          userId: adminId,
+          rideId: parsed.data.rideId,
+          reasoning: parsed.data.reason ?? "Community bonus — undersupply",
+          metadata: { driverId: parsed.data.driverId, amount: parsed.data.amount },
+        }).catch(console.error);
+      }
       res.json(result);
     } catch (error) {
+      console.error("Error allocating bonus:", error);
       res.status(500).json({ message: "Failed to allocate bonus" });
     }
   });
