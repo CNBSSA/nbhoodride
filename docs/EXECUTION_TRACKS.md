@@ -59,7 +59,7 @@ See PR #38 (if merged). GCS, WS payloads, audit log, quick messages, insights wi
 
 | Date | Engagement | Track | PR | Post-audit |
 |------|------------|-------|-----|------------|
-| 2026-06-30 | Phase A continued (A9–A11) | A | TBD | Pass — see below |
+| 2026-06-30 | Phase A continued (A9–A11) | A | [#39](https://github.com/CNBSSA/nbhoodride/pull/39) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit (2026-06-30)
 
