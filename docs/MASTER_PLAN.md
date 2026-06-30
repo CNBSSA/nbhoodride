@@ -9,6 +9,7 @@
 | **Last updated** | June 2026 |
 | **Repository** | `nbhoodride` |
 | **Supersedes** | `replit.md`, `PG_Ride_Marketing_Brief.md`, `docs/AH-060-tax-1099-w9-design.md`, and all `attached_assets/Pasted-*.txt` planning notes |
+| **Future vision** | [`VISION_AI_NATIVE.md`](VISION_AI_NATIVE.md) — AI-native product blueprint |
 
 ---
 
@@ -32,6 +33,8 @@
 16. [Metrics](#16-metrics)
 17. [FAQ and elevator pitches](#17-faq-and-elevator-pitches)
 18. [Contact](#18-contact)
+
+**→ AI-native future vision:** [VISION_AI_NATIVE.md](VISION_AI_NATIVE.md)
 
 ---
 

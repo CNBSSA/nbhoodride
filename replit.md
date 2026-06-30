@@ -1,6 +1,7 @@
 # PG Ride
 
-**Full product plan, architecture, roadmap, and backlog:** see [`docs/MASTER_PLAN.md`](docs/MASTER_PLAN.md).
+**Product plan:** [`docs/MASTER_PLAN.md`](docs/MASTER_PLAN.md)  
+**AI-native vision:** [`docs/VISION_AI_NATIVE.md`](docs/VISION_AI_NATIVE.md)
 
 Quick reference:
 
