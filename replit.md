@@ -1,7 +1,6 @@
 # PG Ride
 
-**Product plan:** [`docs/MASTER_PLAN.md`](docs/MASTER_PLAN.md)  
-**AI-native vision:** [`docs/VISION_AI_NATIVE.md`](docs/VISION_AI_NATIVE.md)
+**Full product plan (current state + AI-native vision):** [`docs/MASTER_PLAN.md`](docs/MASTER_PLAN.md)
 
 Quick reference:
 
