@@ -26,6 +26,11 @@ import {
   rideSurfaceCache,
   rideTemplates,
   guardianLinks,
+  trustEdges,
+  favoriteDrivers,
+  riderTrustPreferences,
+  communityReferrals,
+  communityAnchors,
   demandHeatmap,
   driverScorecard,
   safetyAlerts,
@@ -66,6 +71,10 @@ import {
   type MobilityIntent,
   type RideTemplate,
   type GuardianLink,
+  type TrustEdge,
+  type RiderTrustPreferences,
+  type CommunityReferral,
+  type CommunityAnchor,
   type DemandHeatmapEntry,
   type DriverScorecardEntry,
   type SafetyAlert,
@@ -338,6 +347,19 @@ export interface IStorage {
   upsertRideTemplateFromRide(userId: string, label: string, ride: Ride): Promise<RideTemplate>;
   createGuardianLink(data: { riderUserId: string; guardianName: string; shareToken: string; activeRideId?: string; expiresAt?: Date }): Promise<GuardianLink>;
   getGuardianLinkByToken(token: string): Promise<GuardianLink | undefined>;
+  getTrustEdge(riderId: string, driverId: string): Promise<TrustEdge | undefined>;
+  upsertTrustEdge(riderId: string, driverId: string, edgeType?: string): Promise<TrustEdge>;
+  isFavoriteDriver(riderId: string, driverId: string): Promise<boolean>;
+  addFavoriteDriver(riderId: string, driverId: string): Promise<void>;
+  removeFavoriteDriver(riderId: string, driverId: string): Promise<void>;
+  getFavoriteDriverIds(riderId: string): Promise<string[]>;
+  getRiderTrustPreferences(userId: string): Promise<RiderTrustPreferences>;
+  setRiderTrustPreferences(userId: string, prefs: { maxSeparationDegrees?: number; preferFavorites?: boolean }): Promise<RiderTrustPreferences>;
+  getSeparationDegrees(riderId: string, driverId: string): Promise<number>;
+  createCommunityReferral(data: { referrerId: string; referralCode: string; chainType: string; creditAmount?: string }): Promise<CommunityReferral>;
+  getCommunityReferralByCode(code: string): Promise<CommunityReferral | undefined>;
+  redeemCommunityReferral(code: string, referredId: string): Promise<CommunityReferral | undefined>;
+  getCommunityAnchors(activeOnly?: boolean): Promise<CommunityAnchor[]>;
   upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry>;
   getDemandHeatmap(hourOfDay?: number, dayOfWeek?: number): Promise<DemandHeatmapEntry[]>;
   upsertDriverScorecard(driverId: string): Promise<DriverScorecardEntry>;
@@ -3086,6 +3108,137 @@ export class DatabaseStorage implements IStorage {
     if (!row) return undefined;
     if (row.expiresAt && row.expiresAt < new Date()) return undefined;
     return row;
+  }
+
+  async getTrustEdge(riderId: string, driverId: string): Promise<TrustEdge | undefined> {
+    const [row] = await db
+      .select()
+      .from(trustEdges)
+      .where(and(eq(trustEdges.riderId, riderId), eq(trustEdges.driverId, driverId)));
+    return row;
+  }
+
+  async upsertTrustEdge(riderId: string, driverId: string, edgeType = "rode_together"): Promise<TrustEdge> {
+    const existing = await this.getTrustEdge(riderId, driverId);
+    if (existing) {
+      const [updated] = await db
+        .update(trustEdges)
+        .set({
+          rideCount: (existing.rideCount ?? 0) + 1,
+          lastRideAt: new Date(),
+          edgeType,
+        })
+        .where(eq(trustEdges.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db
+      .insert(trustEdges)
+      .values({
+        riderId,
+        driverId,
+        edgeType,
+        rideCount: 1,
+        lastRideAt: new Date(),
+      })
+      .returning();
+    return created;
+  }
+
+  async isFavoriteDriver(riderId: string, driverId: string): Promise<boolean> {
+    const [row] = await db
+      .select()
+      .from(favoriteDrivers)
+      .where(and(eq(favoriteDrivers.riderId, riderId), eq(favoriteDrivers.driverId, driverId)));
+    return !!row;
+  }
+
+  async addFavoriteDriver(riderId: string, driverId: string): Promise<void> {
+    if (await this.isFavoriteDriver(riderId, driverId)) return;
+    await db.insert(favoriteDrivers).values({ riderId, driverId });
+  }
+
+  async removeFavoriteDriver(riderId: string, driverId: string): Promise<void> {
+    await db
+      .delete(favoriteDrivers)
+      .where(and(eq(favoriteDrivers.riderId, riderId), eq(favoriteDrivers.driverId, driverId)));
+  }
+
+  async getFavoriteDriverIds(riderId: string): Promise<string[]> {
+    const rows = await db.select().from(favoriteDrivers).where(eq(favoriteDrivers.riderId, riderId));
+    return rows.map((r) => r.driverId);
+  }
+
+  async getRiderTrustPreferences(userId: string): Promise<RiderTrustPreferences> {
+    const [row] = await db.select().from(riderTrustPreferences).where(eq(riderTrustPreferences.userId, userId));
+    if (row) return row;
+    const [created] = await db
+      .insert(riderTrustPreferences)
+      .values({ userId })
+      .returning();
+    return created;
+  }
+
+  async setRiderTrustPreferences(
+    userId: string,
+    prefs: { maxSeparationDegrees?: number; preferFavorites?: boolean },
+  ): Promise<RiderTrustPreferences> {
+    const current = await this.getRiderTrustPreferences(userId);
+    const [updated] = await db
+      .update(riderTrustPreferences)
+      .set({
+        maxSeparationDegrees:
+          prefs.maxSeparationDegrees ?? current.maxSeparationDegrees ?? 0,
+        preferFavorites: prefs.preferFavorites ?? current.preferFavorites ?? true,
+        updatedAt: new Date(),
+      })
+      .where(eq(riderTrustPreferences.userId, userId))
+      .returning();
+    return updated;
+  }
+
+  async getSeparationDegrees(riderId: string, driverId: string): Promise<number> {
+    const edge = await this.getTrustEdge(riderId, driverId);
+    if ((edge?.rideCount ?? 0) > 0) return 1;
+    if (await this.isFavoriteDriver(riderId, driverId)) return 1;
+    if (edge && edge.edgeType !== "rode_together") return 2;
+    return 0;
+  }
+
+  async createCommunityReferral(data: {
+    referrerId: string;
+    referralCode: string;
+    chainType: string;
+    creditAmount?: string;
+  }): Promise<CommunityReferral> {
+    const [row] = await db.insert(communityReferrals).values(data).returning();
+    return row;
+  }
+
+  async getCommunityReferralByCode(code: string): Promise<CommunityReferral | undefined> {
+    const [row] = await db
+      .select()
+      .from(communityReferrals)
+      .where(eq(communityReferrals.referralCode, code.toUpperCase()));
+    return row;
+  }
+
+  async redeemCommunityReferral(code: string, referredId: string): Promise<CommunityReferral | undefined> {
+    const existing = await this.getCommunityReferralByCode(code);
+    if (!existing || existing.status !== "pending") return undefined;
+    const [updated] = await db
+      .update(communityReferrals)
+      .set({ referredId, status: "redeemed" })
+      .where(eq(communityReferrals.id, existing.id))
+      .returning();
+    return updated;
+  }
+
+  async getCommunityAnchors(activeOnly = true): Promise<CommunityAnchor[]> {
+    if (activeOnly) {
+      return db.select().from(communityAnchors).where(eq(communityAnchors.isActive, true));
+    }
+    return db.select().from(communityAnchors);
   }
 
   async upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry> {

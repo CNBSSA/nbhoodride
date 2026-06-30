@@ -13,6 +13,7 @@ import { isUnauthorizedError } from "@/lib/authUtils";
 import { Bell, BellOff, Plus, MapPin, ChevronDown, ChevronUp, CheckSquare, Square } from "lucide-react";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { AutonomyDial } from "@/components/AutonomyDial";
+import { TrustPreferences } from "@/components/TrustPreferences";
 import { MD_COUNTIES } from "../../../shared/schema";
 
 export default function Profile() {
@@ -38,6 +39,25 @@ export default function Profile() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/mobility/autonomy"] });
       toast({ title: "Autonomy updated" });
+    },
+  });
+
+  const { data: trustPrefs = { maxSeparationDegrees: 0, preferFavorites: true } } = useQuery<{
+    maxSeparationDegrees: number;
+    preferFavorites: boolean;
+  }>({
+    queryKey: ["/api/trust/preferences"],
+  });
+
+  const setTrustPrefs = useMutation({
+    mutationFn: async (prefs: { maxSeparationDegrees?: number; preferFavorites?: boolean }) => {
+      const res = await apiRequest("PATCH", "/api/trust/preferences", prefs);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trust/preferences"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rides/nearby-drivers"] });
+      toast({ title: "Trust preferences updated" });
     },
   });
 
@@ -438,6 +458,24 @@ export default function Profile() {
                 level={autonomy.autonomyLevel}
                 onChange={(level) => setAutonomy.mutate(level)}
                 disabled={setAutonomy.isPending}
+              />
+            </CardContent>
+          </Card>
+
+          {/* Trust preferences (Phase C) */}
+          <Card>
+            <CardContent className="p-4">
+              <p className="font-medium mb-3">Trust & Matching</p>
+              <TrustPreferences
+                maxSeparationDegrees={trustPrefs.maxSeparationDegrees ?? 0}
+                preferFavorites={trustPrefs.preferFavorites ?? true}
+                onChangeSeparation={(value) =>
+                  setTrustPrefs.mutate({ maxSeparationDegrees: value })
+                }
+                onChangePreferFavorites={(value) =>
+                  setTrustPrefs.mutate({ preferFavorites: value })
+                }
+                disabled={setTrustPrefs.isPending}
               />
             </CardContent>
           </Card>

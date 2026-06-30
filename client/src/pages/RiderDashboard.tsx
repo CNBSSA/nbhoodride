@@ -16,8 +16,10 @@ import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { NotificationBell } from "@/components/NotificationBell";
 import { RideQuickMessages } from "@/components/RideQuickMessages";
 import { MobilityIntentCard, type IntentResolution } from "@/components/MobilityIntentCard";
+import { ExplainableMatchCard } from "@/components/ExplainableMatchCard";
 import { RideSurface } from "@/genui/RideSurface";
 import type { RideSurfaceSpec } from "@shared/genui/schema";
+import { rankDriversByTrustAndEta } from "@shared/trustScore";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -38,6 +40,13 @@ interface Driver {
   estimatedTime: string;
   isVerifiedNeighbor: boolean;
   profileImage?: string;
+  distanceMiles: number;
+  trust?: {
+    trustScore: number;
+    matchReason: string;
+    isFavorite?: boolean;
+    separationDegrees?: number;
+  };
 }
 
 function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -149,6 +158,22 @@ export default function RiderDashboard() {
     placeholderData: (prev) => prev,
   });
 
+  const { data: favoriteDrivers = { driverIds: [] as string[] } } = useQuery<{ driverIds: string[] }>({
+    queryKey: ['/api/trust/favorites'],
+    enabled: panel === "drivers" || panel === "confirm",
+  });
+
+  const toggleFavoriteMutation = useMutation({
+    mutationFn: async ({ driverId, isFavorite }: { driverId: string; isFavorite: boolean }) => {
+      const method = isFavorite ? "DELETE" : "POST";
+      await apiRequest(method, `/api/trust/favorites/${driverId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/trust/favorites'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/nearby-drivers'] });
+    },
+  });
+
   const { data: activeRides = [], refetch: refetchActiveRides } = useQuery<any[]>({
     queryKey: ['/api/rides/active'],
     refetchInterval: 5000,
@@ -167,23 +192,29 @@ export default function RiderDashboard() {
   });
 
   // ── Derived data ──
-  const drivers: Driver[] = nearbyDrivers.map((driver: any) => {
-    const realtimeLocation = realtimeDrivers[driver.id];
-    const driverLocation = realtimeLocation || driver.currentLocation || { lat: currentLat, lng: currentLng };
-    const distMiles = calculateDistance(userLocation.lat, userLocation.lng, driverLocation.lat, driverLocation.lng);
-    return {
-      id: driver.id,
-      userId: driver.userId,
-      name: `${driver.user.firstName} ${driver.user.lastName?.[0] || ''}.`,
-      location: driverLocation,
-      rating: parseFloat(driver.user.rating) || 5.0,
-      vehicle: driver.vehicles[0] ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}` : "Vehicle",
-      estimatedFare: estimateFare(distMiles),
-      estimatedTime: estimateArrival(distMiles),
-      isVerifiedNeighbor: driver.isVerifiedNeighbor,
-      profileImage: driver.user.profileImageUrl,
-    };
-  });
+  const drivers: Driver[] = rankDriversByTrustAndEta(
+    nearbyDrivers.map((driver: any) => {
+      const realtimeLocation = realtimeDrivers[driver.id];
+      const driverLocation = realtimeLocation || driver.currentLocation || { lat: currentLat, lng: currentLng };
+      const distMiles = calculateDistance(userLocation.lat, userLocation.lng, driverLocation.lat, driverLocation.lng);
+      return {
+        id: driver.id,
+        userId: driver.userId,
+        name: `${driver.user.firstName} ${driver.user.lastName?.[0] || ''}.`,
+        location: driverLocation,
+        rating: parseFloat(driver.user.rating) || 5.0,
+        vehicle: driver.vehicles[0] ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}` : "Vehicle",
+        estimatedFare: estimateFare(distMiles),
+        estimatedTime: estimateArrival(distMiles),
+        isVerifiedNeighbor: driver.isVerifiedNeighbor,
+        profileImage: driver.user.profileImageUrl,
+        distanceMiles: distMiles,
+        isOnline: driver.isOnline ?? true,
+        trustScore: driver.trust?.trustScore ?? 0,
+        trust: driver.trust,
+      };
+    }),
+  ).map(({ isOnline: _o, trustScore: _t, ...driver }) => driver);
 
   // ── Geocode destination with debounce ──
   useEffect(() => {
@@ -923,42 +954,29 @@ export default function RiderDashboard() {
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      {drivers.map(driver => (
-                        <button
-                          key={driver.id}
-                          onClick={() => setSelectedDriverId(driver.userId)}
-                          className={`w-full flex items-center gap-3 p-3 rounded-2xl border-2 transition-all text-left ${
-                            selectedDriverId === driver.userId
-                              ? 'border-blue-500 bg-blue-50'
-                              : 'border-transparent bg-gray-50 hover:border-gray-200'
-                          }`}
-                          data-testid={`driver-option-${driver.id}`}
-                        >
-                          <div className={`w-11 h-11 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 ${
-                            selectedDriverId === driver.userId ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'
-                          }`}>
-                            {driver.name.split(' ').map((n: string) => n[0]).join('')}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1">
-                              <span className="font-semibold text-sm">{driver.name}</span>
-                              {driver.isVerifiedNeighbor && <Shield className="w-3.5 h-3.5 text-green-500" />}
-                            </div>
-                            <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                              <Star className="w-3 h-3 text-yellow-500 fill-yellow-500" />
-                              <span>{driver.rating.toFixed(1)}</span>
-                              <span className="text-gray-300">·</span>
-                              <Clock className="w-3 h-3" />
-                              <span>{driver.estimatedTime}</span>
-                            </div>
-                            <p className="text-xs text-gray-400 truncate">{driver.vehicle}</p>
-                          </div>
-                          <div className="text-right flex-shrink-0">
-                            <p className="font-bold text-sm text-blue-600">{driver.estimatedFare}</p>
-                            {selectedDriverId === driver.userId && <CheckCircle className="w-4 h-4 text-blue-500 ml-auto mt-0.5" />}
-                          </div>
-                        </button>
-                      ))}
+                      {drivers.map(driver => {
+                        const isFavorite =
+                          driver.trust?.isFavorite ||
+                          favoriteDrivers.driverIds.includes(driver.userId);
+                        return (
+                          <ExplainableMatchCard
+                            key={driver.id}
+                            driverName={driver.name}
+                            trust={driver.trust}
+                            eta={driver.estimatedTime}
+                            fare={driver.estimatedFare}
+                            selected={selectedDriverId === driver.userId}
+                            isFavorite={isFavorite}
+                            onSelect={() => setSelectedDriverId(driver.userId)}
+                            onFavorite={() =>
+                              toggleFavoriteMutation.mutate({
+                                driverId: driver.userId,
+                                isFavorite,
+                              })
+                            }
+                          />
+                        );
+                      })}
                     </div>
                   )}
                 </div>

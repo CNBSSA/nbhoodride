@@ -703,6 +703,66 @@ CREATE TABLE IF NOT EXISTS guardian_links (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- ── Phase C: Trust graph ─────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS trust_edges (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  rider_id VARCHAR NOT NULL REFERENCES users(id),
+  driver_id VARCHAR NOT NULL REFERENCES users(id),
+  edge_type VARCHAR NOT NULL DEFAULT 'rode_together',
+  ride_count INTEGER DEFAULT 0,
+  last_ride_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trust_edges_pair ON trust_edges (rider_id, driver_id);
+CREATE INDEX IF NOT EXISTS idx_trust_edges_rider ON trust_edges (rider_id);
+
+CREATE TABLE IF NOT EXISTS favorite_drivers (
+  rider_id VARCHAR NOT NULL REFERENCES users(id),
+  driver_id VARCHAR NOT NULL REFERENCES users(id),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_favorite_drivers_pair ON favorite_drivers (rider_id, driver_id);
+
+CREATE TABLE IF NOT EXISTS rider_trust_preferences (
+  user_id VARCHAR PRIMARY KEY REFERENCES users(id),
+  max_separation_degrees INTEGER NOT NULL DEFAULT 0,
+  prefer_favorites BOOLEAN DEFAULT true,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS community_referrals (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  referrer_id VARCHAR NOT NULL REFERENCES users(id),
+  referred_id VARCHAR REFERENCES users(id),
+  referral_code VARCHAR NOT NULL UNIQUE,
+  chain_type VARCHAR NOT NULL,
+  status VARCHAR DEFAULT 'pending',
+  credit_amount DECIMAL(8,2),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS community_anchors (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  anchor_type VARCHAR NOT NULL,
+  name TEXT NOT NULL,
+  location JSONB,
+  metadata JSONB,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+INSERT INTO community_anchors (anchor_type, name, location, metadata)
+SELECT * FROM (VALUES
+  ('church', 'First Baptist Church of Glenarden', '{"lat":38.9293,"lng":-76.8612,"address":"Glenarden, MD"}'::jsonb, '{"note":"Sunday surge-free zone"}'::jsonb),
+  ('campus', 'University of Maryland College Park', '{"lat":38.9869,"lng":-76.9426,"address":"College Park, MD"}'::jsonb, '{"semester":"fall_spring"}'::jsonb),
+  ('campus', 'Bowie State University', '{"lat":39.0181,"lng":-76.7615,"address":"Bowie, MD"}'::jsonb, '{}'::jsonb),
+  ('metro', 'Greenbelt Metro Station', '{"lat":39.0110,"lng":-76.9113,"address":"Greenbelt, MD"}'::jsonb, '{"line":"Green"}'::jsonb),
+  ('metro', 'New Carrollton Metro Station', '{"lat":38.9480,"lng":-76.8722,"address":"New Carrollton, MD"}'::jsonb, '{"line":"Orange/Silver"}'::jsonb),
+  ('venue', 'FedExField', '{"lat":38.9076,"lng":-76.8645,"address":"Landover, MD"}'::jsonb, '{"events":true}'::jsonb),
+  ('senior_center', 'Wayne K. Curry Sports & Learning Complex', '{"lat":38.9054,"lng":-76.8472,"address":"Landover, MD"}'::jsonb, '{"voice_first":true}'::jsonb)
+) AS v(anchor_type, name, location, metadata)
+WHERE NOT EXISTS (SELECT 1 FROM community_anchors LIMIT 1);
+
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
 -- the ALTER TABLE below throws "could not create unique index — Key (user_id)

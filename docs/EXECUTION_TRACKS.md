@@ -52,7 +52,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | A10 | In-app notification inbox | Bell UI; push when VAPID set |
 | A11 | FAQ from real chat excerpts | Anonymized `chat_messages` prompt |
 
-### Part II — Phase B — Delegative UI (in progress)
+### Part II — Phase B — Delegative UI — merged [#40](https://github.com/CNBSSA/nbhoodride/pull/40)
 
 | ID | Deliverable | Notes |
 |----|-------------|-------|
@@ -64,11 +64,21 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | B6 | Voice booking lane | Web Speech API (browser) |
 | B7 | Guardian Mode v1 | Tracking share links |
 
+### Part II — Phase C — Trust Graph (in progress)
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| C1 | `trust_edges` + Trust Score | `shared/trustScore.ts` |
+| C2 | Trust-weighted dispatch | `findBestDriver` + audit metadata |
+| C3 | Favorite drivers + separation filter | Profile `TrustPreferences` |
+| C4 | Community referral chains | `community_referrals` API |
+| C5 | Community anchors (seeded) | PG County churches, Metro, campuses |
+| C6 | Explainable match cards | `ExplainableMatchCard` on rider dashboard |
+
 ### Part II — Later autonomous lanes
 
 | Phase | Agent can build | You provide later |
 |-------|-----------------|-------------------|
-| C — Trust graph | Tables, scoring, dispatch weights | Community org opt-in data |
 | D — Predictive | Forecast workers, coach copy | None for dev |
 | E — Ops agents | Support tool-calling, SMS adapter | Twilio, production keys |
 
