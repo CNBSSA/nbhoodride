@@ -64,7 +64,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | B6 | Voice booking lane | Web Speech API (browser) |
 | B7 | Guardian Mode v1 | Tracking share links |
 
-### Part II — Phase C — Trust Graph (in progress)
+### Part II — Phase C — Trust Graph — merged [#41](https://github.com/CNBSSA/nbhoodride/pull/41)
 
 | ID | Deliverable | Notes |
 |----|-------------|-------|
@@ -75,11 +75,22 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | C5 | Community anchors (seeded) | PG County churches, Metro, campuses |
 | C6 | Explainable match cards | `ExplainableMatchCard` on rider dashboard |
 
+### Part II — Phase D — Predictive Co-op (in progress)
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| D1 | Demand forecast worker + heatmap v2 | `demand_forecasts` + merged heatmap API |
+| D2 | Driver Earnings Coach | `EarningsCoachCard` on driver insights |
+| D3 | Supply positioning nudges | Push to offline drivers at peak hours |
+| D4 | Pricing Fairness Agent | `community_bonus_pool` — no surge |
+| D5 | Ownership Agent projections | Driver ownership dashboard |
+| D6 | Scheduled ride auto-rebook | `recurring_ride_schedules` + prompts |
+| D7 | Safety anomaly layer | Route deviation on live GPS |
+
 ### Part II — Later autonomous lanes
 
 | Phase | Agent can build | You provide later |
 |-------|-----------------|-------------------|
-| D — Predictive | Forecast workers, coach copy | None for dev |
 | E — Ops agents | Support tool-calling, SMS adapter | Twilio, production keys |
 
 ---

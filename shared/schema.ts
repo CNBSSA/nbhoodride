@@ -863,6 +863,53 @@ export const communityAnchors = pgTable("community_anchors", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/** Phase D1 — Hourly demand forecast grid (extends heatmap). */
+export const demandForecasts = pgTable("demand_forecasts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  gridLat: decimal("grid_lat", { precision: 10, scale: 6 }).notNull(),
+  gridLng: decimal("grid_lng", { precision: 10, scale: 6 }).notNull(),
+  hourOfDay: integer("hour_of_day").notNull(),
+  dayOfWeek: integer("day_of_week").notNull(),
+  forecastDate: timestamp("forecast_date").notNull(),
+  predictedRides: integer("predicted_rides").default(0),
+  confidence: decimal("confidence", { precision: 4, scale: 2 }).default("0.50"),
+  lastUpdated: timestamp("last_updated").defaultNow(),
+});
+
+/** Phase D4 — Community bonus pool (no surge; subsidize undersupply). */
+export const communityBonusPool = pgTable("community_bonus_pool", {
+  id: varchar("id").primaryKey().default("default"),
+  balance: decimal("balance", { precision: 12, scale: 2 }).default("0.00"),
+  totalAllocated: decimal("total_allocated", { precision: 12, scale: 2 }).default("0.00"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const bonusAllocations = pgTable("bonus_allocations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  driverId: varchar("driver_id").notNull().references(() => users.id),
+  rideId: varchar("ride_id").references(() => rides.id),
+  amount: decimal("amount", { precision: 8, scale: 2 }).notNull(),
+  reason: text("reason"),
+  zoneLabel: varchar("zone_label"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Phase D6 — Recurring ride auto-rebook prompts. */
+export const recurringRideSchedules = pgTable("recurring_ride_schedules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  templateId: varchar("template_id").references(() => rideTemplates.id),
+  label: varchar("label").notNull(),
+  pickup: jsonb("pickup").$type<{ lat: number; lng: number; address: string }>(),
+  destination: jsonb("destination").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  recurrence: varchar("recurrence").notNull().default("weekly"),
+  dayOfWeek: integer("day_of_week").notNull(),
+  preferredHour: integer("preferred_hour").notNull().default(9),
+  lastPromptAt: timestamp("last_prompt_at"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const demandHeatmap = pgTable("demand_heatmap", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   gridLat: decimal("grid_lat", { precision: 10, scale: 6 }).notNull(),
@@ -1126,6 +1173,10 @@ export type FavoriteDriver = typeof favoriteDrivers.$inferSelect;
 export type RiderTrustPreferences = typeof riderTrustPreferences.$inferSelect;
 export type CommunityReferral = typeof communityReferrals.$inferSelect;
 export type CommunityAnchor = typeof communityAnchors.$inferSelect;
+export type DemandForecast = typeof demandForecasts.$inferSelect;
+export type CommunityBonusPool = typeof communityBonusPool.$inferSelect;
+export type BonusAllocation = typeof bonusAllocations.$inferSelect;
+export type RecurringRideSchedule = typeof recurringRideSchedules.$inferSelect;
 export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
 export type DriverScorecardEntry = typeof driverScorecard.$inferSelect;
 export type SafetyAlert = typeof safetyAlerts.$inferSelect;

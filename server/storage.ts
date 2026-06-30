@@ -31,6 +31,10 @@ import {
   riderTrustPreferences,
   communityReferrals,
   communityAnchors,
+  demandForecasts,
+  communityBonusPool,
+  bonusAllocations,
+  recurringRideSchedules,
   demandHeatmap,
   driverScorecard,
   safetyAlerts,
@@ -75,6 +79,10 @@ import {
   type RiderTrustPreferences,
   type CommunityReferral,
   type CommunityAnchor,
+  type DemandForecast,
+  type CommunityBonusPool,
+  type BonusAllocation,
+  type RecurringRideSchedule,
   type DemandHeatmapEntry,
   type DriverScorecardEntry,
   type SafetyAlert,
@@ -362,6 +370,39 @@ export interface IStorage {
   getCommunityAnchors(activeOnly?: boolean): Promise<CommunityAnchor[]>;
   upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry>;
   getDemandHeatmap(hourOfDay?: number, dayOfWeek?: number): Promise<DemandHeatmapEntry[]>;
+  upsertDemandForecast(data: {
+    gridLat: string;
+    gridLng: string;
+    hourOfDay: number;
+    dayOfWeek: number;
+    forecastDate: Date;
+    predictedRides: number;
+    confidence: number;
+  }): Promise<DemandForecast>;
+  getDemandForecasts(hourOfDay?: number, dayOfWeek?: number): Promise<DemandForecast[]>;
+  getCommunityBonusPool(): Promise<CommunityBonusPool>;
+  fundCommunityBonusPool(amount: number): Promise<CommunityBonusPool>;
+  deductCommunityBonusPool(amount: number): Promise<CommunityBonusPool>;
+  createBonusAllocation(data: {
+    driverId: string;
+    rideId?: string;
+    amount: string;
+    reason?: string;
+    zoneLabel?: string;
+  }): Promise<BonusAllocation>;
+  getBonusAllocations(driverId?: string): Promise<BonusAllocation[]>;
+  getRecurringRideSchedules(userId: string): Promise<RecurringRideSchedule[]>;
+  upsertRecurringRideSchedule(data: {
+    userId: string;
+    templateId?: string;
+    label: string;
+    pickup?: { lat: number; lng: number; address: string };
+    destination: { lat: number; lng: number; address: string };
+    dayOfWeek: number;
+    preferredHour?: number;
+  }): Promise<RecurringRideSchedule>;
+  getDueRecurringSchedules(): Promise<RecurringRideSchedule[]>;
+  markRecurringSchedulePrompted(id: string): Promise<void>;
   upsertDriverScorecard(driverId: string): Promise<DriverScorecardEntry>;
   getDriverScorecard(driverId: string): Promise<DriverScorecardEntry | undefined>;
   getAllDriverScorecards(): Promise<DriverScorecardEntry[]>;
@@ -370,6 +411,10 @@ export interface IStorage {
   resolveSafetyAlert(id: string, resolvedBy: string): Promise<SafetyAlert>;
   getConversionMetrics(startDate: Date, endDate: Date): Promise<{ searches: number; bookings: number; completions: number; conversionRate: number }>;
   getDriverOptimalHours(driverId: string): Promise<{ hour: number; dayOfWeek: number; avgRides: number; avgEarnings: number }[]>;
+  getOrCreateOwnership(driverId: string): Promise<DriverOwnership>;
+  getDriverWeeklyHoursHistory(driverId: string, limit?: number): Promise<DriverWeeklyHours[]>;
+  getShareCertificates(ownerId?: string): Promise<ShareCertificate[]>;
+  getDriverProfitDistributions(driverId: string): Promise<(ProfitDistribution & { declaration: ProfitDeclaration })[]>;
   // Driver hour tracking for ownership qualification
   getOrCreateWeeklyHours(driverId: string, weekStart: string): Promise<DriverWeeklyHours>;
   addDriverMinutes(driverId: string, minutes: number): Promise<void>;
@@ -3425,6 +3470,200 @@ export class DatabaseStorage implements IStorage {
       })
     );
     await db.update(rideGroups).set({ discountActive: true }).where(eq(rideGroups.id, groupId));
+  }
+
+  async upsertDemandForecast(data: {
+    gridLat: string;
+    gridLng: string;
+    hourOfDay: number;
+    dayOfWeek: number;
+    forecastDate: Date;
+    predictedRides: number;
+    confidence: number;
+  }): Promise<DemandForecast> {
+    const dayStart = new Date(data.forecastDate);
+    dayStart.setHours(0, 0, 0, 0);
+    const existing = await db
+      .select()
+      .from(demandForecasts)
+      .where(
+        and(
+          eq(demandForecasts.gridLat, data.gridLat),
+          eq(demandForecasts.gridLng, data.gridLng),
+          eq(demandForecasts.hourOfDay, data.hourOfDay),
+          eq(demandForecasts.dayOfWeek, data.dayOfWeek),
+          eq(demandForecasts.forecastDate, dayStart),
+        ),
+      );
+    if (existing[0]) {
+      const [updated] = await db
+        .update(demandForecasts)
+        .set({
+          predictedRides: data.predictedRides,
+          confidence: data.confidence.toFixed(2),
+          lastUpdated: new Date(),
+        })
+        .where(eq(demandForecasts.id, existing[0].id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db
+      .insert(demandForecasts)
+      .values({
+        gridLat: data.gridLat,
+        gridLng: data.gridLng,
+        hourOfDay: data.hourOfDay,
+        dayOfWeek: data.dayOfWeek,
+        forecastDate: dayStart,
+        predictedRides: data.predictedRides,
+        confidence: data.confidence.toFixed(2),
+      })
+      .returning();
+    return created;
+  }
+
+  async getDemandForecasts(hourOfDay?: number, dayOfWeek?: number): Promise<DemandForecast[]> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const conditions = [gte(demandForecasts.forecastDate, today)];
+    if (hourOfDay !== undefined) conditions.push(eq(demandForecasts.hourOfDay, hourOfDay));
+    if (dayOfWeek !== undefined) conditions.push(eq(demandForecasts.dayOfWeek, dayOfWeek));
+    return db
+      .select()
+      .from(demandForecasts)
+      .where(and(...conditions))
+      .orderBy(desc(demandForecasts.predictedRides));
+  }
+
+  async getCommunityBonusPool(): Promise<CommunityBonusPool> {
+    const [row] = await db.select().from(communityBonusPool).where(eq(communityBonusPool.id, "default"));
+    if (row) return row;
+    const [created] = await db
+      .insert(communityBonusPool)
+      .values({ id: "default", balance: "0.00" })
+      .returning();
+    return created;
+  }
+
+  async fundCommunityBonusPool(amount: number): Promise<CommunityBonusPool> {
+    const pool = await this.getCommunityBonusPool();
+    const balance = parseFloat(pool.balance ?? "0") + amount;
+    const [updated] = await db
+      .update(communityBonusPool)
+      .set({ balance: balance.toFixed(2), updatedAt: new Date() })
+      .where(eq(communityBonusPool.id, "default"))
+      .returning();
+    return updated;
+  }
+
+  async deductCommunityBonusPool(amount: number): Promise<CommunityBonusPool> {
+    const pool = await this.getCommunityBonusPool();
+    const balance = Math.max(0, parseFloat(pool.balance ?? "0") - amount);
+    const allocated = parseFloat(pool.totalAllocated ?? "0") + amount;
+    const [updated] = await db
+      .update(communityBonusPool)
+      .set({
+        balance: balance.toFixed(2),
+        totalAllocated: allocated.toFixed(2),
+        updatedAt: new Date(),
+      })
+      .where(eq(communityBonusPool.id, "default"))
+      .returning();
+    return updated;
+  }
+
+  async createBonusAllocation(data: {
+    driverId: string;
+    rideId?: string;
+    amount: string;
+    reason?: string;
+    zoneLabel?: string;
+  }): Promise<BonusAllocation> {
+    const [row] = await db.insert(bonusAllocations).values(data).returning();
+    return row;
+  }
+
+  async getBonusAllocations(driverId?: string): Promise<BonusAllocation[]> {
+    if (driverId) {
+      return db
+        .select()
+        .from(bonusAllocations)
+        .where(eq(bonusAllocations.driverId, driverId))
+        .orderBy(desc(bonusAllocations.createdAt));
+    }
+    return db.select().from(bonusAllocations).orderBy(desc(bonusAllocations.createdAt));
+  }
+
+  async getRecurringRideSchedules(userId: string): Promise<RecurringRideSchedule[]> {
+    return db
+      .select()
+      .from(recurringRideSchedules)
+      .where(and(eq(recurringRideSchedules.userId, userId), eq(recurringRideSchedules.isActive, true)));
+  }
+
+  async upsertRecurringRideSchedule(data: {
+    userId: string;
+    templateId?: string;
+    label: string;
+    pickup?: { lat: number; lng: number; address: string };
+    destination: { lat: number; lng: number; address: string };
+    dayOfWeek: number;
+    preferredHour?: number;
+  }): Promise<RecurringRideSchedule> {
+    const existing = await db
+      .select()
+      .from(recurringRideSchedules)
+      .where(
+        and(
+          eq(recurringRideSchedules.userId, data.userId),
+          eq(recurringRideSchedules.label, data.label),
+        ),
+      );
+    if (existing[0]) {
+      const [updated] = await db
+        .update(recurringRideSchedules)
+        .set({
+          templateId: data.templateId,
+          pickup: data.pickup,
+          destination: data.destination,
+          dayOfWeek: data.dayOfWeek,
+          preferredHour: data.preferredHour ?? 9,
+          isActive: true,
+        })
+        .where(eq(recurringRideSchedules.id, existing[0].id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(recurringRideSchedules).values(data).returning();
+    return created;
+  }
+
+  async getDueRecurringSchedules(): Promise<RecurringRideSchedule[]> {
+    const now = new Date();
+    const day = now.getDay();
+    const hour = now.getHours();
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const rows = await db
+      .select()
+      .from(recurringRideSchedules)
+      .where(
+        and(
+          eq(recurringRideSchedules.isActive, true),
+          eq(recurringRideSchedules.dayOfWeek, day),
+        ),
+      );
+    return rows.filter((r) => {
+      if (Math.abs((r.preferredHour ?? 9) - hour) > 2) return false;
+      if (!r.lastPromptAt) return true;
+      return new Date(r.lastPromptAt) < weekAgo;
+    });
+  }
+
+  async markRecurringSchedulePrompted(id: string): Promise<void> {
+    await db
+      .update(recurringRideSchedules)
+      .set({ lastPromptAt: new Date() })
+      .where(eq(recurringRideSchedules.id, id));
   }
 }
 

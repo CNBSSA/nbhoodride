@@ -17,6 +17,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EarningsCoachCard } from "@/components/EarningsCoachCard";
 import type { DriverScorecardEntry, DemandHeatmapEntry } from "@shared/schema";
 
 type OptimalHourEntry = {
@@ -104,6 +105,7 @@ export default function DriverInsights() {
           </Card>
         ) : (
           <>
+            <EarningsCoachCard />
             {scorecard && (
               <section data-testid="section-scorecard">
                 <h2 className="text-base font-semibold mb-3 flex items-center gap-2">
