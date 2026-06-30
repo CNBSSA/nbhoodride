@@ -87,7 +87,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | D6 | Scheduled ride auto-rebook | `recurring_ride_schedules` + prompts |
 | D7 | Safety anomaly layer | Route deviation on live GPS |
 
-### Part II — Phase E — Autonomous Operations (in progress)
+### Part II — Phase E — Autonomous Operations — merged [#47](https://github.com/CNBSSA/nbhoodride/pull/47)
 
 | ID | Deliverable | Notes |
 |----|-------------|-------|
@@ -143,6 +143,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-06-30 | Phase B delegative UI (B1–B7) | A | [#40](https://github.com/CNBSSA/nbhoodride/pull/40) | Pass — see below |
 | 2026-06-30 | Phase C trust graph (C1–C6) | A | [#41](https://github.com/CNBSSA/nbhoodride/pull/41) | Pass — see below |
 | 2026-06-30 | Phase D predictive co-op (D1–D7) | A | [#42](https://github.com/CNBSSA/nbhoodride/pull/42) | Pass — see below |
+| 2026-06-30 | Phase E autonomous ops (E1–E7) | A | [#47](https://github.com/CNBSSA/nbhoodride/pull/47) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
@@ -160,6 +161,29 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | `npm test` | Pass — 25 tests |
 
 **Delivered (B1–B7):** GenUI `RideSurface`, orchestrator + intent API, home intent card, ride templates, autonomy dial, voice input, guardian tracking links.
+
+### Phase C — Post-engagement audit (2026-06-30)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 43 tables |
+| `npm test` | Pass — 29 tests |
+
+### Phase D — Post-engagement audit (2026-06-30)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 47 tables |
+| `npm test` | Pass — 33 tests |
+
+### Phase E — Post-engagement audit (2026-06-30)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 51 tables |
+| `npm test` | Pass — 41 tests |
+
+**Delivered (E1–E7):** Support auto-resolve, compliance agent, admin approve-and-apply, SMS adapter, PWA widgets, Calm Ride, i18n.
 
 ---
 
