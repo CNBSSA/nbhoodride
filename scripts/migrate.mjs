@@ -763,6 +763,55 @@ SELECT * FROM (VALUES
 ) AS v(anchor_type, name, location, metadata)
 WHERE NOT EXISTS (SELECT 1 FROM community_anchors LIMIT 1);
 
+-- ── Phase D: Predictive co-op ────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS demand_forecasts (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  grid_lat DECIMAL(10,6) NOT NULL,
+  grid_lng DECIMAL(10,6) NOT NULL,
+  hour_of_day INTEGER NOT NULL,
+  day_of_week INTEGER NOT NULL,
+  forecast_date TIMESTAMP NOT NULL,
+  predicted_rides INTEGER DEFAULT 0,
+  confidence DECIMAL(4,2) DEFAULT 0.50,
+  last_updated TIMESTAMP DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_forecasts_cell ON demand_forecasts (grid_lat, grid_lng, hour_of_day, day_of_week, forecast_date);
+
+CREATE TABLE IF NOT EXISTS community_bonus_pool (
+  id VARCHAR PRIMARY KEY DEFAULT 'default',
+  balance DECIMAL(12,2) DEFAULT 0.00,
+  total_allocated DECIMAL(12,2) DEFAULT 0.00,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+INSERT INTO community_bonus_pool (id, balance) VALUES ('default', 0.00)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS bonus_allocations (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  driver_id VARCHAR NOT NULL REFERENCES users(id),
+  ride_id VARCHAR REFERENCES rides(id),
+  amount DECIMAL(8,2) NOT NULL,
+  reason TEXT,
+  zone_label VARCHAR,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS recurring_ride_schedules (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id VARCHAR NOT NULL REFERENCES users(id),
+  template_id VARCHAR REFERENCES ride_templates(id),
+  label VARCHAR NOT NULL,
+  pickup JSONB,
+  destination JSONB NOT NULL,
+  recurrence VARCHAR NOT NULL DEFAULT 'weekly',
+  day_of_week INTEGER NOT NULL,
+  preferred_hour INTEGER NOT NULL DEFAULT 9,
+  last_prompt_at TIMESTAMP,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_recurring_schedules_user ON recurring_ride_schedules (user_id);
+
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
 -- the ALTER TABLE below throws "could not create unique index — Key (user_id)

@@ -15,6 +15,15 @@ export default function DriverOwnership() {
     profitHistory: any[];
   }>({ queryKey: ["/api/driver/ownership"] });
 
+  const { data: projections } = useQuery<{
+    status: string;
+    onTrack: boolean;
+    weeksToAdHoc: number | null;
+    hoursToLifetime: number | null;
+    projectedQuarterlyShare: number;
+    narrative: string;
+  }>({ queryKey: ["/api/driver/ownership/projections"] });
+
   if (isLoading) {
     return <div className="p-4 text-center" data-testid="loading-ownership">Loading ownership info...</div>;
   }
@@ -90,6 +99,29 @@ export default function DriverOwnership() {
           </div>
         </CardContent>
       </Card>
+
+      {projections && (
+        <Card data-testid="ownership-projections-card">
+          <CardHeader>
+            <CardTitle className="text-lg">Ownership Agent</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Badge variant={projections.onTrack ? "default" : "secondary"}>
+                {projections.onTrack ? "On track" : "At risk"}
+              </Badge>
+              <span className="text-sm text-muted-foreground capitalize">{projections.status.replace("_", " ")}</span>
+            </div>
+            <p className="text-sm">{projections.narrative}</p>
+            {projections.projectedQuarterlyShare > 0 && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <DollarSign className="w-3 h-3" />
+                Projected quarterly share ~${projections.projectedQuarterlyShare.toFixed(0)}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {certificates.length > 0 && (
         <Card data-testid="certificates-card">

@@ -44,6 +44,14 @@ import {
   filterDriversByTrustPreferences,
 } from "./agents/trust";
 import { rankDriversByTrustAndEta } from "@shared/trustScore";
+import { mergeHeatmapWithForecast } from "@shared/demandForecast";
+import { runDemandForecastWorker } from "./agents/predictive";
+import { buildEarningsCoachMessage } from "./agents/earningsCoach";
+import { getPositioningNudges, sendSupplyPositioningNudges } from "./agents/supplyPositioning";
+import { evaluateUndersupply, allocateDriverBonus } from "./agents/pricingFairness";
+import { getOwnershipProjections } from "./agents/ownershipAgent";
+import { checkRouteDeviationForRide } from "./agents/safetyAnomaly";
+import { processRecurringRideRebooks } from "./agents/recurringRides";
 import { rideSurfaceSpecSchema } from "@shared/genui/schema";
 import { buildDriverLocationMessage } from "./wsDriverLocation";
 import {
@@ -1103,8 +1111,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "lat and lng must be numbers" });
       }
       await storage.updateDriverLocation(userId, { lat, lng });
-      // Broadcast to rider of active ride (if provided)
       if (rideId) {
+        checkRouteDeviationForRide(storage, rideId, lat, lng).catch(console.error);
         const ride = await storage.getRide(rideId);
         if (ride?.riderId && activeConnections.has(ride.riderId)) {
           const riderWs = activeConnections.get(ride.riderId)!;
@@ -5136,10 +5144,91 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       const hourOfDay = req.query.hour ? parseInt(req.query.hour) : undefined;
       const dayOfWeek = req.query.day ? parseInt(req.query.day) : undefined;
       const data = await storage.getDemandHeatmap(hourOfDay, dayOfWeek);
-      res.json(data);
+      const withForecast = mergeHeatmapWithForecast(
+        data.map((d) => ({
+          ...d,
+          rideCount: d.rideCount ?? 0,
+          hourOfDay: d.hourOfDay,
+          dayOfWeek: d.dayOfWeek,
+        })),
+      );
+      res.json(withForecast);
     } catch (error) {
       console.error("Error fetching demand heatmap:", error);
       res.status(500).json({ message: "Failed to fetch demand data" });
+    }
+  });
+
+  app.get('/api/demand-forecast', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const hourOfDay = req.query.hour ? parseInt(req.query.hour) : undefined;
+      const dayOfWeek = req.query.day ? parseInt(req.query.day) : undefined;
+      const forecasts = await storage.getDemandForecasts(hourOfDay, dayOfWeek);
+      res.json(forecasts);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch demand forecast" });
+    }
+  });
+
+  app.get('/api/driver/earnings-coach', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const message = await buildEarningsCoachMessage(storage, userId);
+      res.json(message);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to build earnings coach message" });
+    }
+  });
+
+  app.get('/api/driver/positioning-nudges', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const nudges = await getPositioningNudges(storage, userId);
+      res.json(nudges);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch positioning nudges" });
+    }
+  });
+
+  app.get('/api/driver/ownership/projections', sessionOrOidcAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const projections = await getOwnershipProjections(storage, userId);
+      res.json(projections);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch ownership projections" });
+    }
+  });
+
+  app.get('/api/rider/recurring-schedules', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const schedules = await storage.getRecurringRideSchedules(userId);
+      res.json(schedules);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch recurring schedules" });
+    }
+  });
+
+  app.post('/api/rider/recurring-schedules', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { label, pickup, destination, dayOfWeek, preferredHour, templateId } = req.body;
+      if (!label || !destination || dayOfWeek == null) {
+        return res.status(400).json({ message: "label, destination, and dayOfWeek required" });
+      }
+      const schedule = await storage.upsertRecurringRideSchedule({
+        userId,
+        label,
+        pickup,
+        destination,
+        dayOfWeek,
+        preferredHour,
+        templateId,
+      });
+      res.json(schedule);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to save recurring schedule" });
     }
   });
 
@@ -5301,6 +5390,83 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     } catch (error) {
       console.error("Error refreshing scorecards:", error);
       res.status(500).json({ message: "Failed to refresh scorecards" });
+    }
+  });
+
+  app.post('/api/admin/analytics/run-demand-forecast', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const cells = await runDemandForecastWorker(storage);
+      res.json({ cells, message: `Forecast worker wrote ${cells} cells` });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to run demand forecast" });
+    }
+  });
+
+  app.post('/api/admin/analytics/send-supply-nudges', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const sent = await sendSupplyPositioningNudges(storage);
+      res.json({ sent, message: `Sent ${sent} supply positioning nudges` });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to send supply nudges" });
+    }
+  });
+
+  app.post('/api/admin/analytics/process-recurring-rebooks', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const sent = await processRecurringRideRebooks(storage);
+      res.json({ sent, message: `Prompted ${sent} recurring rebooks` });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to process recurring rebooks" });
+    }
+  });
+
+  app.post('/api/admin/fairness/fund-pool', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { amount } = req.body;
+      if (!amount || amount <= 0) return res.status(400).json({ message: "Positive amount required" });
+      const pool = await storage.fundCommunityBonusPool(parseFloat(amount));
+      res.json(pool);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fund bonus pool" });
+    }
+  });
+
+  app.post('/api/admin/fairness/evaluate', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { gridLat, gridLng } = req.body;
+      if (!gridLat || !gridLng) return res.status(400).json({ message: "gridLat and gridLng required" });
+      const evaluation = await evaluateUndersupply(storage, String(gridLat), String(gridLng));
+      res.json(evaluation);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to evaluate fairness" });
+    }
+  });
+
+  app.post('/api/admin/fairness/allocate', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { driverId, amount, reason, rideId, zoneLabel } = req.body;
+      if (!driverId || !amount) return res.status(400).json({ message: "driverId and amount required" });
+      const result = await allocateDriverBonus(
+        storage,
+        driverId,
+        parseFloat(amount),
+        reason ?? "Community bonus — undersupply",
+        rideId,
+        zoneLabel,
+      );
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to allocate bonus" });
+    }
+  });
+
+  app.get('/api/admin/fairness/pool', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const pool = await storage.getCommunityBonusPool();
+      const allocations = await storage.getBonusAllocations();
+      res.json({ pool, allocations });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch bonus pool" });
     }
   });
 
@@ -5688,6 +5854,9 @@ Format as JSON only: {"faqs":[{"question":"...","answer":"...","category":"rides
               storage.updateDriverLocation(message.userId, { lat, lng }).catch((err: any) => {
                 console.error('Failed to persist driver location from WebSocket:', err);
               });
+              if (message.rideId) {
+                checkRouteDeviationForRide(storage, message.rideId, lat, lng).catch(console.error);
+              }
               // Forward to rider of the active ride
               if (message.rideId) {
                 storage.getRide(message.rideId).then(ride => {
@@ -5951,6 +6120,23 @@ Format as JSON only: {"faqs":[{"question":"...","answer":"...","category":"rides
       }
     } catch (err) {
       console.error("Scheduled ride monitor error:", err);
+    }
+  }, 60 * 1000);
+
+  // ── Phase D: hourly predictive workers (forecast refresh, supply nudges, recurring rebooks) ──
+  setInterval(async () => {
+    const now = new Date();
+    if (now.getMinutes() !== 0) return;
+    try {
+      await runDemandForecastWorker(storage).catch(console.error);
+      if (now.getHours() === 7 || now.getHours() === 17) {
+        await sendSupplyPositioningNudges(storage).catch(console.error);
+      }
+      if (now.getHours() === 8) {
+        await processRecurringRideRebooks(storage).catch(console.error);
+      }
+    } catch (err) {
+      console.error("Predictive worker error:", err);
     }
   }, 60 * 1000);
 
