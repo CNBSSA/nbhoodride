@@ -1,0 +1,28 @@
+---
+description: Autonomous execution is contingent on workflow and audit directives (EXECUTION_TRACKS.md)
+alwaysApply: true
+---
+
+# Autonomous directive — contingent on workflow & audits
+
+When the user issues an **autonomous directive** (e.g. "go on autonomously", "execute Track A without asking", "only stop for decisions you cannot make"):
+
+## Contingency (non-negotiable)
+
+**The autonomous directive is contingent on our workflow and audits directive** — defined in [`docs/EXECUTION_TRACKS.md`](../../docs/EXECUTION_TRACKS.md). Autonomous mode does **not** bypass audits, gates, or Track B boundaries.
+
+## When to ask the user
+
+Ask **only** when a decision requires Track B: credentials, business/board approval, legal/tax path choice, production deploy approval, or information absent from docs and codebase.
+
+## Required audits (every engagement)
+
+1. **Pre-planning audit** — `npm run check`, `npm test`, read `EXECUTION_TRACKS.md` + relevant `MASTER_PLAN.md` sections; confirm work is Track A; map tasks to files.
+2. **Pre-implementation audit** — create/switch branch; scope diff; risk check (migrations, live tables, breaking API); confirm no gated decision needed.
+3. **Post-implementation impact assessment** — re-run `npm run check` + `npm test`; verify no unrelated regressions; document Track B env vars still unset; update `EXECUTION_TRACKS.md` engagement log.
+
+## Execution
+
+- Implement → commit → push → PR (draft → ready) → merge when gates pass.
+- Minimize scope; match existing conventions.
+- Never skip audits to move faster.
