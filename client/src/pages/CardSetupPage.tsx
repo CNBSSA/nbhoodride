@@ -13,6 +13,10 @@ import { useToast } from '@/hooks/use-toast';
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
 
+interface PaymentMethodsResponse {
+  hasPaymentMethod: boolean;
+}
+
 function CardSetupForm() {
   const stripe = useStripe();
   const elements = useElements();
@@ -21,10 +25,7 @@ function CardSetupForm() {
 
   const setupCardMutation = useMutation({
     mutationFn: async (paymentMethodId: string) => {
-      const response = await apiRequest('/api/payment/setup-card', {
-        method: 'POST',
-        body: JSON.stringify({ paymentMethodId }),
-      });
+      const response = await apiRequest('POST', '/api/payment/setup-card', { paymentMethodId });
       return response.json();
     },
     onSuccess: () => {
@@ -123,7 +124,7 @@ function CardSetupForm() {
 }
 
 export function CardSetupPage() {
-  const { data: paymentMethods, isLoading } = useQuery({
+  const { data: paymentMethods, isLoading } = useQuery<PaymentMethodsResponse>({
     queryKey: ['/api/payment/methods'],
   });
 

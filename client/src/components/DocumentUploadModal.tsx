@@ -71,7 +71,7 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
       const newDoc: UploadedDocument = {
         type,
         url: file.uploadURL!,
-        name: file.name,
+        name: file.name ?? type,
       };
       
       setUploadedDocuments(prev => {

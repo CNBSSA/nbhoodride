@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 
-interface GeolocationPosition {
+interface LocationCoords {
   latitude: number;
   longitude: number;
   accuracy?: number;
@@ -11,18 +11,18 @@ interface GeolocationPosition {
 }
 
 interface UseGeolocationReturn {
-  location: GeolocationPosition | null;
+  location: LocationCoords | null;
   error: string | null;
   isLoading: boolean;
   requestLocation: () => void;
 }
 
 export function useGeolocation(): UseGeolocationReturn {
-  const [location, setLocation] = useState<GeolocationPosition | null>(null);
+  const [location, setLocation] = useState<LocationCoords | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSuccess = (position: GeolocationPosition) => {
+  const handleSuccess = (position: globalThis.GeolocationPosition) => {
     setLocation({
       latitude: position.coords.latitude,
       longitude: position.coords.longitude,
@@ -96,7 +96,7 @@ export function useGeolocation(): UseGeolocationReturn {
 
 // Hook for watching position changes (useful for drivers)
 export function useGeolocationWatcher() {
-  const [location, setLocation] = useState<GeolocationPosition | null>(null);
+  const [location, setLocation] = useState<LocationCoords | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isWatching, setIsWatching] = useState(false);
   const [watchId, setWatchId] = useState<number | null>(null);
@@ -117,7 +117,7 @@ export function useGeolocationWatcher() {
       maximumAge: 30000, // Cache for 30 seconds when watching
     };
 
-    const handleSuccess = (position: GeolocationPosition) => {
+    const handleSuccess = (position: globalThis.GeolocationPosition) => {
       setLocation({
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
