@@ -56,6 +56,12 @@
 
 ---
 
+# Part I — Current State
+
+*Operational truth: what is shipped, deployed, and in backlog today.*
+
+---
+
 ## 1. Executive summary
 
 PG Ride is a hyper-local, community-focused ride-sharing platform for **Prince George's County, Maryland**. It connects verified neighborhood drivers with local riders, emphasizing transparency, safety, and community trust — not anonymous scale.
