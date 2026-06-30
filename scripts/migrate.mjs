@@ -667,7 +667,7 @@ CREATE TABLE IF NOT EXISTS user_autonomy_settings (
 
 CREATE TABLE IF NOT EXISTS mobility_intents (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id VARCHAR NOT NULL REFERENCES users(id),
+  user_id VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   intent_type VARCHAR NOT NULL,
   utterance TEXT,
   payload JSONB,
@@ -675,6 +675,25 @@ CREATE TABLE IF NOT EXISTS mobility_intents (
   created_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_mobility_intents_user ON mobility_intents (user_id);
+-- Idempotently upgrade the existing FK to ON DELETE CASCADE for any DB
+-- that already created mobility_intents before this fix landed. Drop
+-- (if exists) and re-add the constraint with the cascade behavior.
+-- mobility_intents stores raw user input (addresses, names) so deleting
+-- a user MUST remove their intents to honor privacy/right-to-delete.
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    WHERE t.relname = 'mobility_intents'
+      AND c.contype = 'f'
+      AND c.confdeltype <> 'c'
+  ) THEN
+    ALTER TABLE mobility_intents DROP CONSTRAINT IF EXISTS mobility_intents_user_id_fkey;
+    ALTER TABLE mobility_intents
+      ADD CONSTRAINT mobility_intents_user_id_fkey
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS ride_surface_cache (
   ride_id VARCHAR PRIMARY KEY REFERENCES rides(id) ON DELETE CASCADE,
