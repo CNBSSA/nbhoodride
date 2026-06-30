@@ -9,6 +9,7 @@ import { MapPin, Clock, User, DollarSign, Navigation, CheckCircle, Route, Extern
 import { RideHelpers } from '@/services/rideService';
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
+import { RideQuickMessages } from "@/components/RideQuickMessages";
 
 interface ActiveRideCardProps {
   ride: {
@@ -141,6 +142,7 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
                 Navigate to Pickup (Google Maps)
               </Button>
             )}
+            <RideQuickMessages rideId={ride.id} role="driver" />
             <Button 
               onClick={handleStartRide}
               disabled={isUpdating}
@@ -211,6 +213,8 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
             <p className="text-xs text-muted-foreground text-center">
               Base $4.00 + $0.29/min + $0.90/mi ($7.65 min, $100 max)
             </p>
+
+            <RideQuickMessages rideId={ride.id} role="driver" />
 
             {ride.destinationLocation?.lat && ride.destinationLocation?.lng && (
               <Button 

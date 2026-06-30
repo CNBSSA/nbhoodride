@@ -721,6 +721,17 @@ export const faqEntries = pgTable("faq_entries", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const agentAuditLog = pgTable("agent_audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  agent: varchar("agent").notNull(),
+  action: varchar("action").notNull(),
+  userId: varchar("user_id").references(() => users.id),
+  rideId: varchar("ride_id").references(() => rides.id),
+  reasoning: text("reasoning"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const demandHeatmap = pgTable("demand_heatmap", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   gridLat: decimal("grid_lat", { precision: 10, scale: 6 }).notNull(),
@@ -969,6 +980,7 @@ export type Conversation = typeof conversations.$inferSelect;
 export type ChatMessage = typeof chatMessages.$inferSelect;
 export type EventTracking = typeof eventTracking.$inferSelect;
 export type AiFeedback = typeof aiFeedback.$inferSelect;
+export type AgentAuditLog = typeof agentAuditLog.$inferSelect;
 export type PlatformInsight = typeof platformInsights.$inferSelect;
 export type FaqEntry = typeof faqEntries.$inferSelect;
 export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
