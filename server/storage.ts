@@ -391,6 +391,20 @@ export interface IStorage {
   getCommunityBonusPool(): Promise<CommunityBonusPool>;
   fundCommunityBonusPool(amount: number): Promise<CommunityBonusPool>;
   deductCommunityBonusPool(amount: number): Promise<CommunityBonusPool>;
+  /**
+   * Atomically deduct `amount` from the bonus pool, but only if the current
+   * balance is sufficient. Returns true if the deduction happened, false if
+   * the balance was too low. Used by allocateDriverBonus so concurrent
+   * allocations can't double-spend through a read-then-write race.
+   */
+  tryDeductCommunityBonusPool(amount: number): Promise<boolean>;
+  /**
+   * Sum the auto-credit refunds applied to a reporter within the lookback
+   * window. Used by the support agent's cumulative-cap guard: once a rider
+   * crosses $50 of auto-credit in 30 days, further disputes escalate to
+   * admin review rather than auto-resolving.
+   */
+  sumAutoCreditByReporterSince(reporterId: string, since: Date): Promise<number>;
   createBonusAllocation(data: {
     driverId: string;
     rideId?: string;
@@ -3307,6 +3321,27 @@ export class DatabaseStorage implements IStorage {
   async redeemCommunityReferral(code: string, referredId: string): Promise<CommunityReferral | undefined> {
     const existing = await this.getCommunityReferralByCode(code);
     if (!existing || existing.status !== "pending") return undefined;
+    // Self-redemption guard. Previously a user could create a referral,
+    // sign in as a second account (or even pass their own id), and
+    // redeem their own code for the $5 credit. The referral system
+    // becomes a per-account mint with no upper bound.
+    if (existing.referrerId === referredId) return undefined;
+    // Per-redeemer cap. Each redeemed referral credits the referrer +
+    // the redeemer; a single redeemer hitting multiple codes can
+    // collect $5 per code with no human review. Cap at one redeemed
+    // referral per user. Operators can lift the cap later via admin
+    // process if needed for promo campaigns.
+    const priorRedemption = await db
+      .select()
+      .from(communityReferrals)
+      .where(
+        and(
+          eq(communityReferrals.referredId, referredId),
+          eq(communityReferrals.status, "redeemed"),
+        ),
+      )
+      .limit(1);
+    if (priorRedemption.length > 0) return undefined;
     const [updated] = await db
       .update(communityReferrals)
       .set({ referredId, status: "redeemed" })
@@ -3590,6 +3625,55 @@ export class DatabaseStorage implements IStorage {
       .where(eq(communityBonusPool.id, "default"))
       .returning();
     return updated;
+  }
+
+  async tryDeductCommunityBonusPool(amount: number): Promise<boolean> {
+    if (!Number.isFinite(amount) || amount <= 0) return false;
+    // Atomic compare-and-set: only deduct if the row's balance still meets
+    // the requirement. Postgres's UPDATE with a value-based WHERE serializes
+    // through MVCC + row locking, so two concurrent callers can never both
+    // succeed when there's only enough for one. Previously this was a
+    // read-then-write race that let dispatch + admin allocations
+    // double-spend the pool.
+    const result = await db.execute(sql`
+      UPDATE community_bonus_pool
+      SET balance = (balance::numeric - ${amount})::text,
+          total_allocated = (total_allocated::numeric + ${amount})::text,
+          updated_at = NOW()
+      WHERE id = 'default'
+        AND balance::numeric >= ${amount}
+      RETURNING id
+    `);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async sumAutoCreditByReporterSince(reporterId: string, since: Date): Promise<number> {
+    // We log auto-credit on disputes by setting refundedAmount on the ride
+    // and resolution text mentioning 'Auto-resolved by Support Agent'. The
+    // cumulative cap reads back via the disputes table — each auto-resolved
+    // row's matched ride.refundedAmount is the per-dispute credit.
+    const rows = await db
+      .select({
+        rideId: disputes.rideId,
+        resolution: disputes.resolution,
+        updatedAt: disputes.updatedAt,
+      })
+      .from(disputes)
+      .where(
+        and(
+          eq(disputes.reporterId, reporterId),
+          eq(disputes.status, "resolved"),
+          gte(disputes.updatedAt, since),
+        ),
+      );
+    let total = 0;
+    for (const row of rows) {
+      if (!row.resolution?.includes("Auto-resolved by Support Agent")) continue;
+      // Extract "$X.XX" from "Auto-resolved by Support Agent: $7.50 PG Card credit"
+      const match = row.resolution.match(/\$(\d+(?:\.\d{1,2})?)/);
+      if (match) total += parseFloat(match[1]);
+    }
+    return total;
   }
 
   async deductCommunityBonusPool(amount: number): Promise<CommunityBonusPool> {
