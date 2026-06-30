@@ -27,6 +27,11 @@ import {
   sendSignupRejectedEmail,
 } from "./emailService";
 import { sendPushToSubscriptions } from "./pushService";
+import { buildDriverLocationMessage } from "./wsDriverLocation";
+import {
+  getQuickMessageText,
+  isQuickMessageAllowedForRole,
+} from "@shared/quickRideMessages";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import {
   insertDriverProfileSchema,
@@ -1085,7 +1090,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (ride?.riderId && activeConnections.has(ride.riderId)) {
           const riderWs = activeConnections.get(ride.riderId)!;
           if (riderWs.readyState === WebSocket.OPEN) {
-            riderWs.send(JSON.stringify({ type: 'driver_location', rideId, lat, lng }));
+            riderWs.send(JSON.stringify(buildDriverLocationMessage({
+              rideId,
+              driverId: userId,
+              lat,
+              lng,
+            })));
           }
         }
       }
@@ -1093,6 +1103,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error updating driver location:", error);
       res.status(500).json({ message: "Failed to update location" });
+    }
+  });
+
+  app.post('/api/rides/:rideId/quick-message', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const { messageKey } = req.body ?? {};
+      if (typeof messageKey !== "string") {
+        return res.status(400).json({ message: "messageKey is required" });
+      }
+      const ride = await storage.getRide(rideId);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+
+      const isRider = ride.riderId === userId;
+      const isDriver = ride.driverId === userId;
+      if (!isRider && !isDriver) {
+        return res.status(403).json({ message: "Not a participant on this ride" });
+      }
+      const role = isRider ? "rider" : "driver";
+      if (!isQuickMessageAllowedForRole(messageKey, role)) {
+        return res.status(400).json({ message: "Invalid message for your role" });
+      }
+      const text = getQuickMessageText(messageKey);
+      if (!text) return res.status(400).json({ message: "Unknown message key" });
+
+      const targetUserId = isRider ? ride.driverId : ride.riderId;
+      const payload = {
+        type: "ride_quick_message",
+        rideId,
+        messageKey,
+        text,
+        fromUserId: userId,
+        fromRole: role,
+      };
+      if (targetUserId && activeConnections.has(targetUserId)) {
+        const ws = activeConnections.get(targetUserId)!;
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(payload));
+        }
+      }
+      res.json({ ok: true, text });
+    } catch (error) {
+      console.error("Error sending quick message:", error);
+      res.status(500).json({ message: "Failed to send message" });
     }
   });
 
@@ -1126,6 +1181,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         actorId: userId,
         details: { riderId: ride.riderId, estimatedFare: ride.estimatedFare },
       });
+
+      await storage.createAgentAuditLog({
+        agent: "dispatch",
+        action: "ride_accepted",
+        userId,
+        rideId,
+        reasoning: `Driver ${userId} accepted ride for rider ${ride.riderId}`,
+        metadata: { estimatedFare: ride.estimatedFare },
+      }).catch((err) => console.error("agent_audit_log write failed:", err));
 
       if (ride.paymentMethod === 'card') {
         const rawFare = parseFloat(ride.estimatedFare || "0");
@@ -4923,6 +4987,17 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
               data: { disputeCount: scorecard.disputeCount },
             });
             alerts.push(alert);
+            if (alert.severity === 'critical') {
+              await storage.createPlatformInsight({
+                insightType: 'safety_alert',
+                category: 'safety',
+                title: alert.title,
+                description: alert.description ?? undefined,
+                data: alert.data as Record<string, any> | undefined,
+                severity: 'critical',
+                isActionable: true,
+              });
+            }
           }
           if ((scorecard.sosCount || 0) >= 2) {
             const alert = await storage.createSafetyAlert({
@@ -4934,6 +5009,15 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
               data: { sosCount: scorecard.sosCount },
             });
             alerts.push(alert);
+            await storage.createPlatformInsight({
+              insightType: 'safety_alert',
+              category: 'safety',
+              title: alert.title,
+              description: alert.description ?? undefined,
+              data: alert.data as Record<string, any> | undefined,
+              severity: 'critical',
+              isActionable: true,
+            });
           }
           if (parseFloat(scorecard.avgRating?.toString() || '5') < 3.0 && (scorecard.totalRidesCompleted || 0) >= 5) {
             const alert = await storage.createSafetyAlert({
@@ -5228,7 +5312,12 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
                   if (ride?.riderId && activeConnections.has(ride.riderId)) {
                     const riderWs = activeConnections.get(ride.riderId)!;
                     if (riderWs.readyState === WebSocket.OPEN) {
-                      riderWs.send(JSON.stringify({ type: 'driver_location', rideId: message.rideId, lat, lng }));
+                      riderWs.send(JSON.stringify(buildDriverLocationMessage({
+                        rideId: message.rideId,
+                        driverId: message.userId,
+                        lat,
+                        lng,
+                      })));
                     }
                   }
                 }).catch(() => {});
