@@ -812,6 +812,54 @@ CREATE TABLE IF NOT EXISTS recurring_ride_schedules (
 );
 CREATE INDEX IF NOT EXISTS idx_recurring_schedules_user ON recurring_ride_schedules (user_id);
 
+-- ── Phase E: Autonomous operations ───────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS agent_action_proposals (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent VARCHAR NOT NULL,
+  action VARCHAR NOT NULL,
+  status VARCHAR NOT NULL DEFAULT 'pending',
+  user_id VARCHAR REFERENCES users(id),
+  ride_id VARCHAR REFERENCES rides(id),
+  payload JSONB,
+  reasoning TEXT,
+  proposed_at TIMESTAMP DEFAULT NOW(),
+  reviewed_by VARCHAR REFERENCES users(id),
+  reviewed_at TIMESTAMP,
+  review_note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_proposals_status ON agent_action_proposals (status);
+
+CREATE TABLE IF NOT EXISTS compliance_records (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  driver_id VARCHAR NOT NULL REFERENCES users(id),
+  record_type VARCHAR NOT NULL,
+  status VARCHAR NOT NULL DEFAULT 'missing',
+  expires_at TIMESTAMP,
+  tax_compliance_path VARCHAR,
+  metadata JSONB,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_compliance_driver ON compliance_records (driver_id);
+
+CREATE TABLE IF NOT EXISTS sms_booking_sessions (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone VARCHAR NOT NULL UNIQUE,
+  user_id VARCHAR REFERENCES users(id),
+  state VARCHAR NOT NULL DEFAULT 'idle',
+  context JSONB,
+  active_ride_id VARCHAR REFERENCES rides(id),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_ride_preferences (
+  user_id VARCHAR PRIMARY KEY REFERENCES users(id),
+  calm_ride_mode VARCHAR NOT NULL DEFAULT 'off',
+  preferred_language VARCHAR NOT NULL DEFAULT 'en',
+  minimize_notifications BOOLEAN DEFAULT false,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
 -- the ALTER TABLE below throws "could not create unique index — Key (user_id)

@@ -35,6 +35,10 @@ import {
   communityBonusPool,
   bonusAllocations,
   recurringRideSchedules,
+  agentActionProposals,
+  complianceRecords,
+  smsBookingSessions,
+  userRidePreferences,
   demandHeatmap,
   driverScorecard,
   safetyAlerts,
@@ -83,6 +87,10 @@ import {
   type CommunityBonusPool,
   type BonusAllocation,
   type RecurringRideSchedule,
+  type AgentActionProposal,
+  type ComplianceRecord,
+  type SmsBookingSession,
+  type UserRidePreferences,
   type DemandHeatmapEntry,
   type DriverScorecardEntry,
   type SafetyAlert,
@@ -403,6 +411,34 @@ export interface IStorage {
   }): Promise<RecurringRideSchedule>;
   getDueRecurringSchedules(): Promise<RecurringRideSchedule[]>;
   markRecurringSchedulePrompted(id: string): Promise<void>;
+  getDisputeById(disputeId: string): Promise<Dispute | undefined>;
+  getAllDisputes(): Promise<Dispute[]>;
+  adminResolveDispute(disputeId: string, resolution: string, resolvedBy?: string | null, refundAmount?: number): Promise<Dispute>;
+  adminUpdateDriverProfile(userId: string, updates: Partial<{ isVerifiedNeighbor: boolean; isSuspended: boolean; approvalStatus: string }>): Promise<DriverProfile>;
+  createAgentActionProposal(data: {
+    agent: string;
+    action: string;
+    userId?: string;
+    rideId?: string;
+    reasoning?: string;
+    payload?: Record<string, unknown>;
+  }): Promise<AgentActionProposal>;
+  getAgentActionProposal(id: string): Promise<AgentActionProposal | undefined>;
+  getPendingAgentActionProposals(limit?: number): Promise<AgentActionProposal[]>;
+  updateAgentActionProposal(id: string, updates: { status: string; reviewedBy?: string; reviewNote?: string }): Promise<AgentActionProposal>;
+  upsertComplianceRecord(data: {
+    driverId: string;
+    recordType: string;
+    status: string;
+    expiresAt?: Date;
+    taxCompliancePath?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<ComplianceRecord>;
+  getComplianceRecords(driverId?: string): Promise<ComplianceRecord[]>;
+  getOrCreateSmsBookingSession(phone: string): Promise<SmsBookingSession>;
+  updateSmsBookingSession(phone: string, updates: Partial<{ state: string; context: Record<string, unknown>; activeRideId: string | null; userId: string }>): Promise<SmsBookingSession>;
+  getUserRidePreferences(userId: string): Promise<UserRidePreferences>;
+  setUserRidePreferences(userId: string, prefs: Partial<{ calmRideMode: string; preferredLanguage: string; minimizeNotifications: boolean }>): Promise<UserRidePreferences>;
   upsertDriverScorecard(driverId: string): Promise<DriverScorecardEntry>;
   getDriverScorecard(driverId: string): Promise<DriverScorecardEntry | undefined>;
   getAllDriverScorecards(): Promise<DriverScorecardEntry[]>;
@@ -2363,11 +2399,11 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(disputes).orderBy(desc(disputes.createdAt));
   }
 
-  async adminResolveDispute(disputeId: string, resolution: string, resolvedBy: string, refundAmount?: number): Promise<Dispute> {
+  async adminResolveDispute(disputeId: string, resolution: string, resolvedBy?: string | null, refundAmount?: number): Promise<Dispute> {
     const [dispute] = await db.update(disputes).set({
       status: "resolved",
       resolution,
-      resolvedBy,
+      resolvedBy: resolvedBy ?? null,
       updatedAt: new Date()
     }).where(eq(disputes.id, disputeId)).returning();
 
@@ -2375,7 +2411,7 @@ export class DatabaseStorage implements IStorage {
     if (refundAmount && refundAmount > 0 && dispute?.rideId) {
       const [ride] = await db.select().from(rides).where(eq(rides.id, dispute.rideId));
       if (ride?.riderId) {
-        await this.addVirtualCardBalance(ride.riderId, refundAmount, "dispute_refund", dispute.rideId, resolvedBy);
+        await this.addVirtualCardBalance(ride.riderId, refundAmount, "dispute_refund", dispute.rideId, resolvedBy ?? undefined);
         // Mark refunded amount on the ride
         await db.update(rides)
           .set({ refundedAmount: refundAmount.toFixed(2), updatedAt: new Date() })
@@ -3664,6 +3700,155 @@ export class DatabaseStorage implements IStorage {
       .update(recurringRideSchedules)
       .set({ lastPromptAt: new Date() })
       .where(eq(recurringRideSchedules.id, id));
+  }
+
+  async getDisputeById(disputeId: string): Promise<Dispute | undefined> {
+    const [row] = await db.select().from(disputes).where(eq(disputes.id, disputeId));
+    return row;
+  }
+
+  async createAgentActionProposal(data: {
+    agent: string;
+    action: string;
+    userId?: string;
+    rideId?: string;
+    reasoning?: string;
+    payload?: Record<string, unknown>;
+  }): Promise<AgentActionProposal> {
+    const [row] = await db.insert(agentActionProposals).values(data).returning();
+    return row;
+  }
+
+  async getAgentActionProposal(id: string): Promise<AgentActionProposal | undefined> {
+    const [row] = await db.select().from(agentActionProposals).where(eq(agentActionProposals.id, id));
+    return row;
+  }
+
+  async getPendingAgentActionProposals(limit = 50): Promise<AgentActionProposal[]> {
+    return db
+      .select()
+      .from(agentActionProposals)
+      .where(eq(agentActionProposals.status, "pending"))
+      .orderBy(desc(agentActionProposals.proposedAt))
+      .limit(limit);
+  }
+
+  async updateAgentActionProposal(
+    id: string,
+    updates: { status: string; reviewedBy?: string; reviewNote?: string },
+  ): Promise<AgentActionProposal> {
+    const [row] = await db
+      .update(agentActionProposals)
+      .set({
+        status: updates.status,
+        reviewedBy: updates.reviewedBy,
+        reviewNote: updates.reviewNote,
+        reviewedAt: new Date(),
+      })
+      .where(eq(agentActionProposals.id, id))
+      .returning();
+    return row;
+  }
+
+  async upsertComplianceRecord(data: {
+    driverId: string;
+    recordType: string;
+    status: string;
+    expiresAt?: Date;
+    taxCompliancePath?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<ComplianceRecord> {
+    const existing = await db
+      .select()
+      .from(complianceRecords)
+      .where(
+        and(
+          eq(complianceRecords.driverId, data.driverId),
+          eq(complianceRecords.recordType, data.recordType),
+        ),
+      );
+    if (existing[0]) {
+      const [updated] = await db
+        .update(complianceRecords)
+        .set({
+          status: data.status,
+          expiresAt: data.expiresAt,
+          taxCompliancePath: data.taxCompliancePath,
+          metadata: data.metadata,
+          updatedAt: new Date(),
+        })
+        .where(eq(complianceRecords.id, existing[0].id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(complianceRecords).values(data).returning();
+    return created;
+  }
+
+  async getComplianceRecords(driverId?: string): Promise<ComplianceRecord[]> {
+    if (driverId) {
+      return db.select().from(complianceRecords).where(eq(complianceRecords.driverId, driverId));
+    }
+    return db.select().from(complianceRecords).orderBy(desc(complianceRecords.updatedAt));
+  }
+
+  async getOrCreateSmsBookingSession(phone: string): Promise<SmsBookingSession> {
+    const [existing] = await db
+      .select()
+      .from(smsBookingSessions)
+      .where(eq(smsBookingSessions.phone, phone));
+    if (existing) return existing;
+    const [created] = await db.insert(smsBookingSessions).values({ phone }).returning();
+    return created;
+  }
+
+  async updateSmsBookingSession(
+    phone: string,
+    updates: Partial<{ state: string; context: Record<string, unknown>; activeRideId: string | null; userId: string }>,
+  ): Promise<SmsBookingSession> {
+    const session = await this.getOrCreateSmsBookingSession(phone);
+    const [updated] = await db
+      .update(smsBookingSessions)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(smsBookingSessions.id, session.id))
+      .returning();
+    return updated;
+  }
+
+  async getUserRidePreferences(userId: string): Promise<UserRidePreferences> {
+    const [row] = await db
+      .select()
+      .from(userRidePreferences)
+      .where(eq(userRidePreferences.userId, userId));
+    if (row) return row;
+    const [created] = await db
+      .insert(userRidePreferences)
+      .values({ userId })
+      .returning();
+    return created;
+  }
+
+  async setUserRidePreferences(
+    userId: string,
+    prefs: Partial<{ calmRideMode: string; preferredLanguage: string; minimizeNotifications: boolean }>,
+  ): Promise<UserRidePreferences> {
+    const current = await this.getUserRidePreferences(userId);
+    const calmRideMode = prefs.calmRideMode ?? current.calmRideMode ?? "off";
+    const minimize =
+      prefs.minimizeNotifications ??
+      current.minimizeNotifications ??
+      (calmRideMode !== "off");
+    const [updated] = await db
+      .update(userRidePreferences)
+      .set({
+        calmRideMode,
+        preferredLanguage: prefs.preferredLanguage ?? current.preferredLanguage ?? "en",
+        minimizeNotifications: minimize,
+        updatedAt: new Date(),
+      })
+      .where(eq(userRidePreferences.userId, userId))
+      .returning();
+    return updated;
   }
 }
 

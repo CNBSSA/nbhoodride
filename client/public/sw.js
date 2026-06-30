@@ -51,3 +51,17 @@ self.addEventListener("notificationclick", (event) => {
     })
   );
 });
+
+// E5 — Lock-screen-adjacent ride widget data (badge + shortcut context)
+let rideWidget = { rideId: null, status: null, etaMinutes: null, driverName: null };
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type !== "RIDE_WIDGET_UPDATE") return;
+  rideWidget = { ...rideWidget, ...event.data.payload };
+  if (rideWidget.rideId && rideWidget.status && self.registration.setAppBadge) {
+    const label = rideWidget.etaMinutes ? `${rideWidget.etaMinutes}` : "•";
+    self.registration.setAppBadge(label).catch(() => {});
+  } else if (self.registration.clearAppBadge) {
+    self.registration.clearAppBadge().catch(() => {});
+  }
+});

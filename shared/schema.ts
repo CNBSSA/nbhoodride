@@ -910,6 +910,57 @@ export const recurringRideSchedules = pgTable("recurring_ride_schedules", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/** Phase E3 — Admin approve-and-apply queue for agent actions. */
+export const agentActionProposals = pgTable("agent_action_proposals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  agent: varchar("agent").notNull(),
+  action: varchar("action").notNull(),
+  status: varchar("status").default("pending").notNull(),
+  userId: varchar("user_id").references(() => users.id),
+  rideId: varchar("ride_id").references(() => rides.id),
+  payload: jsonb("payload").$type<Record<string, unknown>>(),
+  reasoning: text("reasoning"),
+  proposedAt: timestamp("proposed_at").defaultNow(),
+  reviewedBy: varchar("reviewed_by").references(() => users.id),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewNote: text("review_note"),
+});
+
+/** Phase E2 — Driver compliance (W-9, doc expiry). */
+export const complianceRecords = pgTable("compliance_records", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  driverId: varchar("driver_id").notNull().references(() => users.id),
+  recordType: varchar("record_type").notNull(),
+  status: varchar("status").default("missing").notNull(),
+  expiresAt: timestamp("expires_at"),
+  taxCompliancePath: varchar("tax_compliance_path"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_compliance_driver").on(table.driverId),
+]);
+
+/** Phase E4 — SMS booking session state. */
+export const smsBookingSessions = pgTable("sms_booking_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  phone: varchar("phone").notNull().unique(),
+  userId: varchar("user_id").references(() => users.id),
+  state: varchar("state").default("idle").notNull(),
+  context: jsonb("context").$type<Record<string, unknown>>(),
+  activeRideId: varchar("active_ride_id").references(() => rides.id),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Phase E6/E7 — Calm Ride mode + language preference. */
+export const userRidePreferences = pgTable("user_ride_preferences", {
+  userId: varchar("user_id").primaryKey().references(() => users.id),
+  calmRideMode: varchar("calm_ride_mode").default("off").notNull(),
+  preferredLanguage: varchar("preferred_language").default("en").notNull(),
+  minimizeNotifications: boolean("minimize_notifications").default(false),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 export const demandHeatmap = pgTable("demand_heatmap", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   gridLat: decimal("grid_lat", { precision: 10, scale: 6 }).notNull(),
@@ -1177,6 +1228,10 @@ export type DemandForecast = typeof demandForecasts.$inferSelect;
 export type CommunityBonusPool = typeof communityBonusPool.$inferSelect;
 export type BonusAllocation = typeof bonusAllocations.$inferSelect;
 export type RecurringRideSchedule = typeof recurringRideSchedules.$inferSelect;
+export type AgentActionProposal = typeof agentActionProposals.$inferSelect;
+export type ComplianceRecord = typeof complianceRecords.$inferSelect;
+export type SmsBookingSession = typeof smsBookingSessions.$inferSelect;
+export type UserRidePreferences = typeof userRidePreferences.$inferSelect;
 export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
 export type DriverScorecardEntry = typeof driverScorecard.$inferSelect;
 export type SafetyAlert = typeof safetyAlerts.$inferSelect;

@@ -22,7 +22,19 @@ export async function deliverUserNotification(userId: string, input: UserNotific
     data: input.data,
   });
 
-  if (input.push !== false) {
+  let allowPush = input.push !== false;
+  if (allowPush && input.type !== "sos" && input.type !== "emergency") {
+    try {
+      const prefs = await storage.getUserRidePreferences(userId);
+      if (prefs.minimizeNotifications || (prefs.calmRideMode && prefs.calmRideMode !== "off")) {
+        allowPush = false;
+      }
+    } catch {
+      /* preferences optional */
+    }
+  }
+
+  if (allowPush) {
     const payload: PushPayload = {
       title: input.title,
       body: input.body,

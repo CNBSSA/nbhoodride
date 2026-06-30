@@ -52,6 +52,10 @@ import { evaluateUndersupply, allocateDriverBonus } from "./agents/pricingFairne
 import { getOwnershipProjections } from "./agents/ownershipAgent";
 import { checkRouteDeviationForRide } from "./agents/safetyAnomaly";
 import { processRecurringRideRebooks } from "./agents/recurringRides";
+import { tryAutoResolveDispute } from "./agents/support";
+import { runComplianceScan } from "./agents/compliance";
+import { approveAndApplyProposal, rejectProposal } from "./agents/agentProposals";
+import { handleInboundSms, sendRideTrackingSms } from "./agents/smsBooking";
 import { rideSurfaceSpecSchema } from "@shared/genui/schema";
 import { buildDriverLocationMessage } from "./wsDriverLocation";
 import {
@@ -3000,6 +3004,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       const dispute = await storage.createDispute(disputeData);
+
+      tryAutoResolveDispute(storage, dispute.id)
+        .then((result) => {
+          if (result.autoResolved) {
+            console.log(`Support agent auto-resolved dispute ${dispute.id}: $${result.refundAmount}`);
+          }
+        })
+        .catch(console.error);
+
       res.json(dispute);
     } catch (error) {
       console.error("Error creating dispute:", error);
@@ -4772,6 +4785,121 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       res.json(anchors);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch anchors" });
+    }
+  });
+
+  // ── Phase E: Autonomous operations ──────────────────────────────────────────
+  app.get('/api/user/ride-preferences', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const prefs = await storage.getUserRidePreferences(userId);
+      res.json(prefs);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch ride preferences" });
+    }
+  });
+
+  app.patch('/api/user/ride-preferences', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { calmRideMode, preferredLanguage, minimizeNotifications } = req.body;
+      const prefs = await storage.setUserRidePreferences(userId, {
+        calmRideMode,
+        preferredLanguage,
+        minimizeNotifications,
+      });
+      res.json(prefs);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update ride preferences" });
+    }
+  });
+
+  app.post('/api/support/resolve/:disputeId', isAuthenticated, async (req: any, res) => {
+    try {
+      const result = await tryAutoResolveDispute(storage, req.params.disputeId);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to resolve support request" });
+    }
+  });
+
+  app.post('/api/sms/inbound', async (req, res) => {
+    try {
+      const phone = req.body.From || req.body.from;
+      const body = req.body.Body || req.body.body || "";
+      if (!phone) return res.status(400).send("Missing From");
+      const reply = await handleInboundSms(storage, phone, body);
+      res.type("text/xml").send(
+        `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${reply.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</Message></Response>`,
+      );
+    } catch (error) {
+      console.error("SMS inbound error:", error);
+      res.status(500).send("Error");
+    }
+  });
+
+  app.post('/api/rides/:rideId/sms-tracking', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { phone } = req.body;
+      const ride = await storage.getRide(req.params.rideId);
+      if (!ride || ride.riderId !== userId) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+      if (!phone) return res.status(400).json({ message: "phone required" });
+      const sent = await sendRideTrackingSms(storage, phone, ride.id, userId);
+      res.json({ sent, message: sent ? "Tracking link sent via SMS" : "SMS not configured — link logged" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to send SMS tracking" });
+    }
+  });
+
+  app.get('/api/admin/agent-proposals', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const proposals = await storage.getPendingAgentActionProposals();
+      res.json(proposals);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch proposals" });
+    }
+  });
+
+  app.post('/api/admin/agent-proposals/:id/approve', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { note } = req.body;
+      const result = await approveAndApplyProposal(storage, req.params.id, adminId, note);
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to approve" });
+    }
+  });
+
+  app.post('/api/admin/agent-proposals/:id/reject', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { note } = req.body;
+      await rejectProposal(storage, req.params.id, adminId, note);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(400).json({ message: "Failed to reject proposal" });
+    }
+  });
+
+  app.get('/api/admin/compliance', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const records = await storage.getComplianceRecords();
+      res.json(records);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance records" });
+    }
+  });
+
+  app.post('/api/admin/compliance/scan', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const alerts = await runComplianceScan(storage);
+      res.json({ alerts, message: `Compliance scan complete — ${alerts} alert(s)` });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to run compliance scan" });
     }
   });
 
