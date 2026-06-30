@@ -19,6 +19,13 @@ import {
   agentAuditLog,
   platformInsights,
   faqEntries,
+  knowledgeChunks,
+  inAppNotifications,
+  userAutonomySettings,
+  mobilityIntents,
+  rideSurfaceCache,
+  rideTemplates,
+  guardianLinks,
   demandHeatmap,
   driverScorecard,
   safetyAlerts,
@@ -53,6 +60,12 @@ import {
   type AgentAuditLog,
   type PlatformInsight,
   type FaqEntry,
+  type KnowledgeChunk,
+  type InAppNotification,
+  type UserAutonomySettings,
+  type MobilityIntent,
+  type RideTemplate,
+  type GuardianLink,
   type DemandHeatmapEntry,
   type DriverScorecardEntry,
   type SafetyAlert,
@@ -304,9 +317,27 @@ export interface IStorage {
   getPlatformInsights(limit?: number): Promise<PlatformInsight[]>;
   getUnreadInsights(): Promise<PlatformInsight[]>;
   markInsightRead(id: string): Promise<void>;
-  createFaqEntry(data: { question: string; answer: string; category: string }): Promise<FaqEntry>;
+  createFaqEntry(data: { question: string; answer: string; category: string; sourceCount?: number; isPublished?: boolean }): Promise<FaqEntry>;
   getFaqEntries(publishedOnly?: boolean): Promise<FaqEntry[]>;
-  updateFaqEntry(id: string, updates: Partial<{ question: string; answer: string; category: string; isPublished: boolean }>): Promise<FaqEntry>;
+  updateFaqEntry(id: string, updates: Partial<{ question: string; answer: string; category: string; isPublished: boolean; sourceCount: number }>): Promise<FaqEntry>;
+  getRecentUserChatExcerpts(limit?: number): Promise<string[]>;
+  upsertKnowledgeChunk(data: { sourceType: string; sourceId?: string | null; title: string; content: string; embedding?: number[] }): Promise<KnowledgeChunk>;
+  getAllKnowledgeChunks(): Promise<KnowledgeChunk[]>;
+  createInAppNotification(data: { userId: string; type: string; title: string; body: string; data?: Record<string, unknown> }): Promise<InAppNotification>;
+  getInAppNotifications(userId: string, limit?: number): Promise<InAppNotification[]>;
+  getUnreadInAppNotificationCount(userId: string): Promise<number>;
+  markInAppNotificationRead(userId: string, id: string): Promise<void>;
+  markAllInAppNotificationsRead(userId: string): Promise<void>;
+  getUserAutonomyLevel(userId: string): Promise<number>;
+  setUserAutonomyLevel(userId: string, level: number): Promise<UserAutonomySettings>;
+  createMobilityIntent(data: { userId: string; intentType: string; utterance?: string; payload?: Record<string, unknown> }): Promise<MobilityIntent>;
+  getLastCompletedRideForUser(userId: string): Promise<Ride | undefined>;
+  upsertRideSurfaceCache(rideId: string, spec: Record<string, unknown>): Promise<void>;
+  getRideSurfaceCache(rideId: string): Promise<Record<string, unknown> | undefined>;
+  getRideTemplateByLabel(userId: string, label: string): Promise<RideTemplate | undefined>;
+  upsertRideTemplateFromRide(userId: string, label: string, ride: Ride): Promise<RideTemplate>;
+  createGuardianLink(data: { riderUserId: string; guardianName: string; shareToken: string; activeRideId?: string; expiresAt?: Date }): Promise<GuardianLink>;
+  getGuardianLinkByToken(token: string): Promise<GuardianLink | undefined>;
   upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry>;
   getDemandHeatmap(hourOfDay?: number, dayOfWeek?: number): Promise<DemandHeatmapEntry[]>;
   upsertDriverScorecard(driverId: string): Promise<DriverScorecardEntry>;
@@ -2844,7 +2875,7 @@ export class DatabaseStorage implements IStorage {
     await db.update(platformInsights).set({ isRead: true }).where(eq(platformInsights.id, id));
   }
 
-  async createFaqEntry(data: { question: string; answer: string; category: string }): Promise<FaqEntry> {
+  async createFaqEntry(data: { question: string; answer: string; category: string; sourceCount?: number; isPublished?: boolean }): Promise<FaqEntry> {
     const [entry] = await db.insert(faqEntries).values(data).returning();
     return entry;
   }
@@ -2856,9 +2887,205 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(faqEntries).orderBy(desc(faqEntries.sourceCount));
   }
 
-  async updateFaqEntry(id: string, updates: Partial<{ question: string; answer: string; category: string; isPublished: boolean }>): Promise<FaqEntry> {
+  async updateFaqEntry(id: string, updates: Partial<{ question: string; answer: string; category: string; isPublished: boolean; sourceCount: number }>): Promise<FaqEntry> {
     const [entry] = await db.update(faqEntries).set({ ...updates, updatedAt: new Date() }).where(eq(faqEntries.id, id)).returning();
     return entry;
+  }
+
+  async getRecentUserChatExcerpts(limit = 100): Promise<string[]> {
+    const rows = await db
+      .select({ content: chatMessages.content })
+      .from(chatMessages)
+      .where(eq(chatMessages.role, "user"))
+      .orderBy(desc(chatMessages.createdAt))
+      .limit(limit);
+    return rows
+      .map((r) => r.content.trim())
+      .filter((c) => c.length >= 8 && c.length <= 800);
+  }
+
+  async upsertKnowledgeChunk(data: {
+    sourceType: string;
+    sourceId?: string | null;
+    title: string;
+    content: string;
+    embedding?: number[];
+  }): Promise<KnowledgeChunk> {
+    const matchConditions = data.sourceId
+      ? and(eq(knowledgeChunks.sourceType, data.sourceType), eq(knowledgeChunks.sourceId, data.sourceId))
+      : and(eq(knowledgeChunks.sourceType, data.sourceType), isNull(knowledgeChunks.sourceId));
+
+    const existing = await db.select().from(knowledgeChunks).where(matchConditions).limit(1);
+    if (existing[0]) {
+      const [updated] = await db
+        .update(knowledgeChunks)
+        .set({
+          title: data.title,
+          content: data.content,
+          embedding: data.embedding,
+          updatedAt: new Date(),
+        })
+        .where(eq(knowledgeChunks.id, existing[0].id))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db
+      .insert(knowledgeChunks)
+      .values({
+        sourceType: data.sourceType,
+        sourceId: data.sourceId ?? null,
+        title: data.title,
+        content: data.content,
+        embedding: data.embedding,
+      })
+      .returning();
+    return created;
+  }
+
+  async getAllKnowledgeChunks(): Promise<KnowledgeChunk[]> {
+    return db.select().from(knowledgeChunks).orderBy(desc(knowledgeChunks.updatedAt));
+  }
+
+  async createInAppNotification(data: {
+    userId: string;
+    type: string;
+    title: string;
+    body: string;
+    data?: Record<string, unknown>;
+  }): Promise<InAppNotification> {
+    const [row] = await db.insert(inAppNotifications).values(data).returning();
+    return row;
+  }
+
+  async getInAppNotifications(userId: string, limit = 50): Promise<InAppNotification[]> {
+    return db
+      .select()
+      .from(inAppNotifications)
+      .where(eq(inAppNotifications.userId, userId))
+      .orderBy(desc(inAppNotifications.createdAt))
+      .limit(limit);
+  }
+
+  async getUnreadInAppNotificationCount(userId: string): Promise<number> {
+    const rows = await db
+      .select({ count: count() })
+      .from(inAppNotifications)
+      .where(and(eq(inAppNotifications.userId, userId), isNull(inAppNotifications.readAt)));
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  async markInAppNotificationRead(userId: string, id: string): Promise<void> {
+    await db
+      .update(inAppNotifications)
+      .set({ readAt: new Date() })
+      .where(and(eq(inAppNotifications.id, id), eq(inAppNotifications.userId, userId)));
+  }
+
+  async markAllInAppNotificationsRead(userId: string): Promise<void> {
+    await db
+      .update(inAppNotifications)
+      .set({ readAt: new Date() })
+      .where(and(eq(inAppNotifications.userId, userId), isNull(inAppNotifications.readAt)));
+  }
+
+  async getUserAutonomyLevel(userId: string): Promise<number> {
+    const [row] = await db.select().from(userAutonomySettings).where(eq(userAutonomySettings.userId, userId));
+    return row?.autonomyLevel ?? 1;
+  }
+
+  async setUserAutonomyLevel(userId: string, level: number): Promise<UserAutonomySettings> {
+    const clamped = Math.max(0, Math.min(3, level));
+    const [row] = await db
+      .insert(userAutonomySettings)
+      .values({ userId, autonomyLevel: clamped })
+      .onConflictDoUpdate({
+        target: userAutonomySettings.userId,
+        set: { autonomyLevel: clamped, updatedAt: new Date() },
+      })
+      .returning();
+    return row;
+  }
+
+  async createMobilityIntent(data: {
+    userId: string;
+    intentType: string;
+    utterance?: string;
+    payload?: Record<string, unknown>;
+  }): Promise<MobilityIntent> {
+    const [row] = await db.insert(mobilityIntents).values(data).returning();
+    return row;
+  }
+
+  async getLastCompletedRideForUser(userId: string): Promise<Ride | undefined> {
+    const [ride] = await db
+      .select()
+      .from(rides)
+      .where(and(eq(rides.riderId, userId), eq(rides.status, "completed")))
+      .orderBy(desc(rides.completedAt))
+      .limit(1);
+    return ride;
+  }
+
+  async upsertRideSurfaceCache(rideId: string, spec: Record<string, unknown>): Promise<void> {
+    await db
+      .insert(rideSurfaceCache)
+      .values({ rideId, spec })
+      .onConflictDoUpdate({
+        target: rideSurfaceCache.rideId,
+        set: { spec, updatedAt: new Date() },
+      });
+  }
+
+  async getRideSurfaceCache(rideId: string): Promise<Record<string, unknown> | undefined> {
+    const [row] = await db.select().from(rideSurfaceCache).where(eq(rideSurfaceCache.rideId, rideId));
+    return row?.spec;
+  }
+
+  async getRideTemplateByLabel(userId: string, label: string): Promise<RideTemplate | undefined> {
+    const [row] = await db
+      .select()
+      .from(rideTemplates)
+      .where(and(eq(rideTemplates.userId, userId), eq(rideTemplates.label, label)))
+      .limit(1);
+    return row;
+  }
+
+  async upsertRideTemplateFromRide(userId: string, label: string, ride: Ride): Promise<RideTemplate> {
+    const dest = ride.destinationLocation as { lat: number; lng: number; address: string };
+    const pickup = ride.pickupLocation as { lat: number; lng: number; address: string } | null;
+    const existing = await this.getRideTemplateByLabel(userId, label);
+    if (existing) {
+      const [updated] = await db
+        .update(rideTemplates)
+        .set({ destination: dest, pickup: pickup ?? undefined })
+        .where(eq(rideTemplates.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db
+      .insert(rideTemplates)
+      .values({ userId, label, destination: dest, pickup: pickup ?? undefined })
+      .returning();
+    return created;
+  }
+
+  async createGuardianLink(data: {
+    riderUserId: string;
+    guardianName: string;
+    shareToken: string;
+    activeRideId?: string;
+    expiresAt?: Date;
+  }): Promise<GuardianLink> {
+    const [row] = await db.insert(guardianLinks).values(data).returning();
+    return row;
+  }
+
+  async getGuardianLinkByToken(token: string): Promise<GuardianLink | undefined> {
+    const [row] = await db.select().from(guardianLinks).where(eq(guardianLinks.shareToken, token));
+    if (!row) return undefined;
+    if (row.expiresAt && row.expiresAt < new Date()) return undefined;
+    return row;
   }
 
   async upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry> {

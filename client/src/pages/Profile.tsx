@@ -12,6 +12,7 @@ import TopUpModal from "@/components/TopUpModal";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { Bell, BellOff, Plus, MapPin, ChevronDown, ChevronUp, CheckSquare, Square } from "lucide-react";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
+import { AutonomyDial } from "@/components/AutonomyDial";
 import { MD_COUNTIES } from "../../../shared/schema";
 
 export default function Profile() {
@@ -24,6 +25,21 @@ export default function Profile() {
   const { user, isLoading } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const { data: autonomy = { autonomyLevel: 1 } } = useQuery<{ autonomyLevel: number }>({
+    queryKey: ["/api/mobility/autonomy"],
+  });
+
+  const setAutonomy = useMutation({
+    mutationFn: async (level: number) => {
+      const res = await apiRequest("PATCH", "/api/mobility/autonomy", { autonomyLevel: level });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/mobility/autonomy"] });
+      toast({ title: "Autonomy updated" });
+    },
+  });
 
   // Fetch driver county preferences
   const { data: countyData } = useQuery({
@@ -413,6 +429,18 @@ export default function Profile() {
             </div>
             <i className="fas fa-chevron-right text-muted-foreground" />
           </Button>
+
+          {/* Autonomy dial (Phase B) */}
+          <Card>
+            <CardContent className="p-4">
+              <p className="font-medium mb-3">Booking Autonomy</p>
+              <AutonomyDial
+                level={autonomy.autonomyLevel}
+                onChange={(level) => setAutonomy.mutate(level)}
+                disabled={setAutonomy.isPending}
+              />
+            </CardContent>
+          </Card>
 
           {/* Push Notification Toggle */}
           {isSupported && permission !== "denied" && (

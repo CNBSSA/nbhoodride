@@ -11,6 +11,7 @@ import { PaymentsPage } from "@/pages/PaymentsPage";
 import { CardSetupPage } from "@/pages/CardSetupPage";
 import TestLogin from "@/pages/TestLogin";
 import EmergencyTracking from "@/pages/EmergencyTracking";
+import GuardianTrack from "@/pages/GuardianTrack";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import ForgotPassword from "@/pages/ForgotPassword";
@@ -39,6 +40,7 @@ function Router() {
     <Switch>
       {/* Public routes */}
       <Route path="/emergency/:token" component={EmergencyTracking} />
+      <Route path="/guardian/:token" component={GuardianTrack} />
       <Route path="/terms" component={TermsOfService} />
       <Route path="/privacy" component={PrivacyPolicy} />
       

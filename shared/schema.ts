@@ -721,6 +721,35 @@ export const faqEntries = pgTable("faq_entries", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+/** RAG knowledge base — FAQ, insights, policies indexed for AI assistant retrieval. */
+export const knowledgeChunks = pgTable("knowledge_chunks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sourceType: varchar("source_type").notNull(),
+  sourceId: varchar("source_id"),
+  title: text("title").notNull(),
+  content: text("content").notNull(),
+  /** Hash-based embedding (384-dim); upgrade to external embed API when keyed. */
+  embedding: jsonb("embedding").$type<number[]>(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_knowledge_source").on(table.sourceType, table.sourceId),
+]);
+
+/** In-app notification inbox (push is optional via VAPID). */
+export const inAppNotifications = pgTable("in_app_notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  type: varchar("type").notNull(),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  data: jsonb("data").$type<Record<string, any>>(),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_in_app_notif_user").on(table.userId),
+  index("idx_in_app_notif_created").on(table.createdAt),
+]);
+
 export const agentAuditLog = pgTable("agent_audit_log", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   agent: varchar("agent").notNull(),
@@ -729,6 +758,53 @@ export const agentAuditLog = pgTable("agent_audit_log", {
   rideId: varchar("ride_id").references(() => rides.id),
   reasoning: text("reasoning"),
   metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Autonomy dial — how much the orchestrator can do without confirmation (B5). */
+export const userAutonomySettings = pgTable("user_autonomy_settings", {
+  userId: varchar("user_id").primaryKey().references(() => users.id),
+  autonomyLevel: integer("autonomy_level").default(1).notNull(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Parsed delegative intents from voice/text (B2). */
+export const mobilityIntents = pgTable("mobility_intents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  intentType: varchar("intent_type").notNull(),
+  utterance: text("utterance"),
+  payload: jsonb("payload").$type<Record<string, unknown>>(),
+  status: varchar("status").default("parsed"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Cached GenUI spec per active ride (B1). */
+export const rideSurfaceCache = pgTable("ride_surface_cache", {
+  rideId: varchar("ride_id").primaryKey().references(() => rides.id, { onDelete: "cascade" }),
+  spec: jsonb("spec").$type<Record<string, unknown>>().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Saved ride templates — home, work, repeat (B4). */
+export const rideTemplates = pgTable("ride_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  label: varchar("label").notNull(),
+  pickup: jsonb("pickup").$type<{ lat: number; lng: number; address: string }>(),
+  destination: jsonb("destination").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  isDefault: boolean("is_default").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Guardian / family tracking share links (B7). */
+export const guardianLinks = pgTable("guardian_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  riderUserId: varchar("rider_user_id").notNull().references(() => users.id),
+  guardianName: varchar("guardian_name").notNull(),
+  shareToken: varchar("share_token").notNull().unique(),
+  activeRideId: varchar("active_ride_id").references(() => rides.id),
+  expiresAt: timestamp("expires_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -983,6 +1059,13 @@ export type AiFeedback = typeof aiFeedback.$inferSelect;
 export type AgentAuditLog = typeof agentAuditLog.$inferSelect;
 export type PlatformInsight = typeof platformInsights.$inferSelect;
 export type FaqEntry = typeof faqEntries.$inferSelect;
+export type KnowledgeChunk = typeof knowledgeChunks.$inferSelect;
+export type InAppNotification = typeof inAppNotifications.$inferSelect;
+export type UserAutonomySettings = typeof userAutonomySettings.$inferSelect;
+export type MobilityIntent = typeof mobilityIntents.$inferSelect;
+export type RideSurfaceCache = typeof rideSurfaceCache.$inferSelect;
+export type RideTemplate = typeof rideTemplates.$inferSelect;
+export type GuardianLink = typeof guardianLinks.$inferSelect;
 export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
 export type DriverScorecardEntry = typeof driverScorecard.$inferSelect;
 export type SafetyAlert = typeof safetyAlerts.$inferSelect;
