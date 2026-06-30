@@ -102,7 +102,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 
 | Date | Engagement | Track | PR | Post-audit |
 |------|------------|-------|-----|------------|
-| 2026-06-30 | Phase A foundation (A1–A8) | A | #38 | Pass — see below |
+| 2026-06-30 | Phase A foundation (A1–A8) | A | [#38](https://github.com/CNBSSA/nbhoodride/pull/38) | Pass — see below |
 
 ### Phase A — Post-engagement audit (2026-06-30)
 
