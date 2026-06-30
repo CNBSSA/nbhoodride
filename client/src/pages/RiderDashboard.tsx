@@ -13,11 +13,12 @@ import SharedScheduleSheet from "@/components/SharedScheduleSheet";
 import JoinScheduleModal from "@/components/JoinScheduleModal";
 import SOSModal from "@/components/SOSModal";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
+import { NotificationBell } from "@/components/NotificationBell";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import {
-  MapPin, Navigation, Bell, Star, Clock, X, Shield, Car,
+  MapPin, Navigation, Star, Clock, X, Shield, Car,
   Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign, CalendarClock, UserCheck, Users, AlertTriangle
 } from "lucide-react";
 import { format } from "date-fns";
@@ -445,9 +446,9 @@ export default function RiderDashboard() {
           </button>
         </div>
         <div className="flex items-center gap-2">
-          <button className="w-9 h-9 bg-white/90 backdrop-blur-sm rounded-full shadow-sm flex items-center justify-center" data-testid="button-notifications">
-            <Bell className="w-4 h-4 text-gray-600" />
-          </button>
+          <NotificationBell
+            buttonClassName="w-9 h-9 bg-white/90 backdrop-blur-sm rounded-full shadow-sm flex items-center justify-center"
+          />
           <div className="w-9 h-9 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm">
             {user?.firstName?.[0] || 'U'}{user?.lastName?.[0] || ''}
           </div>

@@ -721,6 +721,35 @@ export const faqEntries = pgTable("faq_entries", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+/** RAG knowledge base — FAQ, insights, policies indexed for AI assistant retrieval. */
+export const knowledgeChunks = pgTable("knowledge_chunks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sourceType: varchar("source_type").notNull(),
+  sourceId: varchar("source_id"),
+  title: text("title").notNull(),
+  content: text("content").notNull(),
+  /** Hash-based embedding (384-dim); upgrade to external embed API when keyed. */
+  embedding: jsonb("embedding").$type<number[]>(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_knowledge_source").on(table.sourceType, table.sourceId),
+]);
+
+/** In-app notification inbox (push is optional via VAPID). */
+export const inAppNotifications = pgTable("in_app_notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  type: varchar("type").notNull(),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  data: jsonb("data").$type<Record<string, any>>(),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_in_app_notif_user").on(table.userId),
+  index("idx_in_app_notif_created").on(table.createdAt),
+]);
+
 export const demandHeatmap = pgTable("demand_heatmap", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   gridLat: decimal("grid_lat", { precision: 10, scale: 6 }).notNull(),
@@ -971,6 +1000,8 @@ export type EventTracking = typeof eventTracking.$inferSelect;
 export type AiFeedback = typeof aiFeedback.$inferSelect;
 export type PlatformInsight = typeof platformInsights.$inferSelect;
 export type FaqEntry = typeof faqEntries.$inferSelect;
+export type KnowledgeChunk = typeof knowledgeChunks.$inferSelect;
+export type InAppNotification = typeof inAppNotifications.$inferSelect;
 export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
 export type DriverScorecardEntry = typeof driverScorecard.$inferSelect;
 export type SafetyAlert = typeof safetyAlerts.$inferSelect;

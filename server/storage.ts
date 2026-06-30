@@ -18,6 +18,8 @@ import {
   aiFeedback,
   platformInsights,
   faqEntries,
+  knowledgeChunks,
+  inAppNotifications,
   demandHeatmap,
   driverScorecard,
   safetyAlerts,
@@ -51,6 +53,8 @@ import {
   type AiFeedback,
   type PlatformInsight,
   type FaqEntry,
+  type KnowledgeChunk,
+  type InAppNotification,
   type DemandHeatmapEntry,
   type DriverScorecardEntry,
   type SafetyAlert,
@@ -294,9 +298,17 @@ export interface IStorage {
   getPlatformInsights(limit?: number): Promise<PlatformInsight[]>;
   getUnreadInsights(): Promise<PlatformInsight[]>;
   markInsightRead(id: string): Promise<void>;
-  createFaqEntry(data: { question: string; answer: string; category: string }): Promise<FaqEntry>;
+  createFaqEntry(data: { question: string; answer: string; category: string; sourceCount?: number; isPublished?: boolean }): Promise<FaqEntry>;
   getFaqEntries(publishedOnly?: boolean): Promise<FaqEntry[]>;
-  updateFaqEntry(id: string, updates: Partial<{ question: string; answer: string; category: string; isPublished: boolean }>): Promise<FaqEntry>;
+  updateFaqEntry(id: string, updates: Partial<{ question: string; answer: string; category: string; isPublished: boolean; sourceCount: number }>): Promise<FaqEntry>;
+  getRecentUserChatExcerpts(limit?: number): Promise<string[]>;
+  upsertKnowledgeChunk(data: { sourceType: string; sourceId?: string | null; title: string; content: string; embedding?: number[] }): Promise<KnowledgeChunk>;
+  getAllKnowledgeChunks(): Promise<KnowledgeChunk[]>;
+  createInAppNotification(data: { userId: string; type: string; title: string; body: string; data?: Record<string, unknown> }): Promise<InAppNotification>;
+  getInAppNotifications(userId: string, limit?: number): Promise<InAppNotification[]>;
+  getUnreadInAppNotificationCount(userId: string): Promise<number>;
+  markInAppNotificationRead(userId: string, id: string): Promise<void>;
+  markAllInAppNotificationsRead(userId: string): Promise<void>;
   upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry>;
   getDemandHeatmap(hourOfDay?: number, dayOfWeek?: number): Promise<DemandHeatmapEntry[]>;
   upsertDriverScorecard(driverId: string): Promise<DriverScorecardEntry>;
@@ -2822,7 +2834,7 @@ export class DatabaseStorage implements IStorage {
     await db.update(platformInsights).set({ isRead: true }).where(eq(platformInsights.id, id));
   }
 
-  async createFaqEntry(data: { question: string; answer: string; category: string }): Promise<FaqEntry> {
+  async createFaqEntry(data: { question: string; answer: string; category: string; sourceCount?: number; isPublished?: boolean }): Promise<FaqEntry> {
     const [entry] = await db.insert(faqEntries).values(data).returning();
     return entry;
   }
@@ -2834,9 +2846,106 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(faqEntries).orderBy(desc(faqEntries.sourceCount));
   }
 
-  async updateFaqEntry(id: string, updates: Partial<{ question: string; answer: string; category: string; isPublished: boolean }>): Promise<FaqEntry> {
+  async updateFaqEntry(id: string, updates: Partial<{ question: string; answer: string; category: string; isPublished: boolean; sourceCount: number }>): Promise<FaqEntry> {
     const [entry] = await db.update(faqEntries).set({ ...updates, updatedAt: new Date() }).where(eq(faqEntries.id, id)).returning();
     return entry;
+  }
+
+  async getRecentUserChatExcerpts(limit = 100): Promise<string[]> {
+    const rows = await db
+      .select({ content: chatMessages.content })
+      .from(chatMessages)
+      .where(eq(chatMessages.role, "user"))
+      .orderBy(desc(chatMessages.createdAt))
+      .limit(limit);
+    return rows
+      .map((r) => r.content.trim())
+      .filter((c) => c.length >= 8 && c.length <= 800);
+  }
+
+  async upsertKnowledgeChunk(data: {
+    sourceType: string;
+    sourceId?: string | null;
+    title: string;
+    content: string;
+    embedding?: number[];
+  }): Promise<KnowledgeChunk> {
+    const matchConditions = data.sourceId
+      ? and(eq(knowledgeChunks.sourceType, data.sourceType), eq(knowledgeChunks.sourceId, data.sourceId))
+      : and(eq(knowledgeChunks.sourceType, data.sourceType), isNull(knowledgeChunks.sourceId));
+
+    const existing = await db.select().from(knowledgeChunks).where(matchConditions).limit(1);
+    if (existing[0]) {
+      const [updated] = await db
+        .update(knowledgeChunks)
+        .set({
+          title: data.title,
+          content: data.content,
+          embedding: data.embedding,
+          updatedAt: new Date(),
+        })
+        .where(eq(knowledgeChunks.id, existing[0].id))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db
+      .insert(knowledgeChunks)
+      .values({
+        sourceType: data.sourceType,
+        sourceId: data.sourceId ?? null,
+        title: data.title,
+        content: data.content,
+        embedding: data.embedding,
+      })
+      .returning();
+    return created;
+  }
+
+  async getAllKnowledgeChunks(): Promise<KnowledgeChunk[]> {
+    return db.select().from(knowledgeChunks).orderBy(desc(knowledgeChunks.updatedAt));
+  }
+
+  async createInAppNotification(data: {
+    userId: string;
+    type: string;
+    title: string;
+    body: string;
+    data?: Record<string, unknown>;
+  }): Promise<InAppNotification> {
+    const [row] = await db.insert(inAppNotifications).values(data).returning();
+    return row;
+  }
+
+  async getInAppNotifications(userId: string, limit = 50): Promise<InAppNotification[]> {
+    return db
+      .select()
+      .from(inAppNotifications)
+      .where(eq(inAppNotifications.userId, userId))
+      .orderBy(desc(inAppNotifications.createdAt))
+      .limit(limit);
+  }
+
+  async getUnreadInAppNotificationCount(userId: string): Promise<number> {
+    const rows = await db
+      .select({ count: count() })
+      .from(inAppNotifications)
+      .where(and(eq(inAppNotifications.userId, userId), isNull(inAppNotifications.readAt)));
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  async markInAppNotificationRead(userId: string, id: string): Promise<void> {
+    await db
+      .update(inAppNotifications)
+      .set({ readAt: new Date() })
+      .where(and(eq(inAppNotifications.id, id), eq(inAppNotifications.userId, userId)));
+  }
+
+  async markAllInAppNotificationsRead(userId: string): Promise<void> {
+    await db
+      .update(inAppNotifications)
+      .set({ readAt: new Date() })
+      .where(and(eq(inAppNotifications.userId, userId), isNull(inAppNotifications.readAt)));
   }
 
   async upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry> {

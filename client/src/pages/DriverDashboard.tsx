@@ -13,9 +13,10 @@ import IncomingRideRequest from "@/components/IncomingRideRequest";
 import { ActiveRideCard } from "@/components/ActiveRideCard";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import CountySelectionSheet from "@/components/CountySelectionSheet";
+import { NotificationBell } from "@/components/NotificationBell";
 import { Link } from "wouter";
 import { format } from "date-fns";
-import { BarChart3, Bell, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote } from "lucide-react";
+import { BarChart3, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote } from "lucide-react";
 import PayoutModal from "@/components/PayoutModal";
 
 export default function DriverDashboard() {
@@ -330,9 +331,10 @@ export default function DriverDashboard() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button className="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center" data-testid="button-notifications">
-            <Bell className="w-5 h-5 text-gray-600" />
-          </button>
+          <NotificationBell
+            buttonClassName="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center"
+            iconClassName="w-5 h-5"
+          />
           <div className="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center text-white text-sm font-bold">
             {user?.firstName?.[0] || 'D'}{user?.lastName?.[0] || 'R'}
           </div>

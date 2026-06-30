@@ -570,6 +570,34 @@ CREATE TABLE IF NOT EXISTS faq_entries (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- ── RAG knowledge chunks (pgvector extension for future HNSW; JSONB embedding today) ─
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_type VARCHAR NOT NULL,
+  source_id VARCHAR,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  embedding JSONB,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_source ON knowledge_chunks (source_type, source_id);
+
+-- ── In-app notification inbox ────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS in_app_notifications (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id VARCHAR NOT NULL REFERENCES users(id),
+  type VARCHAR NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  data JSONB,
+  read_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_in_app_notif_user ON in_app_notifications (user_id);
+CREATE INDEX IF NOT EXISTS idx_in_app_notif_created ON in_app_notifications (created_at);
+
 -- ── Demand heatmap ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS demand_heatmap (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

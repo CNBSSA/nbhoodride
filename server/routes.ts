@@ -26,7 +26,9 @@ import {
   sendSignupPendingEmail,
   sendSignupRejectedEmail,
 } from "./emailService";
-import { sendPushToSubscriptions } from "./pushService";
+import { deliverUserNotification } from "./notificationService";
+import { retrieveKnowledgeContext, syncKnowledgeIndex } from "./ragService";
+import { anonymizeChatExcerpt, buildFaqExcerptBlock } from "@shared/faqExcerpts";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import {
   insertDriverProfileSchema,
@@ -1260,15 +1262,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           promoDiscount: ride.promoDiscountApplied,
         }).catch(console.error);
 
-        // Push notification to rider
-        storage.getPushSubscriptionsByUser(ride.riderId).then((subs) =>
-          sendPushToSubscriptions(subs, {
-            title: "Driver On The Way! 🚗",
-            body: `${rideAcceptedMessage.driverName} accepted your ride. They'll pick you up soon.`,
-            tag: "ride-accepted",
-            url: "/",
-          }, (ep) => storage.deletePushSubscription(ep))
-        ).catch(console.error);
+        // Notify rider — driver accepted
+        deliverUserNotification(ride.riderId, {
+          type: "ride-accepted",
+          title: "Driver On The Way! 🚗",
+          body: `${rideAcceptedMessage.driverName} accepted your ride. They'll pick you up soon.`,
+          tag: "ride-accepted",
+          url: "/",
+          data: { rideId: ride.id },
+        }).catch(console.error);
       }
 
       res.json(ride);
@@ -1370,15 +1372,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Push notification to rider — ride has started
-      storage.getPushSubscriptionsByUser(ride.riderId).then((subs) =>
-        sendPushToSubscriptions(subs, {
-          title: "Your Ride Has Started 🚀",
-          body: "You're on your way! Your driver has started the trip.",
-          tag: "ride-started",
-          url: "/",
-        }, (ep) => storage.deletePushSubscription(ep))
-      ).catch(console.error);
+      // Notify rider — ride started
+      deliverUserNotification(ride.riderId, {
+        type: "ride-started",
+        title: "Your Ride Has Started 🚀",
+        body: "You're on your way! Your driver has started the trip.",
+        tag: "ride-started",
+        url: "/",
+        data: { rideId: ride.id },
+      }).catch(console.error);
 
       res.json(ride);
     } catch (error) {
@@ -1437,14 +1439,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      storage.getPushSubscriptionsByUser(ride.riderId).then((subs) =>
-        sendPushToSubscriptions(subs, {
-          title: "Driver Arrived! 📍",
-          body: "Your driver is at the pickup location. Please head outside.",
-          tag: "driver-arrived",
-          url: "/",
-        }, (ep) => storage.deletePushSubscription(ep))
-      ).catch(console.error);
+      deliverUserNotification(ride.riderId, {
+        type: "driver-arrived",
+        title: "Driver Arrived! 📍",
+        body: "Your driver is at the pickup location. Please head outside.",
+        tag: "driver-arrived",
+        url: "/",
+        data: { rideId },
+      }).catch(console.error);
 
       res.json({ success: true, withinGeofence, status: "driver_arriving" });
     } catch (error) {
@@ -1744,16 +1746,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             completedAt: ride.completedAt,
           }).catch(console.error);
 
-          // Push notification — ride complete
+          // Notify rider — ride complete
           const fare = parseFloat(ride.actualFare || ride.estimatedFare || '0');
-          storage.getPushSubscriptionsByUser(ride.riderId).then((subs) =>
-            sendPushToSubscriptions(subs, {
-              title: "Ride Complete! ✅",
-              body: `Thanks for riding with PG Ride. Total: $${fare.toFixed(2)}.`,
-              tag: "ride-completed",
-              url: "/",
-            }, (ep) => storage.deletePushSubscription(ep))
-          ).catch(console.error);
+          deliverUserNotification(ride.riderId, {
+            type: "ride-completed",
+            title: "Ride Complete! ✅",
+            body: `Thanks for riding with PG Ride. Total: $${fare.toFixed(2)}.`,
+            tag: "ride-completed",
+            url: "/",
+            data: { rideId: ride.id, fare },
+          }).catch(console.error);
         }
       } catch (emailErr) {
         console.error("Failed to send receipt email:", emailErr);
@@ -2145,15 +2147,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
 
-        // Push notification to driver
-        storage.getPushSubscriptionsByUser(notifyDriverId).then((subs) =>
-          sendPushToSubscriptions(subs, {
-            title: isScheduledFuture ? "New Scheduled Ride 📅" : "New Ride Request! 🚗",
-            body: `${riderUser?.firstName || 'A rider'} needs a ride from ${updatedRide.pickupLocation?.address?.split(',')[0] || 'nearby'}`,
-            tag: "new-ride-request",
-            url: "/",
-          }, (ep) => storage.deletePushSubscription(ep))
-        ).catch(console.error);
+        // Notify driver — new ride request
+        deliverUserNotification(notifyDriverId, {
+          type: "new-ride-request",
+          title: isScheduledFuture ? "New Scheduled Ride 📅" : "New Ride Request! 🚗",
+          body: `${riderUser?.firstName || 'A rider'} needs a ride from ${updatedRide.pickupLocation?.address?.split(',')[0] || 'nearby'}`,
+          tag: "new-ride-request",
+          url: "/",
+          data: { rideId: updatedRide.id },
+        }).catch(console.error);
 
         // ── Step 6: Start acceptance timeout for immediate rides ──
         if (!isScheduledFuture) {
@@ -2207,15 +2209,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   }));
                 }
               }
-              // Push notification to rider
-              storage.getPushSubscriptionsByUser(userId).then((subs) =>
-                sendPushToSubscriptions(subs, {
-                  title: "No Drivers Available",
-                  body: "We couldn't find a driver for your ride. Please try again.",
-                  tag: "ride-cancelled",
-                  url: "/",
-                }, (ep) => storage.deletePushSubscription(ep))
-              ).catch(console.error);
+              deliverUserNotification(userId, {
+                type: "ride-cancelled",
+                title: "No Drivers Available",
+                body: "We couldn't find a driver for your ride. Please try again.",
+                tag: "ride-cancelled",
+                url: "/",
+                data: { rideId: updatedRide.id },
+              }).catch(console.error);
             }
           );
         }
@@ -2428,16 +2429,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Push notification to the other party
       const notifyUserId = userId === ride.riderId ? ride.driverId : ride.riderId;
       if (notifyUserId) {
-        storage.getPushSubscriptionsByUser(notifyUserId).then((subs) =>
-          sendPushToSubscriptions(subs, {
-            title: "Ride Cancelled",
-            body: cancellationFee > 0
-              ? `Ride cancelled. A ${cancellationFee.toFixed(2)} cancellation fee has been applied.`
-              : "Your ride has been cancelled.",
-            tag: "ride-cancelled",
-            url: "/",
-          }, (ep) => storage.deletePushSubscription(ep))
-        ).catch(console.error);
+        deliverUserNotification(notifyUserId, {
+          type: "ride-cancelled",
+          title: "Ride Cancelled",
+          body: cancellationFee > 0
+            ? `Ride cancelled. A $${cancellationFee.toFixed(2)} cancellation fee has been applied.`
+            : "Your ride has been cancelled.",
+          tag: "ride-cancelled",
+          url: "/",
+          data: { rideId, cancellationFee },
+        }).catch(console.error);
       }
 
       res.json({ success: true, ride: updatedRide, cancellationFee, feeReason: feeResult.reason });
@@ -4533,6 +4534,52 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     }
   }
 
+  // ── In-app notification inbox ─────────────────────────────────────────────
+  app.get('/api/notifications', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const limit = Math.min(parseInt(req.query.limit as string || "50", 10), 100);
+      const items = await storage.getInAppNotifications(userId, limit);
+      res.json(items);
+    } catch (error) {
+      console.error("Error fetching notifications:", error);
+      res.status(500).json({ message: "Failed to fetch notifications" });
+    }
+  });
+
+  app.get('/api/notifications/unread-count', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const count = await storage.getUnreadInAppNotificationCount(userId);
+      res.json({ count });
+    } catch (error) {
+      console.error("Error fetching unread count:", error);
+      res.status(500).json({ message: "Failed to fetch unread count" });
+    }
+  });
+
+  app.post('/api/notifications/:id/read', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      await storage.markInAppNotificationRead(userId, req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking notification read:", error);
+      res.status(500).json({ message: "Failed to mark notification read" });
+    }
+  });
+
+  app.post('/api/notifications/read-all', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      await storage.markAllInAppNotificationsRead(userId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking all notifications read:", error);
+      res.status(500).json({ message: "Failed to mark notifications read" });
+    }
+  });
+
   app.get('/api/ai/conversations', sessionOrOidcAuth, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -4603,8 +4650,13 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
 
       const existingMessages = await storage.getChatMessages(id);
       const personalizedPrompt = await buildPersonalizedPrompt(userId);
+      const ragContext = await retrieveKnowledgeContext(storage, content, 5);
+      const systemPrompt = ragContext
+        ? `${personalizedPrompt}\n\n${ragContext}`
+        : personalizedPrompt;
+
       const chatHistory: Array<{role: "system" | "user" | "assistant", content: string}> = [
-        { role: "system", content: personalizedPrompt },
+        { role: "system", content: systemPrompt },
         ...existingMessages.map((m) => ({
           role: m.role as "user" | "assistant",
           content: m.content,
@@ -4615,8 +4667,6 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
-      // Anthropic separates the system prompt from the conversation messages.
-      const systemPrompt = chatHistory.find((m) => m.role === "system")?.content ?? "";
       const anthropicMessages = chatHistory
         .filter((m) => m.role !== "system")
         .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
@@ -4957,33 +5007,67 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
 
   app.post('/api/admin/analytics/generate-faq', isAdminOrSessionAuth, async (req: any, res) => {
     try {
-      const recentMessages = await storage.getEventsByType('ai_chat_message', 200);
-      const allConvos = await storage.getPlatformInsights(0);
-      
-      const faqPrompt = `Based on a ride-share platform's AI assistant conversations, generate 5-8 frequently asked questions with clear, helpful answers. Focus on common user questions about rides, payments, safety, and the platform. Format as JSON array: [{"question": "...", "answer": "...", "category": "rides|payments|safety|platform|drivers"}]`;
+      const rawExcerpts = await storage.getRecentUserChatExcerpts(150);
+      const excerpts = rawExcerpts.map(anonymizeChatExcerpt);
+      const excerptBlock = buildFaqExcerptBlock(excerpts);
+
+      const faqPrompt = `You generate FAQs for PG Ride, a community ride-share in Prince George's County, Maryland.
+
+Use these REAL anonymized user messages from the AI assistant as primary evidence of what users ask about:
+
+${excerptBlock}
+
+Generate 5-8 frequently asked questions with clear, helpful answers grounded in the excerpts when possible.
+Focus on rides, payments, safety, drivers, and the platform.
+Format as JSON only: {"faqs":[{"question":"...","answer":"...","category":"rides|payments|safety|platform|drivers"}]}`;
 
       const response = await getAnthropicClient().messages.create({
         model: "claude-opus-4-5",
         system: faqPrompt,
-        messages: [{ role: "user", content: "Generate the FAQ list now." }],
+        messages: [{ role: "user", content: "Generate the FAQ list from the excerpts above." }],
         max_tokens: 2048,
       });
 
       const content = (response.content[0]?.type === "text" ? response.content[0].text : null) || '{"faqs":[]}';
-      const parsed = JSON.parse(content);
+      const cleaned = content.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+      const parsed = JSON.parse(cleaned);
       const faqs = parsed.faqs || parsed;
 
+      const sourceCount = Math.max(1, excerpts.length);
       const created = [];
       for (const faq of (Array.isArray(faqs) ? faqs : [])) {
         if (faq.question && faq.answer && faq.category) {
-          const entry = await storage.createFaqEntry({ question: faq.question, answer: faq.answer, category: faq.category });
+          const entry = await storage.createFaqEntry({
+            question: faq.question,
+            answer: faq.answer,
+            category: faq.category,
+            sourceCount,
+            isPublished: false,
+          });
           created.push(entry);
         }
       }
-      res.json({ generated: created.length, faqs: created });
+
+      await syncKnowledgeIndex(storage).catch(console.error);
+
+      res.json({
+        generated: created.length,
+        faqs: created,
+        excerptCount: excerpts.length,
+      });
     } catch (error) {
       console.error("Error generating FAQs:", error);
       res.status(500).json({ message: "Failed to generate FAQs" });
+    }
+  });
+
+  app.post('/api/admin/analytics/reindex-knowledge', isAdminOrSessionAuth, async (_req: any, res) => {
+    try {
+      const indexed = await syncKnowledgeIndex(storage);
+      res.json({ indexed });
+    } catch (error) {
+      console.error("Error reindexing knowledge:", error);
+      res.status(500).json({ message: "Failed to reindex knowledge base" });
     }
   });
 

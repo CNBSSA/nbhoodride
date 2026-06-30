@@ -1411,4 +1411,4 @@ When these trend right, the quantitative metrics tend to follow. When they don't
 
 ---
 
-*Single source of truth for PG Ride. Part I = operational truth today. Part II = strategic blueprint. Update this file when roadmap, architecture, or GTM strategy changes. The calm surface is the product. The agent brain is the moat. The community soul is the reason.*
+*Single source of truth for PG Ride. Part I = operational truth today. Part II = strategic blueprint. Autonomous execution scope: [`EXECUTION_TRACKS.md`](EXECUTION_TRACKS.md). Update this file when roadmap, architecture, or GTM strategy changes.*
