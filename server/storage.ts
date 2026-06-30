@@ -39,6 +39,9 @@ import {
   complianceRecords,
   smsBookingSessions,
   userRidePreferences,
+  l4ReadinessEvents,
+  certificateProvenance,
+  transitFeedCache,
   demandHeatmap,
   driverScorecard,
   safetyAlerts,
@@ -91,6 +94,9 @@ import {
   type ComplianceRecord,
   type SmsBookingSession,
   type UserRidePreferences,
+  type L4ReadinessEvent,
+  type CertificateProvenance,
+  type TransitFeedEntry,
   type DemandHeatmapEntry,
   type DriverScorecardEntry,
   type SafetyAlert,
@@ -450,6 +456,7 @@ export interface IStorage {
   getOrCreateOwnership(driverId: string): Promise<DriverOwnership>;
   getDriverWeeklyHoursHistory(driverId: string, limit?: number): Promise<DriverWeeklyHours[]>;
   getShareCertificates(ownerId?: string): Promise<ShareCertificate[]>;
+  getShareCertificateById(certificateId: string): Promise<ShareCertificate | undefined>;
   getDriverProfitDistributions(driverId: string): Promise<(ProfitDistribution & { declaration: ProfitDeclaration })[]>;
   // Driver hour tracking for ownership qualification
   getOrCreateWeeklyHours(driverId: string, weekStart: string): Promise<DriverWeeklyHours>;
@@ -461,6 +468,43 @@ export interface IStorage {
   updateRideGroup(id: string, updates: Partial<RideGroup>): Promise<RideGroup>;
   getRidesInGroup(groupId: string): Promise<Ride[]>;
   applyGroupDiscount(groupId: string, discountPct: number): Promise<void>;
+  createL4ReadinessEvent(data: {
+    rideId: string;
+    driverId: string;
+    eventType: string;
+    waypointQuality?: string;
+    speedMph?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<L4ReadinessEvent>;
+  getL4ReadinessEvents(rideId?: string, limit?: number): Promise<L4ReadinessEvent[]>;
+  upsertCertificateProvenance(data: {
+    certificateId: string;
+    contentHash: string;
+    algorithm: string;
+    payloadVersion?: string;
+    onChainTxId?: string;
+  }): Promise<CertificateProvenance>;
+  getCertificateProvenance(certificateId: string): Promise<CertificateProvenance | undefined>;
+  replaceTransitFeedCache(alerts: Array<{
+    agency: string;
+    externalId?: string;
+    alertType: string;
+    title: string;
+    summary?: string;
+    severity?: string;
+    rawPayload?: Record<string, unknown>;
+    expiresAt?: Date;
+  }>): Promise<void>;
+  getActiveTransitAlerts(agency?: string): Promise<TransitFeedEntry[]>;
+  updateVehicleEvStatus(vehicleId: string, driverProfileId: string, isEv: boolean, fuelType?: string): Promise<Vehicle>;
+  getEvDrivers(): Promise<Array<{
+    driverId: string;
+    driverProfileId: string;
+    vehicleId: string;
+    make: string;
+    model: string;
+    fuelType: string | null;
+  }>>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2670,6 +2714,14 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(shareCertificates.issuedAt));
   }
 
+  async getShareCertificateById(certificateId: string): Promise<ShareCertificate | undefined> {
+    const [row] = await db
+      .select()
+      .from(shareCertificates)
+      .where(eq(shareCertificates.id, certificateId));
+    return row;
+  }
+
   async getRebalanceLog(limit = 20): Promise<any[]> {
     return await db.select().from(ownershipRebalanceLog).orderBy(desc(ownershipRebalanceLog.createdAt)).limit(limit);
   }
@@ -3849,6 +3901,147 @@ export class DatabaseStorage implements IStorage {
       .where(eq(userRidePreferences.userId, userId))
       .returning();
     return updated;
+  }
+
+  async createL4ReadinessEvent(data: {
+    rideId: string;
+    driverId: string;
+    eventType: string;
+    waypointQuality?: string;
+    speedMph?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<L4ReadinessEvent> {
+    const [row] = await db.insert(l4ReadinessEvents).values(data).returning();
+    return row;
+  }
+
+  async getL4ReadinessEvents(rideId?: string, limit = 100): Promise<L4ReadinessEvent[]> {
+    if (rideId) {
+      return db
+        .select()
+        .from(l4ReadinessEvents)
+        .where(eq(l4ReadinessEvents.rideId, rideId))
+        .orderBy(desc(l4ReadinessEvents.createdAt))
+        .limit(limit);
+    }
+    return db
+      .select()
+      .from(l4ReadinessEvents)
+      .orderBy(desc(l4ReadinessEvents.createdAt))
+      .limit(limit);
+  }
+
+  async upsertCertificateProvenance(data: {
+    certificateId: string;
+    contentHash: string;
+    algorithm: string;
+    payloadVersion?: string;
+    onChainTxId?: string;
+  }): Promise<CertificateProvenance> {
+    const existing = await this.getCertificateProvenance(data.certificateId);
+    if (existing) {
+      const [updated] = await db
+        .update(certificateProvenance)
+        .set({
+          contentHash: data.contentHash,
+          algorithm: data.algorithm,
+          payloadVersion: data.payloadVersion ?? existing.payloadVersion,
+          onChainTxId: data.onChainTxId ?? existing.onChainTxId,
+        })
+        .where(eq(certificateProvenance.certificateId, data.certificateId))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(certificateProvenance).values(data).returning();
+    return created;
+  }
+
+  async getCertificateProvenance(certificateId: string): Promise<CertificateProvenance | undefined> {
+    const [row] = await db
+      .select()
+      .from(certificateProvenance)
+      .where(eq(certificateProvenance.certificateId, certificateId));
+    return row;
+  }
+
+  async replaceTransitFeedCache(alerts: Array<{
+    agency: string;
+    externalId?: string;
+    alertType: string;
+    title: string;
+    summary?: string;
+    severity?: string;
+    rawPayload?: Record<string, unknown>;
+    expiresAt?: Date;
+  }>): Promise<void> {
+    await db.delete(transitFeedCache);
+    if (alerts.length === 0) return;
+    await db.insert(transitFeedCache).values(
+      alerts.map((a) => ({
+        agency: a.agency,
+        externalId: a.externalId,
+        alertType: a.alertType,
+        title: a.title,
+        summary: a.summary,
+        severity: a.severity ?? "info",
+        rawPayload: a.rawPayload,
+        expiresAt: a.expiresAt,
+        fetchedAt: new Date(),
+      })),
+    );
+  }
+
+  async getActiveTransitAlerts(agency?: string): Promise<TransitFeedEntry[]> {
+    const now = new Date();
+    const conditions = [or(isNull(transitFeedCache.expiresAt), gt(transitFeedCache.expiresAt, now))];
+    if (agency) conditions.push(eq(transitFeedCache.agency, agency));
+    return db
+      .select()
+      .from(transitFeedCache)
+      .where(and(...conditions))
+      .orderBy(desc(transitFeedCache.fetchedAt));
+  }
+
+  async updateVehicleEvStatus(
+    vehicleId: string,
+    driverProfileId: string,
+    isEv: boolean,
+    fuelType = "ev",
+  ): Promise<Vehicle> {
+    const [updated] = await db
+      .update(vehicles)
+      .set({
+        isEv,
+        fuelType: isEv ? fuelType : "gas",
+        updatedAt: new Date(),
+      })
+      .where(and(eq(vehicles.id, vehicleId), eq(vehicles.driverProfileId, driverProfileId)))
+      .returning();
+    if (!updated) throw new Error("Vehicle not found");
+    return updated;
+  }
+
+  async getEvDrivers(): Promise<Array<{
+    driverId: string;
+    driverProfileId: string;
+    vehicleId: string;
+    make: string;
+    model: string;
+    fuelType: string | null;
+  }>> {
+    const rows = await db
+      .select({
+        driverId: driverProfiles.userId,
+        driverProfileId: driverProfiles.id,
+        vehicleId: vehicles.id,
+        make: vehicles.make,
+        model: vehicles.model,
+        fuelType: vehicles.fuelType,
+      })
+      .from(vehicles)
+      .innerJoin(driverProfiles, eq(vehicles.driverProfileId, driverProfiles.id))
+      .where(and(eq(vehicles.isEv, true), eq(driverProfiles.approvalStatus, "approved")));
+    return rows;
   }
 }
 

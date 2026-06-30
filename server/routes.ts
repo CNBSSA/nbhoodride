@@ -56,6 +56,10 @@ import { tryAutoResolveDispute } from "./agents/support";
 import { runComplianceScan } from "./agents/compliance";
 import { approveAndApplyProposal, rejectProposal } from "./agents/agentProposals";
 import { handleInboundSms, sendRideTrackingSms } from "./agents/smsBooking";
+import { processL4Waypoint, logL4Disengagement } from "./agents/l4Readiness";
+import { getTransitAlertsForRiders, refreshTransitFeeds } from "./agents/transitFeed";
+import { recordCertificateProvenance, recordAllActiveCertificateHashes } from "./agents/certificateProvenance";
+import { allocateGreenBonusForRide, getEvEligibleDrivers, GREEN_BONUS_PER_RIDE } from "./agents/greenBonus";
 import { rideSurfaceSpecSchema } from "@shared/genui/schema";
 import { buildDriverLocationMessage } from "./wsDriverLocation";
 import {
@@ -1628,6 +1632,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { lat, lng } = waypointSchema.parse(req.body);
       
       await storage.addRouteWaypoint(rideId, userId, { lat, lng });
+      processL4Waypoint(storage, rideId, userId, { lat, lng }).catch(console.error);
       
       res.json({ success: true });
     } catch (error) {
@@ -1676,6 +1681,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (ride.riderId && ride.driverId) {
         recordRideTrustEdge(storage, ride.riderId, ride.driverId).catch(console.error);
+        allocateGreenBonusForRide(storage, ride.driverId, rideId).catch(console.error);
       }
 
       // ── Audit: ride completed ──
@@ -5627,6 +5633,168 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       res.json({ pool, allocations });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch bonus pool" });
+    }
+  });
+
+  // ── Phase F: Research lane ───────────────────────────────────────────────────
+  app.get('/api/transit/alerts', async (req, res) => {
+    try {
+      const agency = typeof req.query.agency === "string" ? req.query.agency : undefined;
+      const alerts = await getTransitAlertsForRiders(storage, agency as any);
+      res.json({ alerts, disclaimer: "Research lane — verify with agency before travel." });
+    } catch (error) {
+      console.error("Transit alerts error:", error);
+      res.status(500).json({ message: "Failed to fetch transit alerts" });
+    }
+  });
+
+  app.post('/api/driver/rides/:rideId/l4/disengagement', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const body = z.object({
+        reason: z.enum(["manual", "attention_lapse", "gps_loss"]),
+        note: z.string().max(500).optional(),
+      }).parse(req.body);
+      await logL4Disengagement(storage, rideId, userId, body.reason, body.note);
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ message: error.errors[0]?.message });
+        return;
+      }
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to log disengagement" });
+    }
+  });
+
+  app.patch('/api/driver/vehicle/:vehicleId/ev', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { vehicleId } = req.params;
+      const body = z.object({
+        isEv: z.boolean(),
+        fuelType: z.enum(["ev", "hybrid", "gas"]).optional(),
+      }).parse(req.body);
+      const profile = await storage.getDriverProfile(userId);
+      if (!profile) {
+        res.status(404).json({ message: "Driver profile not found" });
+        return;
+      }
+      const vehicle = await storage.updateVehicleEvStatus(
+        vehicleId,
+        profile.id,
+        body.isEv,
+        body.fuelType ?? (body.isEv ? "ev" : "gas"),
+      );
+      res.json({ vehicle, greenBonusPerRide: GREEN_BONUS_PER_RIDE });
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to update vehicle" });
+    }
+  });
+
+  app.get('/api/certificates/:certificateId/provenance', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { certificateId } = req.params;
+      const cert = await storage.getShareCertificateById(certificateId);
+      if (!cert) {
+        res.status(404).json({ message: "Certificate not found" });
+        return;
+      }
+      const user = await storage.getUser(userId);
+      if (cert.ownerId !== userId && !user?.isAdmin && !user?.isSuperAdmin) {
+        res.status(403).json({ message: "Not authorized" });
+        return;
+      }
+      const provenance = await storage.getCertificateProvenance(certificateId);
+      res.json({ certificate: cert, provenance: provenance ?? null });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch provenance" });
+    }
+  });
+
+  app.get('/api/admin/research/summary', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const l4Events = await storage.getL4ReadinessEvents(undefined, 50);
+      const transit = await storage.getActiveTransitAlerts();
+      const evDrivers = await getEvEligibleDrivers(storage);
+      const certs = await storage.getShareCertificates();
+      const withHash = await Promise.all(
+        certs.map(async (c) => ({
+          id: c.id,
+          certificateNumber: c.certificateNumber,
+          hasProvenance: !!(await storage.getCertificateProvenance(c.id)),
+        })),
+      );
+      res.json({
+        l4EventCount: l4Events.length,
+        recentL4Events: l4Events.slice(0, 10),
+        transitAlertCount: transit.length,
+        evDriverCount: evDrivers.length,
+        certificates: withHash,
+        greenBonusPerRide: GREEN_BONUS_PER_RIDE,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch research summary" });
+    }
+  });
+
+  app.get('/api/admin/l4/events', isAdminOrSessionAuth, async (req, res) => {
+    try {
+      const rideId = typeof req.query.rideId === "string" ? req.query.rideId : undefined;
+      const events = await storage.getL4ReadinessEvents(rideId, 200);
+      res.json(events);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch L4 events" });
+    }
+  });
+
+  app.post('/api/admin/transit/refresh', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const result = await refreshTransitFeeds(storage);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to refresh transit feeds" });
+    }
+  });
+
+  app.post('/api/admin/certificates/:certificateId/hash', isAdminOrSessionAuth, async (req, res) => {
+    try {
+      const result = await recordCertificateProvenance(storage, req.params.certificateId);
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to hash certificate" });
+    }
+  });
+
+  app.post('/api/admin/certificates/hash-all', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const count = await recordAllActiveCertificateHashes(storage);
+      res.json({ hashed: count });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to hash certificates" });
+    }
+  });
+
+  app.get('/api/admin/green-bonus/eligible', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const drivers = await getEvEligibleDrivers(storage);
+      res.json({ drivers, bonusPerRide: GREEN_BONUS_PER_RIDE });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to list EV drivers" });
+    }
+  });
+
+  app.post('/api/admin/green-bonus/allocate', isAdminOrSessionAuth, async (req, res) => {
+    try {
+      const body = z.object({
+        driverId: z.string(),
+        rideId: z.string().optional(),
+      }).parse(req.body);
+      const result = await allocateGreenBonusForRide(storage, body.driverId, body.rideId);
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to allocate green bonus" });
     }
   });
 

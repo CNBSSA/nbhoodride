@@ -43,6 +43,23 @@ export default function DriverDashboard() {
     enabled: !!user?.isDriver,
   });
 
+  const evMutation = useMutation({
+    mutationFn: async ({ vehicleId, isEv }: { vehicleId: string; isEv: boolean }) => {
+      const res = await apiRequest("PATCH", `/api/driver/vehicle/${vehicleId}/ev`, { isEv, fuelType: isEv ? "ev" : "gas" });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/vehicles"] });
+      toast({
+        title: data.vehicle?.isEv ? "EV fleet enrolled" : "EV flag removed",
+        description: data.vehicle?.isEv
+          ? `Eligible for $${data.greenBonusPerRide} green bonus per completed ride.`
+          : undefined,
+      });
+    },
+    onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
+  });
+
   // Get driver earnings and trips
   const { data: todayEarnings } = useQuery<{fare: number, tips: number, total: number, rideCount: number}>({
     queryKey: ["/api/driver/earnings/today"],
@@ -655,6 +672,25 @@ export default function DriverDashboard() {
                   <p className="text-sm text-muted-foreground" data-testid="text-vehicle-color">
                     {driverVehicles[0].color || 'Unknown color'}
                   </p>
+                  <div className="flex items-center gap-2 mt-2">
+                    {driverVehicles[0].isEv && (
+                      <Badge className="bg-green-600 text-white text-[10px]">⚡ EV — Green bonus eligible</Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between mt-3 pt-2 border-t">
+                    <div>
+                      <p className="text-sm font-medium">Electric vehicle</p>
+                      <p className="text-xs text-muted-foreground">Community green bonus pool (not surge)</p>
+                    </div>
+                    <Switch
+                      checked={!!driverVehicles[0].isEv}
+                      onCheckedChange={(checked) =>
+                        evMutation.mutate({ vehicleId: driverVehicles[0].id, isEv: checked })
+                      }
+                      disabled={evMutation.isPending}
+                      data-testid="switch-ev-vehicle"
+                    />
+                  </div>
                 </div>
               </div>
             ) : (

@@ -16,6 +16,7 @@ import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { NotificationBell } from "@/components/NotificationBell";
 import { RideQuickMessages } from "@/components/RideQuickMessages";
 import { MobilityIntentCard, type IntentResolution } from "@/components/MobilityIntentCard";
+import { TransitAlertsCard } from "@/components/TransitAlertsCard";
 import { ExplainableMatchCard } from "@/components/ExplainableMatchCard";
 import { RideSurface } from "@/genui/RideSurface";
 import type { RideSurfaceSpec } from "@shared/genui/schema";
@@ -205,7 +206,7 @@ export default function RiderDashboard() {
         name: `${driver.user.firstName} ${driver.user.lastName?.[0] || ''}.`,
         location: driverLocation,
         rating: parseFloat(driver.user.rating) || 5.0,
-        vehicle: driver.vehicles[0] ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}` : "Vehicle",
+        vehicle: driver.vehicles[0] ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}${driver.vehicles[0].isEv ? " ⚡" : ""}` : "Vehicle",
         estimatedFare: estimateFare(distMiles),
         estimatedTime: estimateArrival(distMiles),
         isVerifiedNeighbor: driver.isVerifiedNeighbor,
@@ -773,6 +774,7 @@ export default function RiderDashboard() {
               }}
               disabled={!!activeRide}
             />
+            <TransitAlertsCard />
             <button
               className="w-full flex items-center gap-3 bg-gray-100 active:bg-gray-200 transition-colors rounded-2xl px-4 py-3 text-left"
               onClick={() => {

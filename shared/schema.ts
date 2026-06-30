@@ -150,6 +150,9 @@ export const vehicles = pgTable("vehicles", {
   color: varchar("color").notNull(),
   licensePlate: varchar("license_plate").notNull(),
   photos: jsonb("photos").$type<string[]>().default([]),
+  /** Phase F4 — EV fleet incentives */
+  isEv: boolean("is_ev").default(false),
+  fuelType: varchar("fuel_type").default("gas"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -952,6 +955,48 @@ export const smsBookingSessions = pgTable("sms_booking_sessions", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/** Phase F1 — L4 readiness research (waypoint quality, disengagement). */
+export const l4ReadinessEvents = pgTable("l4_readiness_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  rideId: varchar("ride_id").notNull().references(() => rides.id),
+  driverId: varchar("driver_id").notNull().references(() => users.id),
+  eventType: varchar("event_type").notNull(),
+  waypointQuality: decimal("waypoint_quality", { precision: 4, scale: 3 }),
+  speedMph: decimal("speed_mph", { precision: 6, scale: 2 }),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_l4_readiness_ride").on(table.rideId),
+]);
+
+/** Phase F2 — Share certificate provenance hash (off-chain SHA-256 v1). */
+export const certificateProvenance = pgTable("certificate_provenance", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  certificateId: varchar("certificate_id").notNull().references(() => shareCertificates.id).unique(),
+  contentHash: varchar("content_hash").notNull(),
+  algorithm: varchar("algorithm").notNull().default("sha256"),
+  payloadVersion: varchar("payload_version").default("v1"),
+  onChainTxId: varchar("on_chain_tx_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Phase F3 — Transit feed cache (WMATA, MARC, regional bus). */
+export const transitFeedCache = pgTable("transit_feed_cache", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  agency: varchar("agency").notNull(),
+  externalId: varchar("external_id"),
+  alertType: varchar("alert_type").notNull(),
+  title: varchar("title").notNull(),
+  summary: text("summary"),
+  severity: varchar("severity").default("info"),
+  rawPayload: jsonb("raw_payload").$type<Record<string, unknown>>(),
+  expiresAt: timestamp("expires_at"),
+  fetchedAt: timestamp("fetched_at").defaultNow(),
+}, (table) => [
+  index("idx_transit_feed_agency").on(table.agency),
+  index("idx_transit_feed_expires").on(table.expiresAt),
+]);
+
 /** Phase E6/E7 — Calm Ride mode + language preference. */
 export const userRidePreferences = pgTable("user_ride_preferences", {
   userId: varchar("user_id").primaryKey().references(() => users.id),
@@ -1235,6 +1280,9 @@ export type UserRidePreferences = typeof userRidePreferences.$inferSelect;
 export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
 export type DriverScorecardEntry = typeof driverScorecard.$inferSelect;
 export type SafetyAlert = typeof safetyAlerts.$inferSelect;
+export type L4ReadinessEvent = typeof l4ReadinessEvents.$inferSelect;
+export type CertificateProvenance = typeof certificateProvenance.$inferSelect;
+export type TransitFeedEntry = typeof transitFeedCache.$inferSelect;
 
 export type InsertEventTracking = z.infer<typeof insertEventTrackingSchema>;
 export type InsertAiFeedback = z.infer<typeof insertAiFeedbackSchema>;

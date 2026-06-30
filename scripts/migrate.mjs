@@ -860,6 +860,47 @@ CREATE TABLE IF NOT EXISTS user_ride_preferences (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- ── Phase F: Research lane ─────────────────────────────────────────────────────
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS is_ev BOOLEAN DEFAULT false;
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS fuel_type VARCHAR DEFAULT 'gas';
+
+CREATE TABLE IF NOT EXISTS l4_readiness_events (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  ride_id VARCHAR NOT NULL REFERENCES rides(id),
+  driver_id VARCHAR NOT NULL REFERENCES users(id),
+  event_type VARCHAR NOT NULL,
+  waypoint_quality DECIMAL(4,3),
+  speed_mph DECIMAL(6,2),
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_l4_readiness_ride ON l4_readiness_events (ride_id);
+
+CREATE TABLE IF NOT EXISTS certificate_provenance (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  certificate_id VARCHAR NOT NULL UNIQUE REFERENCES share_certificates(id),
+  content_hash VARCHAR NOT NULL,
+  algorithm VARCHAR NOT NULL DEFAULT 'sha256',
+  payload_version VARCHAR DEFAULT 'v1',
+  on_chain_tx_id VARCHAR,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS transit_feed_cache (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  agency VARCHAR NOT NULL,
+  external_id VARCHAR,
+  alert_type VARCHAR NOT NULL,
+  title VARCHAR NOT NULL,
+  summary TEXT,
+  severity VARCHAR DEFAULT 'info',
+  raw_payload JSONB,
+  expires_at TIMESTAMP,
+  fetched_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_transit_feed_agency ON transit_feed_cache (agency);
+CREATE INDEX IF NOT EXISTS idx_transit_feed_expires ON transit_feed_cache (expires_at);
+
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
 -- the ALTER TABLE below throws "could not create unique index — Key (user_id)

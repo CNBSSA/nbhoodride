@@ -99,11 +99,20 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | E6 | Calm Ride mode | `user_ride_preferences` + Profile toggle |
 | E7 | Multi-language | en / es / fr via `shared/i18n` |
 
+### Part II — Phase F — Research — [#49](https://github.com/CNBSSA/nbhoodride/pull/49)
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| F1 | L4 readiness logging | `l4_readiness_events` + waypoint quality on GPS track |
+| F2 | Certificate provenance | SHA-256 off-chain hash; optional on-chain later |
+| F3 | Transit integration | `transit_feed_cache` + `/api/transit/alerts`; `WMATA_API_KEY` |
+| F4 | EV green bonus | `vehicles.is_ev` + community bonus pool allocation |
+
 ### Part II — Later autonomous lanes
 
 | Phase | Agent can build | You provide later |
 |-------|-----------------|-------------------|
-| F — Research | L4 data, transit APIs | WMATA keys, org partnerships |
+| G+ | TBD per MASTER_PLAN backlog | Board / partnership decisions |
 
 ---
 
@@ -144,6 +153,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-06-30 | Phase C trust graph (C1–C6) | A | [#41](https://github.com/CNBSSA/nbhoodride/pull/41) | Pass — see below |
 | 2026-06-30 | Phase D predictive co-op (D1–D7) | A | [#42](https://github.com/CNBSSA/nbhoodride/pull/42) | Pass — see below |
 | 2026-06-30 | Phase E autonomous ops (E1–E7) | A | [#47](https://github.com/CNBSSA/nbhoodride/pull/47) | Pass — see below |
+| 2026-06-30 | Phase F research (F1–F4) | A | [#49](https://github.com/CNBSSA/nbhoodride/pull/49) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
