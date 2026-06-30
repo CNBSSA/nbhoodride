@@ -1,18 +1,91 @@
 # PG Ride — Master Plan
 
-**Single source of truth** for product strategy, architecture, roadmap, marketing, and open work.
+> ### *"Movement is dignity. PG Ride exists to make every neighbor's movement effortless, fair, and safe — by building the first rideshare that thinks with you, not for you, and never against you."*
+
+---
+
+## 🌅 Mission
+
+Build the world's first **community-owned, AI-native rideshare** — a mobility network where every match feels personal, every fare feels fair, every ride feels safe, and every driver shares in what they help build.
+
+We are not iterating on Uber. We are not cloning Lyft. We are creating a category that has not existed before: a rideshare where **the community is the algorithm**, **AI is the steward (never the master)**, and **the profit is shared with the people who power it**.
+
+---
+
+## 🌠 Vision
+
+By 2030, PG Ride is how Prince George's County moves.
+
+- **Riders** delegate intent — *"get Mom to dialysis Thursday at 7:15"* — and the platform handles the rest, transparently and lovingly.
+- **Drivers** earn equity in the platform they power, coached by an AI that helps them work smarter, not longer.
+- **Families** trust the app because every ride is explainable, every match is a neighbor (or one degree away), and every emergency is one tap from real help.
+- **The county** uses PG Ride as everyday infrastructure — knitting churches, campuses, hospitals, Metro corridors, and senior centers into a single, calm, neighborly network.
+
+> **One-sentence promise:** PG Ride is what rideshare should have been from day one — built by neighbors, owned by drivers, guided by AI, and trusted by the community.
+
+---
+
+## ⚓ Founding Promises (read this before anything else)
+
+These are the seven commitments PG Ride will not break. Every product, design, and engineering decision is measured against them. If we are tempted to break one, we change direction instead.
+
+1. **No surge. Ever.** Demand is balanced by community supply and an AI-managed bonus pool — never by punishing riders when they need a ride most.
+2. **No anonymous matching.** Every driver is a verified neighbor; every match comes with a reason a 78-year-old grandmother can understand in one tap.
+3. **No hidden algorithms.** Every AI decision is explainable in plain language — riders see *"why this driver?"*; drivers see *"why this nudge?"*; admins see *"why this insight?"*. Every agent action is audit-logged.
+4. **No data sold.** Rider location, drive patterns, contacts — never for sale, never for ads, never bundled to partners.
+5. **No driver-as-input.** Drivers are owners-in-waiting. 49% of net profit goes to qualifying driver-owners; they share in what they build.
+6. **No exclusion.** Voice booking, SMS fallback, large touch targets, multilingual surfaces — seniors, non-smartphone households, and non-English speakers are first-class users from day one.
+7. **No false urgency.** Calm surface. Slow notifications. Quiet hours respected. Movement should feel like breathing, not bargaining.
+
+---
+
+## 🌟 What "AI-Native" Actually Means Here
+
+Most apps that claim "AI-native" mean a chatbot bolted onto a 2015 interface. PG Ride means something fundamentally different.
+
+| Legacy rideshare | PG Ride (AI-native) |
+|---|---|
+| Users navigate screens | Users state intent — *"ride home like last Tuesday"* |
+| Algorithms decide silently | Agents propose; humans confirm; every action is logged |
+| One static UI per role | Generative UI — the right card for the right moment |
+| Surge = scarcity tax on riders | Bonus pool = community subsidy for drivers |
+| Generic notifications | Context-aware (quiet hours, prayer time, school pickup) |
+| Anonymous everything | Trust graph: 1st- and 2nd-degree neighbor matching |
+| Apps make you do work | The platform takes work off your shoulders |
+| Surveillance dressed as personalization | Memory you can read, edit, and delete |
+
+The full technical expression of this is in **[Part II](#part-ii--ai-native-future-vision)**. The short answer for non-engineers: we make the easy things invisible and the important things obvious.
+
+---
+
+## 🧭 How to Read This Document
+
+| If you are… | Start at |
+|---|---|
+| A first-time reader | This banner, then [§2 Mission, vision, differentiators](#2-mission-vision-and-differentiators), then [§22 The experience in 2030](#22-the-experience-in-2030) |
+| An engineer | [§5 Current architecture](#5-current-system-architecture), [§23 Multi-agent architecture](#23-multi-agent-architecture), [§30 Future technical architecture](#30-future-technical-architecture) |
+| A driver / driver-recruiter | [§9 Cooperative ownership](#9-cooperative-ownership-model), [§27 Economic intelligence](#27-economic-intelligence) |
+| A rider / safety advocate | [§10 Safety](#10-safety), [§26 Safety intelligence](#26-safety-intelligence) |
+| A marketer or partner | [§11 Brand and marketing](#11-brand-and-marketing), [§12 Go-to-market](#12-go-to-market-strategy) |
+| An investor / cooperative steward | [§8 Pricing and business model](#8-pricing-and-business-model), [§9 Cooperative ownership](#9-cooperative-ownership-model), [§35 Competitive positioning](#35-competitive-positioning) |
+| The founder on a tired evening | [§34 Explicit non-goals](#34-explicit-non-goals) — the things we say no to are how we keep the soul |
+
+---
 
 | Field | Value |
 |-------|-------|
 | **Product** | PG Ride — PG County Community Ride-Share Platform |
-| **Document version** | 3.0 (single document) |
+| **Document version** | 3.1 (mission-first, AI-native rewrite) |
 | **Last updated** | June 2026 |
 | **Repository** | `nbhoodride` |
 | **Supersedes** | All prior planning artifacts including `VISION_AI_NATIVE.md`, marketing brief, and pasted notes |
+| **Two-part structure** | **Part I** = today's operational truth (shipped, deployed, in backlog). **Part II** = the 18–36 month AI-native future. The Founding Promises above govern both. |
 
 ---
 
-## Table of contents
+## Table of Contents
+
+### Part I — Current State
 
 1. [Executive summary](#1-executive-summary)
 2. [Mission, vision, and differentiators](#2-mission-vision-and-differentiators)
@@ -33,7 +106,7 @@
 17. [FAQ and elevator pitches](#17-faq-and-elevator-pitches)
 18. [Contact](#18-contact)
 
-### Part II — AI-native future vision (18–36 month horizon)
+### Part II — AI-Native Future Vision (18–36 month horizon)
 
 19. [North star (AI-native)](#19-north-star-ai-native)
 20. [Design philosophy](#20-design-philosophy)
@@ -53,6 +126,11 @@
 34. [Explicit non-goals](#34-explicit-non-goals)
 35. [Competitive positioning](#35-competitive-positioning)
 
+### Appendices
+
+- [Appendix A — Immediate next sprint](#appendix-a--immediate-next-sprint-from-current-codebase)
+- [Appendix B — Reference research](#appendix-b--reference-research)
+- [Appendix C — Soul metrics (qualitative)](#appendix-c--soul-metrics-qualitative)
 
 ---
 
@@ -75,17 +153,21 @@ Unlike Uber and Lyft, PG Ride offers:
 
 The app is a **Progressive Web App (PWA)** — mobile-first, no app-store download required. Originally prototyped on Replit; deploy target is **Railway** with Neon PostgreSQL.
 
+The vision (Part II) is to evolve PG Ride from a community rideshare into the **first AI-native, cooperative mobility network** — where intent replaces forms, agents replace dashboards, and the trust graph replaces opaque matching. We get there one promise-aligned shipment at a time.
+
 ---
 
 ## 2. Mission, vision, and differentiators
 
+> The banner at the top of this document is the *elevator* version of this section — written for anyone arriving cold. This section is the *operational* version — written for anyone making product, hiring, or partnership decisions.
+
 ### Mission
 
-Build a trusted, reliable, and fair mobility network *for* PG County, *by* PG County.
+Build a trusted, reliable, and fair mobility network *for* PG County, *by* PG County — and prove it can be done with AI as a steward instead of a surveillance layer.
 
 ### Vision
 
-Supplement public transit and compete with incumbent ride-share giants on **community trust** and a superior local experience — the "ride from your neighbor" service.
+Supplement public transit and compete with incumbent ride-share giants on **community trust** and a superior local experience — the "ride from your neighbor" service. Over 18–36 months, evolve into an **AI-native** experience where users delegate intent and agents handle operations under transparent human oversight.
 
 ### Key differentiators
 
@@ -99,6 +181,8 @@ Supplement public transit and compete with incumbent ride-share giants on **comm
 | Driver selection | Algorithm-assigned | Riders can request specific drivers by phone |
 | Emergency tracking | Limited | Live shareable tracking link |
 | Money stays local | No | Yes |
+| AI surface | Chat in corner | Generative intent cards + agent mesh |
+| Algorithm transparency | None | "Why this driver?" on every match |
 
 ### Launch geography
 
@@ -188,6 +272,17 @@ Every user starts as a **Rider**. They may become a **Driver** after verificatio
 | "Ride for a friend" | ❌ Backlog |
 | Community routes | ❌ Backlog |
 | Vehicle type selection | ❌ Backlog |
+
+### Phase 5 — AI-native evolution (see Part II for the deep version)
+
+| Item | Status |
+|------|--------|
+| Agent audit log + "Why this driver?" | ❌ Foundation |
+| RAG-powered assistant (pgvector) | ❌ Foundation |
+| Delegative intent cards + Generative UI | ❌ Months 4–6 |
+| Trust graph + degrees-of-separation matching | ❌ Months 7–9 |
+| Demand forecasting + Driver Earnings Coach | ❌ Months 10–14 |
+| Voice booking + Guardian Mode + SMS fallback | ❌ Months 15–24 |
 
 ---
 
@@ -312,6 +407,8 @@ Drivers may customize within platform bounds (e.g. per mile $0.25–$5.00).
 |------|-------|
 | Platform / founder | 51% of net profit |
 | Driver-owners | 49% of net profit |
+
+This 49% pool is the structural expression of Founding Promise #5 ("No driver-as-input"). It is the single number that distinguishes PG Ride's economics from every Big Tech rideshare on Earth.
 
 ---
 
@@ -504,6 +601,8 @@ For each driver paid **≥$600/calendar year**:
 | Rider NPS / satisfaction | Word of mouth |
 | Referral conversion | Organic growth |
 
+Qualitative companion metrics ("soul metrics") are catalogued in [Appendix C](#appendix-c--soul-metrics-qualitative).
+
 ---
 
 ## 17. FAQ and elevator pitches
@@ -530,6 +629,8 @@ For each driver paid **≥$600/calendar year**:
 
 **General (30s):** "PG Ride is the first community-owned rideshare platform, built exclusively for Prince George's County, Maryland. Riders get verified neighborhood drivers with transparent pricing — no surge fees, ever. Drivers set their own rates and earn real equity through our cooperative ownership model, with 49% of platform profits going back to qualifying driver-owners. It's not just a ride. It's your community, moving together."
 
+**AI-native (45s, for tech investors):** "PG Ride is what rideshare would look like if it were designed in 2026 instead of 2010. Riders state intent — 'get Mom to dialysis' — and our multi-agent system handles trust-graph dispatch, fairness pricing, and safety monitoring under transparent human oversight. Drivers own 49% of the platform they power, coached by an AI that knows when not to push. We do this hyper-locally — Prince George's County, Maryland — because trust density is the moat that scale-first rideshare can never reclaim."
+
 ---
 
 ## 18. Contact
@@ -543,7 +644,7 @@ For each driver paid **≥$600/calendar year**:
 
 # Part II — AI-Native Future Vision
 
-*Horizon: 18–36 months. Builds on Part I (current shipped state).*
+*Horizon: 18–36 months. Builds on Part I (current shipped state). Governed by the Founding Promises at the top of this document.*
 
 ---
 
@@ -663,6 +764,15 @@ Miss Johnson, 78, never learned app navigation. She long-presses the home-screen
 > "PG Ride, I need to go to the doctor on Tuesday."
 
 The **Voice Agent** confirms address from history, reads fare aloud, books with her approved driver list, and texts her daughter the tracking link. Zero map interaction required.
+
+### 4.5 Family — Guardian Mode
+
+Maria's daughter Toya lives in DC. She enables Guardian on her mother's account. From then on:
+
+- Every Maria ride auto-shares the tracking link to Toya
+- A geofence pings Toya when Maria arrives at her cardiologist
+- If the route deviates >500m or the car idles >10 minutes unexpectedly, Toya gets a call from the **Safety Agent** before any 911 escalation
+- All of this is visible to Maria; she can pause Guardian for a single ride if she wants privacy
 
 ---
 
@@ -823,7 +933,7 @@ Pre-built **mobility anchors** for PG County:
 | **Churches** | Sunday surge-free supply nudges; recurring ride templates |
 | **UMD / Bowie State** | Semester-aware student demand; move-in/move-out patterns |
 | **Metro stations** | First/last mile pairing; WMATA delay ingestion |
-| **FedExField / Prince George's Arena | Event pre-positioning |
+| **FedExField / Prince George's Arena** | Event pre-positioning |
 | **Senior centers** | Voice-first booking; door-to-door notes |
 | **County government** | Optional public-benefit ride subsidies |
 
@@ -1198,6 +1308,10 @@ server/
 
 Rides/week, retention, driver qualifying weeks, NPS, referral conversion.
 
+### Soul metrics
+
+See [Appendix C](#appendix-c--soul-metrics-qualitative) for the qualitative companion set — the things we measure to know whether the *feeling* of the product matches the *function*.
+
 ---
 
 ## 34. Explicit non-goals
@@ -1212,6 +1326,8 @@ PG Ride will **not**:
 - Deploy unaudited agent actions on payments >$25 without confirmation
 - Build a generic chatbot as the primary interface
 - Add crypto tokens or speculative DAO governance
+
+If a feature request maps to any of the above, the default answer is **no** — even if it would lift a short-term metric. Soul before scale.
 
 ---
 
@@ -1269,6 +1385,25 @@ The highest-leverage work **starting tomorrow**:
 | Degrees-of-separation ride matching (SJSU) | Trust graph dispatch |
 | Driver.coop / OpenRide | Cooperative infrastructure patterns |
 | UX Tigers 2026 predictions | Delegative UI, GenUI, agent audit |
+
+---
+
+## Appendix C — Soul metrics (qualitative)
+
+Quantitative KPIs in §16 and §33 measure whether the **machinery** works. These measure whether the **feeling** does. Reviewed each quarter alongside the dashboards.
+
+| Soul metric | How we observe it |
+|---|---|
+| **Did a senior book a ride by voice without help?** | Voice-booking events tagged with `accessibility_session=true`; observed in user interviews |
+| **Did a driver describe themselves as an *owner* (not just a contractor) unprompted?** | Driver interview pull quotes; mentions on `community_referrals` social posts |
+| **Did a rider thank the app for explaining a match?** | "Why this driver?" thumbs-up rate; in-app feedback excerpts |
+| **Did a family member say they *worry less* about a senior rider?** | Guardian Mode opt-in rate; NPS comments from secondary accounts |
+| **Did the app stay quiet when it should have?** | Notifications/session ratio vs sector benchmarks; quiet-hours violation rate (target: 0) |
+| **Did a competitor describe us correctly?** | Press coverage tone (community-owned vs another rideshare); analyst framing |
+| **Did a driver post their share certificate online?** | Social mentions of `#PGRideOwner`; ownership-moment screenshots in `attached_assets/` over time |
+| **Did the AI ever feel like it was watching, not helping?** | Privacy-related support tickets per 10k MAU (target: trending down) |
+
+When these trend right, the quantitative metrics tend to follow. When they don't, no dashboard will save us.
 
 ---
 
