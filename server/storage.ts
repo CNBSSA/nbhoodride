@@ -361,7 +361,9 @@ export interface IStorage {
   getRideSurfaceCache(rideId: string): Promise<Record<string, unknown> | undefined>;
   getRideTemplateByLabel(userId: string, label: string): Promise<RideTemplate | undefined>;
   upsertRideTemplateFromRide(userId: string, label: string, ride: Ride): Promise<RideTemplate>;
-  createGuardianLink(data: { riderUserId: string; guardianName: string; shareToken: string; activeRideId?: string; expiresAt?: Date }): Promise<GuardianLink>;
+  // expiresAt is required — a nullable expiry was the original footgun.
+  // Server enforces a max of 7 days at the route layer.
+  createGuardianLink(data: { riderUserId: string; guardianName: string; shareToken: string; activeRideId?: string; expiresAt: Date }): Promise<GuardianLink>;
   getGuardianLinkByToken(token: string): Promise<GuardianLink | undefined>;
   getTrustEdge(riderId: string, driverId: string): Promise<TrustEdge | undefined>;
   upsertTrustEdge(riderId: string, driverId: string, edgeType?: string): Promise<TrustEdge>;
@@ -376,6 +378,16 @@ export interface IStorage {
   getCommunityReferralByCode(code: string): Promise<CommunityReferral | undefined>;
   redeemCommunityReferral(code: string, referredId: string): Promise<CommunityReferral | undefined>;
   getCommunityAnchors(activeOnly?: boolean): Promise<CommunityAnchor[]>;
+  // List a rider's active (non-revoked, non-expired) guardian links so they
+  // can review and revoke. Sorted newest-first.
+  listActiveGuardianLinksByRider(riderUserId: string): Promise<GuardianLink[]>;
+  // Soft-revoke. Returns true if a row was actually revoked (i.e. the link
+  // belonged to this rider and was not already revoked/expired); false
+  // otherwise so the route can return 404 without leaking existence.
+  revokeGuardianLink(linkId: string, riderUserId: string): Promise<boolean>;
+  // Count active links so the route can enforce a per-user cap and prevent
+  // spam-link creation.
+  countActiveGuardianLinks(riderUserId: string): Promise<number>;
   upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry>;
   getDemandHeatmap(hourOfDay?: number, dayOfWeek?: number): Promise<DemandHeatmapEntry[]>;
   upsertDemandForecast(data: {
@@ -3178,7 +3190,7 @@ export class DatabaseStorage implements IStorage {
     guardianName: string;
     shareToken: string;
     activeRideId?: string;
-    expiresAt?: Date;
+    expiresAt: Date;
   }): Promise<GuardianLink> {
     const [row] = await db.insert(guardianLinks).values(data).returning();
     return row;
@@ -3187,7 +3199,10 @@ export class DatabaseStorage implements IStorage {
   async getGuardianLinkByToken(token: string): Promise<GuardianLink | undefined> {
     const [row] = await db.select().from(guardianLinks).where(eq(guardianLinks.shareToken, token));
     if (!row) return undefined;
-    if (row.expiresAt && row.expiresAt < new Date()) return undefined;
+    // Filter on BOTH expiry and explicit revocation. Without revoked_at,
+    // a rider couldn't kill a leaked link before the 24h TTL expired.
+    if (row.expiresAt < new Date()) return undefined;
+    if (row.revokedAt) return undefined;
     return row;
   }
 
@@ -3320,6 +3335,39 @@ export class DatabaseStorage implements IStorage {
       return db.select().from(communityAnchors).where(eq(communityAnchors.isActive, true));
     }
     return db.select().from(communityAnchors);
+  }
+
+  async listActiveGuardianLinksByRider(riderUserId: string): Promise<GuardianLink[]> {
+    const now = new Date();
+    const rows = await db
+      .select()
+      .from(guardianLinks)
+      .where(eq(guardianLinks.riderUserId, riderUserId))
+      .orderBy(desc(guardianLinks.createdAt));
+    return rows.filter((r) => r.expiresAt > now && !r.revokedAt);
+  }
+
+  async revokeGuardianLink(linkId: string, riderUserId: string): Promise<boolean> {
+    // Soft-revoke (set revoked_at) instead of DELETE so the row stays for
+    // audit. The ownership filter on rider_user_id is what prevents one
+    // rider from revoking another's link via a guessed id.
+    const result = await db
+      .update(guardianLinks)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(guardianLinks.id, linkId),
+          eq(guardianLinks.riderUserId, riderUserId),
+          isNull(guardianLinks.revokedAt),
+        ),
+      )
+      .returning({ id: guardianLinks.id });
+    return result.length > 0;
+  }
+
+  async countActiveGuardianLinks(riderUserId: string): Promise<number> {
+    const links = await this.listActiveGuardianLinksByRider(riderUserId);
+    return links.length;
   }
 
   async upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry> {

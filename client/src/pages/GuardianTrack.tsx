@@ -1,7 +1,28 @@
+import { useEffect } from "react";
 import { useParams } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Loader2, MapPin, Shield } from "lucide-react";
+
+/**
+ * Install a no-referrer policy for THIS page only. The share token lives
+ * in the URL (`/guardian/:token`) — without this, the browser would
+ * include the full URL in the Referer header when this page loads any
+ * external resource (map tile, font, analytics script in the future),
+ * leaking the secret to those vendors. document.referrer scrubbing on
+ * the server side handles logs; this scrub handles the browser side.
+ */
+function useNoReferrerPolicy() {
+  useEffect(() => {
+    const meta = document.createElement("meta");
+    meta.name = "referrer";
+    meta.content = "no-referrer";
+    document.head.appendChild(meta);
+    return () => {
+      document.head.removeChild(meta);
+    };
+  }, []);
+}
 
 interface GuardianTrackResponse {
   status: string;
@@ -12,6 +33,7 @@ interface GuardianTrackResponse {
 }
 
 export default function GuardianTrack() {
+  useNoReferrerPolicy();
   const { token } = useParams<{ token: string }>();
 
   const { data, isLoading, error } = useQuery<GuardianTrackResponse>({
