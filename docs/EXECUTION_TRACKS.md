@@ -15,13 +15,14 @@
 
 Work the agent can complete end-to-end: code, migrations, tests, docs, env-**gated** wiring (you add Railway variables when ready).
 
+> **Autonomous directive rule:** When the user says "go autonomously" or similar, that directive is **contingent on this workflow and audits section** — not a bypass of it. The agent proceeds without permission prompts for Track A work but must still run all audits below and only ask the user for Track B decisions it cannot make from docs/code.
+
 **Workflow per engagement:**
 
-1. **Baseline audit** — `npm run check`, `npm test`, read backlog / Appendix A
-2. **Planning audit** — map tasks to files; confirm no business decision required
-3. **Pre-engagement audit** — branch, scope diff, risk check
-4. **Implement + commit + push + PR**
-5. **Post-engagement audit** — re-run gates; document what still needs Track B vars
+1. **Pre-planning audit (baseline)** — `npm run check`, `npm test`, read backlog / Appendix A / phase table; confirm Track A scope; map tasks to files
+2. **Pre-implementation audit** — branch, scope diff, migration/live-table risk check; confirm no business decision required
+3. **Implement + commit + push + PR**
+4. **Post-implementation impact assessment** — re-run gates; verify no regressions; document Track B vars still needed; update engagement log
 
 ### Track B — Gated (requires you)
 
@@ -99,7 +100,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | E6 | Calm Ride mode | `user_ride_preferences` + Profile toggle |
 | E7 | Multi-language | en / es / fr via `shared/i18n` |
 
-### Part II — Phase F — Research — [#49](https://github.com/CNBSSA/nbhoodride/pull/49)
+### Part II — Phase F — Research — merged [#49](https://github.com/CNBSSA/nbhoodride/pull/49)
 
 | ID | Deliverable | Notes |
 |----|-------------|-------|
@@ -194,6 +195,15 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | `npm test` | Pass — 41 tests |
 
 **Delivered (E1–E7):** Support auto-resolve, compliance agent, admin approve-and-apply, SMS adapter, PWA widgets, Calm Ride, i18n.
+
+### Phase F — Post-engagement audit (2026-06-30)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 54 tables |
+| `npm test` | Pass — 50 tests |
+
+**Delivered (F1–F4):** L4 readiness logging, certificate SHA-256 provenance, transit feed cache + rider alerts, EV green bonus from community pool.
 
 ---
 
