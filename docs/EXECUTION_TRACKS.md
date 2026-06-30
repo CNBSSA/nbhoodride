@@ -117,6 +117,15 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | `npm test` | Pass — 18 tests |
 | PR #39 conflict | Resolved — merged `main` (#38) with A9–A11; kept both `agent_audit_log` + `knowledge_chunks` + `in_app_notifications` |
 
+### Phase B — Post-engagement audit (2026-06-30)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 38 tables, tsc clean |
+| `npm test` | Pass — 25 tests |
+
+**Delivered (B1–B7):** GenUI `RideSurface`, orchestrator + intent API, home intent card, ride templates, autonomy dial, voice input, guardian tracking links.
+
 ---
 
 ## How to read status
