@@ -14,7 +14,10 @@ import { Bell, BellOff, Plus, MapPin, ChevronDown, ChevronUp, CheckSquare, Squar
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { AutonomyDial } from "@/components/AutonomyDial";
 import { TrustPreferences } from "@/components/TrustPreferences";
+import { CalmRideToggle } from "@/components/CalmRideToggle";
+import { LanguageSelector } from "@/components/LanguageSelector";
 import { MD_COUNTIES } from "../../../shared/schema";
+import type { Locale } from "@shared/i18n";
 
 export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
@@ -58,6 +61,25 @@ export default function Profile() {
       queryClient.invalidateQueries({ queryKey: ["/api/trust/preferences"] });
       queryClient.invalidateQueries({ queryKey: ["/api/rides/nearby-drivers"] });
       toast({ title: "Trust preferences updated" });
+    },
+  });
+
+  const { data: ridePrefs = { calmRideMode: "off", preferredLanguage: "en" } } = useQuery<{
+    calmRideMode: string;
+    preferredLanguage: string;
+    minimizeNotifications: boolean;
+  }>({
+    queryKey: ["/api/user/ride-preferences"],
+  });
+
+  const setRidePrefs = useMutation({
+    mutationFn: async (prefs: { calmRideMode?: string; preferredLanguage?: string }) => {
+      const res = await apiRequest("PATCH", "/api/user/ride-preferences", prefs);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/user/ride-preferences"] });
+      toast({ title: "Ride preferences updated" });
     },
   });
 
@@ -476,6 +498,24 @@ export default function Profile() {
                   setTrustPrefs.mutate({ preferFavorites: value })
                 }
                 disabled={setTrustPrefs.isPending}
+              />
+            </CardContent>
+          </Card>
+
+          {/* Calm Ride + language (Phase E) */}
+          <Card>
+            <CardContent className="p-4 space-y-6">
+              <CalmRideToggle
+                value={ridePrefs.calmRideMode ?? "off"}
+                onChange={(mode) => setRidePrefs.mutate({ calmRideMode: mode })}
+                disabled={setRidePrefs.isPending}
+              />
+              <LanguageSelector
+                value={ridePrefs.preferredLanguage ?? "en"}
+                onChange={(locale: Locale) =>
+                  setRidePrefs.mutate({ preferredLanguage: locale })
+                }
+                disabled={setRidePrefs.isPending}
               />
             </CardContent>
           </Card>

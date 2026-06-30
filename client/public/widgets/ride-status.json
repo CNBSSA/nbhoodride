@@ -1,0 +1,6 @@
+{
+  "name": "PG Ride — Active Trip",
+  "description": "Your driver is on the way. Open PG Ride for live map.",
+  "template": "Ride with {{driverName}} — {{status}} (~{{etaMinutes}} min)",
+  "fallback": "Open PG Ride to view your active trip."
+}

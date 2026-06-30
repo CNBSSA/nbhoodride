@@ -87,11 +87,23 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | D6 | Scheduled ride auto-rebook | `recurring_ride_schedules` + prompts |
 | D7 | Safety anomaly layer | Route deviation on live GPS |
 
+### Part II — Phase E — Autonomous Operations (in progress)
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| E1 | Support Agent auto-resolve ≤$25 | `supportPolicy` + dispute hook |
+| E2 | Compliance Agent | W-9 / doc expiry scan; `TAX_COMPLIANCE_PATH` |
+| E3 | Admin approve-and-apply | `agent_action_proposals` + Agents tab |
+| E4 | SMS booking + tracking | `POST /api/sms/inbound` (Twilio gated) |
+| E5 | PWA lock screen widgets | SW badge + manifest widgets |
+| E6 | Calm Ride mode | `user_ride_preferences` + Profile toggle |
+| E7 | Multi-language | en / es / fr via `shared/i18n` |
+
 ### Part II — Later autonomous lanes
 
 | Phase | Agent can build | You provide later |
 |-------|-----------------|-------------------|
-| E — Ops agents | Support tool-calling, SMS adapter | Twilio, production keys |
+| F — Research | L4 data, transit APIs | WMATA keys, org partnerships |
 
 ---
 

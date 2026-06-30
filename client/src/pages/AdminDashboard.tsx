@@ -22,7 +22,7 @@ import {
 import { format } from "date-fns";
 import { useLocation } from "wouter";
 
-type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "disputes" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics";
+type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "disputes" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -50,6 +50,7 @@ export default function AdminDashboard() {
     { id: "drivers", label: "Drivers", icon: Car },
     { id: "rides", label: "Rides", icon: MapPin },
     { id: "disputes", label: "Disputes", icon: AlertTriangle },
+    { id: "agents", label: "Agents", icon: Brain },
     { id: "payouts", label: "Payouts", icon: Banknote },
     { id: "finances", label: "Finances", icon: DollarSign },
     { id: "ownership", label: "Ownership", icon: Award },
@@ -111,6 +112,7 @@ export default function AdminDashboard() {
           {activeTab === "drivers" && <DriversPanel />}
           {activeTab === "rides" && <RidesPanel />}
           {activeTab === "disputes" && <DisputesPanel />}
+          {activeTab === "agents" && <AgentProposalsPanel />}
           {activeTab === "payouts" && <PayoutsPanel />}
           {activeTab === "finances" && <FinancesPanel />}
           {activeTab === "ownership" && <OwnershipPanel />}
@@ -1697,6 +1699,110 @@ function AnalyticsPanel() {
           </CardContent>
         </Card>
       )}
+    </div>
+  );
+}
+
+function AgentProposalsPanel() {
+  const { toast } = useToast();
+  const { data: proposals = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/agent-proposals"],
+    refetchInterval: 30000,
+  });
+  const { data: compliance = [] } = useQuery<any[]>({
+    queryKey: ["/api/admin/compliance"],
+  });
+
+  const approve = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/admin/agent-proposals/${id}/approve`, {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/agent-proposals"] });
+      toast({ title: data.message || "Proposal applied" });
+    },
+  });
+
+  const reject = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("POST", `/api/admin/agent-proposals/${id}/reject`, { note: "Rejected by admin" });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/agent-proposals"] });
+      toast({ title: "Proposal rejected" });
+    },
+  });
+
+  const scanCompliance = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/compliance/scan");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/compliance"] });
+      toast({ title: data.message || "Scan complete" });
+    },
+  });
+
+  if (isLoading) return <div data-testid="loading-agents">Loading agent queue...</div>;
+
+  return (
+    <div data-testid="panel-agents" className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold">Agent Operations</h2>
+        <Button onClick={() => scanCompliance.mutate()} disabled={scanCompliance.isPending} data-testid="btn-compliance-scan">
+          {scanCompliance.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+          Run compliance scan
+        </Button>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Pending approvals (E3)</CardTitle>
+          <CardDescription>Approve-and-apply workflow for agent-proposed actions</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {proposals.map((p) => (
+            <div key={p.id} className="border rounded-lg p-3 flex flex-col md:flex-row md:items-center gap-3" data-testid={`proposal-${p.id}`}>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-sm">{p.agent} · {p.action}</p>
+                <p className="text-xs text-muted-foreground truncate">{p.reasoning}</p>
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={() => approve.mutate(p.id)} disabled={approve.isPending} data-testid={`btn-approve-${p.id}`}>
+                  <CheckCircle className="w-4 h-4 mr-1" /> Approve
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => reject.mutate(p.id)} disabled={reject.isPending} data-testid={`btn-reject-${p.id}`}>
+                  <XCircle className="w-4 h-4 mr-1" /> Reject
+                </Button>
+              </div>
+            </div>
+          ))}
+          {proposals.length === 0 && (
+            <p className="text-muted-foreground text-sm text-center py-6">No pending agent proposals</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Compliance records (E2)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {compliance.slice(0, 20).map((r) => (
+              <div key={r.id} className="flex justify-between text-sm border-b py-1">
+                <span>{r.recordType} · {r.driverId?.slice(0, 8)}…</span>
+                <Badge variant={r.status === "on_file" ? "default" : "destructive"}>{r.status}</Badge>
+              </div>
+            ))}
+            {compliance.length === 0 && (
+              <p className="text-muted-foreground text-sm">Run a compliance scan to populate records.</p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

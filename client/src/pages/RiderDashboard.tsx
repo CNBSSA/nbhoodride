@@ -20,6 +20,8 @@ import { ExplainableMatchCard } from "@/components/ExplainableMatchCard";
 import { RideSurface } from "@/genui/RideSurface";
 import type { RideSurfaceSpec } from "@shared/genui/schema";
 import { rankDriversByTrustAndEta } from "@shared/trustScore";
+import { updateRideWidget, clearRideWidget } from "@/hooks/useRideWidget";
+import { useLocale } from "@/hooks/useLocale";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -482,6 +484,19 @@ export default function RiderDashboard() {
 
   // ── Derived UI values ──
   const activeRide = activeRides[0] || null;
+  const { translate } = useLocale();
+
+  useEffect(() => {
+    if (activeRide && ["accepted", "driver_arriving", "in_progress", "pending"].includes(activeRide.status)) {
+      updateRideWidget({
+        rideId: activeRide.id,
+        status: activeRide.status,
+        etaMinutes: getDriverETA(activeRide) ?? undefined,
+      });
+    } else {
+      clearRideWidget();
+    }
+  }, [activeRide?.id, activeRide?.status]);
 
   const { data: rideSurface } = useQuery<RideSurfaceSpec>({
     queryKey: ["/api/mobility/surface", activeRide?.id],

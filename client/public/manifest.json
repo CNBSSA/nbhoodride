@@ -44,10 +44,20 @@
       "icons": [{ "src": "/icons/icon-96.png", "sizes": "96x96" }]
     },
     {
-      "name": "Driver Mode",
-      "short_name": "Drive",
-      "url": "/?mode=driver",
+      "name": "Active Ride",
+      "short_name": "Ride",
+      "url": "/?action=active-ride",
       "icons": [{ "src": "/icons/icon-96.png", "sizes": "96x96" }]
+    }
+  ],
+  "widgets": [
+    {
+      "name": "Ride Status",
+      "short_name": "Status",
+      "description": "Live ETA and driver for your current PG Ride trip",
+      "tag": "pg-ride-active",
+      "ms_ac_template": "RideStatus",
+      "data": "/widgets/ride-status.json"
     }
   ]
 }
