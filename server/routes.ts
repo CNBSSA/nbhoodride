@@ -176,6 +176,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     message: { message: "Too many authentication attempts. Please try again later." },
   });
 
+  // Per-user (falls back to per-IP) limiter for /api/mobility/intent.
+  // Without this a single authenticated account could spam unbounded
+  // rows into mobility_intents + agent_audit_logs, burning DB writes
+  // and CPU. 60/min is comfortable for legitimate use (voice + a few
+  // rapid edits) without slowing down any real rider.
+  const mobilityIntentLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) =>
+      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || req.ip,
+    message: { message: "Too many intent requests, please slow down." },
+  });
+
   app.use('/api', generalLimiter);
   app.use('/api/auth/login', authLimiter);
   app.use('/api/auth/email-login', authLimiter);
@@ -4945,14 +4960,31 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     }
   });
 
-  app.post('/api/mobility/intent', isAuthenticated, async (req: any, res) => {
+  // Mobility intent endpoint. Note on autonomy:
+  //
+  // `autonomyLevel` returned here is an ADVISORY hint for the rider's
+  // own UI — it tells the client app "this rider has opted into Level 2
+  // (smart-match)", so the client can skip a confirmation step. It is
+  // NOT a security boundary. Actual ride creation goes through a
+  // SEPARATE authenticated POST that requires the full ride payload
+  // (pickup + destination coords + driver id) and re-checks the user is
+  // who they say they are. A manipulated client cannot use a forged
+  // autonomyLevel value to bypass any server-side guard — there is no
+  // server-side auto-booking from this endpoint at all.
+  //
+  // What this endpoint DOES need to defend against is utterance spam
+  // (length cap + per-user rate limit) and the implicit privacy/storage
+  // burden of recording every parsed intent in mobility_intents
+  // forever — the cascade-delete + retention is tracked separately.
+  app.post('/api/mobility/intent', isAuthenticated, mobilityIntentLimiter, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const { utterance } = req.body;
-      if (!utterance || typeof utterance !== "string") {
-        return res.status(400).json({ message: "utterance is required" });
+      const bodySchema = z.object({ utterance: z.string().trim().min(1).max(500) });
+      const parsedBody = bodySchema.safeParse(req.body ?? {});
+      if (!parsedBody.success) {
+        return res.status(400).json({ message: "utterance is required (1–500 chars)" });
       }
-      const parsed = parseMobilityUtterance(utterance);
+      const parsed = parseMobilityUtterance(parsedBody.data.utterance);
       await recordMobilityIntent(storage, userId, parsed);
       const resolved = await resolveIntentDestination(storage, userId, parsed);
       const autonomyLevel = await storage.getUserAutonomyLevel(userId);
