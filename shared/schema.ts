@@ -808,6 +808,61 @@ export const guardianLinks = pgTable("guardian_links", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/** Rider↔driver trust graph edges (C1). */
+export const trustEdges = pgTable("trust_edges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  riderId: varchar("rider_id").notNull().references(() => users.id),
+  driverId: varchar("driver_id").notNull().references(() => users.id),
+  edgeType: varchar("edge_type").notNull().default("rode_together"),
+  rideCount: integer("ride_count").default(0),
+  lastRideAt: timestamp("last_ride_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_trust_edges_rider").on(table.riderId),
+  index("idx_trust_edges_driver").on(table.driverId),
+]);
+
+/** Rider favorite drivers (C3). */
+export const favoriteDrivers = pgTable("favorite_drivers", {
+  riderId: varchar("rider_id").notNull().references(() => users.id),
+  driverId: varchar("driver_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_favorite_drivers_rider").on(table.riderId),
+]);
+
+/** Rider trust matching preferences (C3). */
+export const riderTrustPreferences = pgTable("rider_trust_preferences", {
+  userId: varchar("user_id").primaryKey().references(() => users.id),
+  /** 0 = open, 1 = rode together only, 2 = within 2 degrees */
+  maxSeparationDegrees: integer("max_separation_degrees").default(0).notNull(),
+  preferFavorites: boolean("prefer_favorites").default(true),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Community referral chains (C4). */
+export const communityReferrals = pgTable("community_referrals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  referrerId: varchar("referrer_id").notNull().references(() => users.id),
+  referredId: varchar("referred_id").references(() => users.id),
+  referralCode: varchar("referral_code").notNull().unique(),
+  chainType: varchar("chain_type").notNull(),
+  status: varchar("status").default("pending"),
+  creditAmount: decimal("credit_amount", { precision: 8, scale: 2 }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Community mobility anchors — churches, campuses, Metro (C5). */
+export const communityAnchors = pgTable("community_anchors", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  anchorType: varchar("anchor_type").notNull(),
+  name: text("name").notNull(),
+  location: jsonb("location").$type<{ lat: number; lng: number; address?: string }>(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const demandHeatmap = pgTable("demand_heatmap", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   gridLat: decimal("grid_lat", { precision: 10, scale: 6 }).notNull(),
@@ -1066,6 +1121,11 @@ export type MobilityIntent = typeof mobilityIntents.$inferSelect;
 export type RideSurfaceCache = typeof rideSurfaceCache.$inferSelect;
 export type RideTemplate = typeof rideTemplates.$inferSelect;
 export type GuardianLink = typeof guardianLinks.$inferSelect;
+export type TrustEdge = typeof trustEdges.$inferSelect;
+export type FavoriteDriver = typeof favoriteDrivers.$inferSelect;
+export type RiderTrustPreferences = typeof riderTrustPreferences.$inferSelect;
+export type CommunityReferral = typeof communityReferrals.$inferSelect;
+export type CommunityAnchor = typeof communityAnchors.$inferSelect;
 export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
 export type DriverScorecardEntry = typeof driverScorecard.$inferSelect;
 export type SafetyAlert = typeof safetyAlerts.$inferSelect;

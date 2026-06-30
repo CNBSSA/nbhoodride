@@ -37,6 +37,13 @@ import {
   buildRideSurfaceSpec,
   createGuardianShareToken,
 } from "./agents/orchestrator";
+import {
+  generateReferralCode,
+  recordRideTrustEdge,
+  getDriverTrustContext,
+  filterDriversByTrustPreferences,
+} from "./agents/trust";
+import { rankDriversByTrustAndEta } from "@shared/trustScore";
 import { rideSurfaceSpecSchema } from "@shared/genui/schema";
 import { buildDriverLocationMessage } from "./wsDriverLocation";
 import {
@@ -55,6 +62,7 @@ import {
   validateRideRequest,
   estimateFare,
   findBestDriver,
+  haversineMiles,
   startAcceptanceTimer,
   clearAcceptanceTimer,
   isWithinPickupGeofence,
@@ -1639,6 +1647,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const ride = await storage.completeRide(rideId, userId, actualFare);
 
+      if (ride.riderId && ride.driverId) {
+        recordRideTrustEdge(storage, ride.riderId, ride.driverId).catch(console.error);
+      }
+
       // ── Audit: ride completed ──
       await logRideAudit({
         rideId,
@@ -2039,7 +2051,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         { lat: parseFloat(lat), lng: parseFloat(lng) },
         parseFloat(radius)
       );
-      
+
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      if (userId) {
+        const PG_CENTER = { lat: 38.9073, lng: -76.7781 };
+        const enriched = await Promise.all(
+          drivers.map(async (d) => {
+            const trust = await getDriverTrustContext(storage, userId, d.userId, {
+              avgRating: parseFloat(d.user.rating || "5"),
+              isVerifiedNeighbor: d.isVerifiedNeighbor ?? false,
+            });
+            const loc = (d.currentLocation as { lat: number; lng: number } | null) ?? PG_CENTER;
+            const distanceMiles = haversineMiles(
+              parseFloat(lat as string),
+              parseFloat(lng as string),
+              loc.lat,
+              loc.lng,
+            );
+            return {
+              ...d,
+              trust,
+              separationDegrees: trust.separationDegrees,
+              isFavorite: trust.isFavorite,
+              trustScore: trust.trustScore,
+              distanceMiles,
+              isOnline: d.isOnline ?? true,
+            };
+          }),
+        );
+        const filtered = await filterDriversByTrustPreferences(storage, userId, enriched);
+        const ranked = rankDriversByTrustAndEta(filtered);
+        return res.json(ranked.map(({ separationDegrees: _s, isFavorite: _f, trustScore: _t, distanceMiles: _d, isOnline: _o, ...rest }) => rest));
+      }
+
       res.json(drivers);
     } catch (error) {
       console.error("Error fetching nearby drivers:", error);
@@ -2151,7 +2195,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let assignedDriver: { userId: string; etaMinutes: number } | null = null;
       if (!isScheduledFuture && !ride.driverId) {
         try {
-          const bestDriver = await findBestDriver(pickup, pickupCounty, []);
+          const bestDriver = await findBestDriver(pickup, pickupCounty, [], { riderId: userId });
           if (bestDriver) {
             await storage.updateRide(ride.id, { driverId: bestDriver.userId });
             assignedDriver = { userId: bestDriver.userId, etaMinutes: bestDriver.etaMinutes };
@@ -2164,8 +2208,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 distanceMiles: bestDriver.distanceMiles,
                 etaMinutes: bestDriver.etaMinutes,
                 rating: bestDriver.rating,
+                trustScore: bestDriver.trustScore,
+                matchReason: bestDriver.matchReason,
               },
             });
+
+            await storage.createAgentAuditLog({
+              agent: "dispatch",
+              action: "driver_auto_assigned",
+              userId,
+              rideId: ride.id,
+              reasoning: bestDriver.matchReason ?? `Assigned nearest driver (ETA ${bestDriver.etaMinutes} min)`,
+              metadata: {
+                driverId: bestDriver.userId,
+                trustScore: bestDriver.trustScore,
+                separationDegrees: bestDriver.separationDegrees,
+                isFavorite: bestDriver.isFavorite,
+                distanceMiles: bestDriver.distanceMiles,
+                etaMinutes: bestDriver.etaMinutes,
+              },
+            }).catch((err) => console.error("agent_audit_log write failed:", err));
           }
         } catch (matchErr) {
           console.error("Auto driver matching error (non-fatal):", matchErr);
@@ -3368,7 +3430,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         pickupCounty = await getCountyFromCoords(pickupLocation.lat, pickupLocation.lng);
       } catch { /* best-effort */ }
 
-      const bestDriver = await findBestDriver(pickupLocation, pickupCounty, []);
+      const bestDriver = await findBestDriver(pickupLocation, pickupCounty, [], {
+        riderId: req.session?.userId || req.session?.testUserId || req.user?.claims?.sub,
+      });
 
       if (!bestDriver) {
         return res.json({ available: false, message: "No drivers available in your area" });
@@ -4606,6 +4670,102 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       return BASE_SYSTEM_PROMPT;
     }
   }
+
+  // ── Phase C: Trust graph ────────────────────────────────────────────────────
+  app.get('/api/trust/preferences', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const prefs = await storage.getRiderTrustPreferences(userId);
+      res.json(prefs);
+    } catch (error) {
+      console.error("Error fetching trust preferences:", error);
+      res.status(500).json({ message: "Failed to fetch trust preferences" });
+    }
+  });
+
+  app.patch('/api/trust/preferences', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { maxSeparationDegrees, preferFavorites } = req.body;
+      const prefs = await storage.setRiderTrustPreferences(userId, {
+        maxSeparationDegrees,
+        preferFavorites,
+      });
+      res.json(prefs);
+    } catch (error) {
+      console.error("Error updating trust preferences:", error);
+      res.status(500).json({ message: "Failed to update trust preferences" });
+    }
+  });
+
+  app.get('/api/trust/favorites', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const ids = await storage.getFavoriteDriverIds(userId);
+      res.json({ driverIds: ids });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch favorites" });
+    }
+  });
+
+  app.post('/api/trust/favorites/:driverId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      await storage.addFavoriteDriver(userId, req.params.driverId);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to add favorite" });
+    }
+  });
+
+  app.delete('/api/trust/favorites/:driverId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      await storage.removeFavoriteDriver(userId, req.params.driverId);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to remove favorite" });
+    }
+  });
+
+  app.post('/api/trust/referrals', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const chainType = req.body.chainType || "rider_rider";
+      const code = generateReferralCode();
+      const referral = await storage.createCommunityReferral({
+        referrerId: userId,
+        referralCode: code,
+        chainType,
+        creditAmount: "5.00",
+      });
+      res.json(referral);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create referral" });
+    }
+  });
+
+  app.post('/api/trust/referrals/redeem', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { code } = req.body;
+      if (!code) return res.status(400).json({ message: "code is required" });
+      const referral = await storage.redeemCommunityReferral(code, userId);
+      if (!referral) return res.status(400).json({ message: "Invalid or used referral code" });
+      res.json(referral);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to redeem referral" });
+    }
+  });
+
+  app.get('/api/trust/anchors', async (_req, res) => {
+    try {
+      const anchors = await storage.getCommunityAnchors(true);
+      res.json(anchors);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch anchors" });
+    }
+  });
 
   // ── Phase B: Delegative mobility / GenUI ────────────────────────────────────
   app.get('/api/mobility/autonomy', isAuthenticated, async (req: any, res) => {

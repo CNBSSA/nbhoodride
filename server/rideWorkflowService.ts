@@ -31,6 +31,9 @@ import {
   count,
 } from "drizzle-orm";
 import { getCountyFromCoords, driverCoversCounty } from "./countyService";
+import { storage } from "./storage";
+import { getDriverTrustContext, filterDriversByTrustPreferences } from "./agents/trust";
+import { rankDriversByTrustAndEta } from "@shared/trustScore";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -90,6 +93,10 @@ export interface DriverMatch {
   lastName: string | null;
   vehicle: string | null;
   licensePlate: string | null;
+  trustScore?: number;
+  separationDegrees?: number;
+  matchReason?: string;
+  isFavorite?: boolean;
 }
 
 export interface ValidationResult {
@@ -313,7 +320,8 @@ function round2(n: number): number {
 export async function findBestDriver(
   pickupLocation: Location,
   pickupCounty: string | null,
-  excludeDriverIds: string[] = []
+  excludeDriverIds: string[] = [],
+  options?: { riderId?: string },
 ): Promise<DriverMatch | null> {
   // Fetch all non-suspended drivers with their user and vehicle info
   const results = await db
@@ -424,17 +432,43 @@ export async function findBestDriver(
   const nearby = withDistance.filter(
     (d) => d.distanceMiles <= DRIVER_SEARCH_RADIUS_MILES
   );
-  const pool = nearby.length > 0 ? nearby : withDistance;
+  let pool = nearby.length > 0 ? nearby : withDistance;
 
-  // Sort: online first, then by distance, then by rating (desc)
-  pool.sort((a, b) => {
-    if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
-    if (a.distanceMiles !== b.distanceMiles)
-      return a.distanceMiles - b.distanceMiles;
-    return parseFloat(b.rating) - parseFloat(a.rating);
-  });
+  if (options?.riderId) {
+    const enriched = await Promise.all(
+      pool.map(async (d) => {
+        const profile = available.find((a) => a.profile.userId === d.userId)?.profile;
+        const trust = await getDriverTrustContext(storage, options.riderId!, d.userId, {
+          avgRating: parseFloat(d.rating),
+          isVerifiedNeighbor: profile?.isVerifiedNeighbor ?? false,
+        });
+        return { ...d, ...trust, separationDegrees: trust.separationDegrees };
+      }),
+    );
+    pool = await filterDriversByTrustPreferences(storage, options.riderId, enriched);
+    if (pool.length === 0) return null;
+    pool = rankDriversByTrustAndEta(
+      pool.map((d) => ({
+        ...d,
+        isOnline: d.isOnline ?? false,
+        trustScore: (d as { trustScore?: number }).trustScore ?? 0,
+      })),
+    ) as typeof pool;
+  } else {
+    pool.sort((a, b) => {
+      if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+      if (a.distanceMiles !== b.distanceMiles)
+        return a.distanceMiles - b.distanceMiles;
+      return parseFloat(b.rating) - parseFloat(a.rating);
+    });
+  }
 
-  const best = pool[0];
+  const best = pool[0] as typeof pool[0] & {
+    trustScore?: number;
+    separationDegrees?: number;
+    matchReason?: string;
+    isFavorite?: boolean;
+  };
   return {
     userId: best.userId,
     driverProfileId: best.driverProfileId,
@@ -445,6 +479,10 @@ export async function findBestDriver(
     lastName: best.lastName,
     vehicle: best.vehicle,
     licensePlate: best.licensePlate,
+    trustScore: best.trustScore,
+    separationDegrees: best.separationDegrees,
+    matchReason: best.matchReason,
+    isFavorite: best.isFavorite,
   };
 }
 
@@ -526,10 +564,12 @@ export function startAcceptanceTimer(
 
       // Find next best driver (exclude all previously tried drivers)
       const triedDrivers = await getTriedDriversForRide(rideId);
+      const [rideRow] = await db.select({ riderId: rides.riderId }).from(rides).where(eq(rides.id, rideId));
       const nextDriver = await findBestDriver(
         pickupLocation,
         pickupCounty,
-        triedDrivers
+        triedDrivers,
+        rideRow?.riderId ? { riderId: rideRow.riderId } : undefined,
       );
 
       if (!nextDriver) {
