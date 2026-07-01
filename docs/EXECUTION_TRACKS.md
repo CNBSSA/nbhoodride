@@ -171,7 +171,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-07-01 | Referral wallet credits + Driver Pro tiers (REF2/PRO1) | A | [#57](https://github.com/CNBSSA/nbhoodride/pull/57) | Pass — see below |
 | 2026-07-01 | Mobility intent TTL purge + MASTER_PLAN sync (PRIV1) | A | [#58](https://github.com/CNBSSA/nbhoodride/pull/58) | Pass — see below |
 | 2026-07-01 | Ride receipts polish (RCP1) | A | [#59](https://github.com/CNBSSA/nbhoodride/pull/59) | Pass — see below |
-| 2026-07-02 | Free-text ride chat (CHAT1) | A | TBD | Pass — see below |
+| 2026-07-02 | Free-text ride chat (CHAT1) | A | [#60](https://github.com/CNBSSA/nbhoodride/pull/60) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
