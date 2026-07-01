@@ -18,6 +18,7 @@ import { Link } from "wouter";
 import { format } from "date-fns";
 import { BarChart3, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote } from "lucide-react";
 import PayoutModal from "@/components/PayoutModal";
+import { LostFoundDriverCard } from "@/components/LostFoundDriverCard";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
@@ -41,6 +42,12 @@ export default function DriverDashboard() {
   const { data: driverVehicles = [] } = useQuery<any[]>({
     queryKey: ["/api/vehicles"],
     enabled: !!user?.isDriver,
+  });
+
+  const { data: lostFoundData } = useQuery<{ asDriver: any[] }>({
+    queryKey: ["/api/lost-found/mine"],
+    enabled: !!user?.isDriver,
+    refetchInterval: 60000,
   });
 
   const evMutation = useMutation({
@@ -647,6 +654,8 @@ export default function DriverDashboard() {
             </Link>
           </CardContent>
         </Card>
+
+        <LostFoundDriverCard reports={lostFoundData?.asDriver ?? []} />
 
         {/* Vehicle Profile */}
         <Card>

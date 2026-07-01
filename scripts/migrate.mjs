@@ -911,6 +911,28 @@ CREATE TABLE IF NOT EXISTS transit_feed_cache (
 CREATE INDEX IF NOT EXISTS idx_transit_feed_agency ON transit_feed_cache (agency);
 CREATE INDEX IF NOT EXISTS idx_transit_feed_expires ON transit_feed_cache (expires_at);
 
+-- ── Lost & found workflow ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lost_found_reports (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  ride_id VARCHAR NOT NULL REFERENCES rides(id),
+  rider_id VARCHAR NOT NULL REFERENCES users(id),
+  driver_id VARCHAR NOT NULL REFERENCES users(id),
+  item_description TEXT NOT NULL,
+  item_category VARCHAR NOT NULL DEFAULT 'other',
+  status VARCHAR NOT NULL DEFAULT 'reported',
+  driver_note TEXT,
+  rider_note TEXT,
+  admin_note TEXT,
+  resolved_by VARCHAR REFERENCES users(id),
+  resolved_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_lost_found_ride ON lost_found_reports (ride_id);
+CREATE INDEX IF NOT EXISTS idx_lost_found_rider ON lost_found_reports (rider_id);
+CREATE INDEX IF NOT EXISTS idx_lost_found_driver ON lost_found_reports (driver_id);
+CREATE INDEX IF NOT EXISTS idx_lost_found_status ON lost_found_reports (status);
+
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
 -- the ALTER TABLE below throws "could not create unique index — Key (user_id)

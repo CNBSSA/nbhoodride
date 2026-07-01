@@ -60,6 +60,8 @@ import { processL4Waypoint, logL4Disengagement } from "./agents/l4Readiness";
 import { getTransitAlertsForRiders, refreshTransitFeeds } from "./agents/transitFeed";
 import { recordCertificateProvenance, recordAllActiveCertificateHashes } from "./agents/certificateProvenance";
 import { allocateGreenBonusForRide, getEvEligibleDrivers, GREEN_BONUS_PER_RIDE } from "./agents/greenBonus";
+import { processLostFoundReport, updateLostFoundStatus } from "./agents/lostFound";
+import { LOST_FOUND_CATEGORIES, LOST_FOUND_STATUSES } from "@shared/lostFoundPolicy";
 import { rideSurfaceSpecSchema } from "@shared/genui/schema";
 import { buildDriverLocationMessage } from "./wsDriverLocation";
 import {
@@ -3077,6 +3079,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Lost & found routes
+  app.post('/api/lost-found', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const body = z.object({
+        rideId: z.string(),
+        itemDescription: z.string().min(3).max(500),
+        itemCategory: z.enum(LOST_FOUND_CATEGORIES as unknown as [string, ...string[]]),
+        riderNote: z.string().max(500).optional(),
+      }).parse(req.body);
+
+      const result = await processLostFoundReport(storage, {
+        rideId: body.rideId,
+        riderId: userId,
+        itemDescription: body.itemDescription,
+        itemCategory: body.itemCategory as any,
+        riderNote: body.riderNote,
+      });
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({
+        message: error instanceof Error ? error.message : "Failed to report lost item",
+      });
+    }
+  });
+
+  app.get('/api/lost-found/mine', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const user = await storage.getUser(userId);
+      const asRider = await storage.getLostFoundReportsForUser(userId);
+      const asDriver = user?.isDriver
+        ? await storage.getLostFoundReportsForDriver(userId)
+        : [];
+      res.json({ asRider, asDriver });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch lost & found reports" });
+    }
+  });
+
+  app.patch('/api/lost-found/:reportId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { reportId } = req.params;
+      const body = z.object({
+        status: z.enum(LOST_FOUND_STATUSES as unknown as [string, ...string[]]),
+        note: z.string().max(500).optional(),
+      }).parse(req.body);
+
+      const report = await storage.getLostFoundReportById(reportId);
+      if (!report) return res.status(404).json({ message: "Report not found" });
+
+      const user = await storage.getUser(userId);
+      let role: "driver" | "rider" | "admin";
+      if (user?.isAdmin || user?.isSuperAdmin) role = "admin";
+      else if (report.driverId === userId) role = "driver";
+      else if (report.riderId === userId) role = "rider";
+      else return res.status(403).json({ message: "Not authorized" });
+
+      await updateLostFoundStatus(storage, reportId, userId, role, body.status as any, body.note);
+      const updated = await storage.getLostFoundReportById(reportId);
+      res.json(updated);
+    } catch (error) {
+      res.status(400).json({
+        message: error instanceof Error ? error.message : "Failed to update report",
+      });
+    }
+  });
+
   // Emergency contact management routes
   app.put('/api/user/emergency-contact', isAuthenticated, async (req: any, res) => {
     try {
@@ -4173,6 +4244,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error resolving dispute:", error);
       res.status(500).json({ message: "Failed to resolve dispute" });
+    }
+  });
+
+  app.get('/api/admin/lost-found', isAdminOrSessionAuth, async (req, res) => {
+    try {
+      const status = typeof req.query.status === "string" ? req.query.status : undefined;
+      const reports = await storage.getAllLostFoundReports(status);
+      res.json(reports);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch lost & found reports" });
+    }
+  });
+
+  app.patch('/api/admin/lost-found/:reportId', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { reportId } = req.params;
+      const body = z.object({
+        status: z.enum(LOST_FOUND_STATUSES as unknown as [string, ...string[]]),
+        adminNote: z.string().max(500).optional(),
+      }).parse(req.body);
+      await updateLostFoundStatus(storage, reportId, adminId, "admin", body.status as any, body.adminNote);
+      const updated = await storage.getLostFoundReportById(reportId);
+      await storage.logAdminAction(adminId, "lost_found_update", "lost_found", reportId, { status: body.status });
+      res.json(updated);
+    } catch (error) {
+      res.status(400).json({
+        message: error instanceof Error ? error.message : "Failed to update report",
+      });
     }
   });
 

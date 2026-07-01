@@ -109,6 +109,15 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | F3 | Transit integration | `transit_feed_cache` + `/api/transit/alerts`; `WMATA_API_KEY` |
 | F4 | EV green bonus | `vehicles.is_ev` + community bonus pool allocation |
 
+### Backlog — Lost & Found
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| LF1 | Lost item reports | `lost_found_reports` + rider modal |
+| LF2 | Driver response flow | Has item / returned / not in car |
+| LF3 | Support agent notifications | Driver + rider in-app alerts |
+| LF4 | Admin mediation panel | Lost & Found tab |
+
 ### Part II — Later autonomous lanes
 
 | Phase | Agent can build | You provide later |

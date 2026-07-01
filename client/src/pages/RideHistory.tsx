@@ -6,12 +6,14 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import RideDetailsModal from "@/components/RideDetailsModal";
 import ReportModal from "@/components/ReportModal";
+import LostFoundModal from "@/components/LostFoundModal";
 
 export default function RideHistory() {
   const [selectedPeriod, setSelectedPeriod] = useState("30");
   const [selectedRide, setSelectedRide] = useState<any>(null);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [isLostFoundOpen, setIsLostFoundOpen] = useState(false);
   const { user } = useAuth();
 
   // Fetch ride history
@@ -169,6 +171,20 @@ export default function RideHistory() {
                       >
                         Report Issue
                       </Button>
+                      {ride.status === "completed" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedRide(ride);
+                            setIsLostFoundOpen(true);
+                          }}
+                          className="text-muted-foreground"
+                          data-testid={`button-lost-item-${ride.id}`}
+                        >
+                          Lost Item
+                        </Button>
+                      )}
                     </div>
                     <span className={`text-xs px-2 py-1 rounded ${getStatusColor(ride.status)}`}>
                       {ride.status === "completed" ? "Completed" : 
@@ -194,6 +210,11 @@ export default function RideHistory() {
       <ReportModal
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}
+        rideId={selectedRide?.id || null}
+      />
+      <LostFoundModal
+        isOpen={isLostFoundOpen}
+        onClose={() => setIsLostFoundOpen(false)}
         rideId={selectedRide?.id || null}
       />
     </>
