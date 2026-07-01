@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { VEHICLE_TYPE_LABELS, VEHICLE_TYPES, type VehicleType } from "@shared/vehicleTypes";
+import { DRIVER_PRO_LABELS, type DriverProTier } from "@shared/driverProTier";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
@@ -49,6 +50,15 @@ export default function DriverDashboard() {
     queryKey: ["/api/lost-found/mine"],
     enabled: !!user?.isDriver,
     refetchInterval: 60000,
+  });
+
+  const { data: proTierData } = useQuery<{
+    tier: DriverProTier;
+    label: string;
+    stats: { totalRides: number; avgRating: string; qualifyingWeeks: number };
+  }>({
+    queryKey: ["/api/driver/pro-tier"],
+    enabled: !!user?.isDriver,
   });
 
   const evMutation = useMutation({
@@ -669,6 +679,18 @@ export default function DriverDashboard() {
         </Card>
 
         <LostFoundDriverCard reports={lostFoundData?.asDriver ?? []} />
+
+        {proTierData && proTierData.tier !== "community" && (
+          <Card className="border-amber-200 bg-amber-50/50" data-testid="driver-pro-tier-card">
+            <CardContent className="p-4 flex items-center gap-3">
+              <Badge className="bg-amber-600 text-white">{proTierData.label}</Badge>
+              <p className="text-sm text-muted-foreground">
+                {proTierData.stats.totalRides} trips · {parseFloat(proTierData.stats.avgRating || "5").toFixed(1)}★
+                {proTierData.stats.qualifyingWeeks > 0 && ` · ${proTierData.stats.qualifyingWeeks} qualifying weeks`}
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Vehicle Profile */}
         <Card>

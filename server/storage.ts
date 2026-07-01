@@ -113,6 +113,7 @@ import {
   type DriverRateCard,
 } from "@shared/schema";
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
+import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
 import { db } from "./db";
 import { eq, and, desc, asc, sql, or, isNull, isNotNull, gt, like, inArray, count, sum, gte, lte } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -409,7 +410,7 @@ export interface IStorage {
   getSeparationDegrees(riderId: string, driverId: string): Promise<number>;
   createCommunityReferral(data: { referrerId: string; referralCode: string; chainType: string; creditAmount?: string }): Promise<CommunityReferral>;
   getCommunityReferralByCode(code: string): Promise<CommunityReferral | undefined>;
-  redeemCommunityReferral(code: string, referredId: string): Promise<CommunityReferral | undefined>;
+  redeemCommunityReferral(code: string, referredId: string): Promise<{ referral: CommunityReferral; creditAmount: number } | undefined>;
   listCommunityReferralsByReferrer(referrerId: string): Promise<CommunityReferral[]>;
   getRedeemedReferralForUser(userId: string): Promise<CommunityReferral | undefined>;
   getCommunityAnchors(activeOnly?: boolean): Promise<CommunityAnchor[]>;
@@ -3499,19 +3500,14 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
-  async redeemCommunityReferral(code: string, referredId: string): Promise<CommunityReferral | undefined> {
+  async redeemCommunityReferral(
+    code: string,
+    referredId: string,
+  ): Promise<{ referral: CommunityReferral; creditAmount: number } | undefined> {
     const existing = await this.getCommunityReferralByCode(code);
     if (!existing || existing.status !== "pending") return undefined;
-    // Self-redemption guard. Previously a user could create a referral,
-    // sign in as a second account (or even pass their own id), and
-    // redeem their own code for the $5 credit. The referral system
-    // becomes a per-account mint with no upper bound.
     if (existing.referrerId === referredId) return undefined;
-    // Per-redeemer cap. Each redeemed referral credits the referrer +
-    // the redeemer; a single redeemer hitting multiple codes can
-    // collect $5 per code with no human review. Cap at one redeemed
-    // referral per user. Operators can lift the cap later via admin
-    // process if needed for promo campaigns.
+
     const priorRedemption = await db
       .select()
       .from(communityReferrals)
@@ -3523,12 +3519,45 @@ export class DatabaseStorage implements IStorage {
       )
       .limit(1);
     if (priorRedemption.length > 0) return undefined;
-    const [updated] = await db
-      .update(communityReferrals)
-      .set({ referredId, status: "redeemed" })
-      .where(eq(communityReferrals.id, existing.id))
-      .returning();
-    return updated;
+
+    const creditAmount = parseReferralCreditAmount(existing.creditAmount);
+
+    return db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(communityReferrals)
+        .set({ referredId, status: "redeemed" })
+        .where(
+          and(
+            eq(communityReferrals.id, existing.id),
+            eq(communityReferrals.status, "pending"),
+          ),
+        )
+        .returning();
+      if (!updated) return undefined;
+
+      const applyCredit = async (userId: string, reason: string) => {
+        const [userRow] = await tx
+          .update(users)
+          .set({
+            virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) + ${creditAmount})`,
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, userId))
+          .returning();
+        if (!userRow) throw new Error("User not found");
+        await tx.insert(walletTransactions).values({
+          userId,
+          amount: creditAmount.toFixed(2),
+          balanceAfter: userRow.virtualCardBalance ?? "0.00",
+          reason,
+        });
+      };
+
+      await applyCredit(existing.referrerId, REFERRAL_CREDIT_REASONS.referrer);
+      await applyCredit(referredId, REFERRAL_CREDIT_REASONS.redeemer);
+
+      return { referral: updated, creditAmount };
+    });
   }
 
   async listCommunityReferralsByReferrer(referrerId: string): Promise<CommunityReferral[]> {

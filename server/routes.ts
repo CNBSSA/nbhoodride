@@ -62,6 +62,7 @@ import { recordCertificateProvenance, recordAllActiveCertificateHashes } from ".
 import { allocateGreenBonusForRide, getEvEligibleDrivers, GREEN_BONUS_PER_RIDE } from "./agents/greenBonus";
 import { validateFriendRideInput } from "@shared/rideForFriend";
 import { validateVehicleTypeInput } from "@shared/vehicleTypes";
+import { computeDriverProTier, DRIVER_PRO_LABELS } from "@shared/driverProTier";
 import { processLostFoundReport, updateLostFoundStatus } from "./agents/lostFound";
 import { LOST_FOUND_CATEGORIES, LOST_FOUND_STATUSES } from "@shared/lostFoundPolicy";
 import { rideSurfaceSpecSchema } from "@shared/genui/schema";
@@ -2141,9 +2142,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
               loc.lat,
               loc.lng,
             );
+            const proTier = computeDriverProTier({
+              totalRides: d.user.totalRides ?? 0,
+              avgRating: parseFloat(d.user.rating || "5"),
+              isVerifiedNeighbor: d.isVerifiedNeighbor ?? false,
+            });
             return {
               ...d,
               trust,
+              proTier,
               separationDegrees: trust.separationDegrees,
               isFavorite: trust.isFavorite,
               trustScore: trust.trustScore,
@@ -4958,9 +4965,24 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { code } = req.body;
       if (!code) return res.status(400).json({ message: "code is required" });
-      const referral = await storage.redeemCommunityReferral(code, userId);
-      if (!referral) return res.status(400).json({ message: "Invalid or used referral code" });
-      res.json(referral);
+      const result = await storage.redeemCommunityReferral(code, userId);
+      if (!result) return res.status(400).json({ message: "Invalid or used referral code" });
+      const { referral, creditAmount } = result;
+      try {
+        await deliverUserNotification(referral.referrerId, {
+          title: "Referral redeemed!",
+          body: `A neighbor used your code — $${creditAmount.toFixed(2)} PG Card credit added.`,
+          type: "referral_credit",
+        });
+        await deliverUserNotification(userId, {
+          title: "Welcome credit applied",
+          body: `$${creditAmount.toFixed(2)} added to your PG Card.`,
+          type: "referral_credit",
+        });
+      } catch {
+        /* non-fatal */
+      }
+      res.json({ referral, creditAmount, creditsApplied: true });
     } catch (error) {
       res.status(500).json({ message: "Failed to redeem referral" });
     }
@@ -6036,6 +6058,37 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       res.json({ vehicle });
     } catch (error) {
       res.status(400).json({ message: error instanceof Error ? error.message : "Failed to update vehicle type" });
+    }
+  });
+
+  app.get('/api/driver/pro-tier', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const user = await storage.getUser(userId);
+      const profile = await storage.getDriverProfile(userId);
+      if (!user?.isDriver || !profile) {
+        res.status(404).json({ message: "Driver profile not found" });
+        return;
+      }
+      const ownership = await storage.getDriverOwnershipStatus(userId);
+      const tier = computeDriverProTier({
+        totalRides: user.totalRides ?? 0,
+        avgRating: parseFloat(user.rating || "5"),
+        isVerifiedNeighbor: profile.isVerifiedNeighbor ?? false,
+        qualifyingWeeks: ownership?.totalQualifyingWeeks ?? 0,
+      });
+      res.json({
+        tier,
+        label: DRIVER_PRO_LABELS[tier],
+        stats: {
+          totalRides: user.totalRides ?? 0,
+          avgRating: user.rating,
+          qualifyingWeeks: ownership?.totalQualifyingWeeks ?? 0,
+          isVerifiedNeighbor: profile.isVerifiedNeighbor ?? false,
+        },
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pro tier" });
     }
   });
 

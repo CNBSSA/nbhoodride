@@ -1,6 +1,7 @@
-import { Shield, Star, Heart } from "lucide-react";
+import { Shield, Star, Heart, Award } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { DRIVER_PRO_LABELS, type DriverProTier } from "@shared/driverProTier";
 
 export interface DriverTrustInfo {
   trustScore: number;
@@ -19,6 +20,7 @@ interface ExplainableMatchCardProps {
   onFavorite?: () => void;
   isFavorite?: boolean;
   className?: string;
+  proTier?: DriverProTier;
 }
 
 /** C6 — Explainable driver match card with trust score. */
@@ -32,6 +34,7 @@ export function ExplainableMatchCard({
   onFavorite,
   isFavorite,
   className,
+  proTier,
 }: ExplainableMatchCardProps) {
   return (
     <button
@@ -62,6 +65,12 @@ export function ExplainableMatchCard({
             {trust?.trustScore != null && (
               <Badge variant="secondary" className="text-[10px]">
                 Trust {trust.trustScore}
+              </Badge>
+            )}
+            {proTier && proTier !== "community" && (
+              <Badge className="text-[10px] bg-amber-100 text-amber-900 border-amber-200" variant="outline">
+                <Award className="w-3 h-3 mr-0.5 inline" />
+                {DRIVER_PRO_LABELS[proTier]}
               </Badge>
             )}
             {eta && <span className="text-xs text-gray-500">{eta}</span>}
