@@ -4,6 +4,7 @@ import {
   vehicles,
   rides,
   disputes,
+  lostFoundReports,
   emergencyIncidents,
   driverWeeklyHours,
   driverOwnership,
@@ -62,6 +63,7 @@ import {
   type Vehicle,
   type Ride,
   type Dispute,
+  type LostFoundReport,
   type EmergencyIncident,
   type DriverWeeklyHours,
   type DriverOwnership,
@@ -276,6 +278,28 @@ export interface IStorage {
   // Dispute operations
   createDispute(dispute: InsertDispute): Promise<Dispute>;
   getDisputesByRide(rideId: string): Promise<Dispute[]>;
+  createLostFoundReport(data: {
+    rideId: string;
+    riderId: string;
+    driverId: string;
+    itemDescription: string;
+    itemCategory: string;
+    riderNote?: string;
+    status?: string;
+  }): Promise<LostFoundReport>;
+  getLostFoundReportById(id: string): Promise<LostFoundReport | undefined>;
+  getOpenLostFoundReportForRide(rideId: string, riderId: string): Promise<LostFoundReport | undefined>;
+  getLostFoundReportsForUser(userId: string): Promise<LostFoundReport[]>;
+  getLostFoundReportsForDriver(driverId: string): Promise<LostFoundReport[]>;
+  getAllLostFoundReports(status?: string): Promise<LostFoundReport[]>;
+  updateLostFoundReport(id: string, updates: Partial<{
+    status: string;
+    driverNote: string;
+    riderNote: string;
+    adminNote: string;
+    resolvedBy: string;
+    resolvedAt: Date;
+  }>): Promise<LostFoundReport>;
   updateDispute(disputeId: string, updates: Partial<InsertDispute>): Promise<Dispute>;
   
   // Emergency operations
@@ -1240,6 +1264,85 @@ export class DatabaseStorage implements IStorage {
       .from(disputes)
       .where(eq(disputes.rideId, rideId))
       .orderBy(desc(disputes.createdAt));
+  }
+
+  async createLostFoundReport(data: {
+    rideId: string;
+    riderId: string;
+    driverId: string;
+    itemDescription: string;
+    itemCategory: string;
+    riderNote?: string;
+    status?: string;
+  }): Promise<LostFoundReport> {
+    const [row] = await db.insert(lostFoundReports).values(data).returning();
+    return row;
+  }
+
+  async getLostFoundReportById(id: string): Promise<LostFoundReport | undefined> {
+    const [row] = await db.select().from(lostFoundReports).where(eq(lostFoundReports.id, id));
+    return row;
+  }
+
+  async getOpenLostFoundReportForRide(
+    rideId: string,
+    riderId: string,
+  ): Promise<LostFoundReport | undefined> {
+    const rows = await db
+      .select()
+      .from(lostFoundReports)
+      .where(and(eq(lostFoundReports.rideId, rideId), eq(lostFoundReports.riderId, riderId)))
+      .orderBy(desc(lostFoundReports.createdAt));
+    return rows.find((r) =>
+      ["reported", "driver_notified", "driver_has_item"].includes(r.status ?? ""),
+    );
+  }
+
+  async getLostFoundReportsForUser(userId: string): Promise<LostFoundReport[]> {
+    return db
+      .select()
+      .from(lostFoundReports)
+      .where(eq(lostFoundReports.riderId, userId))
+      .orderBy(desc(lostFoundReports.createdAt));
+  }
+
+  async getLostFoundReportsForDriver(driverId: string): Promise<LostFoundReport[]> {
+    return db
+      .select()
+      .from(lostFoundReports)
+      .where(eq(lostFoundReports.driverId, driverId))
+      .orderBy(desc(lostFoundReports.createdAt));
+  }
+
+  async getAllLostFoundReports(status?: string): Promise<LostFoundReport[]> {
+    if (status) {
+      return db
+        .select()
+        .from(lostFoundReports)
+        .where(eq(lostFoundReports.status, status))
+        .orderBy(desc(lostFoundReports.createdAt));
+    }
+    return db.select().from(lostFoundReports).orderBy(desc(lostFoundReports.createdAt));
+  }
+
+  async updateLostFoundReport(
+    id: string,
+    updates: Partial<{
+      status: string;
+      driverNote: string;
+      riderNote: string;
+      adminNote: string;
+      resolvedBy: string;
+      resolvedAt: Date;
+    }>,
+  ): Promise<LostFoundReport> {
+    const [row] = await db
+      .update(lostFoundReports)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(lostFoundReports.id, id))
+      .returning();
+    if (!row) throw new Error("Lost & found report not found");
+    return row;
   }
 
   async updateDispute(disputeId: string, updates: Partial<InsertDispute>): Promise<Dispute> {

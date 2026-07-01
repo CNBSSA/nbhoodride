@@ -17,12 +17,12 @@ import {
   DollarSign, Award, TrendingUp, Shield, Activity,
   CheckCircle, XCircle, Eye, Ban, UserCheck, Clock,
   ChevronLeft, BarChart3, Brain, AlertCircle, BookOpen,
-  RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2, Banknote, FlaskConical, Train
+  RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2, Banknote, FlaskConical, Train, Package
 } from "lucide-react";
 import { format } from "date-fns";
 import { useLocation } from "wouter";
 
-type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "disputes" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
+type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -50,6 +50,7 @@ export default function AdminDashboard() {
     { id: "drivers", label: "Drivers", icon: Car },
     { id: "rides", label: "Rides", icon: MapPin },
     { id: "disputes", label: "Disputes", icon: AlertTriangle },
+    { id: "lostfound", label: "Lost & Found", icon: Package },
     { id: "agents", label: "Agents", icon: Brain },
     { id: "research", label: "Research", icon: FlaskConical },
     { id: "payouts", label: "Payouts", icon: Banknote },
@@ -113,6 +114,7 @@ export default function AdminDashboard() {
           {activeTab === "drivers" && <DriversPanel />}
           {activeTab === "rides" && <RidesPanel />}
           {activeTab === "disputes" && <DisputesPanel />}
+          {activeTab === "lostfound" && <LostFoundPanel />}
           {activeTab === "agents" && <AgentProposalsPanel />}
           {activeTab === "research" && <ResearchPanel />}
           {activeTab === "payouts" && <PayoutsPanel />}
@@ -916,6 +918,69 @@ function PayoutsPanel() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function LostFoundPanel() {
+  const { toast } = useToast();
+  const { data: reports = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/lost-found"],
+  });
+
+  const updateReport = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      const res = await apiRequest("PATCH", `/api/admin/lost-found/${id}`, { status });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/lost-found"] });
+      toast({ title: "Report updated" });
+    },
+    onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
+  });
+
+  if (isLoading) return <div data-testid="loading-lost-found">Loading…</div>;
+
+  const open = reports.filter((r) => !["returned", "closed_not_found", "closed_no_response"].includes(r.status));
+
+  return (
+    <div data-testid="panel-lost-found">
+      <h2 className="text-2xl font-bold mb-2">Lost & Found</h2>
+      <p className="text-muted-foreground text-sm mb-6">{open.length} open · {reports.length} total</p>
+      <div className="space-y-3">
+        {reports.map((report) => (
+          <Card key={report.id} data-testid={`lost-found-admin-${report.id}`}>
+            <CardContent className="pt-4">
+              <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+                <div>
+                  <Badge variant="outline" className="mr-2">{report.itemCategory}</Badge>
+                  <Badge variant={open.some((o) => o.id === report.id) ? "destructive" : "default"}>{report.status}</Badge>
+                  <p className="font-medium mt-2">{report.itemDescription}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Ride {report.rideId?.slice(0, 8)}… · {new Date(report.createdAt).toLocaleString()}
+                  </p>
+                </div>
+                {open.some((o) => o.id === report.id) && (
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => updateReport.mutate({ id: report.id, status: "closed_no_response" })}>
+                      Close
+                    </Button>
+                    <Button size="sm" onClick={() => updateReport.mutate({ id: report.id, status: "returned" })}>
+                      Mark returned
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {report.driverNote && <p className="text-sm text-muted-foreground">Driver: {report.driverNote}</p>}
+              {report.riderNote && <p className="text-sm text-muted-foreground">Rider: {report.riderNote}</p>}
+            </CardContent>
+          </Card>
+        ))}
+        {reports.length === 0 && (
+          <p className="text-muted-foreground text-center py-8">No lost & found reports yet.</p>
+        )}
+      </div>
     </div>
   );
 }

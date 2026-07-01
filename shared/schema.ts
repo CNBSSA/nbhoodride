@@ -332,6 +332,29 @@ export const disputes = pgTable("disputes", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+/** Lost & found — rider↔driver item coordination on completed rides. */
+export const lostFoundReports = pgTable("lost_found_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  rideId: varchar("ride_id").notNull().references(() => rides.id),
+  riderId: varchar("rider_id").notNull().references(() => users.id),
+  driverId: varchar("driver_id").notNull().references(() => users.id),
+  itemDescription: text("item_description").notNull(),
+  itemCategory: varchar("item_category").default("other").notNull(),
+  status: varchar("status").default("reported").notNull(),
+  driverNote: text("driver_note"),
+  riderNote: text("rider_note"),
+  adminNote: text("admin_note"),
+  resolvedBy: varchar("resolved_by").references(() => users.id),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_lost_found_ride").on(table.rideId),
+  index("idx_lost_found_rider").on(table.riderId),
+  index("idx_lost_found_driver").on(table.driverId),
+  index("idx_lost_found_status").on(table.status),
+]);
+
 // Emergency incidents
 export const emergencyIncidents = pgTable("emergency_incidents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1230,6 +1253,7 @@ export type DriverProfile = typeof driverProfiles.$inferSelect;
 export type Vehicle = typeof vehicles.$inferSelect;
 export type Ride = typeof rides.$inferSelect;
 export type Dispute = typeof disputes.$inferSelect;
+export type LostFoundReport = typeof lostFoundReports.$inferSelect;
 export type EmergencyIncident = typeof emergencyIncidents.$inferSelect;
 export type DriverWeeklyHours = typeof driverWeeklyHours.$inferSelect;
 export type DriverOwnership = typeof driverOwnership.$inferSelect;

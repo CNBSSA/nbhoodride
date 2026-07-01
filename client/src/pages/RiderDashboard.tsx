@@ -12,6 +12,7 @@ import MultiStopBookingSheet from "@/components/MultiStopBookingSheet";
 import SharedScheduleSheet from "@/components/SharedScheduleSheet";
 import JoinScheduleModal from "@/components/JoinScheduleModal";
 import SOSModal from "@/components/SOSModal";
+import LostFoundModal from "@/components/LostFoundModal";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { NotificationBell } from "@/components/NotificationBell";
 import { RideQuickMessages } from "@/components/RideQuickMessages";
@@ -98,6 +99,7 @@ export default function RiderDashboard() {
   const [isSharedScheduleOpen, setIsSharedScheduleOpen] = useState(false);
   const [isJoinScheduleOpen, setIsJoinScheduleOpen] = useState(false);
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
+  const [isLostFoundOpen, setIsLostFoundOpen] = useState(false);
   const [realtimeDrivers, setRealtimeDrivers] = useState<Record<string, { lat: number; lng: number }>>({});
   const [recentlyCompletedRide, setRecentlyCompletedRide] = useState<any>(null);
   const [quickRating, setQuickRating] = useState(0);
@@ -643,6 +645,15 @@ export default function RiderDashboard() {
                   >
                     {submitQuickRating.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <><ThumbsUp className="w-3 h-3 mr-1" />{quickRating > 0 ? `Rate ${quickRating}★` : 'Tap a Star'}</>}
                   </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 text-xs px-2"
+                    onClick={() => setIsLostFoundOpen(true)}
+                    data-testid="btn-lost-item-completed"
+                  >
+                    Left item?
+                  </Button>
                   <Button variant="ghost" size="sm" onClick={() => { setRecentlyCompletedRide(null); setQuickRating(0); }} className="px-3" data-testid="btn-dismiss-completed">
                     <X className="w-4 h-4 text-gray-400" />
                   </Button>
@@ -1079,6 +1090,11 @@ export default function RiderDashboard() {
       {/* Modals */}
       <ScheduleRideModal isOpen={isScheduleModalOpen} onClose={() => setIsScheduleModalOpen(false)} drivers={drivers} userLocation={userLocation} />
       <SOSModal isOpen={isSOSModalOpen} onClose={() => setIsSOSModalOpen(false)} />
+      <LostFoundModal
+        isOpen={isLostFoundOpen}
+        onClose={() => setIsLostFoundOpen(false)}
+        rideId={recentlyCompletedRide?.id ?? null}
+      />
       <MultiStopBookingSheet
         isOpen={isMultiStopOpen}
         onClose={() => setIsMultiStopOpen(false)}
