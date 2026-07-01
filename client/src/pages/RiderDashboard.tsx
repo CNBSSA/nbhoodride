@@ -19,7 +19,11 @@ import { RideQuickMessages } from "@/components/RideQuickMessages";
 import { MobilityIntentCard, type IntentResolution } from "@/components/MobilityIntentCard";
 import { TransitAlertsCard } from "@/components/TransitAlertsCard";
 import { RideForFriendFields } from "@/components/RideForFriendFields";
+import { VehicleTypePicker } from "@/components/VehicleTypePicker";
+import { CommunityRoutesCard } from "@/components/CommunityRoutesCard";
 import { ExplainableMatchCard } from "@/components/ExplainableMatchCard";
+import type { VehicleType } from "@shared/vehicleTypes";
+import { VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 import { RideSurface } from "@/genui/RideSurface";
 import type { RideSurfaceSpec } from "@shared/genui/schema";
 import { rankDriversByTrustAndEta } from "@shared/trustScore";
@@ -94,6 +98,7 @@ export default function RiderDashboard() {
   const [rideForFriend, setRideForFriend] = useState(false);
   const [passengerName, setPassengerName] = useState("");
   const [passengerPhone, setPassengerPhone] = useState("");
+  const [requestedVehicleType, setRequestedVehicleType] = useState<VehicleType>("standard");
   const [geocoding, setGeocoding] = useState(false);
   const [calculatingFare, setCalculatingFare] = useState(false);
 
@@ -157,9 +162,13 @@ export default function RiderDashboard() {
   };
 
   const { data: nearbyDrivers = [], isLoading: driversLoading } = useQuery<any[]>({
-    queryKey: ['/api/rides/nearby-drivers', userLocation.lat, userLocation.lng],
+    queryKey: ['/api/rides/nearby-drivers', userLocation.lat, userLocation.lng, requestedVehicleType],
     queryFn: async () => {
-      const res = await fetch(`/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}`, { credentials: 'include' });
+      const vtParam = requestedVehicleType !== "standard" ? `&vehicleType=${requestedVehicleType}` : "";
+      const res = await fetch(
+        `/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}${vtParam}`,
+        { credentials: 'include' },
+      );
       if (!res.ok) throw new Error('Failed to fetch nearby drivers');
       return res.json();
     },
@@ -212,7 +221,9 @@ export default function RiderDashboard() {
         name: `${driver.user.firstName} ${driver.user.lastName?.[0] || ''}.`,
         location: driverLocation,
         rating: parseFloat(driver.user.rating) || 5.0,
-        vehicle: driver.vehicles[0] ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}${driver.vehicles[0].isEv ? " ⚡" : ""}` : "Vehicle",
+        vehicle: driver.vehicles[0]
+          ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}${driver.vehicles[0].isEv ? " ⚡" : ""}${driver.vehicles[0].vehicleType && driver.vehicles[0].vehicleType !== "standard" ? ` · ${VEHICLE_TYPE_LABELS[driver.vehicles[0].vehicleType as VehicleType] ?? driver.vehicles[0].vehicleType}` : ""}`
+          : "Vehicle",
         estimatedFare: estimateFare(distMiles),
         estimatedTime: estimateArrival(distMiles),
         isVerifiedNeighbor: driver.isVerifiedNeighbor,
@@ -369,6 +380,7 @@ export default function RiderDashboard() {
     setRideForFriend(false);
     setPassengerName("");
     setPassengerPhone("");
+    setRequestedVehicleType("standard");
     setGeocoding(false);
     setCalculatingFare(false);
   }, []);
@@ -396,8 +408,35 @@ export default function RiderDashboard() {
       bookedForFriend: rideForFriend,
       passengerName: rideForFriend ? passengerName.trim() : undefined,
       passengerPhone: rideForFriend && passengerPhone.trim() ? passengerPhone.trim() : undefined,
+      requestedVehicleType: requestedVehicleType !== "standard" ? requestedVehicleType : undefined,
     });
   };
+
+  const handleCommunityRouteSelect = useCallback((route: {
+    destinationLocation: { lat: number; lng: number; address: string };
+    name: string;
+  }) => {
+    const lat = route.destinationLocation.lat;
+    const lng = route.destinationLocation.lng;
+    setDestinationAddress(route.destinationLocation.address || route.name);
+    setDestCoords({ lat, lng });
+    const dLat = (lat - userLocation.lat) * Math.PI / 180;
+    const dLng = (lng - userLocation.lng) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    const dist = Math.round(3959 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
+    const dur = Math.round((dist / 25) * 60);
+    setEstimatedDistance(dist);
+    setEstimatedDuration(dur);
+    trackRideSearch();
+    setPanel("drivers");
+  }, [trackRideSearch, userLocation.lat, userLocation.lng]);
+
+  const handleVehicleTypeChange = useCallback((type: VehicleType) => {
+    setRequestedVehicleType(type);
+    setSelectedDriverId("");
+    setFareEstimate(null);
+    queryClient.invalidateQueries({ queryKey: ['/api/rides/nearby-drivers'] });
+  }, []);
 
   const getDriverETA = (ride: any): number | null => {
     const driverId = ride.driverId || ride.driver?.id;
@@ -800,6 +839,7 @@ export default function RiderDashboard() {
               disabled={!!activeRide}
             />
             <TransitAlertsCard />
+            <CommunityRoutesCard onSelectRoute={handleCommunityRouteSelect} disabled={!!activeRide} />
             <button
               className="w-full flex items-center gap-3 bg-gray-100 active:bg-gray-200 transition-colors rounded-2xl px-4 py-3 text-left"
               onClick={() => {
@@ -965,8 +1005,14 @@ export default function RiderDashboard() {
             {/* Scrollable content */}
             <div className="flex-1 overflow-y-auto px-4 pb-2">
 
-              {/* Pickup instructions */}
-              <div className="mt-3">
+              {/* Vehicle type + pickup instructions */}
+              <div className="mt-3 space-y-3">
+                {(panel === "drivers" || panel === "confirm") && (
+                  <VehicleTypePicker
+                    value={requestedVehicleType}
+                    onChange={handleVehicleTypeChange}
+                  />
+                )}
                 <Input
                   placeholder="Pickup instructions (optional)"
                   value={pickupInstructions}

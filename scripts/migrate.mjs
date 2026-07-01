@@ -976,6 +976,95 @@ BEGIN
   END IF;
 END $$;
 
+-- ── Backlog: Vehicle types, community routes, referral UI ─────────────────────
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS vehicle_type VARCHAR DEFAULT 'standard';
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS requested_vehicle_type VARCHAR;
+
+CREATE TABLE IF NOT EXISTS community_routes (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  description TEXT,
+  route_category VARCHAR NOT NULL,
+  destination_location JSONB NOT NULL,
+  from_anchor_id VARCHAR REFERENCES community_anchors(id),
+  to_anchor_id VARCHAR REFERENCES community_anchors(id),
+  sort_order INTEGER DEFAULT 0,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'Metro → UMD Campus',
+  'First/last mile to College Park',
+  'metro',
+  a.location,
+  a.id,
+  10
+FROM community_anchors a
+WHERE a.name = 'University of Maryland College Park'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'Metro → UMD Campus');
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'Metro → Bowie State',
+  'Campus drop-off at Bowie State',
+  'campus',
+  a.location,
+  a.id,
+  20
+FROM community_anchors a
+WHERE a.name = 'Bowie State University'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'Metro → Bowie State');
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'Greenbelt Metro',
+  'Ride to Green Line station',
+  'metro',
+  a.location,
+  a.id,
+  30
+FROM community_anchors a
+WHERE a.name = 'Greenbelt Metro Station'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'Greenbelt Metro');
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'New Carrollton Metro',
+  'Orange/Silver line connection',
+  'metro',
+  a.location,
+  a.id,
+  40
+FROM community_anchors a
+WHERE a.name = 'New Carrollton Metro Station'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'New Carrollton Metro');
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'Sunday → Glenarden Church',
+  'Community anchor — surge-free Sundays',
+  'church',
+  a.location,
+  a.id,
+  50
+FROM community_anchors a
+WHERE a.name = 'First Baptist Church of Glenarden'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'Sunday → Glenarden Church');
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'Event → FedExField',
+  'Game day & events at Landover',
+  'venue',
+  a.location,
+  a.id,
+  60
+FROM community_anchors a
+WHERE a.name = 'FedExField'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'Event → FedExField');
+
 -- Ensure one driver profile per user — prevents duplicate rows from concurrent
 -- "Get Started" clicks or retries.
 --

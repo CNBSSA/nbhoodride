@@ -32,6 +32,7 @@ import {
   riderTrustPreferences,
   communityReferrals,
   communityAnchors,
+  communityRoutes,
   demandForecasts,
   communityBonusPool,
   bonusAllocations,
@@ -88,6 +89,7 @@ import {
   type RiderTrustPreferences,
   type CommunityReferral,
   type CommunityAnchor,
+  type CommunityRoute,
   type DemandForecast,
   type CommunityBonusPool,
   type BonusAllocation,
@@ -110,6 +112,7 @@ import {
   driverRateCards,
   type DriverRateCard,
 } from "@shared/schema";
+import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { db } from "./db";
 import { eq, and, desc, asc, sql, or, isNull, isNotNull, gt, like, inArray, count, sum, gte, lte } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -219,7 +222,7 @@ export interface IStorage {
   updateDriverProfile(userId: string, updates: Partial<InsertDriverProfile>): Promise<DriverProfile>;
   updateDriverLocation(userId: string, location: {lat: number, lng: number}): Promise<void>;
   toggleDriverOnlineStatus(userId: string, isOnline: boolean): Promise<void>;
-  getNearbyDrivers(location: {lat: number, lng: number}, radiusMiles: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
+  getNearbyDrivers(location: {lat: number, lng: number}, radiusMiles: number, vehicleType?: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
   searchDriversByPhone(phone: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
   
   getAllDriverProfiles(): Promise<DriverProfile[]>;
@@ -407,7 +410,10 @@ export interface IStorage {
   createCommunityReferral(data: { referrerId: string; referralCode: string; chainType: string; creditAmount?: string }): Promise<CommunityReferral>;
   getCommunityReferralByCode(code: string): Promise<CommunityReferral | undefined>;
   redeemCommunityReferral(code: string, referredId: string): Promise<CommunityReferral | undefined>;
+  listCommunityReferralsByReferrer(referrerId: string): Promise<CommunityReferral[]>;
+  getRedeemedReferralForUser(userId: string): Promise<CommunityReferral | undefined>;
   getCommunityAnchors(activeOnly?: boolean): Promise<CommunityAnchor[]>;
+  getCommunityRoutes(activeOnly?: boolean): Promise<CommunityRoute[]>;
   // List a rider's active (non-revoked, non-expired) guardian links so they
   // can review and revoke. Sorted newest-first.
   listActiveGuardianLinksByRider(riderUserId: string): Promise<GuardianLink[]>;
@@ -547,6 +553,7 @@ export interface IStorage {
   }>): Promise<void>;
   getActiveTransitAlerts(agency?: string): Promise<TransitFeedEntry[]>;
   updateVehicleEvStatus(vehicleId: string, driverProfileId: string, isEv: boolean, fuelType?: string): Promise<Vehicle>;
+  updateVehicleType(vehicleId: string, driverProfileId: string, vehicleType: string): Promise<Vehicle>;
   getEvDrivers(): Promise<Array<{
     driverId: string;
     driverProfileId: string;
@@ -760,7 +767,7 @@ export class DatabaseStorage implements IStorage {
       .where(eq(driverProfiles.userId, userId));
   }
 
-  async getNearbyDrivers(location: {lat: number, lng: number}, radiusMiles: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]> {
+  async getNearbyDrivers(location: {lat: number, lng: number}, radiusMiles: number, vehicleType?: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]> {
     // Fetch all active drivers (not suspended) — show pending/approved drivers during early launch
     // Admins can suspend bad actors; the approval gate is secondary during onboarding
     const results = await db
@@ -814,7 +821,11 @@ export class DatabaseStorage implements IStorage {
     // Online drivers first, then offline
     pool.sort((a, b) => (b.isOnline ? 1 : 0) - (a.isOnline ? 1 : 0));
 
-    return filterAvailableDrivers(pool, (d) => d.userId);
+    const available = await filterAvailableDrivers(pool, (d) => d.userId);
+    if (vehicleType) {
+      return filterDriversByVehicleType(available, vehicleType);
+    }
+    return available;
   }
 
   async getAllDriverProfiles(): Promise<DriverProfile[]> {
@@ -3520,11 +3531,47 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async listCommunityReferralsByReferrer(referrerId: string): Promise<CommunityReferral[]> {
+    return db
+      .select()
+      .from(communityReferrals)
+      .where(eq(communityReferrals.referrerId, referrerId))
+      .orderBy(desc(communityReferrals.createdAt));
+  }
+
+  async getRedeemedReferralForUser(userId: string): Promise<CommunityReferral | undefined> {
+    const [row] = await db
+      .select()
+      .from(communityReferrals)
+      .where(
+        and(
+          eq(communityReferrals.referredId, userId),
+          eq(communityReferrals.status, "redeemed"),
+        ),
+      )
+      .limit(1);
+    return row;
+  }
+
   async getCommunityAnchors(activeOnly = true): Promise<CommunityAnchor[]> {
     if (activeOnly) {
       return db.select().from(communityAnchors).where(eq(communityAnchors.isActive, true));
     }
     return db.select().from(communityAnchors);
+  }
+
+  async getCommunityRoutes(activeOnly = true): Promise<CommunityRoute[]> {
+    if (activeOnly) {
+      return db
+        .select()
+        .from(communityRoutes)
+        .where(eq(communityRoutes.isActive, true))
+        .orderBy(asc(communityRoutes.sortOrder), asc(communityRoutes.name));
+    }
+    return db
+      .select()
+      .from(communityRoutes)
+      .orderBy(asc(communityRoutes.sortOrder), asc(communityRoutes.name));
   }
 
   async listActiveGuardianLinksByRider(riderUserId: string): Promise<GuardianLink[]> {
@@ -4248,6 +4295,23 @@ export class DatabaseStorage implements IStorage {
       .set({
         isEv,
         fuelType: isEv ? fuelType : "gas",
+        updatedAt: new Date(),
+      })
+      .where(and(eq(vehicles.id, vehicleId), eq(vehicles.driverProfileId, driverProfileId)))
+      .returning();
+    if (!updated) throw new Error("Vehicle not found");
+    return updated;
+  }
+
+  async updateVehicleType(
+    vehicleId: string,
+    driverProfileId: string,
+    vehicleType: string,
+  ): Promise<Vehicle> {
+    const [updated] = await db
+      .update(vehicles)
+      .set({
+        vehicleType,
         updatedAt: new Date(),
       })
       .where(and(eq(vehicles.id, vehicleId), eq(vehicles.driverProfileId, driverProfileId)))

@@ -61,6 +61,7 @@ import { getTransitAlertsForRiders, refreshTransitFeeds } from "./agents/transit
 import { recordCertificateProvenance, recordAllActiveCertificateHashes } from "./agents/certificateProvenance";
 import { allocateGreenBonusForRide, getEvEligibleDrivers, GREEN_BONUS_PER_RIDE } from "./agents/greenBonus";
 import { validateFriendRideInput } from "@shared/rideForFriend";
+import { validateVehicleTypeInput } from "@shared/vehicleTypes";
 import { processLostFoundReport, updateLostFoundStatus } from "./agents/lostFound";
 import { LOST_FOUND_CATEGORIES, LOST_FOUND_STATUSES } from "@shared/lostFoundPolicy";
 import { rideSurfaceSpecSchema } from "@shared/genui/schema";
@@ -2089,15 +2090,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Ride routes
   app.get('/api/rides/nearby-drivers', isAuthenticated, async (req: any, res) => {
     try {
-      const { lat, lng, radius = 10 } = req.query;
+      const { lat, lng, radius = 10, vehicleType } = req.query;
       
       if (!lat || !lng) {
         return res.status(400).json({ message: "Location required" });
       }
+
+      if (vehicleType) {
+        const typeCheck = validateVehicleTypeInput(vehicleType);
+        if (!typeCheck.valid) {
+          return res.status(400).json({ message: typeCheck.error });
+        }
+      }
       
       const drivers = await storage.getNearbyDrivers(
         { lat: parseFloat(lat), lng: parseFloat(lng) },
-        parseFloat(radius)
+        parseFloat(radius),
+        typeof vehicleType === "string" && vehicleType ? vehicleType : undefined,
       );
 
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -2181,6 +2190,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: friendCheck.error });
       }
 
+      const vehicleTypeCheck = validateVehicleTypeInput(req.body.requestedVehicleType);
+      if (!vehicleTypeCheck.valid) {
+        return res.status(400).json({ message: vehicleTypeCheck.error });
+      }
+      const requestedVehicleType =
+        vehicleTypeCheck.type && vehicleTypeCheck.type !== "standard"
+          ? vehicleTypeCheck.type
+          : undefined;
+
       // ── Step 1: Validate ride request (service area, distance, rate limit) ──
       const validation = await validateRideRequest(userId, pickup, destination);
       if (!validation.valid) {
@@ -2194,6 +2212,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         bookedForFriend,
         passengerName: bookedForFriend ? passengerName : undefined,
         passengerPhone: bookedForFriend ? passengerPhone : undefined,
+        requestedVehicleType,
         rideType: bookedForFriend ? 'friend' : (req.body.rideType ?? 'solo'),
       };
       if (typeof bodyData.estimatedFare === 'number') {
@@ -2229,6 +2248,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           wantsSharedRide: ride.wantsSharedRide,
           bookedForFriend: ride.bookedForFriend,
           passengerName: ride.passengerName,
+          requestedVehicleType: ride.requestedVehicleType,
         },
       });
 
@@ -2257,7 +2277,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let assignedDriver: { userId: string; etaMinutes: number } | null = null;
       if (!isScheduledFuture && !ride.driverId) {
         try {
-          const bestDriver = await findBestDriver(pickup, pickupCounty, [], { riderId: userId });
+          const bestDriver = await findBestDriver(pickup, pickupCounty, [], {
+            riderId: userId,
+            requestedVehicleType: ride.requestedVehicleType ?? undefined,
+          });
           if (bestDriver) {
             await storage.updateRide(ride.id, { driverId: bestDriver.userId });
             assignedDriver = { userId: bestDriver.userId, etaMinutes: bestDriver.etaMinutes };
@@ -4927,12 +4950,42 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     }
   });
 
+  app.get('/api/trust/referrals/mine', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const created = await storage.listCommunityReferralsByReferrer(userId);
+      const redeemedAsReferrer = created.filter((r) => r.status === "redeemed").length;
+      const redeemedAsUser = await storage.getRedeemedReferralForUser(userId);
+      res.json({
+        referrals: created,
+        stats: {
+          codesCreated: created.length,
+          codesRedeemed: redeemedAsReferrer,
+          creditPerReferral: created[0]?.creditAmount ?? "5.00",
+        },
+        hasRedeemedCode: !!redeemedAsUser,
+        redeemedReferral: redeemedAsUser ?? null,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch referrals" });
+    }
+  });
+
   app.get('/api/trust/anchors', async (_req, res) => {
     try {
       const anchors = await storage.getCommunityAnchors(true);
       res.json(anchors);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch anchors" });
+    }
+  });
+
+  app.get('/api/community/routes', async (_req, res) => {
+    try {
+      const routes = await storage.getCommunityRoutes(true);
+      res.json(routes);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch community routes" });
     }
   });
 
@@ -5946,6 +5999,27 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       res.json({ vehicle, greenBonusPerRide: GREEN_BONUS_PER_RIDE });
     } catch (error) {
       res.status(400).json({ message: error instanceof Error ? error.message : "Failed to update vehicle" });
+    }
+  });
+
+  app.patch('/api/driver/vehicle/:vehicleId/type', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { vehicleId } = req.params;
+      const typeCheck = validateVehicleTypeInput(req.body.vehicleType);
+      if (!typeCheck.valid || !typeCheck.type) {
+        res.status(400).json({ message: typeCheck.error ?? "Invalid vehicle type" });
+        return;
+      }
+      const profile = await storage.getDriverProfile(userId);
+      if (!profile) {
+        res.status(404).json({ message: "Driver profile not found" });
+        return;
+      }
+      const vehicle = await storage.updateVehicleType(vehicleId, profile.id, typeCheck.type);
+      res.json({ vehicle });
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to update vehicle type" });
     }
   });
 
