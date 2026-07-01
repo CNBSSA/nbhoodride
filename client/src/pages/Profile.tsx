@@ -14,6 +14,7 @@ import { Bell, BellOff, Plus, MapPin, ChevronDown, ChevronUp, CheckSquare, Squar
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { AutonomyDial } from "@/components/AutonomyDial";
 import { TrustPreferences } from "@/components/TrustPreferences";
+import { ReferralProgramCard } from "@/components/ReferralProgramCard";
 import { CalmRideToggle } from "@/components/CalmRideToggle";
 import { LanguageSelector } from "@/components/LanguageSelector";
 import { MD_COUNTIES } from "../../../shared/schema";
@@ -499,6 +500,13 @@ export default function Profile() {
                 }
                 disabled={setTrustPrefs.isPending}
               />
+            </CardContent>
+          </Card>
+
+          {/* Neighbor referrals (C4 UI) */}
+          <Card>
+            <CardContent className="p-4">
+              <ReferralProgramCard />
             </CardContent>
           </Card>
 

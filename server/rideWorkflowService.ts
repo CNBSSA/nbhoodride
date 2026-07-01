@@ -34,6 +34,7 @@ import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import { storage } from "./storage";
 import { getDriverTrustContext, filterDriversByTrustPreferences } from "./agents/trust";
 import { rankDriversByTrustAndEta } from "@shared/trustScore";
+import { normalizeVehicleType, vehicleTypeMatches } from "@shared/vehicleTypes";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -321,7 +322,7 @@ export async function findBestDriver(
   pickupLocation: Location,
   pickupCounty: string | null,
   excludeDriverIds: string[] = [],
-  options?: { riderId?: string },
+  options?: { riderId?: string; requestedVehicleType?: string | null },
 ): Promise<DriverMatch | null> {
   // Fetch all non-suspended drivers with their user and vehicle info
   const results = await db
@@ -396,13 +397,22 @@ export async function findBestDriver(
     (d) => !busyDriverIds.has(d.profile.userId)
   );
 
-  if (available.length === 0) return null;
+  const requestedType = options?.requestedVehicleType
+    ? normalizeVehicleType(options.requestedVehicleType)
+    : undefined;
+  const vehicleFiltered = requestedType
+    ? available.filter((d) =>
+        d.vehicles.some((v) => v && vehicleTypeMatches(requestedType, v.vehicleType)),
+      )
+    : available;
+
+  if (vehicleFiltered.length === 0) return null;
 
   // Default location for drivers without GPS
   const PG_CENTER = { lat: 38.9073, lng: -76.7781 };
 
   // Compute distance to pickup for each driver
-  const withDistance = available.map((d) => {
+  const withDistance = vehicleFiltered.map((d) => {
     const loc = (d.profile.currentLocation as { lat: number; lng: number } | null) ?? PG_CENTER;
     const distanceMiles = haversineMiles(
       pickupLocation.lat,
@@ -437,7 +447,7 @@ export async function findBestDriver(
   if (options?.riderId) {
     const enriched = await Promise.all(
       pool.map(async (d) => {
-        const profile = available.find((a) => a.profile.userId === d.userId)?.profile;
+        const profile = vehicleFiltered.find((a) => a.profile.userId === d.userId)?.profile;
         const trust = await getDriverTrustContext(storage, options.riderId!, d.userId, {
           avgRating: parseFloat(d.rating),
           isVerifiedNeighbor: profile?.isVerifiedNeighbor ?? false,
@@ -564,12 +574,20 @@ export function startAcceptanceTimer(
 
       // Find next best driver (exclude all previously tried drivers)
       const triedDrivers = await getTriedDriversForRide(rideId);
-      const [rideRow] = await db.select({ riderId: rides.riderId }).from(rides).where(eq(rides.id, rideId));
+      const [rideRow] = await db
+        .select({ riderId: rides.riderId, requestedVehicleType: rides.requestedVehicleType })
+        .from(rides)
+        .where(eq(rides.id, rideId));
       const nextDriver = await findBestDriver(
         pickupLocation,
         pickupCounty,
         triedDrivers,
-        rideRow?.riderId ? { riderId: rideRow.riderId } : undefined,
+        rideRow?.riderId
+          ? {
+              riderId: rideRow.riderId,
+              requestedVehicleType: rideRow.requestedVehicleType ?? undefined,
+            }
+          : undefined,
       );
 
       if (!nextDriver) {

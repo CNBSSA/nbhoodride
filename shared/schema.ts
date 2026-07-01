@@ -153,6 +153,8 @@ export const vehicles = pgTable("vehicles", {
   /** Phase F4 — EV fleet incentives */
   isEv: boolean("is_ev").default(false),
   fuelType: varchar("fuel_type").default("gas"),
+  /** Rider-requestable vehicle class (standard / xl / suv / wheelchair). */
+  vehicleType: varchar("vehicle_type").default("standard"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -247,6 +249,8 @@ export const rides = pgTable("rides", {
   bookedForFriend: boolean("booked_for_friend").default(false),
   passengerName: varchar("passenger_name"),
   passengerPhone: varchar("passenger_phone"),
+  /** Rider preference: standard, xl, suv, wheelchair */
+  requestedVehicleType: varchar("requested_vehicle_type"),
   pickupStops: jsonb("pickup_stops").$type<Array<{lat: number, lng: number, address: string}>>(),
   originalFare: decimal("original_fare", { precision: 8, scale: 2 }),
   groupDiscountAmount: decimal("group_discount_amount", { precision: 8, scale: 2 }).default("0.00"),
@@ -906,6 +910,20 @@ export const communityAnchors = pgTable("community_anchors", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/** Pre-set community corridors — anchor-to-anchor quick booking. */
+export const communityRoutes = pgTable("community_routes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  routeCategory: varchar("route_category").notNull(),
+  destinationLocation: jsonb("destination_location").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  fromAnchorId: varchar("from_anchor_id").references(() => communityAnchors.id),
+  toAnchorId: varchar("to_anchor_id").references(() => communityAnchors.id),
+  sortOrder: integer("sort_order").default(0),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 /** Phase D1 — Hourly demand forecast grid (extends heatmap). */
 export const demandForecasts = pgTable("demand_forecasts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1327,6 +1345,7 @@ export type FavoriteDriver = typeof favoriteDrivers.$inferSelect;
 export type RiderTrustPreferences = typeof riderTrustPreferences.$inferSelect;
 export type CommunityReferral = typeof communityReferrals.$inferSelect;
 export type CommunityAnchor = typeof communityAnchors.$inferSelect;
+export type CommunityRoute = typeof communityRoutes.$inferSelect;
 export type DemandForecast = typeof demandForecasts.$inferSelect;
 export type CommunityBonusPool = typeof communityBonusPool.$inferSelect;
 export type BonusAllocation = typeof bonusAllocations.$inferSelect;

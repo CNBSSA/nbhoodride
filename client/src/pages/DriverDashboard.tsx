@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { VEHICLE_TYPE_LABELS, VEHICLE_TYPES, type VehicleType } from "@shared/vehicleTypes";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
@@ -63,6 +64,18 @@ export default function DriverDashboard() {
           ? `Eligible for $${data.greenBonusPerRide} green bonus per completed ride.`
           : undefined,
       });
+    },
+    onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
+  });
+
+  const vehicleTypeMutation = useMutation({
+    mutationFn: async ({ vehicleId, vehicleType }: { vehicleId: string; vehicleType: VehicleType }) => {
+      const res = await apiRequest("PATCH", `/api/driver/vehicle/${vehicleId}/type`, { vehicleType });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/vehicles"] });
+      toast({ title: "Vehicle type updated" });
     },
     onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
   });
@@ -699,6 +712,33 @@ export default function DriverDashboard() {
                       disabled={evMutation.isPending}
                       data-testid="switch-ev-vehicle"
                     />
+                  </div>
+                  <div className="mt-3 pt-2 border-t space-y-2">
+                    <p className="text-sm font-medium">Vehicle type for riders</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {VEHICLE_TYPES.map((type) => {
+                        const active = (driverVehicles[0].vehicleType ?? "standard") === type;
+                        return (
+                          <Button
+                            key={type}
+                            type="button"
+                            size="sm"
+                            variant={active ? "default" : "outline"}
+                            className="h-8 text-xs"
+                            disabled={vehicleTypeMutation.isPending}
+                            onClick={() =>
+                              vehicleTypeMutation.mutate({
+                                vehicleId: driverVehicles[0].id,
+                                vehicleType: type,
+                              })
+                            }
+                            data-testid={`driver-vehicle-type-${type}`}
+                          >
+                            {VEHICLE_TYPE_LABELS[type]}
+                          </Button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               </div>

@@ -167,6 +167,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-06-30 | Phase F research (F1–F4) | A | [#49](https://github.com/CNBSSA/nbhoodride/pull/49) | Pass — see below |
 | 2026-07-01 | Lost & found workflow (LF1–LF4) | A | [#52](https://github.com/CNBSSA/nbhoodride/pull/52) | Pass — see below |
 | 2026-07-01 | Ride for a friend + credentials (RFF1–RFF4) | A | [#54](https://github.com/CNBSSA/nbhoodride/pull/54) | Pass — see below |
+| 2026-07-01 | Vehicle types, community routes, referral UI (VT/CR/REF) | A | [#56](https://github.com/CNBSSA/nbhoodride/pull/56) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
@@ -235,6 +236,16 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | RFF3 | Driver visibility | Incoming + active ride passenger label |
 | RFF4 | Track B credentials inventory | `docs/TRACK_B_CREDENTIALS.md` |
 
+### Backlog — Vehicle types, community routes, referral UI
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| VT1 | Vehicle type on fleet | `vehicles.vehicle_type` + driver profile picker |
+| VT2 | Rider vehicle preference | `rides.requested_vehicle_type` + nearby-drivers filter |
+| CR1 | Community route presets | `community_routes` + seeded PG corridors |
+| CR2 | Rider quick-pick UI | `CommunityRoutesCard` on idle dashboard |
+| REF1 | Referral program UI | `GET /api/trust/referrals/mine` + Profile card |
+
 ### Ride for a friend — Post-implementation audit (2026-07-01)
 
 | Gate | Result |
@@ -243,6 +254,15 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | `npm test` | Pass — 74 tests |
 
 **Delivered (RFF1–RFF4):** Friend booking, rider UI, driver passenger label, credentials inventory.
+
+### Vehicle types, community routes, referral UI — Post-implementation audit (2026-07-01)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 56 tables |
+| `npm test` | Pass — 81 tests |
+
+**Delivered (VT1–REF1):** Vehicle type on fleet + rider picker, nearby-drivers filter, `community_routes` seeded corridors, idle quick-pick UI, referral Profile card + `GET /api/trust/referrals/mine`.
 
 ---
 
