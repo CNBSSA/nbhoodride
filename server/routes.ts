@@ -60,6 +60,7 @@ import { processL4Waypoint, logL4Disengagement } from "./agents/l4Readiness";
 import { getTransitAlertsForRiders, refreshTransitFeeds } from "./agents/transitFeed";
 import { recordCertificateProvenance, recordAllActiveCertificateHashes } from "./agents/certificateProvenance";
 import { allocateGreenBonusForRide, getEvEligibleDrivers, GREEN_BONUS_PER_RIDE } from "./agents/greenBonus";
+import { validateFriendRideInput } from "@shared/rideForFriend";
 import { processLostFoundReport, updateLostFoundStatus } from "./agents/lostFound";
 import { LOST_FOUND_CATEGORIES, LOST_FOUND_STATUSES } from "@shared/lostFoundPolicy";
 import { rideSurfaceSpecSchema } from "@shared/genui/schema";
@@ -2172,6 +2173,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "pickupLocation and destinationLocation are required" });
       }
 
+      const bookedForFriend = Boolean(req.body.bookedForFriend);
+      const passengerName = typeof req.body.passengerName === "string" ? req.body.passengerName.trim() : undefined;
+      const passengerPhone = typeof req.body.passengerPhone === "string" ? req.body.passengerPhone.trim() : undefined;
+      const friendCheck = validateFriendRideInput(bookedForFriend, passengerName, passengerPhone);
+      if (!friendCheck.valid) {
+        return res.status(400).json({ message: friendCheck.error });
+      }
+
       // ── Step 1: Validate ride request (service area, distance, rate limit) ──
       const validation = await validateRideRequest(userId, pickup, destination);
       if (!validation.valid) {
@@ -2182,6 +2191,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const bodyData = {
         ...req.body,
         paymentMethod: 'card', // Force virtual card payment
+        bookedForFriend,
+        passengerName: bookedForFriend ? passengerName : undefined,
+        passengerPhone: bookedForFriend ? passengerPhone : undefined,
+        rideType: bookedForFriend ? 'friend' : (req.body.rideType ?? 'solo'),
       };
       if (typeof bodyData.estimatedFare === 'number') {
         bodyData.estimatedFare = bodyData.estimatedFare.toString();
@@ -2214,6 +2227,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           pickupCounty: validation.pickupCounty,
           rideType: ride.rideType,
           wantsSharedRide: ride.wantsSharedRide,
+          bookedForFriend: ride.bookedForFriend,
+          passengerName: ride.passengerName,
         },
       });
 

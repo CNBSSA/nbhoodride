@@ -18,6 +18,7 @@ import { NotificationBell } from "@/components/NotificationBell";
 import { RideQuickMessages } from "@/components/RideQuickMessages";
 import { MobilityIntentCard, type IntentResolution } from "@/components/MobilityIntentCard";
 import { TransitAlertsCard } from "@/components/TransitAlertsCard";
+import { RideForFriendFields } from "@/components/RideForFriendFields";
 import { ExplainableMatchCard } from "@/components/ExplainableMatchCard";
 import { RideSurface } from "@/genui/RideSurface";
 import type { RideSurfaceSpec } from "@shared/genui/schema";
@@ -90,6 +91,9 @@ export default function RiderDashboard() {
   const [estimatedDistance, setEstimatedDistance] = useState<number | null>(null);
   const [estimatedDuration, setEstimatedDuration] = useState<number | null>(null);
   const [pickupInstructions, setPickupInstructions] = useState("");
+  const [rideForFriend, setRideForFriend] = useState(false);
+  const [passengerName, setPassengerName] = useState("");
+  const [passengerPhone, setPassengerPhone] = useState("");
   const [geocoding, setGeocoding] = useState(false);
   const [calculatingFare, setCalculatingFare] = useState(false);
 
@@ -362,6 +366,9 @@ export default function RiderDashboard() {
     setEstimatedDistance(null);
     setEstimatedDuration(null);
     setPickupInstructions("");
+    setRideForFriend(false);
+    setPassengerName("");
+    setPassengerPhone("");
     setGeocoding(false);
     setCalculatingFare(false);
   }, []);
@@ -375,6 +382,10 @@ export default function RiderDashboard() {
       toast({ title: "Address Not Found", description: "We couldn't locate that destination. Try a more specific address.", variant: "destructive" });
       return;
     }
+    if (rideForFriend && passengerName.trim().length < 2) {
+      toast({ title: "Passenger name required", description: "Enter who will be riding.", variant: "destructive" });
+      return;
+    }
     bookRideMutation.mutate({
       pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: userLocation.address },
       destinationLocation: { lat: destCoords.lat, lng: destCoords.lng, address: destinationAddress },
@@ -382,6 +393,9 @@ export default function RiderDashboard() {
       driverId: selectedDriverId,
       estimatedFare: fareEstimate?.total || 0,
       paymentMethod: 'card',
+      bookedForFriend: rideForFriend,
+      passengerName: rideForFriend ? passengerName.trim() : undefined,
+      passengerPhone: rideForFriend && passengerPhone.trim() ? passengerPhone.trim() : undefined,
     });
   };
 
@@ -961,6 +975,19 @@ export default function RiderDashboard() {
                   data-testid="input-pickup-instructions"
                 />
               </div>
+
+              {panel === "confirm" && (
+                <div className="mt-3">
+                  <RideForFriendFields
+                    enabled={rideForFriend}
+                    onEnabledChange={setRideForFriend}
+                    passengerName={passengerName}
+                    onPassengerNameChange={setPassengerName}
+                    passengerPhone={passengerPhone}
+                    onPassengerPhoneChange={setPassengerPhone}
+                  />
+                </div>
+              )}
 
               {/* Driver list */}
               {(panel === "drivers" || panel === "confirm") && (

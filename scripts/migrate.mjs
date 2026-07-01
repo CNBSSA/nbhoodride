@@ -933,6 +933,11 @@ CREATE INDEX IF NOT EXISTS idx_lost_found_rider ON lost_found_reports (rider_id)
 CREATE INDEX IF NOT EXISTS idx_lost_found_driver ON lost_found_reports (driver_id);
 CREATE INDEX IF NOT EXISTS idx_lost_found_status ON lost_found_reports (status);
 
+-- ── Ride for a friend (booker pays; passenger rides) ─────────────────────────
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS booked_for_friend BOOLEAN DEFAULT false;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS passenger_name VARCHAR;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS passenger_phone VARCHAR;
+
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
 -- the ALTER TABLE below throws "could not create unique index — Key (user_id)

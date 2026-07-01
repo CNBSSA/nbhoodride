@@ -10,6 +10,7 @@ import { RideHelpers } from '@/services/rideService';
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { RideQuickMessages } from "@/components/RideQuickMessages";
+import { formatPassengerLabel } from "@shared/rideForFriend";
 
 interface ActiveRideCardProps {
   ride: {
@@ -26,6 +27,9 @@ interface ActiveRideCardProps {
       lng: number;
     };
     pickupInstructions?: string;
+    bookedForFriend?: boolean;
+    passengerName?: string;
+    passengerPhone?: string;
     estimatedFare: string;
     actualFare?: string;
     acceptedAt?: string;
@@ -267,6 +271,14 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
               <p className="text-sm text-muted-foreground">
                 Rating: {parseFloat(ride.rider.rating || "5.0").toFixed(1)} ⭐
               </p>
+              {ride.bookedForFriend && ride.passengerName && (
+                <p className="text-xs text-purple-700 font-medium mt-1">
+                  {formatPassengerLabel(true, ride.passengerName, ride.rider.firstName)}
+                </p>
+              )}
+              {ride.passengerPhone && (
+                <p className="text-xs text-muted-foreground">📞 {ride.passengerPhone}</p>
+              )}
             </div>
           </div>
         )}
