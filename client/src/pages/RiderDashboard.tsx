@@ -15,7 +15,9 @@ import SOSModal from "@/components/SOSModal";
 import LostFoundModal from "@/components/LostFoundModal";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { NotificationBell } from "@/components/NotificationBell";
-import { RideQuickMessages } from "@/components/RideQuickMessages";
+import { RideChat } from "@/components/RideChat";
+import type { RideMessagePayload } from "@shared/rideChat";
+import { parseRideMessageWsEvent } from "@shared/rideChat";
 import { MobilityIntentCard, type IntentResolution } from "@/components/MobilityIntentCard";
 import { TransitAlertsCard } from "@/components/TransitAlertsCard";
 import { RideForFriendFields } from "@/components/RideForFriendFields";
@@ -110,6 +112,7 @@ export default function RiderDashboard() {
   const [isJoinScheduleOpen, setIsJoinScheduleOpen] = useState(false);
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
   const [isLostFoundOpen, setIsLostFoundOpen] = useState(false);
+  const [incomingRideMessage, setIncomingRideMessage] = useState<RideMessagePayload | null>(null);
   const [realtimeDrivers, setRealtimeDrivers] = useState<Record<string, { lat: number; lng: number }>>({});
   const [recentlyCompletedRide, setRecentlyCompletedRide] = useState<any>(null);
   const [quickRating, setQuickRating] = useState(0);
@@ -468,12 +471,16 @@ export default function RiderDashboard() {
         const driverId = lastMessage.driverId ?? activeRide?.driverId ?? 'active-driver';
         setRealtimeDrivers(prev => ({ ...prev, [driverId]: loc }));
       }
-    } else if (lastMessage.type === 'ride_quick_message') {
-      toast({
-        title: lastMessage.fromRole === 'driver' ? 'Driver message' : 'Rider message',
-        description: lastMessage.text,
-      });
-      navigator.vibrate?.([100]);
+    } else if (lastMessage.type === 'ride_message' || lastMessage.type === 'ride_quick_message') {
+      const payload = parseRideMessageWsEvent(lastMessage as Record<string, unknown>);
+      if (payload) {
+        setIncomingRideMessage(payload);
+        toast({
+          title: payload.senderRole === 'driver' ? 'Driver message' : 'Rider message',
+          description: payload.body,
+        });
+        navigator.vibrate?.([100]);
+      }
     } else if (lastMessage.type === 'ride_accepted') {
       refetchActiveRides();
       toast({ title: "Driver Accepted!", description: lastMessage.driverName ? `${lastMessage.driverName} is on the way!` : "Your driver is on the way!" });
@@ -642,7 +649,11 @@ export default function RiderDashboard() {
             )}
             {['accepted', 'driver_arriving', 'in_progress'].includes(activeRide.status) && (
               <div className="mt-2">
-                <RideQuickMessages rideId={activeRide.id} role="rider" />
+                <RideChat
+                  rideId={activeRide.id}
+                  role="rider"
+                  incomingMessage={incomingRideMessage?.rideId === activeRide.id ? incomingRideMessage : null}
+                />
               </div>
             )}
             {rideSurface && (

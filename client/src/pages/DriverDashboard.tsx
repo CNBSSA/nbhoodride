@@ -21,11 +21,14 @@ import { format } from "date-fns";
 import { BarChart3, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote } from "lucide-react";
 import PayoutModal from "@/components/PayoutModal";
 import { LostFoundDriverCard } from "@/components/LostFoundDriverCard";
+import type { RideMessagePayload } from "@shared/rideChat";
+import { parseRideMessageWsEvent } from "@shared/rideChat";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
   const [showPayoutModal, setShowPayoutModal] = useState(false);
   const [showCountySheet, setShowCountySheet] = useState(false);
+  const [incomingRideMessages, setIncomingRideMessages] = useState<Record<string, RideMessagePayload>>({});
   const [todayCounties, setTodayCounties] = useState<string[]>([]);
   const { user } = useAuth();
   const { toast } = useToast();
@@ -327,6 +330,18 @@ export default function DriverDashboard() {
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         navigator.vibrate([300, 100, 300]);
       }
+    } else if (lastMessage.type === 'ride_message' || lastMessage.type === 'ride_quick_message') {
+      const payload = parseRideMessageWsEvent(lastMessage as Record<string, unknown>);
+      if (payload) {
+        setIncomingRideMessages((prev) => ({ ...prev, [payload.rideId]: payload }));
+        toast({
+          title: payload.senderRole === 'rider' ? 'Rider message' : 'Driver message',
+          description: payload.body,
+        });
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+          navigator.vibrate([100]);
+        }
+      }
     } else if (lastMessage.type === 'ride_accepted' || lastMessage.type === 'ride_declined') {
       refetchPendingRides();
       refetchActiveRides();
@@ -433,7 +448,7 @@ export default function DriverDashboard() {
               Active Rides ({activeRides.length})
             </h3>
             {activeRides.map((ride: any) => (
-              <ActiveRideCard key={ride.id} ride={ride} />
+              <ActiveRideCard key={ride.id} ride={ride} incomingRideMessage={incomingRideMessages[ride.id] ?? null} />
             ))}
           </div>
         )}

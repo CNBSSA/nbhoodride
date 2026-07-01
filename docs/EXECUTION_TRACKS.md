@@ -171,6 +171,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-07-01 | Referral wallet credits + Driver Pro tiers (REF2/PRO1) | A | [#57](https://github.com/CNBSSA/nbhoodride/pull/57) | Pass — see below |
 | 2026-07-01 | Mobility intent TTL purge + MASTER_PLAN sync (PRIV1) | A | [#58](https://github.com/CNBSSA/nbhoodride/pull/58) | Pass — see below |
 | 2026-07-01 | Ride receipts polish (RCP1) | A | [#59](https://github.com/CNBSSA/nbhoodride/pull/59) | Pass — see below |
+| 2026-07-02 | Free-text ride chat (CHAT1) | A | [#60](https://github.com/CNBSSA/nbhoodride/pull/60) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
@@ -306,6 +307,15 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | `npm test` | Pass — 104 tests |
 
 **Delivered (RCP1):** Shared receipt builder, itemized RideReceiptModal with download, history list enrichment + period filter.
+
+### Free-text ride chat — Post-implementation audit (2026-07-02)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 57 tables |
+| `npm test` | Pass — 111 tests |
+
+**Delivered (CHAT1):** `ride_messages` table, GET/POST chat API, WS `ride_message` delivery, `RideChat` UI on rider/driver dashboards, quick messages persisted.
 
 ---
 

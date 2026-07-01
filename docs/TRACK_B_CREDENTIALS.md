@@ -81,6 +81,27 @@
 
 ## Your action checklist (when ready)
 
+### Railway deploy (from repo root)
+
+1. **Authenticate:** `railway login` (or `railway up -y` signs in + deploys in one step)
+2. **Link project** (if existing): `railway link --project <name>` — or `railway up -y` creates project + service
+3. **Add Postgres:** Railway dashboard → **+ New** → **Database** → **PostgreSQL** — copy `DATABASE_URL` into app service variables
+4. **Minimum variables** on the app service:
+
+| Variable | How to set |
+|----------|------------|
+| `DATABASE_URL` | From Railway Postgres service (reference variable) |
+| `SESSION_SECRET` | `openssl rand -hex 32` |
+| `SUPER_ADMIN_SETUP_TOKEN` | One-time random string; hit setup route then remove |
+| `SUPER_ADMIN_EMAIL` | Your admin email |
+| `PUBLIC_APP_URL` | Railway public domain, e.g. `https://<app>.up.railway.app` |
+
+5. **Deploy:** `railway up --detach -m "deploy main"` — `railway.toml` runs `npm run db:push` pre-deploy
+6. **Verify:** open `/health`, then login/signup smoke test
+7. **Next vars** (when ready): Stripe, `GCS_BUCKET_NAME`, VAPID, `ANTHROPIC_API_KEY` — see table above
+
+### Feature flip checklist
+
 1. **Deploy minimum:** `DATABASE_URL`, `SESSION_SECRET`, `SUPER_ADMIN_SETUP_TOKEN`
 2. **Payments:** Stripe keys + webhook secret
 3. **Driver docs:** GCS bucket + credentials

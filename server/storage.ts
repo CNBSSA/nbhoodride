@@ -33,6 +33,7 @@ import {
   communityReferrals,
   communityAnchors,
   communityRoutes,
+  rideMessages,
   demandForecasts,
   communityBonusPool,
   bonusAllocations,
@@ -90,6 +91,7 @@ import {
   type CommunityReferral,
   type CommunityAnchor,
   type CommunityRoute,
+  type RideMessage,
   type DemandForecast,
   type CommunityBonusPool,
   type BonusAllocation,
@@ -416,6 +418,15 @@ export interface IStorage {
   getRedeemedReferralForUser(userId: string): Promise<CommunityReferral | undefined>;
   getCommunityAnchors(activeOnly?: boolean): Promise<CommunityAnchor[]>;
   getCommunityRoutes(activeOnly?: boolean): Promise<CommunityRoute[]>;
+  createRideMessage(data: {
+    rideId: string;
+    senderId: string;
+    senderRole: string;
+    kind: string;
+    messageKey?: string | null;
+    body: string;
+  }): Promise<RideMessage>;
+  getRideMessages(rideId: string, limit?: number, before?: Date): Promise<RideMessage[]>;
   // List a rider's active (non-revoked, non-expired) guardian links so they
   // can review and revoke. Sorted newest-first.
   listActiveGuardianLinksByRider(riderUserId: string): Promise<GuardianLink[]>;
@@ -3610,6 +3621,31 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(communityRoutes)
       .orderBy(asc(communityRoutes.sortOrder), asc(communityRoutes.name));
+  }
+
+  async createRideMessage(data: {
+    rideId: string;
+    senderId: string;
+    senderRole: string;
+    kind: string;
+    messageKey?: string | null;
+    body: string;
+  }): Promise<RideMessage> {
+    const [row] = await db.insert(rideMessages).values(data).returning();
+    return row;
+  }
+
+  async getRideMessages(rideId: string, limit = 50, before?: Date): Promise<RideMessage[]> {
+    const conditions = before
+      ? and(eq(rideMessages.rideId, rideId), lt(rideMessages.createdAt, before))
+      : eq(rideMessages.rideId, rideId);
+    return db
+      .select()
+      .from(rideMessages)
+      .where(conditions)
+      .orderBy(desc(rideMessages.createdAt))
+      .limit(limit)
+      .then((rows) => rows.reverse());
   }
 
   async listActiveGuardianLinksByRider(riderUserId: string): Promise<GuardianLink[]> {

@@ -9,7 +9,8 @@ import { MapPin, Clock, User, DollarSign, Navigation, CheckCircle, Route, Extern
 import { RideHelpers } from '@/services/rideService';
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
-import { RideQuickMessages } from "@/components/RideQuickMessages";
+import { RideChat } from "@/components/RideChat";
+import type { RideMessagePayload } from "@shared/rideChat";
 import { formatPassengerLabel } from "@shared/rideForFriend";
 
 interface ActiveRideCardProps {
@@ -40,9 +41,10 @@ interface ActiveRideCardProps {
       rating: string;
     };
   };
+  incomingRideMessage?: RideMessagePayload | null;
 }
 
-export function ActiveRideCard({ ride }: ActiveRideCardProps) {
+export function ActiveRideCard({ ride, incomingRideMessage }: ActiveRideCardProps) {
   const [isUpdating, setIsUpdating] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -146,7 +148,7 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
                 Navigate to Pickup (Google Maps)
               </Button>
             )}
-            <RideQuickMessages rideId={ride.id} role="driver" />
+            <RideChat rideId={ride.id} role="driver" incomingMessage={incomingRideMessage ?? null} />
             <Button 
               onClick={handleStartRide}
               disabled={isUpdating}
@@ -218,7 +220,7 @@ export function ActiveRideCard({ ride }: ActiveRideCardProps) {
               Base $4.00 + $0.29/min + $0.90/mi ($7.65 min, $100 max)
             </p>
 
-            <RideQuickMessages rideId={ride.id} role="driver" />
+            <RideChat rideId={ride.id} role="driver" incomingMessage={incomingRideMessage ?? null} />
 
             {ride.destinationLocation?.lat && ride.destinationLocation?.lng && (
               <Button 

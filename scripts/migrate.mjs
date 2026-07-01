@@ -1084,6 +1084,19 @@ FROM community_anchors a
 WHERE a.name = 'FedExField'
   AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'Event → FedExField');
 
+-- In-ride rider ↔ driver chat (quick + free-text)
+CREATE TABLE IF NOT EXISTS ride_messages (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  ride_id VARCHAR NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+  sender_id VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  sender_role VARCHAR NOT NULL,
+  kind VARCHAR NOT NULL DEFAULT 'text',
+  message_key VARCHAR,
+  body TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ride_messages_ride_created_idx ON ride_messages (ride_id, created_at);
+
 -- Ensure one driver profile per user — prevents duplicate rows from concurrent
 -- "Get Started" clicks or retries.
 --
