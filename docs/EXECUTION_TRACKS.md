@@ -6,6 +6,7 @@
 |----------|------|
 | [`MASTER_PLAN.md`](MASTER_PLAN.md) | What to build (Part I = today, Part II = vision) |
 | **This file** | Who executes what, and the audit workflow |
+| [`TRACK_B_CREDENTIALS.md`](TRACK_B_CREDENTIALS.md) | **All keys/APIs/decisions needed from you** |
 
 ---
 
@@ -223,6 +224,15 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | `npm test` | Pass — 72 tests |
 
 **Delivered (LF1–LF4):** Lost item reports, driver response flow, Support notifications, admin Lost & Found tab.
+
+### Backlog — Ride for a friend
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| RFF1 | Booker pays, passenger rides | `rides.booked_for_friend` + passenger fields |
+| RFF2 | Rider booking UI | `RideForFriendFields` on confirm step |
+| RFF3 | Driver visibility | Incoming + active ride passenger label |
+| RFF4 | Track B credentials inventory | `docs/TRACK_B_CREDENTIALS.md` |
 
 ---
 

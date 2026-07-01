@@ -243,6 +243,10 @@ export const rides = pgTable("rides", {
   sharedFareDiscount: decimal("shared_fare_discount", { precision: 8, scale: 2 }).default("0.00"),
   groupId: varchar("group_id"),
   rideType: varchar("ride_type").default("solo"),
+  /** Book for someone else — payer is riderId; passenger fields name the rider. */
+  bookedForFriend: boolean("booked_for_friend").default(false),
+  passengerName: varchar("passenger_name"),
+  passengerPhone: varchar("passenger_phone"),
   pickupStops: jsonb("pickup_stops").$type<Array<{lat: number, lng: number, address: string}>>(),
   originalFare: decimal("original_fare", { precision: 8, scale: 2 }),
   groupDiscountAmount: decimal("group_discount_amount", { precision: 8, scale: 2 }).default("0.00"),
