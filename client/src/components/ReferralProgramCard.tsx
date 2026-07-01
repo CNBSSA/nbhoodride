@@ -55,12 +55,14 @@ export function ReferralProgramCard() {
   const redeemReferral = useMutation({
     mutationFn: async (code: string) => {
       const res = await apiRequest("POST", "/api/trust/referrals/redeem", { code: code.trim().toUpperCase() });
-      return res.json();
+      return res.json() as Promise<{ creditAmount: number }>;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       setRedeemCode("");
       queryClient.invalidateQueries({ queryKey: ["/api/trust/referrals/mine"] });
-      toast({ title: "Code redeemed!", description: "$5 community credit applied to your account." });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      const amt = data.creditAmount ?? 5;
+      toast({ title: "Code redeemed!", description: `$${amt.toFixed(2)} community credit applied to your PG Card.` });
     },
     onError: async (err: Error) => {
       toast({

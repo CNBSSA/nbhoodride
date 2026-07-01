@@ -56,6 +56,7 @@ interface Driver {
     isFavorite?: boolean;
     separationDegrees?: number;
   };
+  proTier?: "community" | "pro" | "elite";
 }
 
 function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -232,6 +233,7 @@ export default function RiderDashboard() {
         isOnline: driver.isOnline ?? true,
         trustScore: driver.trust?.trustScore ?? 0,
         trust: driver.trust,
+        proTier: driver.proTier,
       };
     }),
   ).map(({ isOnline: _o, trustScore: _t, ...driver }) => driver);
@@ -1064,6 +1066,7 @@ export default function RiderDashboard() {
                             key={driver.id}
                             driverName={driver.name}
                             trust={driver.trust}
+                            proTier={driver.proTier}
                             eta={driver.estimatedTime}
                             fare={driver.estimatedFare}
                             selected={selectedDriverId === driver.userId}
