@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useLocation, Link } from 'wouter';
-import { queryClient } from '@/lib/queryClient';
+import { queryClient, getCsrfToken } from '@/lib/queryClient';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -22,7 +22,7 @@ export default function Login() {
     try {
       const response = await fetch('/api/auth/resend-verification', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() ?? '' },
         body: JSON.stringify({ email: verificationRequired.email }),
         credentials: 'include',
       });
@@ -53,9 +53,7 @@ export default function Login() {
     try {
       const response = await fetch('/api/auth/email-login', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() ?? '' },
         body: JSON.stringify({ email, password }),
         credentials: 'include',
       });

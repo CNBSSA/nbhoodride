@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { useLocation, Link } from 'wouter';
+import { getCsrfToken } from '@/lib/queryClient';
 
 export default function ResetPassword() {
   const [token, setToken] = useState('');
@@ -34,10 +35,9 @@ export default function ResetPassword() {
     try {
       const response = await fetch('/api/auth/reset-password', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() ?? '' },
         body: JSON.stringify({ token, newPassword }),
+        credentials: 'include',
       });
 
       if (!response.ok) {

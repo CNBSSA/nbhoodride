@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { Link } from 'wouter';
+import { getCsrfToken } from '@/lib/queryClient';
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
@@ -21,10 +22,9 @@ export default function ForgotPassword() {
     try {
       const response = await fetch('/api/auth/forgot-password', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() ?? '' },
         body: JSON.stringify({ email }),
+        credentials: 'include',
       });
 
       if (!response.ok) {

@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { useLocation } from 'wouter';
+import { getCsrfToken } from '@/lib/queryClient';
 
 export default function TestLogin() {
   const [email, setEmail] = useState('');
@@ -27,9 +28,7 @@ export default function TestLogin() {
     try {
       const response = await fetch('/api/auth/test-login', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() ?? '' },
         body: JSON.stringify({ email, password }),
         credentials: 'include',
       });
