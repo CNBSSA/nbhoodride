@@ -168,7 +168,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-07-01 | Lost & found workflow (LF1–LF4) | A | [#52](https://github.com/CNBSSA/nbhoodride/pull/52) | Pass — see below |
 | 2026-07-01 | Ride for a friend + credentials (RFF1–RFF4) | A | [#54](https://github.com/CNBSSA/nbhoodride/pull/54) | Pass — see below |
 | 2026-07-01 | Vehicle types, community routes, referral UI (VT/CR/REF) | A | [#56](https://github.com/CNBSSA/nbhoodride/pull/56) | Pass — see below |
-| 2026-07-01 | Referral wallet credits + Driver Pro tiers (REF2/PRO1) | A | TBD | Pass — see below |
+| 2026-07-01 | Referral wallet credits + Driver Pro tiers (REF2/PRO1) | A | [#57](https://github.com/CNBSSA/nbhoodride/pull/57) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
@@ -246,6 +246,13 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | CR1 | Community route presets | `community_routes` + seeded PG corridors |
 | CR2 | Rider quick-pick UI | `CommunityRoutesCard` on idle dashboard |
 | REF1 | Referral program UI | `GET /api/trust/referrals/mine` + Profile card |
+
+### Backlog — Referral credits + Driver Pro tiers
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| REF2 | Referral PG Card payout | Atomic wallet credit on redeem (referrer + redeemer) |
+| PRO1 | Driver Pro tiers | Computed badges; rider match cards + driver dashboard |
 
 ### Ride for a friend — Post-implementation audit (2026-07-01)
 
