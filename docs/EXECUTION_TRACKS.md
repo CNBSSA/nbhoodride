@@ -109,7 +109,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | F3 | Transit integration | `transit_feed_cache` + `/api/transit/alerts`; `WMATA_API_KEY` |
 | F4 | EV green bonus | `vehicles.is_ev` + community bonus pool allocation |
 
-### Backlog — Lost & Found
+### Backlog — Lost & Found — merged [#52](https://github.com/CNBSSA/nbhoodride/pull/52)
 
 | ID | Deliverable | Notes |
 |----|-------------|-------|
@@ -164,6 +164,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-06-30 | Phase D predictive co-op (D1–D7) | A | [#42](https://github.com/CNBSSA/nbhoodride/pull/42) | Pass — see below |
 | 2026-06-30 | Phase E autonomous ops (E1–E7) | A | [#47](https://github.com/CNBSSA/nbhoodride/pull/47) | Pass — see below |
 | 2026-06-30 | Phase F research (F1–F4) | A | [#49](https://github.com/CNBSSA/nbhoodride/pull/49) | Pass — see below |
+| 2026-07-01 | Lost & found workflow (LF1–LF4) | A | [#52](https://github.com/CNBSSA/nbhoodride/pull/52) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
@@ -213,6 +214,15 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | `npm test` | Pass — 50 tests |
 
 **Delivered (F1–F4):** L4 readiness logging, certificate SHA-256 provenance, transit feed cache + rider alerts, EV green bonus from community pool.
+
+### Lost & Found — Post-implementation audit (2026-07-01)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 55 tables |
+| `npm test` | Pass — 72 tests |
+
+**Delivered (LF1–LF4):** Lost item reports, driver response flow, Support notifications, admin Lost & Found tab.
 
 ---
 
