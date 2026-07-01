@@ -932,6 +932,20 @@ export const communityRoutes = pgTable("community_routes", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/** In-ride rider ↔ driver messages (quick + free-text). */
+export const rideMessages = pgTable("ride_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  rideId: varchar("ride_id").notNull().references(() => rides.id, { onDelete: "cascade" }),
+  senderId: varchar("sender_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  senderRole: varchar("sender_role").notNull(),
+  kind: varchar("kind").notNull().default("text"),
+  messageKey: varchar("message_key"),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("ride_messages_ride_created_idx").on(table.rideId, table.createdAt),
+]);
+
 /** Phase D1 — Hourly demand forecast grid (extends heatmap). */
 export const demandForecasts = pgTable("demand_forecasts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1354,6 +1368,7 @@ export type RiderTrustPreferences = typeof riderTrustPreferences.$inferSelect;
 export type CommunityReferral = typeof communityReferrals.$inferSelect;
 export type CommunityAnchor = typeof communityAnchors.$inferSelect;
 export type CommunityRoute = typeof communityRoutes.$inferSelect;
+export type RideMessage = typeof rideMessages.$inferSelect;
 export type DemandForecast = typeof demandForecasts.$inferSelect;
 export type CommunityBonusPool = typeof communityBonusPool.$inferSelect;
 export type BonusAllocation = typeof bonusAllocations.$inferSelect;

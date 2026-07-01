@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { apiRequest } from "@/lib/queryClient";
 import { QUICK_RIDE_MESSAGES, type QuickRideMessageKey } from "@shared/quickRideMessages";
@@ -11,14 +11,16 @@ interface RideQuickMessagesProps {
 
 export function RideQuickMessages({ rideId, role }: RideQuickMessagesProps) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   const sendMutation = useMutation({
     mutationFn: async (messageKey: QuickRideMessageKey) => {
       const res = await apiRequest("POST", `/api/rides/${rideId}/quick-message`, { messageKey });
-      return res.json() as Promise<{ ok: boolean; text: string }>;
+      return res.json() as Promise<{ ok: boolean; text: string; message?: { id: string } }>;
     },
     onSuccess: (data) => {
       toast({ title: "Sent", description: data.text });
+      queryClient.invalidateQueries({ queryKey: ["/api/rides", rideId, "messages"] });
     },
     onError: () => {
       toast({ title: "Could not send", description: "Try again.", variant: "destructive" });

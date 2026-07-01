@@ -538,7 +538,7 @@ Original stack was Replit-first (auth, AI integrations, GCS via Replit sidecar).
 
 | Feature | Phase | Status |
 |---------|-------|--------|
-| In-app chat with canned messages | Beta | ✅ Quick messages (A4) |
+| In-app chat with canned messages | Beta | ✅ Quick messages (A4) + free-text ride chat |
 | Lost & found workflow | Beta | ✅ [#52](https://github.com/CNBSSA/nbhoodride/pull/52) |
 | Favorite drivers | Beta | ✅ [#41](https://github.com/CNBSSA/nbhoodride/pull/41) |
 | Referral program | Growth | ✅ [#56](https://github.com/CNBSSA/nbhoodride/pull/56), [#57](https://github.com/CNBSSA/nbhoodride/pull/57) |
@@ -1370,7 +1370,7 @@ The highest-leverage work **starting now**:
 2. **Object storage live** — `GCS_BUCKET_NAME` + credentials (driver doc uploads still 503 without)
 3. **Tax compliance path** — AH-060 decision (Path A/B/C) before 1099 season
 4. **Ride receipts polish** — ✅ detailed receipts in ride history ([#59](https://github.com/CNBSSA/nbhoodride/pull/59))
-5. **Free-text in-app chat** — optional; canned quick messages already shipped (A4)
+5. **Free-text in-app chat** — ✅ rider↔driver chat during active rides (quick messages + text)
 
 Phases A–F and backlog items through [#57](https://github.com/CNBSSA/nbhoodride/pull/57) are merged on `main`.
 

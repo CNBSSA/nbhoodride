@@ -72,6 +72,15 @@ import {
   getQuickMessageText,
   isQuickMessageAllowedForRole,
 } from "@shared/quickRideMessages";
+import {
+  isRideChatActiveStatus,
+  validateRideChatBody,
+  type RideMessageKind,
+  type RideMessagePayload,
+  type RideMessageRole,
+} from "@shared/rideChat";
+import { pushRideMessageToUser, setRideMessageConnections } from "./rideMessageHub";
+import type { RideMessage } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import {
   insertDriverProfileSchema,
@@ -159,6 +168,37 @@ async function ensureSuperAdminSetup() {
   }
 }
 
+function serializeRideMessage(row: RideMessage): RideMessagePayload {
+  return {
+    id: row.id,
+    rideId: row.rideId,
+    senderId: row.senderId,
+    senderRole: row.senderRole as RideMessageRole,
+    kind: row.kind as RideMessageKind,
+    messageKey: row.messageKey,
+    body: row.body,
+    createdAt: (row.createdAt ?? new Date()).toISOString(),
+  };
+}
+
+async function notifyRideMessageRecipient(
+  targetUserId: string | null | undefined,
+  message: RideMessagePayload,
+  fromRole: RideMessageRole,
+) {
+  if (!targetUserId) return;
+  const delivered = pushRideMessageToUser(targetUserId, message);
+  if (!delivered) {
+    await deliverUserNotification(targetUserId, {
+      type: "ride_message",
+      title: fromRole === "driver" ? "Message from your driver" : "Message from your rider",
+      body: message.body.length > 120 ? `${message.body.slice(0, 117)}...` : message.body,
+      data: { rideId: message.rideId, messageId: message.id },
+      tag: `ride-message-${message.rideId}`,
+    });
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Rate limiting
   const generalLimiter = rateLimit({
@@ -227,6 +267,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     standardHeaders: true,
     legacyHeaders: false,
     message: { message: "Too many tracking requests, please slow down." },
+  });
+
+  const rideChatLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: "Too many chat messages. Please slow down." },
   });
 
   app.use('/api', generalLimiter);
@@ -1190,7 +1238,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/rides/:rideId/quick-message', isAuthenticated, async (req: any, res) => {
+  app.post('/api/rides/:rideId/quick-message', isAuthenticated, rideChatLimiter, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
@@ -1206,6 +1254,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!isRider && !isDriver) {
         return res.status(403).json({ message: "Not a participant on this ride" });
       }
+      if (!ride.status || !isRideChatActiveStatus(ride.status)) {
+        return res.status(400).json({ message: "Chat is only available during active rides" });
+      }
       const role = isRider ? "rider" : "driver";
       if (!isQuickMessageAllowedForRole(messageKey, role)) {
         return res.status(400).json({ message: "Invalid message for your role" });
@@ -1213,24 +1264,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const text = getQuickMessageText(messageKey);
       if (!text) return res.status(400).json({ message: "Unknown message key" });
 
-      const targetUserId = isRider ? ride.driverId : ride.riderId;
-      const payload = {
-        type: "ride_quick_message",
+      const row = await storage.createRideMessage({
         rideId,
+        senderId: userId,
+        senderRole: role,
+        kind: "quick",
         messageKey,
-        text,
-        fromUserId: userId,
-        fromRole: role,
-      };
-      if (targetUserId && activeConnections.has(targetUserId)) {
-        const ws = activeConnections.get(targetUserId)!;
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify(payload));
-        }
-      }
-      res.json({ ok: true, text });
+        body: text,
+      });
+      const message = serializeRideMessage(row);
+      const targetUserId = isRider ? ride.driverId : ride.riderId;
+      await notifyRideMessageRecipient(targetUserId, message, role);
+
+      res.json({ ok: true, text, message });
     } catch (error) {
       console.error("Error sending quick message:", error);
+      res.status(500).json({ message: "Failed to send message" });
+    }
+  });
+
+  app.get('/api/rides/:rideId/messages', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const limit = req.query.limit ? Math.min(parseInt(req.query.limit as string, 10) || 50, 100) : 50;
+      const before = req.query.before ? new Date(req.query.before as string) : undefined;
+
+      const ride = await storage.getRide(rideId);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+      const isParticipant = ride.riderId === userId || ride.driverId === userId;
+      const user = await storage.getUser(userId);
+      if (!isParticipant && !user?.isAdmin && !user?.isSuperAdmin) {
+        return res.status(403).json({ message: "Not authorized to view this chat" });
+      }
+
+      const rows = await storage.getRideMessages(rideId, limit, before);
+      res.json(rows.map(serializeRideMessage));
+    } catch (error) {
+      console.error("Error fetching ride messages:", error);
+      res.status(500).json({ message: "Failed to fetch messages" });
+    }
+  });
+
+  app.post('/api/rides/:rideId/messages', isAuthenticated, rideChatLimiter, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const parsed = validateRideChatBody(req.body?.body);
+      if (!parsed.ok) {
+        return res.status(400).json({ message: parsed.error });
+      }
+
+      const ride = await storage.getRide(rideId);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+
+      const isRider = ride.riderId === userId;
+      const isDriver = ride.driverId === userId;
+      if (!isRider && !isDriver) {
+        return res.status(403).json({ message: "Not a participant on this ride" });
+      }
+      if (!ride.status || !isRideChatActiveStatus(ride.status)) {
+        return res.status(400).json({ message: "Chat is only available during active rides" });
+      }
+      const role: RideMessageRole = isRider ? "rider" : "driver";
+
+      const row = await storage.createRideMessage({
+        rideId,
+        senderId: userId,
+        senderRole: role,
+        kind: "text",
+        body: parsed.body,
+      });
+      const message = serializeRideMessage(row);
+      const targetUserId = isRider ? ride.driverId : ride.riderId;
+      await notifyRideMessageRecipient(targetUserId, message, role);
+
+      res.status(201).json(message);
+    } catch (error) {
+      console.error("Error sending ride message:", error);
       res.status(500).json({ message: "Failed to send message" });
     }
   });
@@ -6582,6 +6693,7 @@ Generate the FAQ list.`;
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
   
   const activeConnections = new Map<string, WebSocket>();
+  setRideMessageConnections(activeConnections);
 
   // County preferences per connected driver (userId → acceptedCounties[])
   // Empty array = accepts all Maryland counties. Cached at join time.
