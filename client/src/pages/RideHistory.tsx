@@ -4,34 +4,39 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
-import RideDetailsModal from "@/components/RideDetailsModal";
+import { RideReceiptModal } from "@/components/RideReceiptModal";
 import ReportModal from "@/components/ReportModal";
 import LostFoundModal from "@/components/LostFoundModal";
+import { formatPaymentMethodLabel } from "@shared/rideReceipt";
 
 export default function RideHistory() {
   const [selectedPeriod, setSelectedPeriod] = useState("30");
-  const [selectedRide, setSelectedRide] = useState<any>(null);
-  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
+  const [receiptRideId, setReceiptRideId] = useState<string | null>(null);
+  const [isReceiptOpen, setIsReceiptOpen] = useState(false);
+  const [reportRideId, setReportRideId] = useState<string | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isLostFoundOpen, setIsLostFoundOpen] = useState(false);
   const { user } = useAuth();
 
-  // Fetch ride history
   const { data: rides = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/rides"],
+    queryKey: ["/api/rides", selectedPeriod],
+    queryFn: async () => {
+      const res = await fetch(`/api/rides?days=${selectedPeriod}&limit=100`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load rides");
+      return res.json();
+    },
     enabled: !!user,
   });
 
-  const handleViewDetails = (ride: any) => {
-    setSelectedRide(ride);
-    setIsDetailsModalOpen(true);
+  const handleViewReceipt = (ride: { id: string; status: string }) => {
+    if (ride.status !== "completed") return;
+    setReceiptRideId(ride.id);
+    setIsReceiptOpen(true);
   };
 
-  const handleReportIssue = (ride?: any) => {
-    if (ride) {
-      setSelectedRide(ride);
-    }
-    setIsDetailsModalOpen(false);
+  const handleReportIssue = (rideId: string) => {
+    setReportRideId(rideId);
+    setIsReceiptOpen(false);
     setIsReportModalOpen(true);
   };
 
@@ -41,13 +46,13 @@ export default function RideHistory() {
     const diffTime = Math.abs(now.getTime() - date.getTime());
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-    if (diffDays === 1) return "Today";
+    if (diffDays <= 1) return "Today";
     if (diffDays === 2) return "Yesterday";
-    return date.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
   };
 
@@ -64,17 +69,20 @@ export default function RideHistory() {
     }
   };
 
-  const renderStars = (rating: number) => {
-    return Array.from({ length: 5 }, (_, i) => (
+  const renderStars = (rating: number) =>
+    Array.from({ length: 5 }, (_, i) => (
       <span key={i} className={i < rating ? "text-yellow-500" : "text-muted-foreground"}>
         ★
       </span>
     ));
+
+  const fareDisplay = (ride: any) => {
+    const amount = parseFloat(ride.actualFare ?? ride.estimatedFare ?? "0");
+    return amount.toFixed(2);
   };
 
   return (
     <>
-      {/* Header */}
       <header className="bg-card border-b border-border p-4 flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <i className="fas fa-history text-primary text-2xl" />
@@ -86,7 +94,6 @@ export default function RideHistory() {
       </header>
 
       <main className="p-4 space-y-4">
-        {/* Period Filter */}
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Your Rides</h2>
           <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
@@ -101,7 +108,6 @@ export default function RideHistory() {
           </Select>
         </div>
 
-        {/* Rides List */}
         {isLoading ? (
           <div className="text-center py-8 text-muted-foreground">
             <i className="fas fa-spinner animate-spin text-2xl mb-2" />
@@ -111,8 +117,8 @@ export default function RideHistory() {
           <Card>
             <CardContent className="p-8 text-center text-muted-foreground">
               <i className="fas fa-car text-4xl mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No rides yet</h3>
-              <p>Your completed rides will appear here</p>
+              <h3 className="text-lg font-semibold mb-2">No rides in this period</h3>
+              <p>Completed rides will appear here with downloadable receipts</p>
             </CardContent>
           </Card>
         ) : (
@@ -121,51 +127,57 @@ export default function RideHistory() {
               <Card key={ride.id} className="border border-border">
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between mb-3">
-                    <div className="flex-1">
-                      <div className="flex items-center space-x-2 mb-1">
-                        <h3 className="font-semibold" data-testid={`ride-route-${ride.id}`}>
-                          {ride.pickupLocation?.address} → {ride.destinationLocation?.address}
-                        </h3>
-                      </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-semibold truncate" data-testid={`ride-route-${ride.id}`}>
+                        {ride.pickupLocation?.address} → {ride.destinationLocation?.address}
+                      </h3>
                       <p className="text-sm text-muted-foreground" data-testid={`ride-details-${ride.id}`}>
-                        {formatDate(ride.completedAt || ride.createdAt)} • {ride.distance || 0} miles • {ride.duration || 0} min
+                        {formatDate(ride.completedAt || ride.createdAt)} •{" "}
+                        {ride.distance ? `${parseFloat(ride.distance).toFixed(1)} mi` : "—"} •{" "}
+                        {ride.duration ?? "—"} min
                       </p>
                       <div className="flex items-center space-x-2 mt-2">
-                        <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-xs font-bold">
+                        <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-xs">
                           <i className="fas fa-user" />
                         </div>
                         <span className="text-sm text-muted-foreground">
-                          {ride.driver ? `${ride.driver.firstName} ${ride.driver.lastName?.[0] || ''}.` : (ride.driverId ? 'Driver' : 'N/A')}
+                          {ride.driver
+                            ? `${ride.driver.firstName} ${ride.driver.lastName?.[0] || ""}.`
+                            : ride.driverId
+                              ? "Driver"
+                              : "No driver"}
                         </span>
                         {ride.driverRating && (
-                          <div className="flex text-xs">
-                            {renderStars(ride.driverRating)}
-                          </div>
+                          <div className="flex text-xs">{renderStars(ride.driverRating)}</div>
                         )}
                       </div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right ml-2 shrink-0">
                       <p className="text-lg font-bold" data-testid={`ride-fare-${ride.id}`}>
-                        ${ride.actualFare || ride.estimatedFare || 0}
+                        ${fareDisplay(ride)}
                       </p>
-                      <p className="text-sm text-muted-foreground">Cash</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatPaymentMethodLabel(ride.paymentMethod)}
+                      </p>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex space-x-2">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-2">
+                      {ride.status === "completed" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleViewReceipt(ride)}
+                          className="text-primary"
+                          data-testid={`button-view-receipt-${ride.id}`}
+                        >
+                          View Receipt
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleViewDetails(ride)}
-                        className="text-primary"
-                        data-testid={`button-view-receipt-${ride.id}`}
-                      >
-                        View Receipt
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleReportIssue(ride)}
+                        onClick={() => handleReportIssue(ride.id)}
                         className="text-muted-foreground"
                         data-testid={`button-report-issue-${ride.id}`}
                       >
@@ -176,7 +188,7 @@ export default function RideHistory() {
                           variant="ghost"
                           size="sm"
                           onClick={() => {
-                            setSelectedRide(ride);
+                            setReportRideId(ride.id);
                             setIsLostFoundOpen(true);
                           }}
                           className="text-muted-foreground"
@@ -187,9 +199,13 @@ export default function RideHistory() {
                       )}
                     </div>
                     <span className={`text-xs px-2 py-1 rounded ${getStatusColor(ride.status)}`}>
-                      {ride.status === "completed" ? "Completed" : 
-                       ride.status === "cancelled" ? "Cancelled" :
-                       ride.status === "in_progress" ? "In Progress" : "Pending"}
+                      {ride.status === "completed"
+                        ? "Completed"
+                        : ride.status === "cancelled"
+                          ? "Cancelled"
+                          : ride.status === "in_progress"
+                            ? "In Progress"
+                            : "Pending"}
                     </span>
                   </div>
                 </CardContent>
@@ -199,23 +215,27 @@ export default function RideHistory() {
         )}
       </main>
 
-      {/* Modals */}
-      <RideDetailsModal
-        isOpen={isDetailsModalOpen}
-        onClose={() => setIsDetailsModalOpen(false)}
-        onReportIssue={() => handleReportIssue()}
-        ride={selectedRide}
+      <RideReceiptModal
+        rideId={receiptRideId}
+        isOpen={isReceiptOpen}
+        onClose={() => {
+          setIsReceiptOpen(false);
+          setReceiptRideId(null);
+        }}
+        onReportIssue={
+          receiptRideId ? () => handleReportIssue(receiptRideId) : undefined
+        }
       />
 
       <ReportModal
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}
-        rideId={selectedRide?.id || null}
+        rideId={reportRideId}
       />
       <LostFoundModal
         isOpen={isLostFoundOpen}
         onClose={() => setIsLostFoundOpen(false)}
-        rideId={selectedRide?.id || null}
+        rideId={reportRideId}
       />
     </>
   );

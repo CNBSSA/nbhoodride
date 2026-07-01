@@ -2695,10 +2695,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/rides', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const { limit } = req.query;
-      
-      const rides = await storage.getRidesByUser(userId, limit ? parseInt(limit) : undefined);
-      res.json(rides);
+      const { limit, days } = req.query;
+
+      const rides = await storage.getRidesByUser(userId, limit ? parseInt(limit as string) : undefined);
+
+      const dayWindow = days ? parseInt(days as string) : undefined;
+      const cutoff =
+        dayWindow && Number.isFinite(dayWindow)
+          ? new Date(Date.now() - dayWindow * 24 * 60 * 60 * 1000)
+          : null;
+
+      const filtered = cutoff
+        ? rides.filter((r) => {
+            const d = r.completedAt ?? r.createdAt;
+            return d && new Date(d) >= cutoff;
+          })
+        : rides;
+
+      const enriched = await Promise.all(
+        filtered.map(async (ride) => {
+          let driver: { firstName: string | null; lastName: string | null; rating: string | null } | null = null;
+          if (ride.driverId) {
+            const driverUser = await storage.getUser(ride.driverId);
+            if (driverUser) {
+              driver = {
+                firstName: driverUser.firstName,
+                lastName: driverUser.lastName,
+                rating: driverUser.rating,
+              };
+            }
+          }
+          return { ...ride, driver };
+        }),
+      );
+
+      res.json(enriched);
     } catch (error) {
       console.error("Error fetching rides:", error);
       res.status(500).json({ message: "Failed to fetch rides" });
