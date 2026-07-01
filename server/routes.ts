@@ -52,6 +52,7 @@ import { evaluateUndersupply, allocateDriverBonus } from "./agents/pricingFairne
 import { getOwnershipProjections } from "./agents/ownershipAgent";
 import { checkRouteDeviationForRide } from "./agents/safetyAnomaly";
 import { processRecurringRideRebooks } from "./agents/recurringRides";
+import { purgeExpiredMobilityIntents } from "./agents/mobilityIntentRetention";
 import { tryAutoResolveDispute } from "./agents/support";
 import { runComplianceScan } from "./agents/compliance";
 import { approveAndApplyProposal, rejectProposal } from "./agents/agentProposals";
@@ -5902,6 +5903,15 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     }
   });
 
+  app.post('/api/admin/privacy/purge-mobility-intents', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const purged = await purgeExpiredMobilityIntents(storage);
+      res.json({ purged, message: `Purged ${purged} mobility intent rows older than 90 days` });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to purge mobility intents" });
+    }
+  });
+
   app.post('/api/admin/fairness/fund-pool', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const { amount } = req.body;
@@ -6895,6 +6905,9 @@ Generate the FAQ list.`;
       }
       if (now.getHours() === 8) {
         await processRecurringRideRebooks(storage).catch(console.error);
+      }
+      if (now.getHours() === 3) {
+        await purgeExpiredMobilityIntents(storage).catch(console.error);
       }
     } catch (err) {
       console.error("Predictive worker error:", err);

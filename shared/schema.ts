@@ -808,11 +808,8 @@ export const userAutonomySettings = pgTable("user_autonomy_settings", {
  *  - `utterance` holds raw user input. It's PII-adjacent (often
  *    includes addresses or names) so the user FK uses ON DELETE
  *    CASCADE — deleting a user must remove their intents too.
- *  - There is no scheduled purge today. Long-term these rows should
- *    either get a 90-day TTL job or have the raw `utterance` hashed
- *    after N days while the parsed intentType is kept for product
- *    analytics. Tracked as a follow-up; for now the cascade-delete is
- *    the floor.
+ *  - Scheduled purge: rows older than 90 days deleted daily (03:00 UTC)
+ *    via `purgeExpiredMobilityIntents`; admin can trigger manually.
  */
 export const mobilityIntents = pgTable("mobility_intents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

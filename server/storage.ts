@@ -115,7 +115,7 @@ import {
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
 import { db } from "./db";
-import { eq, and, desc, asc, sql, or, isNull, isNotNull, gt, like, inArray, count, sum, gte, lte } from "drizzle-orm";
+import { eq, and, desc, asc, sql, or, isNull, isNotNull, gt, like, inArray, count, sum, gte, lte, lt } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -390,6 +390,7 @@ export interface IStorage {
   getUserAutonomyLevel(userId: string): Promise<number>;
   setUserAutonomyLevel(userId: string, level: number): Promise<UserAutonomySettings>;
   createMobilityIntent(data: { userId: string; intentType: string; utterance?: string; payload?: Record<string, unknown> }): Promise<MobilityIntent>;
+  purgeMobilityIntentsOlderThan(cutoff: Date): Promise<number>;
   getLastCompletedRideForUser(userId: string): Promise<Ride | undefined>;
   upsertRideSurfaceCache(rideId: string, spec: Record<string, unknown>): Promise<void>;
   getRideSurfaceCache(rideId: string): Promise<Record<string, unknown> | undefined>;
@@ -3311,6 +3312,14 @@ export class DatabaseStorage implements IStorage {
   }): Promise<MobilityIntent> {
     const [row] = await db.insert(mobilityIntents).values(data).returning();
     return row;
+  }
+
+  async purgeMobilityIntentsOlderThan(cutoff: Date): Promise<number> {
+    const deleted = await db
+      .delete(mobilityIntents)
+      .where(lt(mobilityIntents.createdAt, cutoff))
+      .returning({ id: mobilityIntents.id });
+    return deleted.length;
   }
 
   async getLastCompletedRideForUser(userId: string): Promise<Ride | undefined> {
