@@ -169,7 +169,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-07-01 | Ride for a friend + credentials (RFF1–RFF4) | A | [#54](https://github.com/CNBSSA/nbhoodride/pull/54) | Pass — see below |
 | 2026-07-01 | Vehicle types, community routes, referral UI (VT/CR/REF) | A | [#56](https://github.com/CNBSSA/nbhoodride/pull/56) | Pass — see below |
 | 2026-07-01 | Referral wallet credits + Driver Pro tiers (REF2/PRO1) | A | [#57](https://github.com/CNBSSA/nbhoodride/pull/57) | Pass — see below |
-| 2026-07-01 | Mobility intent TTL purge + MASTER_PLAN sync (PRIV1) | A | TBD | Pass — see below |
+| 2026-07-01 | Mobility intent TTL purge + MASTER_PLAN sync (PRIV1) | A | [#58](https://github.com/CNBSSA/nbhoodride/pull/58) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
