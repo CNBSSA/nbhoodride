@@ -248,9 +248,9 @@ Every user starts as a **Rider**. They may become a **Driver** after verificatio
 | Multi-stop trips | ✅ Shipped (Mode 3) |
 | Shared schedule / group codes | ✅ Shipped (Mode 4) |
 | Admin console | ✅ Shipped |
-| In-app chat with canned messages | ❌ Backlog |
-| Lost & found workflow | ❌ Backlog |
-| Favorite drivers | ❌ Backlog |
+| In-app chat with canned messages | ✅ Shipped (quick messages — A4; not free-text chat) |
+| Lost & found workflow | ✅ Shipped [#52](https://github.com/CNBSSA/nbhoodride/pull/52) |
+| Favorite drivers | ✅ Shipped [#41](https://github.com/CNBSSA/nbhoodride/pull/41) |
 
 ### Phase 3 — Growth and monetization
 
@@ -259,8 +259,8 @@ Every user starts as a **Rider**. They may become a **Driver** after verificatio
 | Digital payments (Stripe) | ✅ Shipped (top-up + card on file) |
 | Virtual PG Card wallet | ✅ Shipped |
 | Welcome credit + promo rides | ✅ Shipped ($20 + 4×$5 off) |
-| Referral bonuses | ❌ Backlog |
-| Driver "Pro" tiers / badges | ❌ Backlog |
+| Referral bonuses | ✅ Shipped [#57](https://github.com/CNBSSA/nbhoodride/pull/57) |
+| Driver "Pro" tiers / badges | ✅ Shipped [#57](https://github.com/CNBSSA/nbhoodride/pull/57) |
 
 ### Phase 4 — Differentiators and scale
 
@@ -270,20 +270,20 @@ Every user starts as a **Rider**. They may become a **Driver** after verificatio
 | Scheduled rides | ✅ Shipped |
 | AI assistant | ✅ Shipped |
 | Analytics (heatmaps, scorecards, safety patterns) | ✅ Shipped |
-| "Ride for a friend" | ❌ Backlog |
-| Community routes | ❌ Backlog |
-| Vehicle type selection | ❌ Backlog |
+| "Ride for a friend" | ✅ Shipped [#54](https://github.com/CNBSSA/nbhoodride/pull/54) |
+| Community routes | ✅ Shipped [#56](https://github.com/CNBSSA/nbhoodride/pull/56) |
+| Vehicle type selection | ✅ Shipped [#56](https://github.com/CNBSSA/nbhoodride/pull/56) |
 
 ### Phase 5 — AI-native evolution (see Part II for the deep version)
 
 | Item | Status |
 |------|--------|
-| Agent audit log + "Why this driver?" | ❌ Foundation |
-| RAG-powered assistant (pgvector) | ❌ Foundation |
-| Delegative intent cards + Generative UI | ❌ Months 4–6 |
-| Trust graph + degrees-of-separation matching | ❌ Months 7–9 |
-| Demand forecasting + Driver Earnings Coach | ❌ Months 10–14 |
-| Voice booking + Guardian Mode + SMS fallback | ❌ Months 15–24 |
+| Agent audit log + "Why this driver?" | ✅ Shipped [#38](https://github.com/CNBSSA/nbhoodride/pull/38) |
+| RAG-powered assistant (pgvector) | ✅ Shipped [#39](https://github.com/CNBSSA/nbhoodride/pull/39) |
+| Delegative intent cards + Generative UI | ✅ Shipped [#40](https://github.com/CNBSSA/nbhoodride/pull/40) |
+| Trust graph + degrees-of-separation matching | ✅ Shipped [#41](https://github.com/CNBSSA/nbhoodride/pull/41) |
+| Demand forecasting + Driver Earnings Coach | ✅ Shipped [#42](https://github.com/CNBSSA/nbhoodride/pull/42) |
+| Voice booking + Guardian Mode + SMS fallback | ✅ Shipped [#40](https://github.com/CNBSSA/nbhoodride/pull/40), [#47](https://github.com/CNBSSA/nbhoodride/pull/47) |
 
 ---
 
@@ -538,13 +538,13 @@ Original stack was Replit-first (auth, AI integrations, GCS via Replit sidecar).
 
 | Feature | Phase | Status |
 |---------|-------|--------|
-| In-app chat with canned messages | Beta | ❌ |
-| Lost & found workflow | Beta | ❌ |
-| Favorite drivers | Beta | ❌ |
-| Referral program | Growth | ❌ |
-| Ride for a friend | Scale | ❌ |
-| Community routes | Scale | ❌ |
-| Vehicle type selection | Scale | ❌ |
+| In-app chat with canned messages | Beta | ✅ Quick messages (A4) |
+| Lost & found workflow | Beta | ✅ [#52](https://github.com/CNBSSA/nbhoodride/pull/52) |
+| Favorite drivers | Beta | ✅ [#41](https://github.com/CNBSSA/nbhoodride/pull/41) |
+| Referral program | Growth | ✅ [#56](https://github.com/CNBSSA/nbhoodride/pull/56), [#57](https://github.com/CNBSSA/nbhoodride/pull/57) |
+| Ride for a friend | Scale | ✅ [#54](https://github.com/CNBSSA/nbhoodride/pull/54) |
+| Community routes | Scale | ✅ [#56](https://github.com/CNBSSA/nbhoodride/pull/56) |
+| Vehicle type selection | Scale | ✅ [#56](https://github.com/CNBSSA/nbhoodride/pull/56) |
 
 ### Compliance
 
@@ -1364,14 +1364,15 @@ If a feature request maps to any of the above, the default answer is **no** — 
 
 ## Appendix A — Immediate next sprint (from current codebase)
 
-The highest-leverage work **starting tomorrow**:
+The highest-leverage work **starting now**:
 
-1. **Merge PR #37** (MASTER_PLAN consolidation)
-2. **Wire object storage** — unlocks driver verification pipeline
-3. **Fix WS `driver_location` mismatch** — unlocks live rider map
-4. **Add `agent_audit_log` migration** — foundation for explainable dispatch
-5. **RAG pipeline for AIAssistant** — first true "AI-native" upgrade
-6. **Canned message cards** — ships in-ride communication without full chat
+1. **Production deploy** — Railway vars per [`TRACK_B_CREDENTIALS.md`](TRACK_B_CREDENTIALS.md) (`DATABASE_URL`, `SESSION_SECRET`, then Stripe/GCS/VAPID as needed)
+2. **Object storage live** — `GCS_BUCKET_NAME` + credentials (driver doc uploads still 503 without)
+3. **Tax compliance path** — AH-060 decision (Path A/B/C) before 1099 season
+4. **Ride receipts polish** — detailed receipts in ride history (marked partial in Part I)
+5. **Free-text in-app chat** — optional; canned quick messages already shipped (A4)
+
+Phases A–F and backlog items through [#57](https://github.com/CNBSSA/nbhoodride/pull/57) are merged on `main`.
 
 ---
 
