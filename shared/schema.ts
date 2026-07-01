@@ -802,10 +802,21 @@ export const userAutonomySettings = pgTable("user_autonomy_settings", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-/** Parsed delegative intents from voice/text (B2). */
+/** Parsed delegative intents from voice/text (B2).
+ *
+ * Privacy / retention notes (post-supervisor review):
+ *  - `utterance` holds raw user input. It's PII-adjacent (often
+ *    includes addresses or names) so the user FK uses ON DELETE
+ *    CASCADE — deleting a user must remove their intents too.
+ *  - There is no scheduled purge today. Long-term these rows should
+ *    either get a 90-day TTL job or have the raw `utterance` hashed
+ *    after N days while the parsed intentType is kept for product
+ *    analytics. Tracked as a follow-up; for now the cascade-delete is
+ *    the floor.
+ */
 export const mobilityIntents = pgTable("mobility_intents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   intentType: varchar("intent_type").notNull(),
   utterance: text("utterance"),
   payload: jsonb("payload").$type<Record<string, unknown>>(),
