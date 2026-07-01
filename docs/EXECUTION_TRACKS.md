@@ -170,6 +170,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-07-01 | Vehicle types, community routes, referral UI (VT/CR/REF) | A | [#56](https://github.com/CNBSSA/nbhoodride/pull/56) | Pass — see below |
 | 2026-07-01 | Referral wallet credits + Driver Pro tiers (REF2/PRO1) | A | [#57](https://github.com/CNBSSA/nbhoodride/pull/57) | Pass — see below |
 | 2026-07-01 | Mobility intent TTL purge + MASTER_PLAN sync (PRIV1) | A | [#58](https://github.com/CNBSSA/nbhoodride/pull/58) | Pass — see below |
+| 2026-07-01 | Ride receipts polish (RCP1) | A | [#59](https://github.com/CNBSSA/nbhoodride/pull/59) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
@@ -296,6 +297,15 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | `npm test` | Pass — 101 tests |
 
 **Delivered (PRIV1):** 90-day `mobility_intents` purge (daily 03:00 UTC + admin route), MASTER_PLAN status tables synced to merged PRs.
+
+### Ride receipts polish — Post-implementation audit (2026-07-01)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 56 tables |
+| `npm test` | Pass — 104 tests |
+
+**Delivered (RCP1):** Shared receipt builder, itemized RideReceiptModal with download, history list enrichment + period filter.
 
 ---
 

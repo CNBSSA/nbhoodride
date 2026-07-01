@@ -239,7 +239,7 @@ Every user starts as a **Rider**. They may become a **Driver** after verificatio
 | Dispute resolution ("Report Issue") | ✅ Shipped |
 | Driver earnings dashboard | ✅ Shipped |
 | Precise pickup instructions | ⚠️ Partial / verify in UI |
-| Detailed ride receipts | ⚠️ Partial / verify in ride history |
+| Detailed ride receipts | ✅ Shipped — API + RideReceiptModal [#59] |
 
 ### Phase 2 — Beta polish
 
@@ -1369,7 +1369,7 @@ The highest-leverage work **starting now**:
 1. **Production deploy** — Railway vars per [`TRACK_B_CREDENTIALS.md`](TRACK_B_CREDENTIALS.md) (`DATABASE_URL`, `SESSION_SECRET`, then Stripe/GCS/VAPID as needed)
 2. **Object storage live** — `GCS_BUCKET_NAME` + credentials (driver doc uploads still 503 without)
 3. **Tax compliance path** — AH-060 decision (Path A/B/C) before 1099 season
-4. **Ride receipts polish** — detailed receipts in ride history (marked partial in Part I)
+4. **Ride receipts polish** — ✅ detailed receipts in ride history ([#59](https://github.com/CNBSSA/nbhoodride/pull/59))
 5. **Free-text in-app chat** — optional; canned quick messages already shipped (A4)
 
 Phases A–F and backlog items through [#57](https://github.com/CNBSSA/nbhoodride/pull/57) are merged on `main`.
