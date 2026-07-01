@@ -6,6 +6,7 @@
 |----------|------|
 | [`MASTER_PLAN.md`](MASTER_PLAN.md) | What to build (Part I = today, Part II = vision) |
 | **This file** | Who executes what, and the audit workflow |
+| [`TRACK_B_CREDENTIALS.md`](TRACK_B_CREDENTIALS.md) | **All keys/APIs/decisions needed from you** |
 
 ---
 
@@ -15,13 +16,14 @@
 
 Work the agent can complete end-to-end: code, migrations, tests, docs, env-**gated** wiring (you add Railway variables when ready).
 
+> **Autonomous directive rule:** When the user says "go autonomously" or similar, that directive is **contingent on this workflow and audits section** — not a bypass of it. The agent proceeds without permission prompts for Track A work but must still run all audits below and only ask the user for Track B decisions it cannot make from docs/code.
+
 **Workflow per engagement:**
 
-1. **Baseline audit** — `npm run check`, `npm test`, read backlog / Appendix A
-2. **Planning audit** — map tasks to files; confirm no business decision required
-3. **Pre-engagement audit** — branch, scope diff, risk check
-4. **Implement + commit + push + PR**
-5. **Post-engagement audit** — re-run gates; document what still needs Track B vars
+1. **Pre-planning audit (baseline)** — `npm run check`, `npm test`, read backlog / Appendix A / phase table; confirm Track A scope; map tasks to files
+2. **Pre-implementation audit** — branch, scope diff, migration/live-table risk check; confirm no business decision required
+3. **Implement + commit + push + PR**
+4. **Post-implementation impact assessment** — re-run gates; verify no regressions; document Track B vars still needed; update engagement log
 
 ### Track B — Gated (requires you)
 
@@ -99,11 +101,29 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | E6 | Calm Ride mode | `user_ride_preferences` + Profile toggle |
 | E7 | Multi-language | en / es / fr via `shared/i18n` |
 
+### Part II — Phase F — Research — merged [#49](https://github.com/CNBSSA/nbhoodride/pull/49)
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| F1 | L4 readiness logging | `l4_readiness_events` + waypoint quality on GPS track |
+| F2 | Certificate provenance | SHA-256 off-chain hash; optional on-chain later |
+| F3 | Transit integration | `transit_feed_cache` + `/api/transit/alerts`; `WMATA_API_KEY` |
+| F4 | EV green bonus | `vehicles.is_ev` + community bonus pool allocation |
+
+### Backlog — Lost & Found — merged [#52](https://github.com/CNBSSA/nbhoodride/pull/52)
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| LF1 | Lost item reports | `lost_found_reports` + rider modal |
+| LF2 | Driver response flow | Has item / returned / not in car |
+| LF3 | Support agent notifications | Driver + rider in-app alerts |
+| LF4 | Admin mediation panel | Lost & Found tab |
+
 ### Part II — Later autonomous lanes
 
 | Phase | Agent can build | You provide later |
 |-------|-----------------|-------------------|
-| F — Research | L4 data, transit APIs | WMATA keys, org partnerships |
+| G+ | TBD per MASTER_PLAN backlog | Board / partnership decisions |
 
 ---
 
@@ -144,6 +164,10 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-06-30 | Phase C trust graph (C1–C6) | A | [#41](https://github.com/CNBSSA/nbhoodride/pull/41) | Pass — see below |
 | 2026-06-30 | Phase D predictive co-op (D1–D7) | A | [#42](https://github.com/CNBSSA/nbhoodride/pull/42) | Pass — see below |
 | 2026-06-30 | Phase E autonomous ops (E1–E7) | A | [#47](https://github.com/CNBSSA/nbhoodride/pull/47) | Pass — see below |
+| 2026-06-30 | Phase F research (F1–F4) | A | [#49](https://github.com/CNBSSA/nbhoodride/pull/49) | Pass — see below |
+| 2026-07-01 | Lost & found workflow (LF1–LF4) | A | [#52](https://github.com/CNBSSA/nbhoodride/pull/52) | Pass — see below |
+| 2026-07-01 | Ride for a friend + credentials (RFF1–RFF4) | A | [#54](https://github.com/CNBSSA/nbhoodride/pull/54) | Pass — see below |
+| 2026-07-01 | Vehicle types, community routes, referral UI (VT/CR/REF) | A | [#56](https://github.com/CNBSSA/nbhoodride/pull/56) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
@@ -184,6 +208,61 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | `npm test` | Pass — 41 tests |
 
 **Delivered (E1–E7):** Support auto-resolve, compliance agent, admin approve-and-apply, SMS adapter, PWA widgets, Calm Ride, i18n.
+
+### Phase F — Post-engagement audit (2026-06-30)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 54 tables |
+| `npm test` | Pass — 50 tests |
+
+**Delivered (F1–F4):** L4 readiness logging, certificate SHA-256 provenance, transit feed cache + rider alerts, EV green bonus from community pool.
+
+### Lost & Found — Post-implementation audit (2026-07-01)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 55 tables |
+| `npm test` | Pass — 72 tests |
+
+**Delivered (LF1–LF4):** Lost item reports, driver response flow, Support notifications, admin Lost & Found tab.
+
+### Backlog — Ride for a friend — merged [#54](https://github.com/CNBSSA/nbhoodride/pull/54)
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| RFF1 | Booker pays, passenger rides | `rides.booked_for_friend` + passenger fields |
+| RFF2 | Rider booking UI | `RideForFriendFields` on confirm step |
+| RFF3 | Driver visibility | Incoming + active ride passenger label |
+| RFF4 | Track B credentials inventory | `docs/TRACK_B_CREDENTIALS.md` |
+
+### Backlog — Vehicle types, community routes, referral UI
+
+| ID | Deliverable | Notes |
+|----|-------------|-------|
+| VT1 | Vehicle type on fleet | `vehicles.vehicle_type` + driver profile picker |
+| VT2 | Rider vehicle preference | `rides.requested_vehicle_type` + nearby-drivers filter |
+| CR1 | Community route presets | `community_routes` + seeded PG corridors |
+| CR2 | Rider quick-pick UI | `CommunityRoutesCard` on idle dashboard |
+| REF1 | Referral program UI | `GET /api/trust/referrals/mine` + Profile card |
+
+### Ride for a friend — Post-implementation audit (2026-07-01)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 55 tables |
+| `npm test` | Pass — 74 tests |
+
+**Delivered (RFF1–RFF4):** Friend booking, rider UI, driver passenger label, credentials inventory.
+
+### Vehicle types, community routes, referral UI — Post-implementation audit (2026-07-01)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 56 tables |
+| `npm test` | Pass — 81 tests |
+
+**Delivered (VT1–REF1):** Vehicle type on fleet + rider picker, nearby-drivers filter, `community_routes` seeded corridors, idle quick-pick UI, referral Profile card + `GET /api/trust/referrals/mine`.
 
 ---
 

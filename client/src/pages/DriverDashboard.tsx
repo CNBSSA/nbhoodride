@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { VEHICLE_TYPE_LABELS, VEHICLE_TYPES, type VehicleType } from "@shared/vehicleTypes";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
@@ -18,6 +19,7 @@ import { Link } from "wouter";
 import { format } from "date-fns";
 import { BarChart3, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote } from "lucide-react";
 import PayoutModal from "@/components/PayoutModal";
+import { LostFoundDriverCard } from "@/components/LostFoundDriverCard";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
@@ -41,6 +43,41 @@ export default function DriverDashboard() {
   const { data: driverVehicles = [] } = useQuery<any[]>({
     queryKey: ["/api/vehicles"],
     enabled: !!user?.isDriver,
+  });
+
+  const { data: lostFoundData } = useQuery<{ asDriver: any[] }>({
+    queryKey: ["/api/lost-found/mine"],
+    enabled: !!user?.isDriver,
+    refetchInterval: 60000,
+  });
+
+  const evMutation = useMutation({
+    mutationFn: async ({ vehicleId, isEv }: { vehicleId: string; isEv: boolean }) => {
+      const res = await apiRequest("PATCH", `/api/driver/vehicle/${vehicleId}/ev`, { isEv, fuelType: isEv ? "ev" : "gas" });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/vehicles"] });
+      toast({
+        title: data.vehicle?.isEv ? "EV fleet enrolled" : "EV flag removed",
+        description: data.vehicle?.isEv
+          ? `Eligible for $${data.greenBonusPerRide} green bonus per completed ride.`
+          : undefined,
+      });
+    },
+    onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
+  });
+
+  const vehicleTypeMutation = useMutation({
+    mutationFn: async ({ vehicleId, vehicleType }: { vehicleId: string; vehicleType: VehicleType }) => {
+      const res = await apiRequest("PATCH", `/api/driver/vehicle/${vehicleId}/type`, { vehicleType });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/vehicles"] });
+      toast({ title: "Vehicle type updated" });
+    },
+    onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
   });
 
   // Get driver earnings and trips
@@ -631,6 +668,8 @@ export default function DriverDashboard() {
           </CardContent>
         </Card>
 
+        <LostFoundDriverCard reports={lostFoundData?.asDriver ?? []} />
+
         {/* Vehicle Profile */}
         <Card>
           <CardContent className="p-4">
@@ -655,6 +694,52 @@ export default function DriverDashboard() {
                   <p className="text-sm text-muted-foreground" data-testid="text-vehicle-color">
                     {driverVehicles[0].color || 'Unknown color'}
                   </p>
+                  <div className="flex items-center gap-2 mt-2">
+                    {driverVehicles[0].isEv && (
+                      <Badge className="bg-green-600 text-white text-[10px]">⚡ EV — Green bonus eligible</Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between mt-3 pt-2 border-t">
+                    <div>
+                      <p className="text-sm font-medium">Electric vehicle</p>
+                      <p className="text-xs text-muted-foreground">Community green bonus pool (not surge)</p>
+                    </div>
+                    <Switch
+                      checked={!!driverVehicles[0].isEv}
+                      onCheckedChange={(checked) =>
+                        evMutation.mutate({ vehicleId: driverVehicles[0].id, isEv: checked })
+                      }
+                      disabled={evMutation.isPending}
+                      data-testid="switch-ev-vehicle"
+                    />
+                  </div>
+                  <div className="mt-3 pt-2 border-t space-y-2">
+                    <p className="text-sm font-medium">Vehicle type for riders</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {VEHICLE_TYPES.map((type) => {
+                        const active = (driverVehicles[0].vehicleType ?? "standard") === type;
+                        return (
+                          <Button
+                            key={type}
+                            type="button"
+                            size="sm"
+                            variant={active ? "default" : "outline"}
+                            className="h-8 text-xs"
+                            disabled={vehicleTypeMutation.isPending}
+                            onClick={() =>
+                              vehicleTypeMutation.mutate({
+                                vehicleId: driverVehicles[0].id,
+                                vehicleType: type,
+                              })
+                            }
+                            data-testid={`driver-vehicle-type-${type}`}
+                          >
+                            {VEHICLE_TYPE_LABELS[type]}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : (

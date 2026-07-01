@@ -56,6 +56,14 @@ import { tryAutoResolveDispute } from "./agents/support";
 import { runComplianceScan } from "./agents/compliance";
 import { approveAndApplyProposal, rejectProposal } from "./agents/agentProposals";
 import { handleInboundSms, sendRideTrackingSms } from "./agents/smsBooking";
+import { processL4Waypoint, logL4Disengagement } from "./agents/l4Readiness";
+import { getTransitAlertsForRiders, refreshTransitFeeds } from "./agents/transitFeed";
+import { recordCertificateProvenance, recordAllActiveCertificateHashes } from "./agents/certificateProvenance";
+import { allocateGreenBonusForRide, getEvEligibleDrivers, GREEN_BONUS_PER_RIDE } from "./agents/greenBonus";
+import { validateFriendRideInput } from "@shared/rideForFriend";
+import { validateVehicleTypeInput } from "@shared/vehicleTypes";
+import { processLostFoundReport, updateLostFoundStatus } from "./agents/lostFound";
+import { LOST_FOUND_CATEGORIES, LOST_FOUND_STATUSES } from "@shared/lostFoundPolicy";
 import { rideSurfaceSpecSchema } from "@shared/genui/schema";
 import { buildDriverLocationMessage } from "./wsDriverLocation";
 import {
@@ -205,6 +213,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     keyGenerator: (req: any) =>
       req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || req.ip,
     message: { message: "AI generation rate-limited (5/15min per admin)." },
+  });
+
+  // Guardian track endpoint is unauthenticated (family members hit it via
+  // share URL). The token is 128-bit so guessing is impractical, but a
+  // stricter per-IP limit on top of the global one slows enumeration
+  // attempts and keeps a leaked token from being a DoS amplifier.
+  const guardianTrackLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: "Too many tracking requests, please slow down." },
   });
 
   app.use('/api', generalLimiter);
@@ -1644,6 +1664,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { lat, lng } = waypointSchema.parse(req.body);
       
       await storage.addRouteWaypoint(rideId, userId, { lat, lng });
+      processL4Waypoint(storage, rideId, userId, { lat, lng }).catch(console.error);
       
       res.json({ success: true });
     } catch (error) {
@@ -1692,6 +1713,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (ride.riderId && ride.driverId) {
         recordRideTrustEdge(storage, ride.riderId, ride.driverId).catch(console.error);
+        allocateGreenBonusForRide(storage, ride.driverId, rideId).catch(console.error);
       }
 
       // ── Audit: ride completed ──
@@ -2084,15 +2106,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Ride routes
   app.get('/api/rides/nearby-drivers', isAuthenticated, async (req: any, res) => {
     try {
-      const { lat, lng, radius = 10 } = req.query;
+      const { lat, lng, radius = 10, vehicleType } = req.query;
       
       if (!lat || !lng) {
         return res.status(400).json({ message: "Location required" });
       }
+
+      if (vehicleType) {
+        const typeCheck = validateVehicleTypeInput(vehicleType);
+        if (!typeCheck.valid) {
+          return res.status(400).json({ message: typeCheck.error });
+        }
+      }
       
       const drivers = await storage.getNearbyDrivers(
         { lat: parseFloat(lat), lng: parseFloat(lng) },
-        parseFloat(radius)
+        parseFloat(radius),
+        typeof vehicleType === "string" && vehicleType ? vehicleType : undefined,
       );
 
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -2168,6 +2198,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "pickupLocation and destinationLocation are required" });
       }
 
+      const bookedForFriend = Boolean(req.body.bookedForFriend);
+      const passengerName = typeof req.body.passengerName === "string" ? req.body.passengerName.trim() : undefined;
+      const passengerPhone = typeof req.body.passengerPhone === "string" ? req.body.passengerPhone.trim() : undefined;
+      const friendCheck = validateFriendRideInput(bookedForFriend, passengerName, passengerPhone);
+      if (!friendCheck.valid) {
+        return res.status(400).json({ message: friendCheck.error });
+      }
+
+      const vehicleTypeCheck = validateVehicleTypeInput(req.body.requestedVehicleType);
+      if (!vehicleTypeCheck.valid) {
+        return res.status(400).json({ message: vehicleTypeCheck.error });
+      }
+      const requestedVehicleType =
+        vehicleTypeCheck.type && vehicleTypeCheck.type !== "standard"
+          ? vehicleTypeCheck.type
+          : undefined;
+
       // ── Step 1: Validate ride request (service area, distance, rate limit) ──
       const validation = await validateRideRequest(userId, pickup, destination);
       if (!validation.valid) {
@@ -2178,6 +2225,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const bodyData = {
         ...req.body,
         paymentMethod: 'card', // Force virtual card payment
+        bookedForFriend,
+        passengerName: bookedForFriend ? passengerName : undefined,
+        passengerPhone: bookedForFriend ? passengerPhone : undefined,
+        requestedVehicleType,
+        rideType: bookedForFriend ? 'friend' : (req.body.rideType ?? 'solo'),
       };
       if (typeof bodyData.estimatedFare === 'number') {
         bodyData.estimatedFare = bodyData.estimatedFare.toString();
@@ -2210,6 +2262,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           pickupCounty: validation.pickupCounty,
           rideType: ride.rideType,
           wantsSharedRide: ride.wantsSharedRide,
+          bookedForFriend: ride.bookedForFriend,
+          passengerName: ride.passengerName,
+          requestedVehicleType: ride.requestedVehicleType,
         },
       });
 
@@ -2238,7 +2293,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let assignedDriver: { userId: string; etaMinutes: number } | null = null;
       if (!isScheduledFuture && !ride.driverId) {
         try {
-          const bestDriver = await findBestDriver(pickup, pickupCounty, [], { riderId: userId });
+          const bestDriver = await findBestDriver(pickup, pickupCounty, [], {
+            riderId: userId,
+            requestedVehicleType: ride.requestedVehicleType ?? undefined,
+          });
           if (bestDriver) {
             await storage.updateRide(ride.id, { driverId: bestDriver.userId });
             assignedDriver = { userId: bestDriver.userId, etaMinutes: bestDriver.etaMinutes };
@@ -3072,6 +3130,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching disputes:", error);
       res.status(500).json({ message: "Failed to fetch disputes" });
+    }
+  });
+
+  // Lost & found routes
+  app.post('/api/lost-found', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const body = z.object({
+        rideId: z.string(),
+        itemDescription: z.string().min(3).max(500),
+        itemCategory: z.enum(LOST_FOUND_CATEGORIES as unknown as [string, ...string[]]),
+        riderNote: z.string().max(500).optional(),
+      }).parse(req.body);
+
+      const result = await processLostFoundReport(storage, {
+        rideId: body.rideId,
+        riderId: userId,
+        itemDescription: body.itemDescription,
+        itemCategory: body.itemCategory as any,
+        riderNote: body.riderNote,
+      });
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({
+        message: error instanceof Error ? error.message : "Failed to report lost item",
+      });
+    }
+  });
+
+  app.get('/api/lost-found/mine', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const user = await storage.getUser(userId);
+      const asRider = await storage.getLostFoundReportsForUser(userId);
+      const asDriver = user?.isDriver
+        ? await storage.getLostFoundReportsForDriver(userId)
+        : [];
+      res.json({ asRider, asDriver });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch lost & found reports" });
+    }
+  });
+
+  app.patch('/api/lost-found/:reportId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { reportId } = req.params;
+      const body = z.object({
+        status: z.enum(LOST_FOUND_STATUSES as unknown as [string, ...string[]]),
+        note: z.string().max(500).optional(),
+      }).parse(req.body);
+
+      const report = await storage.getLostFoundReportById(reportId);
+      if (!report) return res.status(404).json({ message: "Report not found" });
+
+      const user = await storage.getUser(userId);
+      let role: "driver" | "rider" | "admin";
+      if (user?.isAdmin || user?.isSuperAdmin) role = "admin";
+      else if (report.driverId === userId) role = "driver";
+      else if (report.riderId === userId) role = "rider";
+      else return res.status(403).json({ message: "Not authorized" });
+
+      await updateLostFoundStatus(storage, reportId, userId, role, body.status as any, body.note);
+      const updated = await storage.getLostFoundReportById(reportId);
+      res.json(updated);
+    } catch (error) {
+      res.status(400).json({
+        message: error instanceof Error ? error.message : "Failed to update report",
+      });
     }
   });
 
@@ -4174,6 +4301,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get('/api/admin/lost-found', isAdminOrSessionAuth, async (req, res) => {
+    try {
+      const status = typeof req.query.status === "string" ? req.query.status : undefined;
+      const reports = await storage.getAllLostFoundReports(status);
+      res.json(reports);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch lost & found reports" });
+    }
+  });
+
+  app.patch('/api/admin/lost-found/:reportId', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { reportId } = req.params;
+      const body = z.object({
+        status: z.enum(LOST_FOUND_STATUSES as unknown as [string, ...string[]]),
+        adminNote: z.string().max(500).optional(),
+      }).parse(req.body);
+      await updateLostFoundStatus(storage, reportId, adminId, "admin", body.status as any, body.adminNote);
+      const updated = await storage.getLostFoundReportById(reportId);
+      await storage.logAdminAction(adminId, "lost_found_update", "lost_found", reportId, { status: body.status });
+      res.json(updated);
+    } catch (error) {
+      res.status(400).json({
+        message: error instanceof Error ? error.message : "Failed to update report",
+      });
+    }
+  });
+
   // ── RIDE GROUPS: MODE 3 (MULTI-STOP) & MODE 4 (SHARED SCHEDULE) ────────────
 
   // Helper: generate a unique PG-XXXXXX code
@@ -4810,12 +4966,42 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     }
   });
 
+  app.get('/api/trust/referrals/mine', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const created = await storage.listCommunityReferralsByReferrer(userId);
+      const redeemedAsReferrer = created.filter((r) => r.status === "redeemed").length;
+      const redeemedAsUser = await storage.getRedeemedReferralForUser(userId);
+      res.json({
+        referrals: created,
+        stats: {
+          codesCreated: created.length,
+          codesRedeemed: redeemedAsReferrer,
+          creditPerReferral: created[0]?.creditAmount ?? "5.00",
+        },
+        hasRedeemedCode: !!redeemedAsUser,
+        redeemedReferral: redeemedAsUser ?? null,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch referrals" });
+    }
+  });
+
   app.get('/api/trust/anchors', async (_req, res) => {
     try {
       const anchors = await storage.getCommunityAnchors(true);
       res.json(anchors);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch anchors" });
+    }
+  });
+
+  app.get('/api/community/routes', async (_req, res) => {
+    try {
+      const routes = await storage.getCommunityRoutes(true);
+      res.json(routes);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch community routes" });
     }
   });
 
@@ -4847,9 +5033,25 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
 
   app.post('/api/support/resolve/:disputeId', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      // Ownership check. Previously this endpoint accepted any authenticated
+      // user's disputeId and ran the auto-resolver, which credits the
+      // dispute's reporter (not the caller). So an attacker could
+      // out-of-band drive arbitrary disputes through auto-resolve — for
+      // example to bypass an admin hold by hot-running the auto-credit
+      // path before the admin gets to it.
+      const dispute = await storage.getDisputeById(req.params.disputeId);
+      if (!dispute) return res.status(404).json({ message: "Dispute not found" });
+      const requester = await storage.getUser(userId);
+      const isOwner = dispute.reporterId === userId;
+      const isAdmin = !!(requester?.isAdmin || requester?.isSuperAdmin);
+      if (!isOwner && !isAdmin) {
+        return res.status(404).json({ message: "Dispute not found" });
+      }
       const result = await tryAutoResolveDispute(storage, req.params.disputeId);
       res.json(result);
     } catch (error) {
+      console.error("Error resolving support request:", error);
       res.status(500).json({ message: "Failed to resolve support request" });
     }
   });
@@ -5032,34 +5234,107 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
     }
   });
 
+  // Guardian share tokens are 16-byte randomBytes hex (32 chars). Lock
+  // the format here so a malformed path returns 404 BEFORE the DB hit,
+  // removing timing/format oracles that could distinguish "invalid
+  // shape" from "valid shape but no row".
+  const GUARDIAN_TOKEN_RE = /^[0-9a-f]{32}$/;
+  // Cap so a misbehaving rider can't spam thousands of active share
+  // links into the system.
+  const GUARDIAN_MAX_ACTIVE_LINKS = 5;
+  // 7 days hard cap; default is still 24h. Long-lived family-track links
+  // are a privacy footgun, so the upper bound stays tight even if the
+  // rider asks for more.
+  const GUARDIAN_MAX_TTL_HOURS = 24 * 7;
+
   app.post('/api/mobility/guardian-links', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const { guardianName } = req.body;
+      const bodySchema = z.object({
+        guardianName: z.string().trim().min(1).max(50).optional(),
+        ttlHours: z.number().int().positive().max(GUARDIAN_MAX_TTL_HOURS).optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid guardian link parameters" });
+      }
+      // Per-user active-link cap. Without this a single account could
+      // mint unlimited tokens and the table grows unbounded.
+      const activeCount = await storage.countActiveGuardianLinks(userId);
+      if (activeCount >= GUARDIAN_MAX_ACTIVE_LINKS) {
+        return res.status(429).json({
+          message: `You already have ${activeCount} active tracking links. Revoke one before sharing another.`,
+        });
+      }
       const activeRides = await storage.getRidesByUser(userId, 5);
       const active = activeRides.find((r) =>
         ["accepted", "driver_arriving", "in_progress"].includes(r.status || ""),
       );
       const token = createGuardianShareToken();
-      const expiresAt = new Date();
-      expiresAt.setHours(expiresAt.getHours() + 24);
-      await storage.createGuardianLink({
+      const ttlHours = parsed.data.ttlHours ?? 24;
+      const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
+      const link = await storage.createGuardianLink({
         riderUserId: userId,
-        guardianName: guardianName || "Family",
+        guardianName: parsed.data.guardianName ?? "Family",
         shareToken: token,
         activeRideId: active?.id,
         expiresAt,
       });
       const baseUrl = process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get("host")}`;
-      res.json({ shareUrl: `${baseUrl}/guardian/${token}`, token });
+      res.json({ id: link.id, shareUrl: `${baseUrl}/guardian/${token}`, token, expiresAt });
     } catch (error) {
       console.error("Error creating guardian link:", error);
       res.status(500).json({ message: "Failed to create guardian link" });
     }
   });
 
-  app.get('/api/guardian/track/:token', async (req, res) => {
+  // List the rider's active guardian links so the UI can show what's
+  // currently shared and let the rider revoke any of them.
+  app.get('/api/mobility/guardian-links', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const links = await storage.listActiveGuardianLinksByRider(userId);
+      // Never return the share_token from the list endpoint — once a link
+      // is created the token only exists on the original share URL. The
+      // list view shows guardianName + expiresAt for the rider's own
+      // bookkeeping, never the secret.
+      res.json(links.map((l) => ({
+        id: l.id,
+        guardianName: l.guardianName,
+        activeRideId: l.activeRideId,
+        expiresAt: l.expiresAt,
+        createdAt: l.createdAt,
+      })));
+    } catch (error) {
+      console.error("Error listing guardian links:", error);
+      res.status(500).json({ message: "Failed to list guardian links" });
+    }
+  });
+
+  // Soft-revoke. After this returns 200 the share URL immediately stops
+  // working — guardians on /guardian/:token see "Link expired or not
+  // found" on their next 15s poll.
+  app.delete('/api/mobility/guardian-links/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const revoked = await storage.revokeGuardianLink(req.params.id, userId);
+      if (!revoked) return res.status(404).json({ message: "Link not found" });
+      res.json({ revoked: true });
+    } catch (error) {
+      console.error("Error revoking guardian link:", error);
+      res.status(500).json({ message: "Failed to revoke guardian link" });
+    }
+  });
+
+  // Public tracking endpoint. Stricter per-IP rate-limit on top of the
+  // global limiter. Token format is validated BEFORE the DB query so
+  // malformed paths can't be used to time-distinguish valid vs invalid
+  // tokens.
+  app.get('/api/guardian/track/:token', guardianTrackLimiter, async (req, res) => {
+    try {
+      if (!GUARDIAN_TOKEN_RE.test(req.params.token)) {
+        return res.status(404).json({ message: "Link expired or not found" });
+      }
       const link = await storage.getGuardianLinkByToken(req.params.token);
       if (!link) return res.status(404).json({ message: "Link expired or not found" });
       if (!link.activeRideId) {
@@ -5067,6 +5342,15 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       }
       const ride = await storage.getRide(link.activeRideId);
       if (!ride) return res.json({ status: "no_active_ride", guardianName: link.guardianName });
+      // Stop returning live ride data once the ride is no longer active.
+      // Previously the endpoint kept emitting pickup + destination
+      // (often the rider's home address) for the full 24h TTL after
+      // the ride ended — privacy violation vs the rider's reasonable
+      // expectation that "family track" means live ride only.
+      const TERMINAL_STATUSES = new Set(["completed", "cancelled", "no_show"]);
+      if (TERMINAL_STATUSES.has(ride.status || "")) {
+        return res.json({ status: "no_active_ride", guardianName: link.guardianName });
+      }
       res.json({
         status: ride.status,
         pickup: ride.pickupLocation,
@@ -5620,18 +5904,50 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
 
   app.post('/api/admin/fairness/allocate', isAdminOrSessionAuth, async (req: any, res) => {
     try {
-      const { driverId, amount, reason, rideId, zoneLabel } = req.body;
-      if (!driverId || !amount) return res.status(400).json({ message: "driverId and amount required" });
+      // Per-call cap so a single admin call can't drain the entire pool to
+      // one driver. The previous version accepted any positive amount
+      // ($10,000 was as legal as $5). Even with admin auth, this is a
+      // belt-and-braces guard against a compromised admin session, a UI
+      // typo (extra zeros), or a misbehaving script. $50 matches the
+      // suggestedBonus ceiling in evaluateUndersupply.
+      const bodySchema = z.object({
+        driverId: z.string().min(1),
+        amount: z.coerce.number().positive().max(50),
+        reason: z.string().max(200).optional(),
+        rideId: z.string().optional(),
+        zoneLabel: z.string().max(80).optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({
+          message: "driverId and amount required (amount must be 0–50)",
+        });
+      }
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const result = await allocateDriverBonus(
         storage,
-        driverId,
-        parseFloat(amount),
-        reason ?? "Community bonus — undersupply",
-        rideId,
-        zoneLabel,
+        parsed.data.driverId,
+        parsed.data.amount,
+        parsed.data.reason ?? "Community bonus — undersupply",
+        parsed.data.rideId,
+        parsed.data.zoneLabel,
       );
+      // Attribute the allocation to the admin who triggered it, not just
+      // the receiving driver, so the audit log can answer "who paid out
+      // what" later.
+      if (result.allocated) {
+        await storage.createAgentAuditLog({
+          agent: "pricing_fairness",
+          action: "admin_allocate_bonus",
+          userId: adminId,
+          rideId: parsed.data.rideId,
+          reasoning: parsed.data.reason ?? "Community bonus — undersupply",
+          metadata: { driverId: parsed.data.driverId, amount: parsed.data.amount },
+        }).catch(console.error);
+      }
       res.json(result);
     } catch (error) {
+      console.error("Error allocating bonus:", error);
       res.status(500).json({ message: "Failed to allocate bonus" });
     }
   });
@@ -5643,6 +5959,189 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       res.json({ pool, allocations });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch bonus pool" });
+    }
+  });
+
+  // ── Phase F: Research lane ───────────────────────────────────────────────────
+  app.get('/api/transit/alerts', async (req, res) => {
+    try {
+      const agency = typeof req.query.agency === "string" ? req.query.agency : undefined;
+      const alerts = await getTransitAlertsForRiders(storage, agency as any);
+      res.json({ alerts, disclaimer: "Research lane — verify with agency before travel." });
+    } catch (error) {
+      console.error("Transit alerts error:", error);
+      res.status(500).json({ message: "Failed to fetch transit alerts" });
+    }
+  });
+
+  app.post('/api/driver/rides/:rideId/l4/disengagement', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const body = z.object({
+        reason: z.enum(["manual", "attention_lapse", "gps_loss"]),
+        note: z.string().max(500).optional(),
+      }).parse(req.body);
+      await logL4Disengagement(storage, rideId, userId, body.reason, body.note);
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ message: error.errors[0]?.message });
+        return;
+      }
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to log disengagement" });
+    }
+  });
+
+  app.patch('/api/driver/vehicle/:vehicleId/ev', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { vehicleId } = req.params;
+      const body = z.object({
+        isEv: z.boolean(),
+        fuelType: z.enum(["ev", "hybrid", "gas"]).optional(),
+      }).parse(req.body);
+      const profile = await storage.getDriverProfile(userId);
+      if (!profile) {
+        res.status(404).json({ message: "Driver profile not found" });
+        return;
+      }
+      const vehicle = await storage.updateVehicleEvStatus(
+        vehicleId,
+        profile.id,
+        body.isEv,
+        body.fuelType ?? (body.isEv ? "ev" : "gas"),
+      );
+      res.json({ vehicle, greenBonusPerRide: GREEN_BONUS_PER_RIDE });
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to update vehicle" });
+    }
+  });
+
+  app.patch('/api/driver/vehicle/:vehicleId/type', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { vehicleId } = req.params;
+      const typeCheck = validateVehicleTypeInput(req.body.vehicleType);
+      if (!typeCheck.valid || !typeCheck.type) {
+        res.status(400).json({ message: typeCheck.error ?? "Invalid vehicle type" });
+        return;
+      }
+      const profile = await storage.getDriverProfile(userId);
+      if (!profile) {
+        res.status(404).json({ message: "Driver profile not found" });
+        return;
+      }
+      const vehicle = await storage.updateVehicleType(vehicleId, profile.id, typeCheck.type);
+      res.json({ vehicle });
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to update vehicle type" });
+    }
+  });
+
+  app.get('/api/certificates/:certificateId/provenance', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { certificateId } = req.params;
+      const cert = await storage.getShareCertificateById(certificateId);
+      if (!cert) {
+        res.status(404).json({ message: "Certificate not found" });
+        return;
+      }
+      const user = await storage.getUser(userId);
+      if (cert.ownerId !== userId && !user?.isAdmin && !user?.isSuperAdmin) {
+        res.status(403).json({ message: "Not authorized" });
+        return;
+      }
+      const provenance = await storage.getCertificateProvenance(certificateId);
+      res.json({ certificate: cert, provenance: provenance ?? null });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch provenance" });
+    }
+  });
+
+  app.get('/api/admin/research/summary', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const l4Events = await storage.getL4ReadinessEvents(undefined, 50);
+      const transit = await storage.getActiveTransitAlerts();
+      const evDrivers = await getEvEligibleDrivers(storage);
+      const certs = await storage.getShareCertificates();
+      const withHash = await Promise.all(
+        certs.map(async (c) => ({
+          id: c.id,
+          certificateNumber: c.certificateNumber,
+          hasProvenance: !!(await storage.getCertificateProvenance(c.id)),
+        })),
+      );
+      res.json({
+        l4EventCount: l4Events.length,
+        recentL4Events: l4Events.slice(0, 10),
+        transitAlertCount: transit.length,
+        evDriverCount: evDrivers.length,
+        certificates: withHash,
+        greenBonusPerRide: GREEN_BONUS_PER_RIDE,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch research summary" });
+    }
+  });
+
+  app.get('/api/admin/l4/events', isAdminOrSessionAuth, async (req, res) => {
+    try {
+      const rideId = typeof req.query.rideId === "string" ? req.query.rideId : undefined;
+      const events = await storage.getL4ReadinessEvents(rideId, 200);
+      res.json(events);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch L4 events" });
+    }
+  });
+
+  app.post('/api/admin/transit/refresh', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const result = await refreshTransitFeeds(storage);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to refresh transit feeds" });
+    }
+  });
+
+  app.post('/api/admin/certificates/:certificateId/hash', isAdminOrSessionAuth, async (req, res) => {
+    try {
+      const result = await recordCertificateProvenance(storage, req.params.certificateId);
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to hash certificate" });
+    }
+  });
+
+  app.post('/api/admin/certificates/hash-all', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const count = await recordAllActiveCertificateHashes(storage);
+      res.json({ hashed: count });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to hash certificates" });
+    }
+  });
+
+  app.get('/api/admin/green-bonus/eligible', isAdminOrSessionAuth, async (_req, res) => {
+    try {
+      const drivers = await getEvEligibleDrivers(storage);
+      res.json({ drivers, bonusPerRide: GREEN_BONUS_PER_RIDE });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to list EV drivers" });
+    }
+  });
+
+  app.post('/api/admin/green-bonus/allocate', isAdminOrSessionAuth, async (req, res) => {
+    try {
+      const body = z.object({
+        driverId: z.string(),
+        rideId: z.string().optional(),
+      }).parse(req.body);
+      const result = await allocateGreenBonusForRide(storage, body.driverId, body.rideId);
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Failed to allocate green bonus" });
     }
   });
 

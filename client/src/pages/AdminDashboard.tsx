@@ -17,12 +17,12 @@ import {
   DollarSign, Award, TrendingUp, Shield, Activity,
   CheckCircle, XCircle, Eye, Ban, UserCheck, Clock,
   ChevronLeft, BarChart3, Brain, AlertCircle, BookOpen,
-  RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2, Banknote
+  RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2, Banknote, FlaskConical, Train, Package
 } from "lucide-react";
 import { format } from "date-fns";
 import { useLocation } from "wouter";
 
-type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "disputes" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics";
+type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -50,7 +50,9 @@ export default function AdminDashboard() {
     { id: "drivers", label: "Drivers", icon: Car },
     { id: "rides", label: "Rides", icon: MapPin },
     { id: "disputes", label: "Disputes", icon: AlertTriangle },
+    { id: "lostfound", label: "Lost & Found", icon: Package },
     { id: "agents", label: "Agents", icon: Brain },
+    { id: "research", label: "Research", icon: FlaskConical },
     { id: "payouts", label: "Payouts", icon: Banknote },
     { id: "finances", label: "Finances", icon: DollarSign },
     { id: "ownership", label: "Ownership", icon: Award },
@@ -112,7 +114,9 @@ export default function AdminDashboard() {
           {activeTab === "drivers" && <DriversPanel />}
           {activeTab === "rides" && <RidesPanel />}
           {activeTab === "disputes" && <DisputesPanel />}
+          {activeTab === "lostfound" && <LostFoundPanel />}
           {activeTab === "agents" && <AgentProposalsPanel />}
+          {activeTab === "research" && <ResearchPanel />}
           {activeTab === "payouts" && <PayoutsPanel />}
           {activeTab === "finances" && <FinancesPanel />}
           {activeTab === "ownership" && <OwnershipPanel />}
@@ -914,6 +918,69 @@ function PayoutsPanel() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function LostFoundPanel() {
+  const { toast } = useToast();
+  const { data: reports = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/lost-found"],
+  });
+
+  const updateReport = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      const res = await apiRequest("PATCH", `/api/admin/lost-found/${id}`, { status });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/lost-found"] });
+      toast({ title: "Report updated" });
+    },
+    onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
+  });
+
+  if (isLoading) return <div data-testid="loading-lost-found">Loading…</div>;
+
+  const open = reports.filter((r) => !["returned", "closed_not_found", "closed_no_response"].includes(r.status));
+
+  return (
+    <div data-testid="panel-lost-found">
+      <h2 className="text-2xl font-bold mb-2">Lost & Found</h2>
+      <p className="text-muted-foreground text-sm mb-6">{open.length} open · {reports.length} total</p>
+      <div className="space-y-3">
+        {reports.map((report) => (
+          <Card key={report.id} data-testid={`lost-found-admin-${report.id}`}>
+            <CardContent className="pt-4">
+              <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+                <div>
+                  <Badge variant="outline" className="mr-2">{report.itemCategory}</Badge>
+                  <Badge variant={open.some((o) => o.id === report.id) ? "destructive" : "default"}>{report.status}</Badge>
+                  <p className="font-medium mt-2">{report.itemDescription}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Ride {report.rideId?.slice(0, 8)}… · {new Date(report.createdAt).toLocaleString()}
+                  </p>
+                </div>
+                {open.some((o) => o.id === report.id) && (
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => updateReport.mutate({ id: report.id, status: "closed_no_response" })}>
+                      Close
+                    </Button>
+                    <Button size="sm" onClick={() => updateReport.mutate({ id: report.id, status: "returned" })}>
+                      Mark returned
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {report.driverNote && <p className="text-sm text-muted-foreground">Driver: {report.driverNote}</p>}
+              {report.riderNote && <p className="text-sm text-muted-foreground">Rider: {report.riderNote}</p>}
+            </CardContent>
+          </Card>
+        ))}
+        {reports.length === 0 && (
+          <p className="text-muted-foreground text-center py-8">No lost & found reports yet.</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -1801,6 +1868,145 @@ function AgentProposalsPanel() {
               <p className="text-muted-foreground text-sm">Run a compliance scan to populate records.</p>
             )}
           </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ResearchPanel() {
+  const { toast } = useToast();
+  const { data: summary, isLoading, refetch } = useQuery<{
+    l4EventCount: number;
+    recentL4Events: any[];
+    transitAlertCount: number;
+    evDriverCount: number;
+    certificates: Array<{ id: string; certificateNumber: string; hasProvenance: boolean }>;
+    greenBonusPerRide: number;
+  }>({ queryKey: ["/api/admin/research/summary"] });
+
+  const refreshTransit = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/transit/refresh");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      refetch();
+      toast({ title: `Transit refreshed (${data.source})`, description: `${data.count} alerts cached` });
+    },
+    onError: () => toast({ title: "Transit refresh failed", variant: "destructive" }),
+  });
+
+  const hashAllCerts = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/certificates/hash-all");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      refetch();
+      toast({ title: `Hashed ${data.hashed} certificates` });
+    },
+    onError: () => toast({ title: "Certificate hashing failed", variant: "destructive" }),
+  });
+
+  if (isLoading) return <div className="py-12 text-center">Loading research summary…</div>;
+
+  return (
+    <div className="space-y-6" data-testid="panel-research">
+      <h2 className="text-2xl font-bold">Phase F — Research Lane</h2>
+      <p className="text-muted-foreground text-sm">
+        L4 readiness data, transit feeds, certificate provenance, and EV green bonus — no robotaxi promise.
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card>
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">L4 events logged</p>
+            <p className="text-2xl font-bold">{summary?.l4EventCount ?? 0}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Transit alerts cached</p>
+            <p className="text-2xl font-bold">{summary?.transitAlertCount ?? 0}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">EV drivers enrolled</p>
+            <p className="text-2xl font-bold">{summary?.evDriverCount ?? 0}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Green bonus / ride</p>
+            <p className="text-2xl font-bold">${summary?.greenBonusPerRide?.toFixed(2) ?? "2.50"}</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Train className="w-4 h-4" /> Transit feeds (F3)
+            </CardTitle>
+            <Button size="sm" variant="outline" onClick={() => refreshTransit.mutate()} disabled={refreshTransit.isPending}>
+              {refreshTransit.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground mb-2">
+              WMATA live when <code>WMATA_API_KEY</code> is set; seeded PG County alerts otherwise.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Zap className="w-4 h-4" /> Certificate provenance (F2)
+            </CardTitle>
+            <Button size="sm" variant="outline" onClick={() => hashAllCerts.mutate()} disabled={hashAllCerts.isPending}>
+              Hash all active
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-1 max-h-40 overflow-y-auto">
+            {(summary?.certificates ?? []).map((c) => (
+              <div key={c.id} className="flex justify-between text-sm border-b py-1">
+                <span>{c.certificateNumber}</span>
+                <Badge variant={c.hasProvenance ? "default" : "secondary"}>
+                  {c.hasProvenance ? "SHA-256" : "pending"}
+                </Badge>
+              </div>
+            ))}
+            {(summary?.certificates?.length ?? 0) === 0 && (
+              <p className="text-muted-foreground text-sm">No active share certificates.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Recent L4 readiness events (F1)</CardTitle>
+          <CardDescription>Waypoint quality and disengagement — research only</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 max-h-64 overflow-y-auto">
+          {(summary?.recentL4Events ?? []).map((e) => (
+            <div key={e.id} className="text-sm border-b py-1 flex justify-between gap-2">
+              <span>
+                <Badge variant="outline" className="mr-2">{e.eventType}</Badge>
+                ride {e.rideId?.slice(0, 8)}…
+              </span>
+              <span className="text-muted-foreground shrink-0">
+                {e.waypointQuality != null ? `q=${e.waypointQuality}` : ""}
+              </span>
+            </div>
+          ))}
+          {(summary?.recentL4Events?.length ?? 0) === 0 && (
+            <p className="text-muted-foreground text-sm">No L4 events yet — logged during active ride GPS tracking.</p>
+          )}
         </CardContent>
       </Card>
     </div>

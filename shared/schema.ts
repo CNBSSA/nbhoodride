@@ -150,6 +150,11 @@ export const vehicles = pgTable("vehicles", {
   color: varchar("color").notNull(),
   licensePlate: varchar("license_plate").notNull(),
   photos: jsonb("photos").$type<string[]>().default([]),
+  /** Phase F4 — EV fleet incentives */
+  isEv: boolean("is_ev").default(false),
+  fuelType: varchar("fuel_type").default("gas"),
+  /** Rider-requestable vehicle class (standard / xl / suv / wheelchair). */
+  vehicleType: varchar("vehicle_type").default("standard"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -240,6 +245,12 @@ export const rides = pgTable("rides", {
   sharedFareDiscount: decimal("shared_fare_discount", { precision: 8, scale: 2 }).default("0.00"),
   groupId: varchar("group_id"),
   rideType: varchar("ride_type").default("solo"),
+  /** Book for someone else — payer is riderId; passenger fields name the rider. */
+  bookedForFriend: boolean("booked_for_friend").default(false),
+  passengerName: varchar("passenger_name"),
+  passengerPhone: varchar("passenger_phone"),
+  /** Rider preference: standard, xl, suv, wheelchair */
+  requestedVehicleType: varchar("requested_vehicle_type"),
   pickupStops: jsonb("pickup_stops").$type<Array<{lat: number, lng: number, address: string}>>(),
   originalFare: decimal("original_fare", { precision: 8, scale: 2 }),
   groupDiscountAmount: decimal("group_discount_amount", { precision: 8, scale: 2 }).default("0.00"),
@@ -328,6 +339,29 @@ export const disputes = pgTable("disputes", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+/** Lost & found — rider↔driver item coordination on completed rides. */
+export const lostFoundReports = pgTable("lost_found_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  rideId: varchar("ride_id").notNull().references(() => rides.id),
+  riderId: varchar("rider_id").notNull().references(() => users.id),
+  driverId: varchar("driver_id").notNull().references(() => users.id),
+  itemDescription: text("item_description").notNull(),
+  itemCategory: varchar("item_category").default("other").notNull(),
+  status: varchar("status").default("reported").notNull(),
+  driverNote: text("driver_note"),
+  riderNote: text("rider_note"),
+  adminNote: text("admin_note"),
+  resolvedBy: varchar("resolved_by").references(() => users.id),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_lost_found_ride").on(table.rideId),
+  index("idx_lost_found_rider").on(table.riderId),
+  index("idx_lost_found_driver").on(table.driverId),
+  index("idx_lost_found_status").on(table.status),
+]);
 
 // Emergency incidents
 export const emergencyIncidents = pgTable("emergency_incidents", {
@@ -808,16 +842,29 @@ export const rideTemplates = pgTable("ride_templates", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-/** Guardian / family tracking share links (B7). */
+/** Guardian / family tracking share links (B7).
+ *
+ * Security model (post-supervisor review):
+ *  - expires_at is NOT NULL. Server-enforced max of 7 days. A nullable
+ *    expiry was a "link lives forever" footgun.
+ *  - revoked_at supports soft-revocation. getGuardianLinkByToken filters
+ *    on (expires_at > now AND revoked_at IS NULL) so a rider can kill
+ *    a shared link immediately without waiting for the 24h TTL.
+ *  - rider_user_id is indexed so the rider can list and revoke their
+ *    own active links cheaply.
+ */
 export const guardianLinks = pgTable("guardian_links", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   riderUserId: varchar("rider_user_id").notNull().references(() => users.id),
   guardianName: varchar("guardian_name").notNull(),
   shareToken: varchar("share_token").notNull().unique(),
   activeRideId: varchar("active_ride_id").references(() => rides.id),
-  expiresAt: timestamp("expires_at"),
+  expiresAt: timestamp("expires_at").notNull(),
+  revokedAt: timestamp("revoked_at"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => [
+  index("idx_guardian_links_rider").on(table.riderUserId),
+]);
 
 /** Rider↔driver trust graph edges (C1). */
 export const trustEdges = pgTable("trust_edges", {
@@ -870,6 +917,20 @@ export const communityAnchors = pgTable("community_anchors", {
   name: text("name").notNull(),
   location: jsonb("location").$type<{ lat: number; lng: number; address?: string }>(),
   metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Pre-set community corridors — anchor-to-anchor quick booking. */
+export const communityRoutes = pgTable("community_routes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  routeCategory: varchar("route_category").notNull(),
+  destinationLocation: jsonb("destination_location").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  fromAnchorId: varchar("from_anchor_id").references(() => communityAnchors.id),
+  toAnchorId: varchar("to_anchor_id").references(() => communityAnchors.id),
+  sortOrder: integer("sort_order").default(0),
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -962,6 +1023,48 @@ export const smsBookingSessions = pgTable("sms_booking_sessions", {
   updatedAt: timestamp("updated_at").defaultNow(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+/** Phase F1 — L4 readiness research (waypoint quality, disengagement). */
+export const l4ReadinessEvents = pgTable("l4_readiness_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  rideId: varchar("ride_id").notNull().references(() => rides.id),
+  driverId: varchar("driver_id").notNull().references(() => users.id),
+  eventType: varchar("event_type").notNull(),
+  waypointQuality: decimal("waypoint_quality", { precision: 4, scale: 3 }),
+  speedMph: decimal("speed_mph", { precision: 6, scale: 2 }),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_l4_readiness_ride").on(table.rideId),
+]);
+
+/** Phase F2 — Share certificate provenance hash (off-chain SHA-256 v1). */
+export const certificateProvenance = pgTable("certificate_provenance", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  certificateId: varchar("certificate_id").notNull().references(() => shareCertificates.id).unique(),
+  contentHash: varchar("content_hash").notNull(),
+  algorithm: varchar("algorithm").notNull().default("sha256"),
+  payloadVersion: varchar("payload_version").default("v1"),
+  onChainTxId: varchar("on_chain_tx_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Phase F3 — Transit feed cache (WMATA, MARC, regional bus). */
+export const transitFeedCache = pgTable("transit_feed_cache", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  agency: varchar("agency").notNull(),
+  externalId: varchar("external_id"),
+  alertType: varchar("alert_type").notNull(),
+  title: varchar("title").notNull(),
+  summary: text("summary"),
+  severity: varchar("severity").default("info"),
+  rawPayload: jsonb("raw_payload").$type<Record<string, unknown>>(),
+  expiresAt: timestamp("expires_at"),
+  fetchedAt: timestamp("fetched_at").defaultNow(),
+}, (table) => [
+  index("idx_transit_feed_agency").on(table.agency),
+  index("idx_transit_feed_expires").on(table.expiresAt),
+]);
 
 /** Phase E6/E7 — Calm Ride mode + language preference. */
 export const userRidePreferences = pgTable("user_ride_preferences", {
@@ -1079,10 +1182,27 @@ export const insertRideSchema = createInsertSchema(rides).omit({
   updatedAt: true,
 });
 
+// Constrain issueType to a closed enum so the support auto-resolver can't be
+// tricked by a client picking 'duplicate_charge' for unrelated complaints.
+// Previously this was a free varchar — anything went, including invented
+// types that would silently get high-credit treatment.
+const ISSUE_TYPES_FOR_DISPUTE = [
+  "fare_dispute",
+  "short_wait",
+  "wrong_route",
+  "lost_item_minor",
+  "promo_not_applied",
+  "duplicate_charge",
+  "driver_no_show",
+  "safety",
+  "other",
+] as const;
 export const insertDisputeSchema = createInsertSchema(disputes).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+}).extend({
+  issueType: z.enum(ISSUE_TYPES_FOR_DISPUTE),
 });
 
 export const insertEmergencyIncidentSchema = createInsertSchema(emergencyIncidents).omit({
@@ -1166,6 +1286,7 @@ export type DriverProfile = typeof driverProfiles.$inferSelect;
 export type Vehicle = typeof vehicles.$inferSelect;
 export type Ride = typeof rides.$inferSelect;
 export type Dispute = typeof disputes.$inferSelect;
+export type LostFoundReport = typeof lostFoundReports.$inferSelect;
 export type EmergencyIncident = typeof emergencyIncidents.$inferSelect;
 export type DriverWeeklyHours = typeof driverWeeklyHours.$inferSelect;
 export type DriverOwnership = typeof driverOwnership.$inferSelect;
@@ -1235,6 +1356,7 @@ export type FavoriteDriver = typeof favoriteDrivers.$inferSelect;
 export type RiderTrustPreferences = typeof riderTrustPreferences.$inferSelect;
 export type CommunityReferral = typeof communityReferrals.$inferSelect;
 export type CommunityAnchor = typeof communityAnchors.$inferSelect;
+export type CommunityRoute = typeof communityRoutes.$inferSelect;
 export type DemandForecast = typeof demandForecasts.$inferSelect;
 export type CommunityBonusPool = typeof communityBonusPool.$inferSelect;
 export type BonusAllocation = typeof bonusAllocations.$inferSelect;
@@ -1246,6 +1368,9 @@ export type UserRidePreferences = typeof userRidePreferences.$inferSelect;
 export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
 export type DriverScorecardEntry = typeof driverScorecard.$inferSelect;
 export type SafetyAlert = typeof safetyAlerts.$inferSelect;
+export type L4ReadinessEvent = typeof l4ReadinessEvents.$inferSelect;
+export type CertificateProvenance = typeof certificateProvenance.$inferSelect;
+export type TransitFeedEntry = typeof transitFeedCache.$inferSelect;
 
 export type InsertEventTracking = z.infer<typeof insertEventTrackingSchema>;
 export type InsertAiFeedback = z.infer<typeof insertAiFeedbackSchema>;

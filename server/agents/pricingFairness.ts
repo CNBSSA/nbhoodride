@@ -41,6 +41,28 @@ export async function evaluateUndersupply(
   };
 }
 
+/**
+ * Allocate a community bonus to a driver, atomically.
+ *
+ * Concurrency note (post-supervisor review):
+ *
+ * The previous implementation did `read balance → compare → write` as three
+ * separate non-transactional SQL calls. Two concurrent callers (the
+ * undersupply detector hitting from dispatch + an admin hitting the
+ * /api/admin/fairness/allocate route at the same moment) could both read
+ * balance=100, both pass `balance < amount` for amount=50, both deduct
+ * 50, and both write allocation rows — total payout 100 against a pool
+ * that should only have funded ONE of them. `Math.max(0, ...)` in
+ * deductCommunityBonusPool masked the negative-balance smell while the
+ * allocation rows still landed.
+ *
+ * Fix: `tryDeductCommunityBonusPool` does a single atomic `UPDATE ...
+ * SET balance = balance - $amount WHERE balance >= $amount RETURNING`.
+ * Postgres serializes the row, so concurrent callers see "your turn,
+ * then their turn"; the loser's WHERE clause fails and returns 0 rows.
+ * We only create the bonus_allocation row when the deduction returned
+ * true.
+ */
 export async function allocateDriverBonus(
   storage: IStorage,
   driverId: string,
@@ -49,12 +71,13 @@ export async function allocateDriverBonus(
   rideId?: string,
   zoneLabel?: string,
 ): Promise<{ allocated: boolean; amount: number }> {
-  const pool = await storage.getCommunityBonusPool();
-  const balance = parseFloat(pool.balance ?? "0");
-  if (balance < amount || amount <= 0) {
+  if (!Number.isFinite(amount) || amount <= 0) {
     return { allocated: false, amount: 0 };
   }
-  await storage.deductCommunityBonusPool(amount);
+  const deducted = await storage.tryDeductCommunityBonusPool(amount);
+  if (!deducted) {
+    return { allocated: false, amount: 0 };
+  }
   await storage.createBonusAllocation({
     driverId,
     rideId,

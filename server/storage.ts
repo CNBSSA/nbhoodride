@@ -4,6 +4,7 @@ import {
   vehicles,
   rides,
   disputes,
+  lostFoundReports,
   emergencyIncidents,
   driverWeeklyHours,
   driverOwnership,
@@ -31,6 +32,7 @@ import {
   riderTrustPreferences,
   communityReferrals,
   communityAnchors,
+  communityRoutes,
   demandForecasts,
   communityBonusPool,
   bonusAllocations,
@@ -39,6 +41,9 @@ import {
   complianceRecords,
   smsBookingSessions,
   userRidePreferences,
+  l4ReadinessEvents,
+  certificateProvenance,
+  transitFeedCache,
   demandHeatmap,
   driverScorecard,
   safetyAlerts,
@@ -59,6 +64,7 @@ import {
   type Vehicle,
   type Ride,
   type Dispute,
+  type LostFoundReport,
   type EmergencyIncident,
   type DriverWeeklyHours,
   type DriverOwnership,
@@ -83,6 +89,7 @@ import {
   type RiderTrustPreferences,
   type CommunityReferral,
   type CommunityAnchor,
+  type CommunityRoute,
   type DemandForecast,
   type CommunityBonusPool,
   type BonusAllocation,
@@ -91,6 +98,9 @@ import {
   type ComplianceRecord,
   type SmsBookingSession,
   type UserRidePreferences,
+  type L4ReadinessEvent,
+  type CertificateProvenance,
+  type TransitFeedEntry,
   type DemandHeatmapEntry,
   type DriverScorecardEntry,
   type SafetyAlert,
@@ -102,6 +112,7 @@ import {
   driverRateCards,
   type DriverRateCard,
 } from "@shared/schema";
+import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { db } from "./db";
 import { eq, and, desc, asc, sql, or, isNull, isNotNull, gt, like, inArray, count, sum, gte, lte } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -211,7 +222,7 @@ export interface IStorage {
   updateDriverProfile(userId: string, updates: Partial<InsertDriverProfile>): Promise<DriverProfile>;
   updateDriverLocation(userId: string, location: {lat: number, lng: number}): Promise<void>;
   toggleDriverOnlineStatus(userId: string, isOnline: boolean): Promise<void>;
-  getNearbyDrivers(location: {lat: number, lng: number}, radiusMiles: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
+  getNearbyDrivers(location: {lat: number, lng: number}, radiusMiles: number, vehicleType?: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
   searchDriversByPhone(phone: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]>;
   
   getAllDriverProfiles(): Promise<DriverProfile[]>;
@@ -270,6 +281,28 @@ export interface IStorage {
   // Dispute operations
   createDispute(dispute: InsertDispute): Promise<Dispute>;
   getDisputesByRide(rideId: string): Promise<Dispute[]>;
+  createLostFoundReport(data: {
+    rideId: string;
+    riderId: string;
+    driverId: string;
+    itemDescription: string;
+    itemCategory: string;
+    riderNote?: string;
+    status?: string;
+  }): Promise<LostFoundReport>;
+  getLostFoundReportById(id: string): Promise<LostFoundReport | undefined>;
+  getOpenLostFoundReportForRide(rideId: string, riderId: string): Promise<LostFoundReport | undefined>;
+  getLostFoundReportsForUser(userId: string): Promise<LostFoundReport[]>;
+  getLostFoundReportsForDriver(driverId: string): Promise<LostFoundReport[]>;
+  getAllLostFoundReports(status?: string): Promise<LostFoundReport[]>;
+  updateLostFoundReport(id: string, updates: Partial<{
+    status: string;
+    driverNote: string;
+    riderNote: string;
+    adminNote: string;
+    resolvedBy: string;
+    resolvedAt: Date;
+  }>): Promise<LostFoundReport>;
   updateDispute(disputeId: string, updates: Partial<InsertDispute>): Promise<Dispute>;
   
   // Emergency operations
@@ -361,7 +394,9 @@ export interface IStorage {
   getRideSurfaceCache(rideId: string): Promise<Record<string, unknown> | undefined>;
   getRideTemplateByLabel(userId: string, label: string): Promise<RideTemplate | undefined>;
   upsertRideTemplateFromRide(userId: string, label: string, ride: Ride): Promise<RideTemplate>;
-  createGuardianLink(data: { riderUserId: string; guardianName: string; shareToken: string; activeRideId?: string; expiresAt?: Date }): Promise<GuardianLink>;
+  // expiresAt is required — a nullable expiry was the original footgun.
+  // Server enforces a max of 7 days at the route layer.
+  createGuardianLink(data: { riderUserId: string; guardianName: string; shareToken: string; activeRideId?: string; expiresAt: Date }): Promise<GuardianLink>;
   getGuardianLinkByToken(token: string): Promise<GuardianLink | undefined>;
   getTrustEdge(riderId: string, driverId: string): Promise<TrustEdge | undefined>;
   upsertTrustEdge(riderId: string, driverId: string, edgeType?: string): Promise<TrustEdge>;
@@ -375,7 +410,20 @@ export interface IStorage {
   createCommunityReferral(data: { referrerId: string; referralCode: string; chainType: string; creditAmount?: string }): Promise<CommunityReferral>;
   getCommunityReferralByCode(code: string): Promise<CommunityReferral | undefined>;
   redeemCommunityReferral(code: string, referredId: string): Promise<CommunityReferral | undefined>;
+  listCommunityReferralsByReferrer(referrerId: string): Promise<CommunityReferral[]>;
+  getRedeemedReferralForUser(userId: string): Promise<CommunityReferral | undefined>;
   getCommunityAnchors(activeOnly?: boolean): Promise<CommunityAnchor[]>;
+  getCommunityRoutes(activeOnly?: boolean): Promise<CommunityRoute[]>;
+  // List a rider's active (non-revoked, non-expired) guardian links so they
+  // can review and revoke. Sorted newest-first.
+  listActiveGuardianLinksByRider(riderUserId: string): Promise<GuardianLink[]>;
+  // Soft-revoke. Returns true if a row was actually revoked (i.e. the link
+  // belonged to this rider and was not already revoked/expired); false
+  // otherwise so the route can return 404 without leaking existence.
+  revokeGuardianLink(linkId: string, riderUserId: string): Promise<boolean>;
+  // Count active links so the route can enforce a per-user cap and prevent
+  // spam-link creation.
+  countActiveGuardianLinks(riderUserId: string): Promise<number>;
   upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry>;
   getDemandHeatmap(hourOfDay?: number, dayOfWeek?: number): Promise<DemandHeatmapEntry[]>;
   upsertDemandForecast(data: {
@@ -391,6 +439,20 @@ export interface IStorage {
   getCommunityBonusPool(): Promise<CommunityBonusPool>;
   fundCommunityBonusPool(amount: number): Promise<CommunityBonusPool>;
   deductCommunityBonusPool(amount: number): Promise<CommunityBonusPool>;
+  /**
+   * Atomically deduct `amount` from the bonus pool, but only if the current
+   * balance is sufficient. Returns true if the deduction happened, false if
+   * the balance was too low. Used by allocateDriverBonus so concurrent
+   * allocations can't double-spend through a read-then-write race.
+   */
+  tryDeductCommunityBonusPool(amount: number): Promise<boolean>;
+  /**
+   * Sum the auto-credit refunds applied to a reporter within the lookback
+   * window. Used by the support agent's cumulative-cap guard: once a rider
+   * crosses $50 of auto-credit in 30 days, further disputes escalate to
+   * admin review rather than auto-resolving.
+   */
+  sumAutoCreditByReporterSince(reporterId: string, since: Date): Promise<number>;
   createBonusAllocation(data: {
     driverId: string;
     rideId?: string;
@@ -450,6 +512,7 @@ export interface IStorage {
   getOrCreateOwnership(driverId: string): Promise<DriverOwnership>;
   getDriverWeeklyHoursHistory(driverId: string, limit?: number): Promise<DriverWeeklyHours[]>;
   getShareCertificates(ownerId?: string): Promise<ShareCertificate[]>;
+  getShareCertificateById(certificateId: string): Promise<ShareCertificate | undefined>;
   getDriverProfitDistributions(driverId: string): Promise<(ProfitDistribution & { declaration: ProfitDeclaration })[]>;
   // Driver hour tracking for ownership qualification
   getOrCreateWeeklyHours(driverId: string, weekStart: string): Promise<DriverWeeklyHours>;
@@ -461,6 +524,44 @@ export interface IStorage {
   updateRideGroup(id: string, updates: Partial<RideGroup>): Promise<RideGroup>;
   getRidesInGroup(groupId: string): Promise<Ride[]>;
   applyGroupDiscount(groupId: string, discountPct: number): Promise<void>;
+  createL4ReadinessEvent(data: {
+    rideId: string;
+    driverId: string;
+    eventType: string;
+    waypointQuality?: string;
+    speedMph?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<L4ReadinessEvent>;
+  getL4ReadinessEvents(rideId?: string, limit?: number): Promise<L4ReadinessEvent[]>;
+  upsertCertificateProvenance(data: {
+    certificateId: string;
+    contentHash: string;
+    algorithm: string;
+    payloadVersion?: string;
+    onChainTxId?: string;
+  }): Promise<CertificateProvenance>;
+  getCertificateProvenance(certificateId: string): Promise<CertificateProvenance | undefined>;
+  replaceTransitFeedCache(alerts: Array<{
+    agency: string;
+    externalId?: string;
+    alertType: string;
+    title: string;
+    summary?: string;
+    severity?: string;
+    rawPayload?: Record<string, unknown>;
+    expiresAt?: Date;
+  }>): Promise<void>;
+  getActiveTransitAlerts(agency?: string): Promise<TransitFeedEntry[]>;
+  updateVehicleEvStatus(vehicleId: string, driverProfileId: string, isEv: boolean, fuelType?: string): Promise<Vehicle>;
+  updateVehicleType(vehicleId: string, driverProfileId: string, vehicleType: string): Promise<Vehicle>;
+  getEvDrivers(): Promise<Array<{
+    driverId: string;
+    driverProfileId: string;
+    vehicleId: string;
+    make: string;
+    model: string;
+    fuelType: string | null;
+  }>>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -666,7 +767,7 @@ export class DatabaseStorage implements IStorage {
       .where(eq(driverProfiles.userId, userId));
   }
 
-  async getNearbyDrivers(location: {lat: number, lng: number}, radiusMiles: number): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]> {
+  async getNearbyDrivers(location: {lat: number, lng: number}, radiusMiles: number, vehicleType?: string): Promise<(DriverProfile & {user: User, vehicles: Vehicle[]})[]> {
     // Fetch all active drivers (not suspended) — show pending/approved drivers during early launch
     // Admins can suspend bad actors; the approval gate is secondary during onboarding
     const results = await db
@@ -720,7 +821,11 @@ export class DatabaseStorage implements IStorage {
     // Online drivers first, then offline
     pool.sort((a, b) => (b.isOnline ? 1 : 0) - (a.isOnline ? 1 : 0));
 
-    return filterAvailableDrivers(pool, (d) => d.userId);
+    const available = await filterAvailableDrivers(pool, (d) => d.userId);
+    if (vehicleType) {
+      return filterDriversByVehicleType(available, vehicleType);
+    }
+    return available;
   }
 
   async getAllDriverProfiles(): Promise<DriverProfile[]> {
@@ -1170,6 +1275,85 @@ export class DatabaseStorage implements IStorage {
       .from(disputes)
       .where(eq(disputes.rideId, rideId))
       .orderBy(desc(disputes.createdAt));
+  }
+
+  async createLostFoundReport(data: {
+    rideId: string;
+    riderId: string;
+    driverId: string;
+    itemDescription: string;
+    itemCategory: string;
+    riderNote?: string;
+    status?: string;
+  }): Promise<LostFoundReport> {
+    const [row] = await db.insert(lostFoundReports).values(data).returning();
+    return row;
+  }
+
+  async getLostFoundReportById(id: string): Promise<LostFoundReport | undefined> {
+    const [row] = await db.select().from(lostFoundReports).where(eq(lostFoundReports.id, id));
+    return row;
+  }
+
+  async getOpenLostFoundReportForRide(
+    rideId: string,
+    riderId: string,
+  ): Promise<LostFoundReport | undefined> {
+    const rows = await db
+      .select()
+      .from(lostFoundReports)
+      .where(and(eq(lostFoundReports.rideId, rideId), eq(lostFoundReports.riderId, riderId)))
+      .orderBy(desc(lostFoundReports.createdAt));
+    return rows.find((r) =>
+      ["reported", "driver_notified", "driver_has_item"].includes(r.status ?? ""),
+    );
+  }
+
+  async getLostFoundReportsForUser(userId: string): Promise<LostFoundReport[]> {
+    return db
+      .select()
+      .from(lostFoundReports)
+      .where(eq(lostFoundReports.riderId, userId))
+      .orderBy(desc(lostFoundReports.createdAt));
+  }
+
+  async getLostFoundReportsForDriver(driverId: string): Promise<LostFoundReport[]> {
+    return db
+      .select()
+      .from(lostFoundReports)
+      .where(eq(lostFoundReports.driverId, driverId))
+      .orderBy(desc(lostFoundReports.createdAt));
+  }
+
+  async getAllLostFoundReports(status?: string): Promise<LostFoundReport[]> {
+    if (status) {
+      return db
+        .select()
+        .from(lostFoundReports)
+        .where(eq(lostFoundReports.status, status))
+        .orderBy(desc(lostFoundReports.createdAt));
+    }
+    return db.select().from(lostFoundReports).orderBy(desc(lostFoundReports.createdAt));
+  }
+
+  async updateLostFoundReport(
+    id: string,
+    updates: Partial<{
+      status: string;
+      driverNote: string;
+      riderNote: string;
+      adminNote: string;
+      resolvedBy: string;
+      resolvedAt: Date;
+    }>,
+  ): Promise<LostFoundReport> {
+    const [row] = await db
+      .update(lostFoundReports)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(lostFoundReports.id, id))
+      .returning();
+    if (!row) throw new Error("Lost & found report not found");
+    return row;
   }
 
   async updateDispute(disputeId: string, updates: Partial<InsertDispute>): Promise<Dispute> {
@@ -2670,6 +2854,14 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(shareCertificates.issuedAt));
   }
 
+  async getShareCertificateById(certificateId: string): Promise<ShareCertificate | undefined> {
+    const [row] = await db
+      .select()
+      .from(shareCertificates)
+      .where(eq(shareCertificates.id, certificateId));
+    return row;
+  }
+
   async getRebalanceLog(limit = 20): Promise<any[]> {
     return await db.select().from(ownershipRebalanceLog).orderBy(desc(ownershipRebalanceLog.createdAt)).limit(limit);
   }
@@ -3178,7 +3370,7 @@ export class DatabaseStorage implements IStorage {
     guardianName: string;
     shareToken: string;
     activeRideId?: string;
-    expiresAt?: Date;
+    expiresAt: Date;
   }): Promise<GuardianLink> {
     const [row] = await db.insert(guardianLinks).values(data).returning();
     return row;
@@ -3187,7 +3379,10 @@ export class DatabaseStorage implements IStorage {
   async getGuardianLinkByToken(token: string): Promise<GuardianLink | undefined> {
     const [row] = await db.select().from(guardianLinks).where(eq(guardianLinks.shareToken, token));
     if (!row) return undefined;
-    if (row.expiresAt && row.expiresAt < new Date()) return undefined;
+    // Filter on BOTH expiry and explicit revocation. Without revoked_at,
+    // a rider couldn't kill a leaked link before the 24h TTL expired.
+    if (row.expiresAt < new Date()) return undefined;
+    if (row.revokedAt) return undefined;
     return row;
   }
 
@@ -3307,6 +3502,27 @@ export class DatabaseStorage implements IStorage {
   async redeemCommunityReferral(code: string, referredId: string): Promise<CommunityReferral | undefined> {
     const existing = await this.getCommunityReferralByCode(code);
     if (!existing || existing.status !== "pending") return undefined;
+    // Self-redemption guard. Previously a user could create a referral,
+    // sign in as a second account (or even pass their own id), and
+    // redeem their own code for the $5 credit. The referral system
+    // becomes a per-account mint with no upper bound.
+    if (existing.referrerId === referredId) return undefined;
+    // Per-redeemer cap. Each redeemed referral credits the referrer +
+    // the redeemer; a single redeemer hitting multiple codes can
+    // collect $5 per code with no human review. Cap at one redeemed
+    // referral per user. Operators can lift the cap later via admin
+    // process if needed for promo campaigns.
+    const priorRedemption = await db
+      .select()
+      .from(communityReferrals)
+      .where(
+        and(
+          eq(communityReferrals.referredId, referredId),
+          eq(communityReferrals.status, "redeemed"),
+        ),
+      )
+      .limit(1);
+    if (priorRedemption.length > 0) return undefined;
     const [updated] = await db
       .update(communityReferrals)
       .set({ referredId, status: "redeemed" })
@@ -3315,11 +3531,80 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async listCommunityReferralsByReferrer(referrerId: string): Promise<CommunityReferral[]> {
+    return db
+      .select()
+      .from(communityReferrals)
+      .where(eq(communityReferrals.referrerId, referrerId))
+      .orderBy(desc(communityReferrals.createdAt));
+  }
+
+  async getRedeemedReferralForUser(userId: string): Promise<CommunityReferral | undefined> {
+    const [row] = await db
+      .select()
+      .from(communityReferrals)
+      .where(
+        and(
+          eq(communityReferrals.referredId, userId),
+          eq(communityReferrals.status, "redeemed"),
+        ),
+      )
+      .limit(1);
+    return row;
+  }
+
   async getCommunityAnchors(activeOnly = true): Promise<CommunityAnchor[]> {
     if (activeOnly) {
       return db.select().from(communityAnchors).where(eq(communityAnchors.isActive, true));
     }
     return db.select().from(communityAnchors);
+  }
+
+  async getCommunityRoutes(activeOnly = true): Promise<CommunityRoute[]> {
+    if (activeOnly) {
+      return db
+        .select()
+        .from(communityRoutes)
+        .where(eq(communityRoutes.isActive, true))
+        .orderBy(asc(communityRoutes.sortOrder), asc(communityRoutes.name));
+    }
+    return db
+      .select()
+      .from(communityRoutes)
+      .orderBy(asc(communityRoutes.sortOrder), asc(communityRoutes.name));
+  }
+
+  async listActiveGuardianLinksByRider(riderUserId: string): Promise<GuardianLink[]> {
+    const now = new Date();
+    const rows = await db
+      .select()
+      .from(guardianLinks)
+      .where(eq(guardianLinks.riderUserId, riderUserId))
+      .orderBy(desc(guardianLinks.createdAt));
+    return rows.filter((r) => r.expiresAt > now && !r.revokedAt);
+  }
+
+  async revokeGuardianLink(linkId: string, riderUserId: string): Promise<boolean> {
+    // Soft-revoke (set revoked_at) instead of DELETE so the row stays for
+    // audit. The ownership filter on rider_user_id is what prevents one
+    // rider from revoking another's link via a guessed id.
+    const result = await db
+      .update(guardianLinks)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(guardianLinks.id, linkId),
+          eq(guardianLinks.riderUserId, riderUserId),
+          isNull(guardianLinks.revokedAt),
+        ),
+      )
+      .returning({ id: guardianLinks.id });
+    return result.length > 0;
+  }
+
+  async countActiveGuardianLinks(riderUserId: string): Promise<number> {
+    const links = await this.listActiveGuardianLinksByRider(riderUserId);
+    return links.length;
   }
 
   async upsertDemandHeatmap(data: { gridLat: string; gridLng: string; hourOfDay: number; dayOfWeek: number; rideCount: number; avgFare?: string; avgWaitTime?: number }): Promise<DemandHeatmapEntry> {
@@ -3592,6 +3877,55 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async tryDeductCommunityBonusPool(amount: number): Promise<boolean> {
+    if (!Number.isFinite(amount) || amount <= 0) return false;
+    // Atomic compare-and-set: only deduct if the row's balance still meets
+    // the requirement. Postgres's UPDATE with a value-based WHERE serializes
+    // through MVCC + row locking, so two concurrent callers can never both
+    // succeed when there's only enough for one. Previously this was a
+    // read-then-write race that let dispatch + admin allocations
+    // double-spend the pool.
+    const result = await db.execute(sql`
+      UPDATE community_bonus_pool
+      SET balance = (balance::numeric - ${amount})::text,
+          total_allocated = (total_allocated::numeric + ${amount})::text,
+          updated_at = NOW()
+      WHERE id = 'default'
+        AND balance::numeric >= ${amount}
+      RETURNING id
+    `);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async sumAutoCreditByReporterSince(reporterId: string, since: Date): Promise<number> {
+    // We log auto-credit on disputes by setting refundedAmount on the ride
+    // and resolution text mentioning 'Auto-resolved by Support Agent'. The
+    // cumulative cap reads back via the disputes table — each auto-resolved
+    // row's matched ride.refundedAmount is the per-dispute credit.
+    const rows = await db
+      .select({
+        rideId: disputes.rideId,
+        resolution: disputes.resolution,
+        updatedAt: disputes.updatedAt,
+      })
+      .from(disputes)
+      .where(
+        and(
+          eq(disputes.reporterId, reporterId),
+          eq(disputes.status, "resolved"),
+          gte(disputes.updatedAt, since),
+        ),
+      );
+    let total = 0;
+    for (const row of rows) {
+      if (!row.resolution?.includes("Auto-resolved by Support Agent")) continue;
+      // Extract "$X.XX" from "Auto-resolved by Support Agent: $7.50 PG Card credit"
+      const match = row.resolution.match(/\$(\d+(?:\.\d{1,2})?)/);
+      if (match) total += parseFloat(match[1]);
+    }
+    return total;
+  }
+
   async deductCommunityBonusPool(amount: number): Promise<CommunityBonusPool> {
     const pool = await this.getCommunityBonusPool();
     const balance = Math.max(0, parseFloat(pool.balance ?? "0") - amount);
@@ -3849,6 +4183,164 @@ export class DatabaseStorage implements IStorage {
       .where(eq(userRidePreferences.userId, userId))
       .returning();
     return updated;
+  }
+
+  async createL4ReadinessEvent(data: {
+    rideId: string;
+    driverId: string;
+    eventType: string;
+    waypointQuality?: string;
+    speedMph?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<L4ReadinessEvent> {
+    const [row] = await db.insert(l4ReadinessEvents).values(data).returning();
+    return row;
+  }
+
+  async getL4ReadinessEvents(rideId?: string, limit = 100): Promise<L4ReadinessEvent[]> {
+    if (rideId) {
+      return db
+        .select()
+        .from(l4ReadinessEvents)
+        .where(eq(l4ReadinessEvents.rideId, rideId))
+        .orderBy(desc(l4ReadinessEvents.createdAt))
+        .limit(limit);
+    }
+    return db
+      .select()
+      .from(l4ReadinessEvents)
+      .orderBy(desc(l4ReadinessEvents.createdAt))
+      .limit(limit);
+  }
+
+  async upsertCertificateProvenance(data: {
+    certificateId: string;
+    contentHash: string;
+    algorithm: string;
+    payloadVersion?: string;
+    onChainTxId?: string;
+  }): Promise<CertificateProvenance> {
+    const existing = await this.getCertificateProvenance(data.certificateId);
+    if (existing) {
+      const [updated] = await db
+        .update(certificateProvenance)
+        .set({
+          contentHash: data.contentHash,
+          algorithm: data.algorithm,
+          payloadVersion: data.payloadVersion ?? existing.payloadVersion,
+          onChainTxId: data.onChainTxId ?? existing.onChainTxId,
+        })
+        .where(eq(certificateProvenance.certificateId, data.certificateId))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(certificateProvenance).values(data).returning();
+    return created;
+  }
+
+  async getCertificateProvenance(certificateId: string): Promise<CertificateProvenance | undefined> {
+    const [row] = await db
+      .select()
+      .from(certificateProvenance)
+      .where(eq(certificateProvenance.certificateId, certificateId));
+    return row;
+  }
+
+  async replaceTransitFeedCache(alerts: Array<{
+    agency: string;
+    externalId?: string;
+    alertType: string;
+    title: string;
+    summary?: string;
+    severity?: string;
+    rawPayload?: Record<string, unknown>;
+    expiresAt?: Date;
+  }>): Promise<void> {
+    await db.delete(transitFeedCache);
+    if (alerts.length === 0) return;
+    await db.insert(transitFeedCache).values(
+      alerts.map((a) => ({
+        agency: a.agency,
+        externalId: a.externalId,
+        alertType: a.alertType,
+        title: a.title,
+        summary: a.summary,
+        severity: a.severity ?? "info",
+        rawPayload: a.rawPayload,
+        expiresAt: a.expiresAt,
+        fetchedAt: new Date(),
+      })),
+    );
+  }
+
+  async getActiveTransitAlerts(agency?: string): Promise<TransitFeedEntry[]> {
+    const now = new Date();
+    const conditions = [or(isNull(transitFeedCache.expiresAt), gt(transitFeedCache.expiresAt, now))];
+    if (agency) conditions.push(eq(transitFeedCache.agency, agency));
+    return db
+      .select()
+      .from(transitFeedCache)
+      .where(and(...conditions))
+      .orderBy(desc(transitFeedCache.fetchedAt));
+  }
+
+  async updateVehicleEvStatus(
+    vehicleId: string,
+    driverProfileId: string,
+    isEv: boolean,
+    fuelType = "ev",
+  ): Promise<Vehicle> {
+    const [updated] = await db
+      .update(vehicles)
+      .set({
+        isEv,
+        fuelType: isEv ? fuelType : "gas",
+        updatedAt: new Date(),
+      })
+      .where(and(eq(vehicles.id, vehicleId), eq(vehicles.driverProfileId, driverProfileId)))
+      .returning();
+    if (!updated) throw new Error("Vehicle not found");
+    return updated;
+  }
+
+  async updateVehicleType(
+    vehicleId: string,
+    driverProfileId: string,
+    vehicleType: string,
+  ): Promise<Vehicle> {
+    const [updated] = await db
+      .update(vehicles)
+      .set({
+        vehicleType,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(vehicles.id, vehicleId), eq(vehicles.driverProfileId, driverProfileId)))
+      .returning();
+    if (!updated) throw new Error("Vehicle not found");
+    return updated;
+  }
+
+  async getEvDrivers(): Promise<Array<{
+    driverId: string;
+    driverProfileId: string;
+    vehicleId: string;
+    make: string;
+    model: string;
+    fuelType: string | null;
+  }>> {
+    const rows = await db
+      .select({
+        driverId: driverProfiles.userId,
+        driverProfileId: driverProfiles.id,
+        vehicleId: vehicles.id,
+        make: vehicles.make,
+        model: vehicles.model,
+        fuelType: vehicles.fuelType,
+      })
+      .from(vehicles)
+      .innerJoin(driverProfiles, eq(vehicles.driverProfileId, driverProfiles.id))
+      .where(and(eq(vehicles.isEv, true), eq(driverProfiles.approvalStatus, "approved")));
+    return rows;
   }
 }
 

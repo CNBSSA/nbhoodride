@@ -1,6 +1,28 @@
-/** E1 — Support auto-resolve policy (≤$25). */
+/** E1 — Support auto-resolve policy (≤$25 per resolution, ≤$50 per rider per 30 days). */
 
 export const SUPPORT_AUTO_RESOLVE_MAX_USD = 25;
+/**
+ * Cumulative cap on auto-credit per reporter within a rolling 30-day window.
+ * Without this, a rider could re-file disputes against the same or different
+ * rides to repeatedly extract the $25 single-resolution cap with no human
+ * review. Anything above this rolls into manual-review even if individual
+ * caps would have passed.
+ */
+export const SUPPORT_AUTO_RESOLVE_30D_MAX_USD = 50;
+
+/** Every issueType the client may submit. Anything else → 400. */
+export const ALL_ISSUE_TYPES = [
+  "fare_dispute",
+  "short_wait",
+  "wrong_route",
+  "lost_item_minor",
+  "promo_not_applied",
+  "duplicate_charge",
+  "driver_no_show",
+  "safety",
+  "other",
+] as const;
+export type IssueType = (typeof ALL_ISSUE_TYPES)[number];
 
 export const AUTO_RESOLVABLE_ISSUE_TYPES = new Set([
   "fare_dispute",

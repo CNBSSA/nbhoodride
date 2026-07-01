@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Timer, MapPin, Navigation, Users, Route } from "lucide-react";
+import { formatPassengerLabel } from "@shared/rideForFriend";
 
 interface IncomingRideRequestProps {
   ride: {
@@ -13,6 +14,9 @@ interface IncomingRideRequestProps {
     destinationLocation: { address: string; lat: number; lng: number };
     estimatedFare: string;
     pickupInstructions?: string;
+    bookedForFriend?: boolean;
+    passengerName?: string;
+    passengerPhone?: string;
     createdAt: string;
     rideType?: string;
     groupId?: string;
@@ -181,6 +185,15 @@ export default function IncomingRideRequest({ ride, onAccept, onDecline }: Incom
               <h3 className="font-semibold text-lg">
                 {ride.rider.firstName} {ride.rider.lastName?.[0]}.
               </h3>
+              {ride.bookedForFriend && ride.passengerName && (
+                <p className="text-xs text-purple-700 font-medium flex items-center gap-1 mt-0.5">
+                  <Users className="w-3 h-3" />
+                  {formatPassengerLabel(true, ride.passengerName, ride.rider.firstName)}
+                </p>
+              )}
+              {ride.passengerPhone && (
+                <p className="text-xs text-muted-foreground">Passenger: {ride.passengerPhone}</p>
+              )}
               <div className="flex items-center space-x-1">
                 <div className="flex text-sm">
                   {renderStars(ride.rider.rating)}

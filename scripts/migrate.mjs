@@ -718,9 +718,19 @@ CREATE TABLE IF NOT EXISTS guardian_links (
   guardian_name VARCHAR NOT NULL,
   share_token VARCHAR NOT NULL UNIQUE,
   active_ride_id VARCHAR REFERENCES rides(id),
-  expires_at TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+  revoked_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW()
 );
+-- Idempotent column additions for guardian_links: revoked_at supports the
+-- DELETE /api/mobility/guardian-links/:id revocation endpoint so a rider
+-- can kill a shared link immediately rather than waiting for the 24h TTL.
+-- expires_at is enforced NOT NULL post-hoc (set a default for any orphan
+-- rows that were created with a NULL before this migration ran).
+ALTER TABLE guardian_links ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP;
+UPDATE guardian_links SET expires_at = COALESCE(expires_at, created_at + INTERVAL '1 day') WHERE expires_at IS NULL;
+ALTER TABLE guardian_links ALTER COLUMN expires_at SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_guardian_links_rider ON guardian_links (rider_user_id);
 
 -- ── Phase C: Trust graph ─────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS trust_edges (
@@ -879,6 +889,74 @@ CREATE TABLE IF NOT EXISTS user_ride_preferences (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- ── Phase F: Research lane ─────────────────────────────────────────────────────
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS is_ev BOOLEAN DEFAULT false;
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS fuel_type VARCHAR DEFAULT 'gas';
+
+CREATE TABLE IF NOT EXISTS l4_readiness_events (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  ride_id VARCHAR NOT NULL REFERENCES rides(id),
+  driver_id VARCHAR NOT NULL REFERENCES users(id),
+  event_type VARCHAR NOT NULL,
+  waypoint_quality DECIMAL(4,3),
+  speed_mph DECIMAL(6,2),
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_l4_readiness_ride ON l4_readiness_events (ride_id);
+
+CREATE TABLE IF NOT EXISTS certificate_provenance (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  certificate_id VARCHAR NOT NULL UNIQUE REFERENCES share_certificates(id),
+  content_hash VARCHAR NOT NULL,
+  algorithm VARCHAR NOT NULL DEFAULT 'sha256',
+  payload_version VARCHAR DEFAULT 'v1',
+  on_chain_tx_id VARCHAR,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS transit_feed_cache (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  agency VARCHAR NOT NULL,
+  external_id VARCHAR,
+  alert_type VARCHAR NOT NULL,
+  title VARCHAR NOT NULL,
+  summary TEXT,
+  severity VARCHAR DEFAULT 'info',
+  raw_payload JSONB,
+  expires_at TIMESTAMP,
+  fetched_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_transit_feed_agency ON transit_feed_cache (agency);
+CREATE INDEX IF NOT EXISTS idx_transit_feed_expires ON transit_feed_cache (expires_at);
+
+-- ── Lost & found workflow ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lost_found_reports (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  ride_id VARCHAR NOT NULL REFERENCES rides(id),
+  rider_id VARCHAR NOT NULL REFERENCES users(id),
+  driver_id VARCHAR NOT NULL REFERENCES users(id),
+  item_description TEXT NOT NULL,
+  item_category VARCHAR NOT NULL DEFAULT 'other',
+  status VARCHAR NOT NULL DEFAULT 'reported',
+  driver_note TEXT,
+  rider_note TEXT,
+  admin_note TEXT,
+  resolved_by VARCHAR REFERENCES users(id),
+  resolved_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_lost_found_ride ON lost_found_reports (ride_id);
+CREATE INDEX IF NOT EXISTS idx_lost_found_rider ON lost_found_reports (rider_id);
+CREATE INDEX IF NOT EXISTS idx_lost_found_driver ON lost_found_reports (driver_id);
+CREATE INDEX IF NOT EXISTS idx_lost_found_status ON lost_found_reports (status);
+
+-- ── Ride for a friend (booker pays; passenger rides) ─────────────────────────
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS booked_for_friend BOOLEAN DEFAULT false;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS passenger_name VARCHAR;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS passenger_phone VARCHAR;
+
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
 -- the ALTER TABLE below throws "could not create unique index — Key (user_id)
@@ -916,6 +994,95 @@ BEGIN
     );
   END IF;
 END $$;
+
+-- ── Backlog: Vehicle types, community routes, referral UI ─────────────────────
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS vehicle_type VARCHAR DEFAULT 'standard';
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS requested_vehicle_type VARCHAR;
+
+CREATE TABLE IF NOT EXISTS community_routes (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  description TEXT,
+  route_category VARCHAR NOT NULL,
+  destination_location JSONB NOT NULL,
+  from_anchor_id VARCHAR REFERENCES community_anchors(id),
+  to_anchor_id VARCHAR REFERENCES community_anchors(id),
+  sort_order INTEGER DEFAULT 0,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'Metro → UMD Campus',
+  'First/last mile to College Park',
+  'metro',
+  a.location,
+  a.id,
+  10
+FROM community_anchors a
+WHERE a.name = 'University of Maryland College Park'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'Metro → UMD Campus');
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'Metro → Bowie State',
+  'Campus drop-off at Bowie State',
+  'campus',
+  a.location,
+  a.id,
+  20
+FROM community_anchors a
+WHERE a.name = 'Bowie State University'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'Metro → Bowie State');
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'Greenbelt Metro',
+  'Ride to Green Line station',
+  'metro',
+  a.location,
+  a.id,
+  30
+FROM community_anchors a
+WHERE a.name = 'Greenbelt Metro Station'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'Greenbelt Metro');
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'New Carrollton Metro',
+  'Orange/Silver line connection',
+  'metro',
+  a.location,
+  a.id,
+  40
+FROM community_anchors a
+WHERE a.name = 'New Carrollton Metro Station'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'New Carrollton Metro');
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'Sunday → Glenarden Church',
+  'Community anchor — surge-free Sundays',
+  'church',
+  a.location,
+  a.id,
+  50
+FROM community_anchors a
+WHERE a.name = 'First Baptist Church of Glenarden'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'Sunday → Glenarden Church');
+
+INSERT INTO community_routes (name, description, route_category, destination_location, to_anchor_id, sort_order)
+SELECT
+  'Event → FedExField',
+  'Game day & events at Landover',
+  'venue',
+  a.location,
+  a.id,
+  60
+FROM community_anchors a
+WHERE a.name = 'FedExField'
+  AND NOT EXISTS (SELECT 1 FROM community_routes WHERE name = 'Event → FedExField');
 
 -- Ensure one driver profile per user — prevents duplicate rows from concurrent
 -- "Get Started" clicks or retries.

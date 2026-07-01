@@ -12,11 +12,18 @@ import MultiStopBookingSheet from "@/components/MultiStopBookingSheet";
 import SharedScheduleSheet from "@/components/SharedScheduleSheet";
 import JoinScheduleModal from "@/components/JoinScheduleModal";
 import SOSModal from "@/components/SOSModal";
+import LostFoundModal from "@/components/LostFoundModal";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { NotificationBell } from "@/components/NotificationBell";
 import { RideQuickMessages } from "@/components/RideQuickMessages";
 import { MobilityIntentCard, type IntentResolution } from "@/components/MobilityIntentCard";
+import { TransitAlertsCard } from "@/components/TransitAlertsCard";
+import { RideForFriendFields } from "@/components/RideForFriendFields";
+import { VehicleTypePicker } from "@/components/VehicleTypePicker";
+import { CommunityRoutesCard } from "@/components/CommunityRoutesCard";
 import { ExplainableMatchCard } from "@/components/ExplainableMatchCard";
+import type { VehicleType } from "@shared/vehicleTypes";
+import { VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 import { RideSurface } from "@/genui/RideSurface";
 import type { RideSurfaceSpec } from "@shared/genui/schema";
 import { rankDriversByTrustAndEta } from "@shared/trustScore";
@@ -88,6 +95,10 @@ export default function RiderDashboard() {
   const [estimatedDistance, setEstimatedDistance] = useState<number | null>(null);
   const [estimatedDuration, setEstimatedDuration] = useState<number | null>(null);
   const [pickupInstructions, setPickupInstructions] = useState("");
+  const [rideForFriend, setRideForFriend] = useState(false);
+  const [passengerName, setPassengerName] = useState("");
+  const [passengerPhone, setPassengerPhone] = useState("");
+  const [requestedVehicleType, setRequestedVehicleType] = useState<VehicleType>("standard");
   const [geocoding, setGeocoding] = useState(false);
   const [calculatingFare, setCalculatingFare] = useState(false);
 
@@ -97,6 +108,7 @@ export default function RiderDashboard() {
   const [isSharedScheduleOpen, setIsSharedScheduleOpen] = useState(false);
   const [isJoinScheduleOpen, setIsJoinScheduleOpen] = useState(false);
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
+  const [isLostFoundOpen, setIsLostFoundOpen] = useState(false);
   const [realtimeDrivers, setRealtimeDrivers] = useState<Record<string, { lat: number; lng: number }>>({});
   const [recentlyCompletedRide, setRecentlyCompletedRide] = useState<any>(null);
   const [quickRating, setQuickRating] = useState(0);
@@ -150,9 +162,13 @@ export default function RiderDashboard() {
   };
 
   const { data: nearbyDrivers = [], isLoading: driversLoading } = useQuery<any[]>({
-    queryKey: ['/api/rides/nearby-drivers', userLocation.lat, userLocation.lng],
+    queryKey: ['/api/rides/nearby-drivers', userLocation.lat, userLocation.lng, requestedVehicleType],
     queryFn: async () => {
-      const res = await fetch(`/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}`, { credentials: 'include' });
+      const vtParam = requestedVehicleType !== "standard" ? `&vehicleType=${requestedVehicleType}` : "";
+      const res = await fetch(
+        `/api/rides/nearby-drivers?lat=${userLocation.lat}&lng=${userLocation.lng}${vtParam}`,
+        { credentials: 'include' },
+      );
       if (!res.ok) throw new Error('Failed to fetch nearby drivers');
       return res.json();
     },
@@ -205,7 +221,9 @@ export default function RiderDashboard() {
         name: `${driver.user.firstName} ${driver.user.lastName?.[0] || ''}.`,
         location: driverLocation,
         rating: parseFloat(driver.user.rating) || 5.0,
-        vehicle: driver.vehicles[0] ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}` : "Vehicle",
+        vehicle: driver.vehicles[0]
+          ? `${driver.vehicles[0].year} ${driver.vehicles[0].make} ${driver.vehicles[0].model}${driver.vehicles[0].isEv ? " ⚡" : ""}${driver.vehicles[0].vehicleType && driver.vehicles[0].vehicleType !== "standard" ? ` · ${VEHICLE_TYPE_LABELS[driver.vehicles[0].vehicleType as VehicleType] ?? driver.vehicles[0].vehicleType}` : ""}`
+          : "Vehicle",
         estimatedFare: estimateFare(distMiles),
         estimatedTime: estimateArrival(distMiles),
         isVerifiedNeighbor: driver.isVerifiedNeighbor,
@@ -359,6 +377,10 @@ export default function RiderDashboard() {
     setEstimatedDistance(null);
     setEstimatedDuration(null);
     setPickupInstructions("");
+    setRideForFriend(false);
+    setPassengerName("");
+    setPassengerPhone("");
+    setRequestedVehicleType("standard");
     setGeocoding(false);
     setCalculatingFare(false);
   }, []);
@@ -372,6 +394,10 @@ export default function RiderDashboard() {
       toast({ title: "Address Not Found", description: "We couldn't locate that destination. Try a more specific address.", variant: "destructive" });
       return;
     }
+    if (rideForFriend && passengerName.trim().length < 2) {
+      toast({ title: "Passenger name required", description: "Enter who will be riding.", variant: "destructive" });
+      return;
+    }
     bookRideMutation.mutate({
       pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: userLocation.address },
       destinationLocation: { lat: destCoords.lat, lng: destCoords.lng, address: destinationAddress },
@@ -379,8 +405,38 @@ export default function RiderDashboard() {
       driverId: selectedDriverId,
       estimatedFare: fareEstimate?.total || 0,
       paymentMethod: 'card',
+      bookedForFriend: rideForFriend,
+      passengerName: rideForFriend ? passengerName.trim() : undefined,
+      passengerPhone: rideForFriend && passengerPhone.trim() ? passengerPhone.trim() : undefined,
+      requestedVehicleType: requestedVehicleType !== "standard" ? requestedVehicleType : undefined,
     });
   };
+
+  const handleCommunityRouteSelect = useCallback((route: {
+    destinationLocation: { lat: number; lng: number; address: string };
+    name: string;
+  }) => {
+    const lat = route.destinationLocation.lat;
+    const lng = route.destinationLocation.lng;
+    setDestinationAddress(route.destinationLocation.address || route.name);
+    setDestCoords({ lat, lng });
+    const dLat = (lat - userLocation.lat) * Math.PI / 180;
+    const dLng = (lng - userLocation.lng) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    const dist = Math.round(3959 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
+    const dur = Math.round((dist / 25) * 60);
+    setEstimatedDistance(dist);
+    setEstimatedDuration(dur);
+    trackRideSearch();
+    setPanel("drivers");
+  }, [trackRideSearch, userLocation.lat, userLocation.lng]);
+
+  const handleVehicleTypeChange = useCallback((type: VehicleType) => {
+    setRequestedVehicleType(type);
+    setSelectedDriverId("");
+    setFareEstimate(null);
+    queryClient.invalidateQueries({ queryKey: ['/api/rides/nearby-drivers'] });
+  }, []);
 
   const getDriverETA = (ride: any): number | null => {
     const driverId = ride.driverId || ride.driver?.id;
@@ -642,6 +698,15 @@ export default function RiderDashboard() {
                   >
                     {submitQuickRating.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <><ThumbsUp className="w-3 h-3 mr-1" />{quickRating > 0 ? `Rate ${quickRating}★` : 'Tap a Star'}</>}
                   </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 text-xs px-2"
+                    onClick={() => setIsLostFoundOpen(true)}
+                    data-testid="btn-lost-item-completed"
+                  >
+                    Left item?
+                  </Button>
                   <Button variant="ghost" size="sm" onClick={() => { setRecentlyCompletedRide(null); setQuickRating(0); }} className="px-3" data-testid="btn-dismiss-completed">
                     <X className="w-4 h-4 text-gray-400" />
                   </Button>
@@ -773,6 +838,8 @@ export default function RiderDashboard() {
               }}
               disabled={!!activeRide}
             />
+            <TransitAlertsCard />
+            <CommunityRoutesCard onSelectRoute={handleCommunityRouteSelect} disabled={!!activeRide} />
             <button
               className="w-full flex items-center gap-3 bg-gray-100 active:bg-gray-200 transition-colors rounded-2xl px-4 py-3 text-left"
               onClick={() => {
@@ -938,8 +1005,14 @@ export default function RiderDashboard() {
             {/* Scrollable content */}
             <div className="flex-1 overflow-y-auto px-4 pb-2">
 
-              {/* Pickup instructions */}
-              <div className="mt-3">
+              {/* Vehicle type + pickup instructions */}
+              <div className="mt-3 space-y-3">
+                {(panel === "drivers" || panel === "confirm") && (
+                  <VehicleTypePicker
+                    value={requestedVehicleType}
+                    onChange={handleVehicleTypeChange}
+                  />
+                )}
                 <Input
                   placeholder="Pickup instructions (optional)"
                   value={pickupInstructions}
@@ -948,6 +1021,19 @@ export default function RiderDashboard() {
                   data-testid="input-pickup-instructions"
                 />
               </div>
+
+              {panel === "confirm" && (
+                <div className="mt-3">
+                  <RideForFriendFields
+                    enabled={rideForFriend}
+                    onEnabledChange={setRideForFriend}
+                    passengerName={passengerName}
+                    onPassengerNameChange={setPassengerName}
+                    passengerPhone={passengerPhone}
+                    onPassengerPhoneChange={setPassengerPhone}
+                  />
+                </div>
+              )}
 
               {/* Driver list */}
               {(panel === "drivers" || panel === "confirm") && (
@@ -1077,6 +1163,11 @@ export default function RiderDashboard() {
       {/* Modals */}
       <ScheduleRideModal isOpen={isScheduleModalOpen} onClose={() => setIsScheduleModalOpen(false)} drivers={drivers} userLocation={userLocation} />
       <SOSModal isOpen={isSOSModalOpen} onClose={() => setIsSOSModalOpen(false)} />
+      <LostFoundModal
+        isOpen={isLostFoundOpen}
+        onClose={() => setIsLostFoundOpen(false)}
+        rideId={recentlyCompletedRide?.id ?? null}
+      />
       <MultiStopBookingSheet
         isOpen={isMultiStopOpen}
         onClose={() => setIsMultiStopOpen(false)}
