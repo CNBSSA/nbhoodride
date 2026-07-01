@@ -166,6 +166,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | 2026-06-30 | Phase E autonomous ops (E1–E7) | A | [#47](https://github.com/CNBSSA/nbhoodride/pull/47) | Pass — see below |
 | 2026-06-30 | Phase F research (F1–F4) | A | [#49](https://github.com/CNBSSA/nbhoodride/pull/49) | Pass — see below |
 | 2026-07-01 | Lost & found workflow (LF1–LF4) | A | [#52](https://github.com/CNBSSA/nbhoodride/pull/52) | Pass — see below |
+| 2026-07-01 | Ride for a friend + credentials (RFF1–RFF4) | A | [#54](https://github.com/CNBSSA/nbhoodride/pull/54) | Pass — see below |
 
 ### Phase A9–A11 — Post-engagement audit
 
@@ -225,7 +226,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 
 **Delivered (LF1–LF4):** Lost item reports, driver response flow, Support notifications, admin Lost & Found tab.
 
-### Backlog — Ride for a friend
+### Backlog — Ride for a friend — merged [#54](https://github.com/CNBSSA/nbhoodride/pull/54)
 
 | ID | Deliverable | Notes |
 |----|-------------|-------|
@@ -233,6 +234,15 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 | RFF2 | Rider booking UI | `RideForFriendFields` on confirm step |
 | RFF3 | Driver visibility | Incoming + active ride passenger label |
 | RFF4 | Track B credentials inventory | `docs/TRACK_B_CREDENTIALS.md` |
+
+### Ride for a friend — Post-implementation audit (2026-07-01)
+
+| Gate | Result |
+|------|--------|
+| `npm run check` | Pass — 55 tables |
+| `npm test` | Pass — 74 tests |
+
+**Delivered (RFF1–RFF4):** Friend booking, rider UI, driver passenger label, credentials inventory.
 
 ---
 
