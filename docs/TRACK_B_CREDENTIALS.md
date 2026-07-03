@@ -25,6 +25,7 @@
 | `VITE_STRIPE_PUBLIC_KEY` | Client Stripe.js | **Wired** | Before card payments live | Checkout UI |
 | `STRIPE_WEBHOOK_SECRET` | Verify Stripe webhooks | **Wired** | Before production payments | Payment confirmations |
 | `ANTHROPIC_API_KEY` | AI assistant + orchestrator | **Wired** | Before AI chat live | Mobility intent, FAQ gen |
+| `MAPBOX_TOKEN` | Mapbox geocoding + directions | **Wired** | Before real launch volume | Better US address autocomplete (`/api/geocode/suggest`) + driving routes (`/api/route`) |
 | `GCS_BUCKET_NAME` | Driver document storage | **Wired** | Before doc uploads live | License/insurance uploads |
 | `GOOGLE_APPLICATION_CREDENTIALS` or Railway GCS plugin | GCS auth | **Wired** | With GCS bucket | Object storage |
 | `GCS_PRIVATE_PREFIX` | Private object path prefix | **Wired** | With GCS (default set) | Doc ACL paths |
@@ -74,6 +75,7 @@
 | SMS booking | Inbound route exists; Twilio gated |
 | Push | Bell UI works; no push until VAPID |
 | AI assistant | Falls back or errors gracefully |
+| Maps (autocomplete + routes) | Free OpenStreetMap fallback (Nominatim + OSRM demo) — works, lower quality than Mapbox |
 | Stripe | Cash/virtual-only paths where applicable |
 | Checkr | Manual driver approval flow |
 
@@ -98,7 +100,7 @@
 
 5. **Deploy:** `railway up --detach -m "deploy main"` — `railway.toml` runs `npm run db:push` pre-deploy
 6. **Verify:** open `/health`, then login/signup smoke test
-7. **Next vars** (when ready): Stripe, `GCS_BUCKET_NAME`, VAPID, `ANTHROPIC_API_KEY` — see table above
+7. **Next vars** (when ready): Stripe, `MAPBOX_TOKEN`, VAPID, `GCS_BUCKET_NAME`, `ANTHROPIC_API_KEY` — see table above
 
 ### Feature flip checklist
 
@@ -106,7 +108,8 @@
 2. **Payments:** Stripe keys + webhook secret
 3. **Driver docs:** GCS bucket + credentials
 4. **Comms:** Resend (email), Twilio (SMS), VAPID (push) — pick what you want live first
-5. **Transit:** `WMATA_API_KEY` from [WMATA developer portal](https://developer.wmata.com/)
-6. **Tax:** Choose `TAX_COMPLIANCE_PATH` with CPA input
+5. **Maps:** `MAPBOX_TOKEN` from [mapbox.com](https://account.mapbox.com/) — recommended before real launch volume
+6. **Transit:** `WMATA_API_KEY` from [WMATA developer portal](https://developer.wmata.com/)
+7. **Tax:** Choose `TAX_COMPLIANCE_PATH` with CPA input
 
 *Update this file when new integrations ship. Track A agents add rows here; you flip variables in Railway.*
