@@ -1,13 +1,10 @@
 import { Resend } from "resend";
+import { resolveAppUrl } from "./appUrl";
 
 const FROM_ADDRESS = process.env.RESEND_FROM || "noreply@pgride.app";
 const FROM_NAME = "PG Ride";
 
-// Resolve the app URL: explicit APP_URL > Railway auto-domain
-const APP_URL = (
-  process.env.APP_URL ||
-  (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "")
-).replace(/\/$/, "");
+const APP_URL = resolveAppUrl();
 
 const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)

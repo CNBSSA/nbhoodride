@@ -1,6 +1,7 @@
 import twilio from "twilio";
 import type { IStorage } from "../storage";
 import { createGuardianShareToken } from "./orchestrator";
+import { resolveAppUrl } from "../appUrl";
 
 async function createTrackingLink(
   storage: IStorage,
@@ -63,7 +64,7 @@ export async function handleInboundSms(
   if (text === "status" || text === "track") {
     if (session.activeRideId) {
       const ride = await storage.getRide(session.activeRideId);
-      const base = process.env.PUBLIC_APP_URL || "https://pgride.app";
+      const base = resolveAppUrl("https://pgride.app");
       if (ride?.riderId) {
         const token = await createTrackingLink(
           storage,
@@ -105,7 +106,7 @@ export async function sendRideTrackingSms(
   riderUserId: string,
 ): Promise<boolean> {
   const normalized = normalizePhone(phone);
-  const base = process.env.PUBLIC_APP_URL || "https://pgride.app";
+  const base = resolveAppUrl("https://pgride.app");
   const token = await createTrackingLink(storage, riderUserId, rideId, "SMS");
   const sent = await sendSms(
     normalized,

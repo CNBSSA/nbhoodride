@@ -4,6 +4,7 @@ import cors from "cors";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { csrfMiddleware } from "./csrfProtection";
+import { resolveAppUrl } from "./appUrl";
 
 // Ensure crashes are always visible in Railway logs
 process.on('uncaughtException', (err) => {
@@ -21,9 +22,11 @@ process.on('unhandledRejection', (reason) => {
 function checkEnv() {
   const isProd = process.env.NODE_ENV === "production";
   const required: string[] = ["DATABASE_URL", "SESSION_SECRET"];
-  const recommendedInProd: { name: string; why: string }[] = [
+  // PUBLIC_APP_URL is satisfied by any of the sources resolveAppUrl accepts
+  // (PUBLIC_APP_URL, APP_URL, or Railway's auto-set RAILWAY_PUBLIC_DOMAIN).
+  const recommendedInProd: { name: string; why: string; ok?: () => boolean }[] = [
     { name: "ALLOWED_ORIGINS", why: "without it, CORS is fully disabled — browser clients on a different origin can't reach the API" },
-    { name: "APP_URL", why: "email links will fall back to req.host which can be wrong behind Railway's proxy" },
+    { name: "PUBLIC_APP_URL", why: "email/share links will fall back to req.host which can be wrong behind Railway's proxy", ok: () => resolveAppUrl() !== "" },
     { name: "RESEND_API_KEY", why: "all transactional email (verification, approvals, receipts) will fail" },
     { name: "RESEND_FROM", why: "Resend will reject sends without a verified sender" },
   ];
@@ -35,7 +38,7 @@ function checkEnv() {
   }
 
   if (isProd) {
-    const missingRecommended = recommendedInProd.filter((k) => !process.env[k.name]);
+    const missingRecommended = recommendedInProd.filter((k) => (k.ok ? !k.ok() : !process.env[k.name]));
     if (missingRecommended.length > 0) {
       console.warn("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
       console.warn("[startup] Production env vars MISSING — features will silently degrade:");
