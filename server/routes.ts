@@ -29,6 +29,7 @@ import {
 import { deliverUserNotification } from "./notificationService";
 import { retrieveKnowledgeContext, syncKnowledgeIndex } from "./ragService";
 import { anonymizeChatExcerpt, buildFaqExcerptBlock } from "@shared/faqExcerpts";
+import { mapNominatimResults, mapMapboxResults } from "@shared/geocodeSuggest";
 import {
   parseMobilityUtterance,
   recordMobilityIntent,
@@ -138,6 +139,12 @@ const VALID_RIDE_TRANSITIONS: Record<string, string[]> = {
   completed:      [],   // terminal
   cancelled:      [],   // terminal
 };
+
+// In-process cache for address-suggest lookups. Keyed by "query|limit".
+// Small TTL is plenty — riders retype the same prefixes and the geocoder
+// results are stable minute-to-minute. Bounded to 500 entries in the handler.
+const GEOCODE_CACHE_TTL_MS = 5 * 60 * 1000;
+const geocodeSuggestCache = new Map<string, { at: number; suggestions: Array<{ label: string; lat: number; lng: number }> }>();
 
 function isValidRideTransition(from: string, to: string): boolean {
   return VALID_RIDE_TRANSITIONS[from]?.includes(to) ?? false;
@@ -2174,6 +2181,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error updating vehicle:", error);
       res.status(400).json({ message: "Failed to update vehicle" });
+    }
+  });
+
+  // Forward geocode / address autocomplete. Proxies the query server-side so
+  // the browser never hits Nominatim directly (avoids CORS + shared-IP rate
+  // limiting), sets a proper User-Agent per Nominatim policy, returns UP TO
+  // `limit` candidates so the rider can pick the right one (the old flow used
+  // a browser-side limit=1 single guess that silently booked the wrong place),
+  // and caches results in-process for a few minutes to cut repeat lookups.
+  // If MAPBOX_TOKEN is set we use Mapbox (better US address matching);
+  // otherwise Nominatim. Biased toward Maryland / PG County.
+  app.get('/api/geocode/suggest', isAuthenticated, async (req: any, res) => {
+    try {
+      const q = String(req.query.q ?? '').trim();
+      const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '5'), 10) || 5, 1), 8);
+      if (q.length < 3) return res.json({ suggestions: [] });
+
+      const cacheKey = `${q.toLowerCase()}|${limit}`;
+      const cached = geocodeSuggestCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < GEOCODE_CACHE_TTL_MS) {
+        return res.json({ suggestions: cached.suggestions });
+      }
+
+      let suggestions: Array<{ label: string; lat: number; lng: number }> = [];
+      const mapboxToken = process.env.MAPBOX_TOKEN;
+
+      if (mapboxToken) {
+        // Mapbox geocoding — bias to the PG County area, US only.
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json`
+          + `?access_token=${mapboxToken}&autocomplete=true&country=us&limit=${limit}`
+          + `&proximity=-76.85,38.83&types=address,poi,place,neighborhood`;
+        const r = await fetch(url);
+        if (r.ok) suggestions = mapMapboxResults(await r.json());
+      } else {
+        // Nominatim fallback — server-side with required UA + viewbox bias.
+        const url = `https://nominatim.openstreetmap.org/search?format=json`
+          + `&q=${encodeURIComponent(q)}&limit=${limit}&countrycodes=us&addressdetails=1`
+          + `&viewbox=-77.6,39.4,-76.0,38.4&bounded=0`;
+        const r = await fetch(url, { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } });
+        if (r.ok) suggestions = mapNominatimResults(await r.json());
+      }
+
+      geocodeSuggestCache.set(cacheKey, { at: Date.now(), suggestions });
+      // Bound the cache so it can't grow unbounded on a long-running process.
+      if (geocodeSuggestCache.size > 500) {
+        const oldest = geocodeSuggestCache.keys().next().value;
+        if (oldest) geocodeSuggestCache.delete(oldest);
+      }
+      res.json({ suggestions });
+    } catch (error) {
+      console.error("Address suggest error:", error);
+      // Fail soft — an empty list degrades to "no matches" in the UI rather
+      // than blocking the booking flow with an error.
+      res.json({ suggestions: [] });
     }
   });
 
