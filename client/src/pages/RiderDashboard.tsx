@@ -485,6 +485,10 @@ export default function RiderDashboard() {
       refetchActiveRides();
       toast({ title: "Driver Accepted!", description: lastMessage.driverName ? `${lastMessage.driverName} is on the way!` : "Your driver is on the way!" });
       navigator.vibrate?.([200, 100, 200]);
+    } else if (lastMessage.type === 'driver_arrived') {
+      refetchActiveRides();
+      toast({ title: "Your Driver Has Arrived! 📍", description: "Your driver is at the pickup spot — head outside." });
+      navigator.vibrate?.([300, 120, 300]);
     } else if (lastMessage.type === 'ride_started') {
       refetchActiveRides();
       toast({ title: "Ride Started", description: "You're on your way!" });
@@ -584,6 +588,16 @@ export default function RiderDashboard() {
           drivers={drivers}
           userLocation={userLocation}
           height="100%"
+          destination={
+            activeRide?.destinationLocation?.lat
+              ? { lat: activeRide.destinationLocation.lat, lng: activeRide.destinationLocation.lng }
+              : destCoords
+          }
+          activeDriver={
+            activeRide && ["accepted", "driver_arriving", "in_progress"].includes(activeRide.status)
+              ? realtimeDrivers[activeRide.driverId] ?? null
+              : null
+          }
         />
       </div>
 

@@ -1633,7 +1633,11 @@ export class DatabaseStorage implements IStorage {
     if (ride.driverId !== driverId) {
       throw new Error("Unauthorized to start this ride");
     }
-    if (ride.status !== "accepted") {
+    // Allow start from either "accepted" (driver skipped the explicit arrive
+    // step) or "driver_arriving" (driver tapped "I've Arrived" first). Both
+    // are legitimate pre-trip states — previously only "accepted" was allowed,
+    // which meant wiring the Arrive button would have made Start impossible.
+    if (ride.status !== "accepted" && ride.status !== "driver_arriving") {
       throw new Error("Ride cannot be started. Current status: " + ride.status);
     }
 
@@ -1768,6 +1772,10 @@ export class DatabaseStorage implements IStorage {
           eq(rides.driverId, driverId),
           or(
             eq(rides.status, "accepted"),
+            // driver_arriving is an active pre-trip state (driver tapped
+            // "I've Arrived"). Include it so the driver's active-ride card
+            // and the live-location forward keep working through arrival.
+            eq(rides.status, "driver_arriving"),
             eq(rides.status, "in_progress")
           )
         )

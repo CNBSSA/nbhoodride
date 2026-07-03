@@ -6764,25 +6764,43 @@ Generate the FAQ list.`;
           case 'location_update':
             if (message.userId && message.location) {
               const { lat, lng } = message.location;
+              const driverUserId = message.userId;
               // Persist location (skip if HTTP POST already handled it for this tick)
-              storage.updateDriverLocation(message.userId, { lat, lng }).catch((err: any) => {
+              storage.updateDriverLocation(driverUserId, { lat, lng }).catch((err: any) => {
                 console.error('Failed to persist driver location from WebSocket:', err);
               });
+              // Forward the driver's live position to the RIDER of their active
+              // ride so the rider can watch the car approach on the map and see
+              // a live ETA. The driver client sends location_update WITHOUT a
+              // rideId (it doesn't know it), so we look up the driver's active
+              // ride here rather than depending on a client-supplied rideId.
+              // Previously this whole branch was gated on `message.rideId` and
+              // therefore never fired — the live-driver map was dead end to end.
+              const forwardDriverLocation = (rideId: string, riderId: string) => {
+                if (!activeConnections.has(riderId)) return;
+                const riderWs = activeConnections.get(riderId)!;
+                if (riderWs.readyState === WebSocket.OPEN) {
+                  riderWs.send(JSON.stringify(buildDriverLocationMessage({
+                    rideId,
+                    driverId: driverUserId,
+                    lat,
+                    lng,
+                  })));
+                }
+              };
               if (message.rideId) {
+                // Fast path: client did supply a rideId.
                 checkRouteDeviationForRide(storage, message.rideId, lat, lng).catch(console.error);
-              }
-              // Forward to rider of the active ride
-              if (message.rideId) {
                 storage.getRide(message.rideId).then(ride => {
-                  if (ride?.riderId && activeConnections.has(ride.riderId)) {
-                    const riderWs = activeConnections.get(ride.riderId)!;
-                    if (riderWs.readyState === WebSocket.OPEN) {
-                      riderWs.send(JSON.stringify(buildDriverLocationMessage({
-                        rideId: message.rideId,
-                        driverId: message.userId,
-                        lat,
-                        lng,
-                      })));
+                  if (ride?.riderId) forwardDriverLocation(ride.id, ride.riderId);
+                }).catch(() => {});
+              } else {
+                // Normal path: resolve the driver's active ride and forward.
+                storage.getActiveRidesForDriver(driverUserId).then(activeRides => {
+                  for (const ride of activeRides) {
+                    if (ride?.riderId) {
+                      forwardDriverLocation(ride.id, ride.riderId);
+                      checkRouteDeviationForRide(storage, ride.id, lat, lng).catch(() => {});
                     }
                   }
                 }).catch(() => {});

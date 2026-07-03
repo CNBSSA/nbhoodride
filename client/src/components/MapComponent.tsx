@@ -27,6 +27,15 @@ interface MapComponentProps {
   userLocation?: { lat: number; lng: number };
   height?: string;
   zoom?: number;
+  /** Destination pin (rider's drop-off) — rendered as a red marker. */
+  destination?: { lat: number; lng: number } | null;
+  /**
+   * The assigned driver's live position during an active ride. Rendered as a
+   * distinct moving car marker and connected to the target with a route line
+   * so the rider can watch the driver approach (pre-trip) or watch progress
+   * toward the destination (in-trip).
+   */
+  activeDriver?: { lat: number; lng: number } | null;
 }
 
 export default function MapComponent({
@@ -35,11 +44,14 @@ export default function MapComponent({
   onDriverSelect,
   userLocation,
   height = "300px",
-  zoom = 13
+  zoom = 13,
+  destination,
+  activeDriver,
 }: MapComponentProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersRef = useRef<L.Marker[]>([]);
+  const routeLineRef = useRef<L.Polyline | null>(null);
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -51,9 +63,53 @@ export default function MapComponent({
       }).addTo(mapInstanceRef.current);
     }
 
-    // Clear existing markers
+    // Clear existing markers + route line
     markersRef.current.forEach(m => m.remove());
     markersRef.current = [];
+    if (routeLineRef.current) {
+      routeLineRef.current.remove();
+      routeLineRef.current = null;
+    }
+
+    // Destination pin (red) — the rider's drop-off.
+    if (destination) {
+      const destMarker = L.marker([destination.lat, destination.lng], {
+        icon: L.divIcon({
+          className: '',
+          html: '<div style="background:#ef4444;width:30px;height:30px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;"><span style="transform:rotate(45deg);font-size:14px;">📍</span></div>',
+          iconSize: [30, 30],
+          iconAnchor: [15, 30],
+        }),
+      }).addTo(mapInstanceRef.current);
+      destMarker.bindPopup('<b>Destination</b>');
+      markersRef.current.push(destMarker);
+    }
+
+    // Active driver (live, during an assigned ride) — a distinct pulsing car
+    // marker. Rendered on top of the nearby-driver markers.
+    if (activeDriver) {
+      const liveMarker = L.marker([activeDriver.lat, activeDriver.lng], {
+        icon: L.divIcon({
+          className: '',
+          html: '<div style="background:#2563eb;width:40px;height:40px;border-radius:50%;border:3px solid white;display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 0 0 4px rgba(37,99,235,0.25),0 2px 8px rgba(0,0,0,0.35);">🚗</div>',
+          iconSize: [40, 40],
+          iconAnchor: [20, 20],
+        }),
+        zIndexOffset: 1000,
+      }).addTo(mapInstanceRef.current);
+      liveMarker.bindPopup('<b>Your driver</b>');
+      markersRef.current.push(liveMarker);
+
+      // Route line from the driver to the target (destination if set, else the
+      // rider's pickup/current location) so the approach is visually obvious.
+      const target = destination ?? userLocation ?? null;
+      if (target) {
+        routeLineRef.current = L.polyline(
+          [[activeDriver.lat, activeDriver.lng], [target.lat, target.lng]],
+          { color: '#2563eb', weight: 4, opacity: 0.7, dashArray: '8, 8' },
+        ).addTo(mapInstanceRef.current);
+      }
+    }
 
     // User location dot
     if (userLocation) {
@@ -119,7 +175,7 @@ export default function MapComponent({
     return () => {
       if ((window as any).selectDriver) delete (window as any).selectDriver;
     };
-  }, [center, drivers, userLocation, zoom, onDriverSelect]);
+  }, [center, drivers, userLocation, zoom, onDriverSelect, destination, activeDriver]);
 
   // Pan map when center changes significantly
   useEffect(() => {
