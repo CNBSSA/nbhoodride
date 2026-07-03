@@ -84,6 +84,7 @@ import { pushRideMessageToUser, setRideMessageConnections } from "./rideMessageH
 import { mapRouteResponse, type RouteResult } from "@shared/routeGeometry";
 import type { RideMessage } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
+import { resolveAppUrl } from "./appUrl";
 import {
   insertDriverProfileSchema,
   insertVehicleSchema,
@@ -881,7 +882,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Save reset token
       await storage.setPasswordResetToken(email, resetToken, resetExpiry);
 
-      const appUrl = process.env.APP_URL || `https://${req.get('host')}`;
+      const appUrl = resolveAppUrl(`https://${req.get('host')}`);
       sendPasswordResetEmail(email, user.firstName, resetToken, appUrl).catch(console.error);
 
       res.json({ 
@@ -5573,7 +5574,7 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
         activeRideId: active?.id,
         expiresAt,
       });
-      const baseUrl = process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get("host")}`;
+      const baseUrl = resolveAppUrl(`${req.protocol}://${req.get("host")}`);
       res.json({ id: link.id, shareUrl: `${baseUrl}/guardian/${token}`, token, expiresAt });
     } catch (error) {
       console.error("Error creating guardian link:", error);
