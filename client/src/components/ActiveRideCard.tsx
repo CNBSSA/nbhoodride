@@ -10,6 +10,7 @@ import { RideHelpers } from '@/services/rideService';
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { RideChat } from "@/components/RideChat";
+import { RideMapView } from "@/components/RideMapView";
 import type { RideMessagePayload } from "@shared/rideChat";
 import { formatPassengerLabel } from "@shared/rideForFriend";
 
@@ -42,9 +43,11 @@ interface ActiveRideCardProps {
     };
   };
   incomingRideMessage?: RideMessagePayload | null;
+  /** Driver's live position (from the dashboard's geolocation), for the in-app map. */
+  driverLocation?: { lat: number; lng: number } | null;
 }
 
-export function ActiveRideCard({ ride, incomingRideMessage }: ActiveRideCardProps) {
+export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: ActiveRideCardProps) {
   const [isUpdating, setIsUpdating] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -177,14 +180,22 @@ export function ActiveRideCard({ ride, incomingRideMessage }: ActiveRideCardProp
               Driver Assigned — Head to Pickup
             </Badge>
             {ride.pickupLocation?.lat && ride.pickupLocation?.lng && (
-              <Button 
+              <RideMapView
+                target={{ lat: ride.pickupLocation.lat, lng: ride.pickupLocation.lng }}
+                targetLabel={ride.pickupLocation.address || "Pickup"}
+                driver={driverLocation}
+                leg="pickup"
+              />
+            )}
+            {ride.pickupLocation?.lat && ride.pickupLocation?.lng && (
+              <Button
                 variant="outline"
                 onClick={() => openNavigation(ride.pickupLocation.lat, ride.pickupLocation.lng, ride.pickupLocation.address)}
                 className="w-full border-blue-200 text-blue-700 hover:bg-blue-50"
                 data-testid={`button-navigate-pickup-${ride.id}`}
               >
                 <ExternalLink className="w-4 h-4 mr-2" />
-                Navigate to Pickup (Google Maps)
+                Open in Google Maps
               </Button>
             )}
             <RideChat rideId={ride.id} role="driver" incomingMessage={incomingRideMessage ?? null} />
@@ -210,15 +221,13 @@ export function ActiveRideCard({ ride, incomingRideMessage }: ActiveRideCardProp
               Your rider has been notified you're here. Tap Start Ride once they're in the car.
             </p>
             {ride.pickupLocation?.lat && ride.pickupLocation?.lng && (
-              <Button
-                variant="outline"
-                onClick={() => openNavigation(ride.pickupLocation.lat, ride.pickupLocation.lng, ride.pickupLocation.address)}
-                className="w-full border-blue-200 text-blue-700 hover:bg-blue-50"
-                data-testid={`button-navigate-pickup-arriving-${ride.id}`}
-              >
-                <ExternalLink className="w-4 h-4 mr-2" />
-                Navigate to Pickup (Google Maps)
-              </Button>
+              <RideMapView
+                target={{ lat: ride.pickupLocation.lat, lng: ride.pickupLocation.lng }}
+                targetLabel={ride.pickupLocation.address || "Pickup"}
+                driver={driverLocation}
+                leg="pickup"
+                height="200px"
+              />
             )}
             <RideChat rideId={ride.id} role="driver" incomingMessage={incomingRideMessage ?? null} />
             <Button
@@ -239,7 +248,18 @@ export function ActiveRideCard({ ride, incomingRideMessage }: ActiveRideCardProp
               <Clock className="w-3 h-3 mr-1" />
               In Progress
             </Badge>
-            
+
+            {/* In-app navigation map to the destination (the main driving view). */}
+            {ride.destinationLocation?.lat && ride.destinationLocation?.lng && (
+              <RideMapView
+                target={{ lat: ride.destinationLocation.lat, lng: ride.destinationLocation.lng }}
+                targetLabel={ride.destinationLocation.address || "Destination"}
+                driver={driverLocation}
+                leg="destination"
+                height="300px"
+              />
+            )}
+
             {/* GPS Tracking Info Banner */}
             <div className="bg-blue-50 dark:bg-blue-950 p-3 rounded-lg border border-blue-200 dark:border-blue-800">
               <div className="flex items-center text-sm text-blue-900 dark:text-blue-100">
@@ -302,7 +322,7 @@ export function ActiveRideCard({ ride, incomingRideMessage }: ActiveRideCardProp
                 data-testid={`button-navigate-destination-${ride.id}`}
               >
                 <ExternalLink className="w-4 h-4 mr-2" />
-                Navigate to Destination (Google Maps)
+                Open in Google Maps
               </Button>
             )}
             
