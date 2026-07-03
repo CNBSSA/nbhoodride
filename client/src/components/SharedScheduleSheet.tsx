@@ -7,6 +7,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { X, Copy, CheckCircle, Users, Loader2, DollarSign, Shield, Star } from "lucide-react";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
+import type { AddressSuggestion } from "@/hooks/useGeocode";
 
 interface Driver {
   id: string;
@@ -25,19 +27,6 @@ interface SharedScheduleSheetProps {
   userLocation: { lat: number; lng: number; address: string };
 }
 
-async function geocode(address: string): Promise<{ lat: number; lng: number } | null> {
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1&countrycodes=us`,
-      { headers: { "User-Agent": "PGRide-Community-Rideshare/1.0" } }
-    );
-    const results = await res.json();
-    if (results.length > 0) return { lat: parseFloat(results[0].lat), lng: parseFloat(results[0].lon) };
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 function estimateFare(pickupLat: number, pickupLng: number, destLat: number, destLng: number): number {
   const R = 3958.8;
@@ -58,7 +47,8 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
-  const [geocoding, setGeocoding] = useState(false);
+  // Coordinates resolved when the rider picks a destination from autocomplete.
+  const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -91,13 +81,14 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
     },
   });
 
-  const handleGeocodeAndNext = async () => {
-    if (!destinationAddress.trim()) return;
-    setGeocoding(true);
-    const destCoords = await geocode(destinationAddress);
-    setGeocoding(false);
+  const handleDestinationSelect = (s: AddressSuggestion) => {
+    setDestinationAddress(s.label);
+    setDestCoords({ lat: s.lat, lng: s.lng });
+  };
+
+  const handleGeocodeAndNext = () => {
     if (!destCoords) {
-      toast({ title: "Address Not Found", description: "Please enter a valid destination.", variant: "destructive" });
+      toast({ title: "Pick a destination", description: "Choose an address from the suggestions.", variant: "destructive" });
       return;
     }
     const fare = estimateFare(userLocation.lat, userLocation.lng, destCoords.lat, destCoords.lng);
@@ -106,7 +97,6 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
   };
 
   const handleConfirm = async () => {
-    const destCoords = await geocode(destinationAddress);
     if (!destCoords) return;
     bookMutation.mutate({
       pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: pickupAddress },
@@ -163,7 +153,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 mb-1 block">Your Destination</label>
-                <Input value={destinationAddress} onChange={(e) => setDestinationAddress(e.target.value)} placeholder="Where are you going?" data-testid="input-shared-destination" />
+                <AddressAutocomplete value={destinationAddress} onChange={(v) => { setDestinationAddress(v); setDestCoords(null); }} onSelect={handleDestinationSelect} placeholder="Where are you going?" data-testid="input-shared-destination" />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 mb-1 block">Pickup Notes (optional)</label>
@@ -280,8 +270,8 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
         {/* Footer actions */}
         <div className="p-4 border-t flex-shrink-0 space-y-2" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom, 1rem))" }}>
           {step === 1 && (
-            <Button onClick={handleGeocodeAndNext} disabled={geocoding || !destinationAddress.trim()} className="w-full h-12 bg-purple-600 hover:bg-purple-700" data-testid="button-shared-next-1">
-              {geocoding ? <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Calculating...</> : "Next — Pick Driver"}
+            <Button onClick={handleGeocodeAndNext} disabled={!destCoords} className="w-full h-12 bg-purple-600 hover:bg-purple-700" data-testid="button-shared-next-1">
+              {"Next — Pick Driver"}
             </Button>
           )}
           {step === 2 && (

@@ -7,6 +7,7 @@ import { useGeolocation } from "@/hooks/useGeolocation";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useLocation } from "wouter";
 import MapComponent from "@/components/MapComponent";
+import { useGeocodeSuggest, type AddressSuggestion } from "@/hooks/useGeocode";
 import ScheduleRideModal from "@/components/ScheduleRideModal";
 import MultiStopBookingSheet from "@/components/MultiStopBookingSheet";
 import SharedScheduleSheet from "@/components/SharedScheduleSheet";
@@ -102,7 +103,6 @@ export default function RiderDashboard() {
   const [passengerName, setPassengerName] = useState("");
   const [passengerPhone, setPassengerPhone] = useState("");
   const [requestedVehicleType, setRequestedVehicleType] = useState<VehicleType>("standard");
-  const [geocoding, setGeocoding] = useState(false);
   const [calculatingFare, setCalculatingFare] = useState(false);
 
   // ── UI state ──
@@ -241,44 +241,29 @@ export default function RiderDashboard() {
     }),
   ).map(({ isOnline: _o, trustScore: _t, ...driver }) => driver);
 
-  // ── Geocode destination with debounce ──
-  useEffect(() => {
-    if (destinationAddress.length < 5) {
-      setDestCoords(null);
-      setFareEstimate(null);
-      return;
-    }
-    const timer = setTimeout(async () => {
-      setGeocoding(true);
-      try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationAddress)}&limit=1&countrycodes=us`,
-          { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } }
-        );
-        const results = await res.json();
-        if (results.length > 0) {
-          const lat = parseFloat(results[0].lat);
-          const lng = parseFloat(results[0].lon);
-          setDestCoords({ lat, lng });
-          const dLat = (lat - userLocation.lat) * Math.PI / 180;
-          const dLng = (lng - userLocation.lng) * Math.PI / 180;
-          const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-          const dist = Math.round(3959 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
-          const dur = Math.round((dist / 25) * 60);
-          setEstimatedDistance(dist);
-          setEstimatedDuration(dur);
-          setPanel("drivers");
-        } else {
-          setDestCoords(null);
-        }
-      } catch {
-        setDestCoords(null);
-      } finally {
-        setGeocoding(false);
-      }
-    }, 800);
-    return () => clearTimeout(timer);
-  }, [destinationAddress, userLocation.lat, userLocation.lng]);
+  // ── Address autocomplete ──
+  // Live suggestions as the rider types (server-proxied geocode). The rider
+  // PICKS a suggestion via handlePickDestination — we no longer auto-book a
+  // single unseen limit=1 guess. `suggestLoading` drives the input spinner.
+  const { suggestions: addressSuggestions, loading: suggestLoading } = useGeocodeSuggest(
+    destinationAddress,
+    { enabled: panel === "search" && !destCoords },
+  );
+
+  const handlePickDestination = useCallback((s: AddressSuggestion) => {
+    setDestinationAddress(s.label);
+    setDestCoords({ lat: s.lat, lng: s.lng });
+    setSelectedDriverId("");
+    setFareEstimate(null);
+    const dLat = (s.lat - userLocation.lat) * Math.PI / 180;
+    const dLng = (s.lng - userLocation.lng) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(s.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    const dist = Math.round(3959 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
+    const dur = Math.round((dist / 25) * 60);
+    setEstimatedDistance(dist);
+    setEstimatedDuration(dur);
+    setPanel("drivers");
+  }, [userLocation.lat, userLocation.lng]);
 
   // ── Calculate fare when driver is selected ──
   useEffect(() => {
@@ -386,7 +371,6 @@ export default function RiderDashboard() {
     setPassengerName("");
     setPassengerPhone("");
     setRequestedVehicleType("standard");
-    setGeocoding(false);
     setCalculatingFare(false);
   }, []);
 
@@ -771,8 +755,8 @@ export default function RiderDashboard() {
                 autoFocus
                 data-testid="input-destination"
               />
-              {geocoding && <Loader2 className="w-4 h-4 text-blue-500 animate-spin absolute right-3 top-4" />}
-              {destinationAddress && !geocoding && (
+              {suggestLoading && <Loader2 className="w-4 h-4 text-blue-500 animate-spin absolute right-3 top-4" />}
+              {destinationAddress && !suggestLoading && (
                 <button
                   onClick={() => { setDestinationAddress(""); setDestCoords(null); setFareEstimate(null); }}
                   className="absolute right-3 top-3.5"
@@ -792,29 +776,36 @@ export default function RiderDashboard() {
             </div>
           </div>
 
-          {/* Results — shows above the keyboard since input is at top */}
-          <div className="flex-1 overflow-y-auto px-4 py-6">
+          {/* Suggestions — live address matches the rider picks from */}
+          <div className="flex-1 overflow-y-auto">
             {!destinationAddress && (
-              <div className="text-center">
+              <div className="text-center px-4 py-6">
                 <Search className="w-12 h-12 text-gray-200 mx-auto mb-3" />
                 <p className="text-base font-medium text-gray-400 mb-1">Where are you going?</p>
-                <p className="text-sm text-gray-300">Type any address in Maryland</p>
+                <p className="text-sm text-gray-300">Start typing any address in Maryland</p>
               </div>
             )}
-            {destinationAddress.length > 0 && destinationAddress.length < 5 && (
-              <p className="text-center text-gray-400 text-sm">Keep typing...</p>
+            {destinationAddress.length > 0 && destinationAddress.length < 3 && (
+              <p className="text-center text-gray-400 text-sm px-4 py-6">Keep typing...</p>
             )}
-            {destinationAddress.length >= 5 && geocoding && (
-              <div className="text-center">
-                <Loader2 className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
-                <p className="text-sm text-gray-400">Finding your destination...</p>
-              </div>
-            )}
-            {destinationAddress.length >= 5 && !geocoding && !destCoords && (
-              <div className="text-center">
+            {destinationAddress.length >= 3 && addressSuggestions.map((s, i) => (
+              <button
+                key={`${s.lat},${s.lng},${i}`}
+                onClick={() => handlePickDestination(s)}
+                className="w-full text-left px-4 py-3.5 flex items-start gap-3 border-b border-gray-50 active:bg-blue-50 hover:bg-gray-50"
+                data-testid={`suggestion-${i}`}
+              >
+                <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
+                  <MapPin className="w-4 h-4 text-gray-500" />
+                </div>
+                <span className="text-sm text-gray-800 leading-snug pt-1">{s.label}</span>
+              </button>
+            ))}
+            {destinationAddress.length >= 3 && !suggestLoading && addressSuggestions.length === 0 && (
+              <div className="text-center px-4 py-6">
                 <MapPin className="w-8 h-8 text-red-300 mx-auto mb-3" />
-                <p className="text-sm font-medium text-red-400 mb-1">Address not found</p>
-                <p className="text-xs text-gray-400">Try a more specific address in Maryland</p>
+                <p className="text-sm font-medium text-red-400 mb-1">No matching address</p>
+                <p className="text-xs text-gray-400">Try a more specific street, city, or place</p>
               </div>
             )}
           </div>
