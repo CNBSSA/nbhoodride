@@ -23,6 +23,7 @@ import DriverRateCard from "@/pages/DriverRateCard";
 import { TermsOfService, PrivacyPolicy } from "@/pages/LegalPages";
 import NotFound from "@/pages/not-found";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
+import ErrorBoundary from "@/components/ErrorBoundary";
 
 function AuthRedirect({ component: Component }: { component: React.ComponentType }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -72,15 +73,17 @@ function Router() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <LocaleProvider>
-        <TooltipProvider>
-          <Toaster />
-          <Router />
-          <PushNotificationPrompt />
-        </TooltipProvider>
-      </LocaleProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <LocaleProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Router />
+            <PushNotificationPrompt />
+          </TooltipProvider>
+        </LocaleProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 
