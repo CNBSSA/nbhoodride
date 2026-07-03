@@ -17,9 +17,8 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     queryKey: ["/api/user/ride-preferences"],
     retry: false,
   });
-  const locale: Locale = isLocale(prefs?.preferredLanguage ?? "en")
-    ? (prefs!.preferredLanguage as Locale)
-    : "en";
+  const preferred = prefs?.preferredLanguage ?? "en";
+  const locale: Locale = isLocale(preferred) ? preferred : "en";
 
   const value = useMemo(
     () => ({
