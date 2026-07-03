@@ -448,7 +448,12 @@ export default function DriverDashboard() {
               Active Rides ({activeRides.length})
             </h3>
             {activeRides.map((ride: any) => (
-              <ActiveRideCard key={ride.id} ride={ride} incomingRideMessage={incomingRideMessages[ride.id] ?? null} />
+              <ActiveRideCard
+                key={ride.id}
+                ride={ride}
+                incomingRideMessage={incomingRideMessages[ride.id] ?? null}
+                driverLocation={location ? { lat: location.latitude, lng: location.longitude } : null}
+              />
             ))}
           </div>
         )}

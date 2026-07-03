@@ -81,6 +81,7 @@ import {
   type RideMessageRole,
 } from "@shared/rideChat";
 import { pushRideMessageToUser, setRideMessageConnections } from "./rideMessageHub";
+import { mapRouteResponse, type RouteResult } from "@shared/routeGeometry";
 import type { RideMessage } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import {
@@ -149,6 +150,12 @@ const geocodeSuggestCache = new Map<string, { at: number; suggestions: Array<{ l
 function isValidRideTransition(from: string, to: string): boolean {
   return VALID_RIDE_TRANSITIONS[from]?.includes(to) ?? false;
 }
+
+// In-process cache for driving routes. Keyed by rounded from/to coords so a
+// driver's tiny GPS jitter reuses the same route instead of re-fetching every
+// tick. Short TTL — traffic-free geometry is stable minute-to-minute.
+const ROUTE_CACHE_TTL_MS = 60 * 1000;
+const routeCache = new Map<string, { at: number; route: RouteResult }>();
 // ────────────────────────────────────────────────────────────────────────────
 
 async function ensureSuperAdminSetup() {
@@ -2235,6 +2242,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Fail soft — an empty list degrades to "no matches" in the UI rather
       // than blocking the booking flow with an error.
       res.json({ suggestions: [] });
+    }
+  });
+
+  // Driving route between two points, for the in-app driver navigation map.
+  // Returns a real road-following polyline (not a straight line) plus distance
+  // + ETA. Uses Mapbox Directions when MAPBOX_TOKEN is set (best quality),
+  // else the public OSRM demo server. FAILS SOFT: if the provider is
+  // unreachable it returns a straight 2-point line so the map still draws a
+  // path and the trip is never blocked on a routing outage.
+  app.get('/api/route', isAuthenticated, async (req: any, res) => {
+    try {
+      const fromLat = parseFloat(String(req.query.fromLat));
+      const fromLng = parseFloat(String(req.query.fromLng));
+      const toLat = parseFloat(String(req.query.toLat));
+      const toLng = parseFloat(String(req.query.toLng));
+      if (![fromLat, fromLng, toLat, toLng].every(Number.isFinite)) {
+        return res.status(400).json({ message: "fromLat, fromLng, toLat, toLng required" });
+      }
+
+      const straightLine = (): RouteResult => ({
+        coordinates: [[fromLat, fromLng], [toLat, toLng]],
+        distanceMeters: 0,
+        durationSeconds: 0,
+      });
+
+      // Round to ~11m so GPS jitter reuses the cached route.
+      const r5 = (n: number) => Math.round(n * 10000) / 10000;
+      const cacheKey = `${r5(fromLat)},${r5(fromLng)}->${r5(toLat)},${r5(toLng)}`;
+      const cached = routeCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < ROUTE_CACHE_TTL_MS) {
+        return res.json({ route: cached.route, cached: true });
+      }
+
+      const mapboxToken = process.env.MAPBOX_TOKEN;
+      const url = mapboxToken
+        ? `https://api.mapbox.com/directions/v5/mapbox/driving/${fromLng},${fromLat};${toLng},${toLat}`
+          + `?geometries=geojson&overview=full&access_token=${mapboxToken}`
+        : `https://router.project-osrm.org/route/v1/driving/${fromLng},${fromLat};${toLng},${toLat}`
+          + `?geometries=geojson&overview=full`;
+
+      let route: RouteResult | null = null;
+      try {
+        const r = await fetch(url);
+        if (r.ok) route = mapRouteResponse(await r.json());
+      } catch (err) {
+        console.warn("Routing provider unreachable, using straight line:", err);
+      }
+
+      const result = route ?? straightLine();
+      if (route) {
+        routeCache.set(cacheKey, { at: Date.now(), route });
+        if (routeCache.size > 500) {
+          const oldest = routeCache.keys().next().value;
+          if (oldest) routeCache.delete(oldest);
+        }
+      }
+      res.json({ route: result, cached: false, degraded: !route });
+    } catch (error) {
+      console.error("Route error:", error);
+      res.status(500).json({ message: "Failed to compute route" });
     }
   });
 
