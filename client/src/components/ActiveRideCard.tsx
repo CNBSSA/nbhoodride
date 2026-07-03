@@ -57,6 +57,45 @@ export function ActiveRideCard({ ride, incomingRideMessage }: ActiveRideCardProp
     refetchInterval: 10000, // Refresh every 10 seconds
   });
 
+  // "I've Arrived" — transitions accepted → driver_arriving and fires the
+  // rider's "Driver Arrived" notification. Sends the driver's current GPS so
+  // the server can soft-check the pickup geofence (missing coords is fine —
+  // the check is advisory, not blocking).
+  const confirmArrivalMutation = useMutation({
+    mutationFn: async (rideId: string) => {
+      const coords = await new Promise<{ driverLat?: number; driverLng?: number }>((resolve) => {
+        if (!navigator.geolocation) return resolve({});
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({ driverLat: pos.coords.latitude, driverLng: pos.coords.longitude }),
+          () => resolve({}),
+          { timeout: 4000, maximumAge: 10000 },
+        );
+      });
+      const response = await apiRequest('POST', `/api/driver/rides/${rideId}/confirm-arrival`, coords);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/driver/active-rides"] });
+      toast({
+        title: "Rider Notified 📍",
+        description: "We let your rider know you're here. They're heading out.",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Couldn't confirm arrival",
+        description: "Please try again — or tap Start Ride once your rider is in.",
+        variant: "destructive",
+      });
+    },
+    onSettled: () => setIsUpdating(false),
+  });
+
+  const handleConfirmArrival = () => {
+    setIsUpdating(true);
+    confirmArrivalMutation.mutate(ride.id);
+  };
+
   const startRideMutation = useMutation({
     mutationFn: async (rideId: string) => {
       const response = await apiRequest('POST', `/api/driver/rides/${rideId}/start`);
@@ -149,14 +188,47 @@ export function ActiveRideCard({ ride, incomingRideMessage }: ActiveRideCardProp
               </Button>
             )}
             <RideChat rideId={ride.id} role="driver" incomingMessage={incomingRideMessage ?? null} />
-            <Button 
-              onClick={handleStartRide}
+            <Button
+              onClick={handleConfirmArrival}
               disabled={isUpdating}
               className="w-full"
+              data-testid={`button-confirm-arrival-${ride.id}`}
+            >
+              <MapPin className="w-4 h-4 mr-2" />
+              {isUpdating ? "Notifying rider..." : "I've Arrived at Pickup"}
+            </Button>
+          </div>
+        );
+      case 'driver_arriving':
+        return (
+          <div className="space-y-3">
+            <Badge variant="secondary" className="text-amber-600 bg-amber-50 dark:text-amber-400 dark:bg-amber-950">
+              <MapPin className="w-3 h-3 mr-1" />
+              At Pickup — Waiting for Rider
+            </Badge>
+            <p className="text-sm text-muted-foreground">
+              Your rider has been notified you're here. Tap Start Ride once they're in the car.
+            </p>
+            {ride.pickupLocation?.lat && ride.pickupLocation?.lng && (
+              <Button
+                variant="outline"
+                onClick={() => openNavigation(ride.pickupLocation.lat, ride.pickupLocation.lng, ride.pickupLocation.address)}
+                className="w-full border-blue-200 text-blue-700 hover:bg-blue-50"
+                data-testid={`button-navigate-pickup-arriving-${ride.id}`}
+              >
+                <ExternalLink className="w-4 h-4 mr-2" />
+                Navigate to Pickup (Google Maps)
+              </Button>
+            )}
+            <RideChat rideId={ride.id} role="driver" incomingMessage={incomingRideMessage ?? null} />
+            <Button
+              onClick={handleStartRide}
+              disabled={isUpdating}
+              className="w-full bg-green-600 hover:bg-green-700"
               data-testid={`button-start-ride-${ride.id}`}
             >
               <Navigation className="w-4 h-4 mr-2" />
-              {isUpdating ? "Starting..." : "Arrived — Start Ride"}
+              {isUpdating ? "Starting..." : "Start Ride"}
             </Button>
           </div>
         );
