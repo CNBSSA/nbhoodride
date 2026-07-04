@@ -12,6 +12,7 @@ import ScheduleRideModal from "@/components/ScheduleRideModal";
 import MultiStopBookingSheet from "@/components/MultiStopBookingSheet";
 import SharedScheduleSheet from "@/components/SharedScheduleSheet";
 import JoinScheduleModal from "@/components/JoinScheduleModal";
+import CircuitsTimetableSheet from "@/components/CircuitsTimetableSheet";
 import SOSModal from "@/components/SOSModal";
 import LostFoundModal from "@/components/LostFoundModal";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
@@ -37,7 +38,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import {
   MapPin, Navigation, Star, Clock, X, Shield, Car,
-  Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign, CalendarClock, UserCheck, Users, AlertTriangle
+  Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign, CalendarClock, UserCheck, Users, AlertTriangle, Bus
 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -110,6 +111,7 @@ export default function RiderDashboard() {
   const [isMultiStopOpen, setIsMultiStopOpen] = useState(false);
   const [isSharedScheduleOpen, setIsSharedScheduleOpen] = useState(false);
   const [isJoinScheduleOpen, setIsJoinScheduleOpen] = useState(false);
+  const [isCircuitsOpen, setIsCircuitsOpen] = useState(false);
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
   const [isLostFoundOpen, setIsLostFoundOpen] = useState(false);
   const [incomingRideMessage, setIncomingRideMessage] = useState<RideMessagePayload | null>(null);
@@ -905,6 +907,19 @@ export default function RiderDashboard() {
               </button>
             </div>
 
+            {/* Circuits — the published weekly timetable (launch centerpiece) */}
+            <button
+              onClick={() => setIsCircuitsOpen(true)}
+              className="w-full mt-2 flex items-center justify-between bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 active:bg-primary/10 transition-colors"
+              data-testid="button-circuits"
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold text-primary">
+                <Bus className="w-4 h-4" />
+                This Week's Circuits
+              </span>
+              <span className="text-xs text-gray-500">Guaranteed seats · no surge</span>
+            </button>
+
             {/* Upcoming scheduled rides */}
             {scheduledRides.length > 0 && (
               <div className="mt-4 space-y-2">
@@ -1203,6 +1218,10 @@ export default function RiderDashboard() {
         isOpen={isJoinScheduleOpen}
         onClose={() => setIsJoinScheduleOpen(false)}
         userLocation={userLocation}
+      />
+      <CircuitsTimetableSheet
+        isOpen={isCircuitsOpen}
+        onClose={() => setIsCircuitsOpen(false)}
       />
     </div>
   );

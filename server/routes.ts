@@ -85,6 +85,7 @@ import { mapRouteResponse, type RouteResult } from "@shared/routeGeometry";
 import type { RideMessage } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import { resolveAppUrl } from "./appUrl";
+import { bookingWindow } from "@shared/circuitSchedule";
 import {
   insertDriverProfileSchema,
   insertVehicleSchema,
@@ -4361,6 +4362,127 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error listing circuits:", error);
       res.status(500).json({ message: "Failed to load circuits" });
+    }
+  });
+
+  // This week's runs with live seat availability for the signed-in rider.
+  app.get('/api/circuits/timetable', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const now = new Date();
+      const circuits = await storage.listCircuits();
+      const runs = await Promise.all(
+        circuits.map(async (c) => {
+          const w = bookingWindow(c, now);
+          const group = await storage.getCircuitRunGroup(c.id, w.runAt);
+          let seatsBooked = 0;
+          let alreadyBooked = false;
+          if (group) {
+            const rides = await storage.getRidesInGroup(group.id);
+            const active = rides.filter((r) => r.status !== "cancelled");
+            seatsBooked = active.length;
+            alreadyBooked = active.some((r) => r.riderId === userId);
+          }
+          return {
+            id: c.id,
+            name: c.name,
+            description: c.description,
+            anchorName: c.anchorName,
+            pickup: c.pickup,
+            destination: c.destination,
+            dayOfWeek: c.dayOfWeek,
+            departureHour: c.departureHour,
+            departureMinute: c.departureMinute,
+            farePerSeat: c.farePerSeat,
+            runAt: w.runAt.toISOString(),
+            cutoffAt: w.cutoffAt.toISOString(),
+            bookingOpen: w.open,
+            seatsTotal: c.seatCount,
+            seatsLeft: Math.max(0, c.seatCount - seatsBooked),
+            alreadyBooked,
+          };
+        }),
+      );
+      res.json({ runs });
+    } catch (error) {
+      console.error("Error building circuit timetable:", error);
+      res.status(500).json({ message: "Failed to load timetable" });
+    }
+  });
+
+  // One-tap seat booking. The week's run group is materialized lazily on the
+  // first booking (no scheduler needed): find-or-create keyed on
+  // (circuit_id, scheduled_at). No transaction — at launch seat counts are
+  // tiny and the recount below keeps overselling bounded to a race window.
+  app.post('/api/circuits/:id/book', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const circuit = await storage.getCircuit(req.params.id);
+      if (!circuit || !circuit.isActive) {
+        return res.status(404).json({ message: "Circuit not found" });
+      }
+
+      const w = bookingWindow(circuit, new Date());
+      if (!w.open) {
+        return res.status(400).json({
+          message: `Booking for this run closed at the cutoff. The next run opens for booking after departure.`,
+          cutoffAt: w.cutoffAt.toISOString(),
+          runAt: w.runAt.toISOString(),
+        });
+      }
+
+      let group = await storage.getCircuitRunGroup(circuit.id, w.runAt);
+      if (!group) {
+        group = await storage.createRideGroup({
+          organizerId: userId,
+          groupType: "circuit",
+          sharedDestination: circuit.destination,
+          maxSlots: circuit.seatCount,
+          filledSlots: 0,
+          status: "open",
+          scheduledAt: w.runAt,
+          circuitId: circuit.id,
+        });
+      }
+
+      const rides = await storage.getRidesInGroup(group.id);
+      const active = rides.filter((r) => r.status !== "cancelled");
+      if (active.some((r) => r.riderId === userId)) {
+        return res.status(409).json({ message: "You already have a seat on this run." });
+      }
+      if (active.length >= circuit.seatCount) {
+        return res.status(409).json({ message: "This run is full. Try next week's run or another circuit." });
+      }
+
+      const ride = await storage.createRide({
+        riderId: userId,
+        driverId: group.driverId || null,
+        pickupLocation: circuit.pickup,
+        destinationLocation: circuit.destination,
+        estimatedFare: circuit.farePerSeat,
+        originalFare: circuit.farePerSeat,
+        paymentMethod: req.body?.paymentMethod || "card",
+        rideType: "circuit",
+        groupId: group.id,
+        scheduledAt: w.runAt,
+      });
+
+      const seatsBooked = active.length + 1;
+      await storage.updateRideGroup(group.id, {
+        filledSlots: seatsBooked,
+        ...(seatsBooked >= circuit.seatCount ? { status: "active" } : {}),
+      });
+
+      console.log(`[AUDIT] circuit_seat_booked userId=${userId} circuitId=${circuit.id} rideId=${ride.id} runAt=${w.runAt.toISOString()} seats=${seatsBooked}/${circuit.seatCount}`);
+      res.json({
+        ride,
+        circuitName: circuit.name,
+        runAt: w.runAt.toISOString(),
+        seatsLeft: Math.max(0, circuit.seatCount - seatsBooked),
+      });
+    } catch (error) {
+      console.error("Error booking circuit seat:", error);
+      res.status(500).json({ message: "Failed to book seat" });
     }
   });
 

@@ -538,6 +538,7 @@ export interface IStorage {
   getCircuit(id: string): Promise<Circuit | undefined>;
   listCircuits(opts?: { includeInactive?: boolean }): Promise<Circuit[]>;
   updateCircuit(id: string, updates: Partial<InsertCircuit>): Promise<Circuit>;
+  getCircuitRunGroup(circuitId: string, scheduledAt: Date): Promise<RideGroup | undefined>;
   // Ride groups (Mode 3: multi-stop, Mode 4: shared schedule)
   createRideGroup(data: InsertRideGroup): Promise<RideGroup>;
   getRideGroupByCode(code: string): Promise<RideGroup | undefined>;
@@ -3870,6 +3871,14 @@ export class DatabaseStorage implements IStorage {
       .where(eq(circuits.id, id))
       .returning();
     return circuit;
+  }
+
+  async getCircuitRunGroup(circuitId: string, scheduledAt: Date): Promise<RideGroup | undefined> {
+    const [group] = await db
+      .select()
+      .from(rideGroups)
+      .where(and(eq(rideGroups.circuitId, circuitId), eq(rideGroups.scheduledAt, scheduledAt)));
+    return group;
   }
 
   async createRideGroup(data: InsertRideGroup): Promise<RideGroup> {

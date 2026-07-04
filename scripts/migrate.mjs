@@ -243,6 +243,7 @@ CREATE TABLE IF NOT EXISTS ride_groups (
   driver_id VARCHAR REFERENCES users(id),
   discount_active BOOLEAN DEFAULT false,
   scheduled_at TIMESTAMP,
+  circuit_id VARCHAR,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -977,6 +978,9 @@ CREATE TABLE IF NOT EXISTS circuits (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_circuits_active ON circuits (is_active, day_of_week);
+-- ride_groups predates circuits in production, so the linkage column needs an ALTER.
+ALTER TABLE ride_groups ADD COLUMN IF NOT EXISTS circuit_id VARCHAR;
+CREATE INDEX IF NOT EXISTS idx_ride_groups_circuit_run ON ride_groups (circuit_id, scheduled_at);
 
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
