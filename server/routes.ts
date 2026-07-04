@@ -753,6 +753,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // POST /api/auth/email-login - Login with email and password
+  // PATCH /api/user/profile — self-service edit of basic profile fields.
+  // Whitelisted columns only; email changes are deliberately excluded (email
+  // is the login identity and is verification-gated).
+  app.patch('/api/user/profile', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const schema = z.object({
+        firstName: z.string().trim().min(1, "First name is required").max(50).optional(),
+        lastName: z.string().trim().min(1, "Last name is required").max(50).optional(),
+        phone: z.string().trim().max(20).optional(),
+        emergencyContact: z.string().trim().max(100).optional(),
+      });
+      const updates = schema.parse(req.body);
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "Nothing to update" });
+      }
+      if (updates.phone !== undefined && updates.phone !== "") {
+        const normalized = normalizePhone(updates.phone);
+        if (!/^\+1\d{10}$/.test(normalized)) {
+          return res.status(400).json({ message: "Phone number must be a valid 10-digit US number (e.g. 301-555-1234)." });
+        }
+        updates.phone = normalized;
+      }
+      const user = await storage.updateUserProfile(userId, updates);
+      console.log(`[AUDIT] profile_updated userId=${userId} fields=${Object.keys(updates).join(",")}`);
+      res.json({
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone,
+        emergencyContact: user.emergencyContact,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Profile update error:", error);
+      res.status(500).json({ message: "Failed to update profile" });
+    }
+  });
+
   app.post('/api/auth/email-login', async (req, res) => {
     const ip = req.ip ?? "unknown";
     try {
@@ -2274,7 +2315,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { vehicleId } = req.params;
-      const updates = req.body;
+      // Whitelist editable fields — previously req.body was passed through
+      // verbatim, letting a driver set arbitrary vehicle columns.
+      const currentYear = new Date().getFullYear();
+      const vehicleUpdateSchema = z.object({
+        make: z.string().trim().min(1).max(50).optional(),
+        model: z.string().trim().min(1).max(50).optional(),
+        year: z.number().int().min(1990).max(currentYear + 1).optional(),
+        color: z.string().trim().min(1).max(30).optional(),
+        licensePlate: z.string().trim().regex(/^[A-Z0-9\- ]{2,10}$/i, "License plate must be 2–10 alphanumeric characters").optional(),
+      });
+      const updates = vehicleUpdateSchema.parse(req.body);
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "Nothing to update" });
+      }
 
       // SECURITY: Ensure the vehicle belongs to this driver before updating
       const driverProfile = await storage.getDriverProfile(userId);
