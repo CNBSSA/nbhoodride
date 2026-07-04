@@ -17,12 +17,13 @@ Ask **only** when a decision requires Track B: credentials, business/board appro
 
 ## Required audits (every engagement)
 
-1. **Pre-planning audit** — `npm run check`, `npm test`, read `EXECUTION_TRACKS.md` + relevant `MASTER_PLAN.md` sections; confirm work is Track A; map tasks to files.
-2. **Pre-implementation audit** — create/switch branch; scope diff; risk check (migrations, live tables, breaking API); confirm no gated decision needed.
-3. **Post-implementation impact assessment** — re-run `npm run check` + `npm test`; verify no unrelated regressions; document Track B env vars still unset; update `EXECUTION_TRACKS.md` engagement log.
+1. **Pre-planning audit** — checkout **`main`**; `npm run check`, `npm test`, read `EXECUTION_TRACKS.md` + relevant `MASTER_PLAN.md`; confirm Track A; map tasks to files. See [GIT_WORKFLOW.md](../../docs/GIT_WORKFLOW.md).
+2. **Pre-implementation audit** — checkout **`develop`**, pull latest; create branch `cursor/<name>-a737` from **develop**; scope diff; risk check (migrations, live tables, breaking API).
+3. **Post-implementation impact assessment** — re-run `npm run check` + `npm test`; verify no unrelated regressions; update engagement log.
 
 ## Execution
 
-- Implement → commit → push → PR (draft → ready) → merge when gates pass.
+- Implement on branch from **`develop`** → commit → push → **PR base = `develop`** (draft → ready). Never target `main` unless explicitly told.
+- Humans merge **`develop` → `main`** for production release after QA.
 - Minimize scope; match existing conventions.
 - Never skip audits to move faster.

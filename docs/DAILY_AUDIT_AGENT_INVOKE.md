@@ -1,7 +1,8 @@
 # Daily audit — agent invocation prompt
 
 **Copy the block below** and paste it to your AI agent each morning (or schedule it).  
-Full playbook: [DAILY_AUDIT_PROMPT.md](./DAILY_AUDIT_PROMPT.md)
+Full playbook: [DAILY_AUDIT_PROMPT.md](./DAILY_AUDIT_PROMPT.md)  
+**Branching:** [GIT_WORKFLOW.md](./GIT_WORKFLOW.md) — audit `main`, PR `develop`
 
 ---
 
@@ -15,11 +16,23 @@ Production: https://nbhoodride-production.up.railway.app
 Target domain: https://peoplegoverned.com
 Product: community-owned rideshare — riders, drivers, admin approval, Virtual PG Card, Stripe, WebSocket live rides, SOS/guardian safety.
 
+BRANCHING — NON-NEGOTIABLE
+• AUDIT / REVIEW / SCAN against main (live branch + production URL). Users experience what is on main.
+• CODE FIXES: branch off develop, not main.
+• PULL REQUESTS: base branch = develop (integration/staging). Never open audit-fix PRs directly into main.
+• Only humans merge develop → main after testing on develop.
+See docs/GIT_WORKFLOW.md.
+
 YOUR JOB TODAY
 Find what can go wrong for riders, drivers, and admins before users hit it. Investigate and report. Do not change production data. Only open a draft PR if you find a clear bug fix.
 
+STEP 0 — SYNC FOR AUDIT
+  git fetch origin main develop
+  git checkout main && git pull origin main
+(Read and audit the live codebase on main. Production deploy tracks main.)
+
 STEP 1 — AUTOMATED GATES
-Run from repo root:
+Run from repo root (on main):
   npm run audit:daily
 If any step fails, start the report at RED and explain.
 
@@ -39,6 +52,13 @@ Tag every finding: [RIDER] [DRIVER] [ADMIN] [PAYMENT] [SAFETY] [INFRA]
 Assign P0 / P1 / P2.
 End with 1–3 concrete recommended actions and who owns them (Track A = code agent, Track B = human ops).
 
+STEP 5 — IF YOU FIX CODE
+  git checkout develop && git pull origin develop
+  git checkout -b cursor/daily-audit-YYYYMMDD-a737
+  (implement fix, npm run check, npm test, commit, push)
+  Open DRAFT PR: base=develop, head=cursor/daily-audit-YYYYMMDD-a737
+Do NOT target main with the PR.
+
 RULES
 - No secrets in the report.
 - Evidence required for every finding (log line, route, HTTP status, file path).
@@ -50,7 +70,7 @@ RULES
 ## Optional one-liner (cron / quick ping)
 
 ```
-Run PG Ride daily audit: npm run audit:daily in nbhoodride, then full report per docs/DAILY_AUDIT_PROMPT.md — riders, drivers, payments, safety, domain.
+PG Ride daily audit: checkout main, npm run audit:daily, report per DAILY_AUDIT_PROMPT.md; any fix PR targets develop not main (GIT_WORKFLOW.md).
 ```
 
 ---
@@ -60,7 +80,7 @@ Run PG Ride daily audit: npm run audit:daily in nbhoodride, then full report per
 | When | What |
 |------|------|
 | **Daily 6am ET** | Paste full prompt above |
-| **After every deploy** | `npm run audit:daily` only |
+| **After every deploy to main** | `npm run audit:daily` only |
 | **Weekly Monday** | Full prompt + Phase 8 code regression |
 
 ---

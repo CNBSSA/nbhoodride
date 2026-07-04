@@ -195,8 +195,9 @@ See [STRIPE_SETUP.md](./STRIPE_SETUP.md).
 1. **Read-only** on production DB unless authorized
 2. **Never** log secrets (Stripe, `SESSION_SECRET`)
 3. Cite evidence: route, log tag, query count, curl output
-4. Code fixes: branch `cursor/daily-audit-YYYYMMDD-a737`, gates, **draft PR**
-5. Tag findings: `[RIDER]` `[DRIVER]` `[ADMIN]` `[PAYMENT]` `[SAFETY]` `[INFRA]`
+4. **Branching (mandatory):** audit/review **`main`** (live); create fix branches from **`develop`**; open PRs with **base `develop`** — see [GIT_WORKFLOW.md](./GIT_WORKFLOW.md)
+5. Code fixes: `git checkout develop && git pull` → `cursor/daily-audit-YYYYMMDD-a737` → **draft PR → `develop`**
+6. Tag findings: `[RIDER]` `[DRIVER]` `[ADMIN]` `[PAYMENT]` `[SAFETY]` `[INFRA]`
 
 ---
 
@@ -204,6 +205,7 @@ See [STRIPE_SETUP.md](./STRIPE_SETUP.md).
 
 | Resource | Path |
 |----------|------|
+| **Git workflow (audit main, PR develop)** | [GIT_WORKFLOW.md](./GIT_WORKFLOW.md) |
 | Invoke prompt | [DAILY_AUDIT_AGENT_INVOKE.md](./DAILY_AUDIT_AGENT_INVOKE.md) |
 | Phase 0 / production | [PHASE_0_PRODUCTION.md](./PHASE_0_PRODUCTION.md) |
 | Stripe | [STRIPE_SETUP.md](./STRIPE_SETUP.md) |

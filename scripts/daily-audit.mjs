@@ -39,6 +39,7 @@ async function fetchJson(path) {
 
 console.log(`PG Ride daily audit — ${new Date().toISOString().slice(0, 10)}`);
 console.log(`BASE_URL=${baseUrl}`);
+console.log("Audit code on: main (live). Fix PRs target: develop — see docs/GIT_WORKFLOW.md");
 
 run("npm run check", "npm", ["run", "check"]);
 run("npm test", "npm", ["test"]);
