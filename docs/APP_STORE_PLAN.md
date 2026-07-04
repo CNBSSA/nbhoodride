@@ -64,6 +64,27 @@ flowchart TB
 
 **Bundle ID:** `com.pgride.app` (iOS + Android).
 
+### Review risk, stated honestly
+
+- **Apple guidelines 4.2 / 2.5.2:** a wrapper that loads a remote URL is the
+  pattern Apple rejects most as "just a website." Rideshare apps have a clear
+  reason to exist as apps, so the risk is manageable — but expect pushback.
+  Mitigations, in order: ship native push (APNs) and deep links as early as
+  possible (not just "fast follows"), provide working demo rider + driver
+  accounts in review notes, and if rejected, fall back to the deferred
+  "bundled assets + remote API" option (or launch Android-first via Play,
+  where remote-content wrappers are accepted).
+- **Google Play:** the TWA fallback in the table above remains the cheapest
+  Android path if Capacitor review drags; either route passes Play policy.
+
+### Store payment policy (why Stripe stays)
+
+Rideshare is a **physical-world service**, exempt from both stores'
+in-app-billing mandates (Apple guideline 3.1.5(a); Play "physical goods and
+services"). Stripe and the virtual wallet stay exactly as built — no 15–30%
+store cut, no IAP integration, on either store. Do not let a reviewer or
+consultant talk the project into IAP.
+
 ### What “native” means in v1
 
 Included in scope:
@@ -295,4 +316,8 @@ Explicitly **out of scope for v1** (follow-up releases):
 
 ---
 
-*Last updated: plan created before full store implementation. Phase 2 scaffolding exists on branch `cursor/app-store-readiness-a737` (PR #70) as a head start — merge only after Phase 0–1 sign-off.*
+*Last updated: PR #70 (Capacitor scaffolding + Phase 0 tooling) is merged.
+PWA icons/screenshots were regenerated after merge (full-bleed, no black
+corners; real app captures) — the same art feeds the manifest, the store
+listing master, and the iOS AppIcon slot, so a designed logo can replace
+them all in one pass.*

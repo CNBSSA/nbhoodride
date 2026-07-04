@@ -22,17 +22,17 @@
   ],
   "screenshots": [
     {
-      "src": "/screenshots/screen-rider.png",
+      "src": "/screenshots/screen-welcome.png",
       "sizes": "390x844",
       "type": "image/png",
-      "label": "Book a ride",
+      "label": "PG Ride — community rideshare",
       "form_factor": "narrow"
     },
     {
-      "src": "/screenshots/screen-driver.png",
+      "src": "/screenshots/screen-login.png",
       "sizes": "390x844",
       "type": "image/png",
-      "label": "Driver dashboard",
+      "label": "Sign in",
       "form_factor": "narrow"
     }
   ],
