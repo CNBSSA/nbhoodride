@@ -91,6 +91,7 @@ import {
   insertRideSchema,
   insertDisputeSchema,
   insertEmergencyIncidentSchema,
+  insertCircuitSchema,
 } from "@shared/schema";
 import {
   validateRideRequest,
@@ -4348,6 +4349,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching dashboard stats:", error);
       res.status(500).json({ message: "Failed to fetch dashboard stats" });
+    }
+  });
+
+  // ── Circuits: published weekly timetable (docs/CIRCUITS_LAUNCH_PLAN.md) ──
+
+  // Active circuits, timetable-ordered. Rider timetable screen reads this.
+  app.get('/api/circuits', isAuthenticated, async (_req: any, res) => {
+    try {
+      res.json({ circuits: await storage.listCircuits() });
+    } catch (error) {
+      console.error("Error listing circuits:", error);
+      res.status(500).json({ message: "Failed to load circuits" });
+    }
+  });
+
+  // Admin: all circuits including deactivated ones.
+  app.get('/api/admin/circuits', isAdminOrSessionAuth, async (_req: any, res) => {
+    try {
+      res.json({ circuits: await storage.listCircuits({ includeInactive: true }) });
+    } catch (error) {
+      console.error("Error listing admin circuits:", error);
+      res.status(500).json({ message: "Failed to load circuits" });
+    }
+  });
+
+  app.post('/api/admin/circuits', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const data = insertCircuitSchema.parse({ ...req.body, createdBy: req.adminUser.id });
+      const circuit = await storage.createCircuit(data);
+      console.log(`[AUDIT] circuit_created adminId=${req.adminUser.id} circuitId=${circuit.id} name="${circuit.name}"`);
+      res.json(circuit);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Error creating circuit:", error);
+      res.status(500).json({ message: "Failed to create circuit" });
+    }
+  });
+
+  app.patch('/api/admin/circuits/:id', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const existing = await storage.getCircuit(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Circuit not found" });
+      // createdBy is immutable; validate everything else with the same rules.
+      const updates = insertCircuitSchema.partial().omit({ createdBy: true }).parse(req.body);
+      const circuit = await storage.updateCircuit(existing.id, updates);
+      console.log(`[AUDIT] circuit_updated adminId=${req.adminUser.id} circuitId=${circuit.id} fields=${Object.keys(updates).join(",")}`);
+      res.json(circuit);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Error updating circuit:", error);
+      res.status(500).json({ message: "Failed to update circuit" });
     }
   });
 

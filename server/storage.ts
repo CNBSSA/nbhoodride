@@ -51,6 +51,7 @@ import {
   payoutRequests,
   pushSubscriptions,
   rideGroups,
+  circuits,
   walletTransactions,
   processedWebhookEvents,
   type PayoutRequest,
@@ -58,6 +59,8 @@ import {
   type PushSubscription,
   type RideGroup,
   type InsertRideGroup,
+  type Circuit,
+  type InsertCircuit,
   type WalletTransaction,
   type User,
   type UpsertUser,
@@ -530,6 +533,11 @@ export interface IStorage {
   // Driver hour tracking for ownership qualification
   getOrCreateWeeklyHours(driverId: string, weekStart: string): Promise<DriverWeeklyHours>;
   addDriverMinutes(driverId: string, minutes: number): Promise<void>;
+  // Circuits — published weekly timetable (docs/CIRCUITS_LAUNCH_PLAN.md)
+  createCircuit(data: InsertCircuit): Promise<Circuit>;
+  getCircuit(id: string): Promise<Circuit | undefined>;
+  listCircuits(opts?: { includeInactive?: boolean }): Promise<Circuit[]>;
+  updateCircuit(id: string, updates: Partial<InsertCircuit>): Promise<Circuit>;
   // Ride groups (Mode 3: multi-stop, Mode 4: shared schedule)
   createRideGroup(data: InsertRideGroup): Promise<RideGroup>;
   getRideGroupByCode(code: string): Promise<RideGroup | undefined>;
@@ -3831,6 +3839,38 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ── Ride groups ──────────────────────────────────────────────────────────────
+
+  async createCircuit(data: InsertCircuit): Promise<Circuit> {
+    const [circuit] = await db.insert(circuits).values(data).returning();
+    return circuit;
+  }
+
+  async getCircuit(id: string): Promise<Circuit | undefined> {
+    const [circuit] = await db.select().from(circuits).where(eq(circuits.id, id));
+    return circuit;
+  }
+
+  async listCircuits(opts?: { includeInactive?: boolean }): Promise<Circuit[]> {
+    const rows = opts?.includeInactive
+      ? await db.select().from(circuits)
+      : await db.select().from(circuits).where(eq(circuits.isActive, true));
+    // Timetable order: day of week, then departure time.
+    return rows.sort(
+      (a, b) =>
+        a.dayOfWeek - b.dayOfWeek ||
+        a.departureHour - b.departureHour ||
+        a.departureMinute - b.departureMinute,
+    );
+  }
+
+  async updateCircuit(id: string, updates: Partial<InsertCircuit>): Promise<Circuit> {
+    const [circuit] = await db
+      .update(circuits)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(circuits.id, id))
+      .returning();
+    return circuit;
+  }
 
   async createRideGroup(data: InsertRideGroup): Promise<RideGroup> {
     const [group] = await db.insert(rideGroups).values(data).returning();

@@ -993,6 +993,35 @@ export const recurringRideSchedules = pgTable("recurring_ride_schedules", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/**
+ * Circuits (docs/CIRCUITS_LAUNCH_PLAN.md) — named recurring shared runs that
+ * form the published weekly timetable: "Sunday Church Circuit, 9:00am,
+ * Largo Town Center → First Baptist, 3 seats, $6/seat". Admins define
+ * circuits; weekly run generation and rider booking build on ride_groups.
+ */
+export const circuits = pgTable("circuits", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name").notNull(),
+  description: text("description"),
+  // The org/facility that concentrates riders on this circuit (church,
+  // warehouse, senior center) — anchors are the launch marketing channel.
+  anchorName: varchar("anchor_name"),
+  pickup: jsonb("pickup").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  destination: jsonb("destination").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  dayOfWeek: integer("day_of_week").notNull(), // 0 = Sunday … 6 = Saturday
+  departureHour: integer("departure_hour").notNull(), // 0–23 local time
+  departureMinute: integer("departure_minute").notNull().default(0),
+  seatCount: integer("seat_count").notNull().default(3),
+  farePerSeat: decimal("fare_per_seat", { precision: 8, scale: 2 }).notNull(),
+  // Booking closes this many hours before departure so the driver's
+  // manifest is fixed (Phase 1 item 4 consumes this).
+  cutoffHoursBefore: integer("cutoff_hours_before").notNull().default(12),
+  isActive: boolean("is_active").notNull().default(true),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 /** Phase E3 — Admin approve-and-apply queue for agent actions. */
 export const agentActionProposals = pgTable("agent_action_proposals", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1335,6 +1364,22 @@ export const insertRideGroupSchema = createInsertSchema(rideGroups).omit({
 });
 export type InsertRideGroup = z.infer<typeof insertRideGroupSchema>;
 export type RideGroup = typeof rideGroups.$inferSelect;
+
+export const insertCircuitSchema = createInsertSchema(circuits)
+  .omit({
+    id: true,
+    createdAt: true,
+    updatedAt: true,
+  })
+  .extend({
+    dayOfWeek: z.number().int().min(0).max(6),
+    departureHour: z.number().int().min(0).max(23),
+    departureMinute: z.number().int().min(0).max(59).optional(),
+    seatCount: z.number().int().min(1).max(8).optional(),
+    cutoffHoursBefore: z.number().int().min(0).max(72).optional(),
+  });
+export type InsertCircuit = z.infer<typeof insertCircuitSchema>;
+export type Circuit = typeof circuits.$inferSelect;
 
 export type InsertDriverProfile = z.infer<typeof insertDriverProfileSchema>;
 export type InsertVehicle = z.infer<typeof insertVehicleSchema>;
