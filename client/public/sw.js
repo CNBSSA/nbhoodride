@@ -21,8 +21,8 @@ self.addEventListener("push", (event) => {
   const title = data.title || "PG Ride";
   const options = {
     body: data.body || "",
-    icon: data.icon || "/icon-192.png",
-    badge: "/icon-72.png",
+    icon: data.icon || "/icons/icon-192.png",
+    badge: "/icons/icon-72.png",
     tag: data.tag || "pg-ride-notification",
     data: { url: data.url || "/" },
     requireInteraction: data.requireInteraction || false,

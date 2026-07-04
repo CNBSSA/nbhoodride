@@ -612,7 +612,7 @@ Qualitative companion metrics ("soul metrics") are catalogued in [Appendix C](#a
 
 **Available outside PG County?** No — PG County residents only.
 
-**App store download?** No — PWA at the deployed URL; add to home screen for app-like experience.
+**App store download?** Yes — Capacitor iOS/Android builds are scaffolded in-repo (`docs/APP_STORE_READINESS.md`). The PWA also installs from the browser (Add to Home Screen). Store submission needs Apple/Google developer accounts (Track B).
 
 **vs Uber/Lyft pricing?** No surge; ~$11.40 for a typical 5-mile ride.
 
