@@ -1025,6 +1025,22 @@ export const circuits = pgTable("circuits", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+/**
+ * Database-backed object storage — fallback for driver document uploads when
+ * no GCS bucket is configured (launch scale: a handful of drivers, a few MB
+ * each). When GCS_BUCKET_NAME is set, uploads go to GCS instead and this
+ * table simply stops growing. Content is stored base64 in text for
+ * simplicity; ACL is owner-or-admin.
+ */
+export const storedObjects = pgTable("stored_objects", {
+  id: varchar("id").primaryKey(),
+  ownerUserId: varchar("owner_user_id").notNull().references(() => users.id),
+  contentType: varchar("content_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  dataBase64: text("data_base64").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 /** Phase E3 — Admin approve-and-apply queue for agent actions. */
 export const agentActionProposals = pgTable("agent_action_proposals", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1383,6 +1399,9 @@ export const insertCircuitSchema = createInsertSchema(circuits)
   });
 export type InsertCircuit = z.infer<typeof insertCircuitSchema>;
 export type Circuit = typeof circuits.$inferSelect;
+
+export type StoredObject = typeof storedObjects.$inferSelect;
+export type InsertStoredObject = typeof storedObjects.$inferInsert;
 
 export type InsertDriverProfile = z.infer<typeof insertDriverProfileSchema>;
 export type InsertVehicle = z.infer<typeof insertVehicleSchema>;

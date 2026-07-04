@@ -52,6 +52,7 @@ import {
   pushSubscriptions,
   rideGroups,
   circuits,
+  storedObjects,
   walletTransactions,
   processedWebhookEvents,
   type PayoutRequest,
@@ -61,6 +62,8 @@ import {
   type InsertRideGroup,
   type Circuit,
   type InsertCircuit,
+  type StoredObject,
+  type InsertStoredObject,
   type WalletTransaction,
   type User,
   type UpsertUser,
@@ -539,6 +542,9 @@ export interface IStorage {
   listCircuits(opts?: { includeInactive?: boolean }): Promise<Circuit[]>;
   updateCircuit(id: string, updates: Partial<InsertCircuit>): Promise<Circuit>;
   getCircuitRunGroup(circuitId: string, scheduledAt: Date): Promise<RideGroup | undefined>;
+  // DB-backed object storage (driver docs fallback when GCS is unset)
+  createStoredObject(data: InsertStoredObject): Promise<StoredObject>;
+  getStoredObject(id: string): Promise<StoredObject | undefined>;
   // Ride groups (Mode 3: multi-stop, Mode 4: shared schedule)
   createRideGroup(data: InsertRideGroup): Promise<RideGroup>;
   getRideGroupByCode(code: string): Promise<RideGroup | undefined>;
@@ -3879,6 +3885,16 @@ export class DatabaseStorage implements IStorage {
       .from(rideGroups)
       .where(and(eq(rideGroups.circuitId, circuitId), eq(rideGroups.scheduledAt, scheduledAt)));
     return group;
+  }
+
+  async createStoredObject(data: InsertStoredObject): Promise<StoredObject> {
+    const [obj] = await db.insert(storedObjects).values(data).returning();
+    return obj;
+  }
+
+  async getStoredObject(id: string): Promise<StoredObject | undefined> {
+    const [obj] = await db.select().from(storedObjects).where(eq(storedObjects.id, id));
+    return obj;
   }
 
   async createRideGroup(data: InsertRideGroup): Promise<RideGroup> {

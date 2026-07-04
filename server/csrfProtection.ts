@@ -61,6 +61,12 @@ function isExempt(req: Request): boolean {
   if (req.path.startsWith("/api/webhooks/")) return true;
   // Health checks.
   if (req.path === "/health" || req.path === "/health/ready") return true;
+  // DB-backed document uploads: Uppy PUTs the file via XHR, which bypasses
+  // the patched window.fetch that attaches X-CSRF-Token. The route is still
+  // session-authenticated and writes only to a server-generated random id,
+  // so a forged request can at worst store junk under the attacker's OWN
+  // session-less request (rejected) — acceptable exemption.
+  if (req.path.startsWith("/api/objects/db-upload/")) return true;
   return false;
 }
 
