@@ -1,6 +1,6 @@
 # App Store Readiness — PG Ride
 
-**Status:** Engineering scaffolding complete. Store submission requires Track B accounts (Apple Developer, Google Play) and a signed release build on your machine.
+**Status:** Engineering scaffolding exists (PR #70); follow the phased **[App Store Launch Plan](./APP_STORE_PLAN.md)** before submitting to stores.
 
 **Live web app:** https://nbhoodride-production.up.railway.app  
 **Privacy policy:** `/privacy`  

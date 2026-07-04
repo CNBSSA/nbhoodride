@@ -213,7 +213,7 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 
 **Delivered (E1–E7):** Support auto-resolve, compliance agent, admin approve-and-apply, SMS adapter, PWA widgets, Calm Ride, i18n.
 
-**App stores:** Capacitor iOS/Android scaffolding — see [APP_STORE_READINESS.md](./APP_STORE_READINESS.md).
+**App stores:** Phased plan — [APP_STORE_PLAN.md](./APP_STORE_PLAN.md) (web first). Build runbook: [APP_STORE_READINESS.md](./APP_STORE_READINESS.md).
 
 ### Phase F — Post-engagement audit (2026-06-30)
 

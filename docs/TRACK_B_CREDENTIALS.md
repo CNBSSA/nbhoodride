@@ -114,7 +114,8 @@
 
 ### App stores (iOS + Android)
 
-See **[APP_STORE_READINESS.md](./APP_STORE_READINESS.md)** for full runbook. Track B items:
+**Plan first:** [APP_STORE_PLAN.md](./APP_STORE_PLAN.md) — web production → PWA polish → Capacitor → listing → submit.  
+**Build runbook (Phase 2+):** [APP_STORE_READINESS.md](./APP_STORE_READINESS.md)
 
 | Item | Action |
 |------|--------|
