@@ -298,6 +298,9 @@ export const rideGroups = pgTable("ride_groups", {
   driverId: varchar("driver_id").references(() => users.id),
   discountActive: boolean("discount_active").default(false),
   scheduledAt: timestamp("scheduled_at"),
+  // Set when this group is a materialized weekly run of a circuit
+  // (docs/CIRCUITS_LAUNCH_PLAN.md). Lazy-created on first seat booking.
+  circuitId: varchar("circuit_id").references(() => circuits.id),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

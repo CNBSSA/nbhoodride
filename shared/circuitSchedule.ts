@@ -46,3 +46,25 @@ export function nextRunAt(c: CircuitScheduleFields, from: Date): Date {
 export function cutoffFor(runAt: Date, cutoffHoursBefore: number): Date {
   return new Date(runAt.getTime() - cutoffHoursBefore * 3600_000);
 }
+
+export interface BookingWindow {
+  runAt: Date;
+  cutoffAt: Date;
+  /** True while seats on the next run can still be booked (cutoff not passed). */
+  open: boolean;
+}
+
+/**
+ * The next bookable run of a circuit as seen at `now`. If `now` is already
+ * past this week's cutoff (but before departure), the run is returned with
+ * open=false — riders see "booking closed" rather than silently being
+ * shown next week's run while this week's hasn't departed yet.
+ */
+export function bookingWindow(
+  c: CircuitScheduleFields & { cutoffHoursBefore: number },
+  now: Date,
+): BookingWindow {
+  const runAt = nextRunAt(c, now);
+  const cutoffAt = cutoffFor(runAt, c.cutoffHoursBefore);
+  return { runAt, cutoffAt, open: now.getTime() < cutoffAt.getTime() };
+}

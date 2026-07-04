@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeCircuitSchedule, nextRunAt, cutoffFor } from "./circuitSchedule";
+import { describeCircuitSchedule, nextRunAt, cutoffFor, bookingWindow } from "./circuitSchedule";
 
 describe("describeCircuitSchedule", () => {
   it("formats a morning run", () => {
@@ -71,5 +71,31 @@ describe("cutoffFor", () => {
   it("zero cutoff means booking until departure", () => {
     const run = new Date(2026, 0, 11, 9, 0, 0, 0);
     expect(cutoffFor(run, 0).getTime()).toBe(run.getTime());
+  });
+});
+
+describe("bookingWindow", () => {
+  const sundayNineAm = { dayOfWeek: 0, departureHour: 9, departureMinute: 0, cutoffHoursBefore: 12 };
+
+  it("is open well before the cutoff", () => {
+    const friday = new Date(2026, 0, 9, 12, 0, 0, 0);
+    const w = bookingWindow(sundayNineAm, friday);
+    expect(w.open).toBe(true);
+    expect(w.runAt.getDay()).toBe(0);
+    expect(w.cutoffAt.getHours()).toBe(21); // Sat 9pm
+  });
+
+  it("closes after the cutoff but before departure — no silent skip to next week", () => {
+    const saturdayTenPm = new Date(2026, 0, 10, 22, 0, 0, 0);
+    const w = bookingWindow(sundayNineAm, saturdayTenPm);
+    expect(w.open).toBe(false);
+    expect(w.runAt.getDate()).toBe(11); // still THIS Sunday's run
+  });
+
+  it("rolls to next week's run after departure", () => {
+    const sundayNoon = new Date(2026, 0, 11, 12, 0, 0, 0);
+    const w = bookingWindow(sundayNineAm, sundayNoon);
+    expect(w.runAt.getDate()).toBe(18); // next Sunday
+    expect(w.open).toBe(true);
   });
 });
