@@ -1267,6 +1267,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { isOnline, dailyCounties } = req.body;
 
+      // Approval gate: isDriver is set at profile creation so the driver UI is
+      // reachable while the application is under review — but going online
+      // (and therefore receiving requests) requires an approved profile.
+      if (isOnline) {
+        const profile = await storage.getDriverProfile(userId);
+        if (!profile || profile.approvalStatus !== 'approved' || profile.isSuspended) {
+          return res.status(403).json({
+            message: profile?.isSuspended
+              ? "Your driver account is suspended. Contact support."
+              : "Your driver application is still under review. You'll be able to go online once an admin approves your documents.",
+            approvalStatus: profile?.approvalStatus ?? "missing",
+          });
+        }
+      }
+
       await storage.toggleDriverOnlineStatus(userId, isOnline);
 
       if (isOnline && Array.isArray(dailyCounties)) {
@@ -1451,6 +1466,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
+
+      // Approval gate (same as toggle-status): only approved, non-suspended
+      // drivers may take rides.
+      const approvalProfile = await storage.getDriverProfile(userId);
+      if (!approvalProfile || approvalProfile.approvalStatus !== 'approved' || approvalProfile.isSuspended) {
+        return res.status(403).json({
+          message: "Your driver application is still under review. You'll be able to accept rides once an admin approves your documents.",
+        });
+      }
 
       // ── Clear acceptance timeout immediately (driver responded in time) ──
       clearAcceptanceTimer(rideId);

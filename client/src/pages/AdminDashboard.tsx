@@ -596,6 +596,38 @@ function DriversPanel() {
                       <p className="text-xs text-muted-foreground mt-1">
                         Registered: {new Date(d.createdAt).toLocaleDateString()}
                       </p>
+                      {/* Submitted documents — the whole point of the review.
+                          Thumbnails open full-size in a new tab (admin session
+                          authorizes the object URLs). */}
+                      <div className="mt-2">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Documents</p>
+                        {(d.licenseImageUrl || d.insuranceImageUrl || (Array.isArray(d.vehiclePhotoUrls) && d.vehiclePhotoUrls.length > 0)) ? (
+                          <div className="flex flex-wrap gap-2">
+                            {d.licenseImageUrl && (
+                              <a href={d.licenseImageUrl} target="_blank" rel="noreferrer" className="block" data-testid={`doc-license-${d.id}`}>
+                                <img src={d.licenseImageUrl} alt="License" className="h-16 w-24 object-cover rounded border" />
+                                <span className="block text-[10px] text-center text-muted-foreground">License</span>
+                              </a>
+                            )}
+                            {d.insuranceImageUrl && (
+                              <a href={d.insuranceImageUrl} target="_blank" rel="noreferrer" className="block" data-testid={`doc-insurance-${d.id}`}>
+                                <img src={d.insuranceImageUrl} alt="Insurance" className="h-16 w-24 object-cover rounded border" />
+                                <span className="block text-[10px] text-center text-muted-foreground">Insurance</span>
+                              </a>
+                            )}
+                            {Array.isArray(d.vehiclePhotoUrls) && d.vehiclePhotoUrls.map((url: string, i: number) => (
+                              <a key={url} href={url} target="_blank" rel="noreferrer" className="block" data-testid={`doc-vehicle-${d.id}-${i}`}>
+                                <img src={url} alt={`Vehicle ${i + 1}`} className="h-16 w-24 object-cover rounded border" />
+                                <span className="block text-[10px] text-center text-muted-foreground">Vehicle {i + 1}</span>
+                              </a>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-orange-600" data-testid={`doc-missing-${d.id}`}>
+                            No documents uploaded yet — approval will be blocked until license, insurance, and vehicle are on file.
+                          </p>
+                        )}
+                      </div>
                     </div>
                     <div className="flex flex-col gap-2">
                       <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => updateDriver.mutate({ userId: d.userId, updates: { approvalStatus: "approved", isVerifiedNeighbor: true } })}
