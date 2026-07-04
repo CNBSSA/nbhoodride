@@ -957,6 +957,27 @@ ALTER TABLE rides ADD COLUMN IF NOT EXISTS booked_for_friend BOOLEAN DEFAULT fal
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS passenger_name VARCHAR;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS passenger_phone VARCHAR;
 
+-- ── Circuits: published weekly timetable (docs/CIRCUITS_LAUNCH_PLAN.md) ───────
+CREATE TABLE IF NOT EXISTS circuits (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR NOT NULL,
+  description TEXT,
+  anchor_name VARCHAR,
+  pickup JSONB NOT NULL,
+  destination JSONB NOT NULL,
+  day_of_week INTEGER NOT NULL,
+  departure_hour INTEGER NOT NULL,
+  departure_minute INTEGER NOT NULL DEFAULT 0,
+  seat_count INTEGER NOT NULL DEFAULT 3,
+  fare_per_seat DECIMAL(8,2) NOT NULL,
+  cutoff_hours_before INTEGER NOT NULL DEFAULT 12,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_by VARCHAR NOT NULL REFERENCES users(id),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_circuits_active ON circuits (is_active, day_of_week);
+
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
 -- the ALTER TABLE below throws "could not create unique index — Key (user_id)

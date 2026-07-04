@@ -17,12 +17,16 @@ import {
   DollarSign, Award, TrendingUp, Shield, Activity,
   CheckCircle, XCircle, Eye, Ban, UserCheck, Clock,
   ChevronLeft, BarChart3, Brain, AlertCircle, BookOpen,
-  RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2, Banknote, FlaskConical, Train, Package
+  RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2, Banknote, FlaskConical, Train, Package,
+  Route, Plus, Pencil
 } from "lucide-react";
 import { format } from "date-fns";
 import { useLocation } from "wouter";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
+import type { AddressSuggestion } from "@/hooks/useGeocode";
+import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
 
-type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
+type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -49,6 +53,7 @@ export default function AdminDashboard() {
     { id: "users", label: "Users", icon: Users },
     { id: "drivers", label: "Drivers", icon: Car },
     { id: "rides", label: "Rides", icon: MapPin },
+    { id: "circuits", label: "Circuits", icon: Route },
     { id: "disputes", label: "Disputes", icon: AlertTriangle },
     { id: "lostfound", label: "Lost & Found", icon: Package },
     { id: "agents", label: "Agents", icon: Brain },
@@ -113,6 +118,7 @@ export default function AdminDashboard() {
           {activeTab === "users" && <UsersPanel />}
           {activeTab === "drivers" && <DriversPanel />}
           {activeTab === "rides" && <RidesPanel />}
+          {activeTab === "circuits" && <CircuitsPanel />}
           {activeTab === "disputes" && <DisputesPanel />}
           {activeTab === "lostfound" && <LostFoundPanel />}
           {activeTab === "agents" && <AgentProposalsPanel />}
@@ -2009,6 +2015,349 @@ function ResearchPanel() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// ── Circuits: published weekly timetable (docs/CIRCUITS_LAUNCH_PLAN.md) ──────
+
+interface CircuitRow {
+  id: string;
+  name: string;
+  description: string | null;
+  anchorName: string | null;
+  pickup: { lat: number; lng: number; address: string };
+  destination: { lat: number; lng: number; address: string };
+  dayOfWeek: number;
+  departureHour: number;
+  departureMinute: number;
+  seatCount: number;
+  farePerSeat: string;
+  cutoffHoursBefore: number;
+  isActive: boolean;
+}
+
+interface CircuitFormState {
+  name: string;
+  anchorName: string;
+  description: string;
+  pickupAddress: string;
+  pickupCoords: { lat: number; lng: number } | null;
+  destinationAddress: string;
+  destinationCoords: { lat: number; lng: number } | null;
+  dayOfWeek: string;
+  departureTime: string; // "HH:MM"
+  seatCount: string;
+  farePerSeat: string;
+  cutoffHoursBefore: string;
+}
+
+const emptyCircuitForm: CircuitFormState = {
+  name: "",
+  anchorName: "",
+  description: "",
+  pickupAddress: "",
+  pickupCoords: null,
+  destinationAddress: "",
+  destinationCoords: null,
+  dayOfWeek: "0",
+  departureTime: "09:00",
+  seatCount: "3",
+  farePerSeat: "6.00",
+  cutoffHoursBefore: "12",
+};
+
+function circuitToForm(c: CircuitRow): CircuitFormState {
+  return {
+    name: c.name,
+    anchorName: c.anchorName ?? "",
+    description: c.description ?? "",
+    pickupAddress: c.pickup.address,
+    pickupCoords: { lat: c.pickup.lat, lng: c.pickup.lng },
+    destinationAddress: c.destination.address,
+    destinationCoords: { lat: c.destination.lat, lng: c.destination.lng },
+    dayOfWeek: String(c.dayOfWeek),
+    departureTime: `${String(c.departureHour).padStart(2, "0")}:${String(c.departureMinute).padStart(2, "0")}`,
+    seatCount: String(c.seatCount),
+    farePerSeat: c.farePerSeat,
+    cutoffHoursBefore: String(c.cutoffHoursBefore),
+  };
+}
+
+function CircuitsPanel() {
+  const { toast } = useToast();
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<CircuitRow | null>(null);
+  const [form, setForm] = useState<CircuitFormState>(emptyCircuitForm);
+
+  const { data, isLoading } = useQuery<{ circuits: CircuitRow[] }>({
+    queryKey: ["/api/admin/circuits"],
+  });
+  const circuits = data?.circuits ?? [];
+
+  const openCreate = () => {
+    setEditing(null);
+    setForm(emptyCircuitForm);
+    setFormOpen(true);
+  };
+
+  const openEdit = (c: CircuitRow) => {
+    setEditing(c);
+    setForm(circuitToForm(c));
+    setFormOpen(true);
+  };
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const [hourStr, minuteStr] = form.departureTime.split(":");
+      const payload = {
+        name: form.name.trim(),
+        anchorName: form.anchorName.trim() || null,
+        description: form.description.trim() || null,
+        pickup: { ...form.pickupCoords!, address: form.pickupAddress.trim() },
+        destination: { ...form.destinationCoords!, address: form.destinationAddress.trim() },
+        dayOfWeek: parseInt(form.dayOfWeek, 10),
+        departureHour: parseInt(hourStr, 10),
+        departureMinute: parseInt(minuteStr, 10) || 0,
+        seatCount: parseInt(form.seatCount, 10),
+        farePerSeat: form.farePerSeat.trim(),
+        cutoffHoursBefore: parseInt(form.cutoffHoursBefore, 10),
+      };
+      const res = editing
+        ? await apiRequest("PATCH", `/api/admin/circuits/${editing.id}`, payload)
+        : await apiRequest("POST", "/api/admin/circuits", payload);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/circuits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/circuits"] });
+      toast({ title: editing ? "Circuit updated" : "Circuit created" });
+      setFormOpen(false);
+    },
+    onError: (err: any) => {
+      toast({ title: "Save failed", description: String(err?.message ?? err), variant: "destructive" });
+    },
+  });
+
+  const toggleActive = useMutation({
+    mutationFn: async (c: CircuitRow) => {
+      const res = await apiRequest("PATCH", `/api/admin/circuits/${c.id}`, { isActive: !c.isActive });
+      return res.json();
+    },
+    onSuccess: (updated: CircuitRow) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/circuits"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/circuits"] });
+      toast({ title: updated.isActive ? "Circuit activated" : "Circuit deactivated" });
+    },
+  });
+
+  const formValid =
+    form.name.trim().length > 0 &&
+    form.pickupCoords !== null &&
+    form.destinationCoords !== null &&
+    /^\d+(\.\d{1,2})?$/.test(form.farePerSeat.trim()) &&
+    /^\d{2}:\d{2}$/.test(form.departureTime);
+
+  if (isLoading) return <div data-testid="loading-circuits">Loading circuits...</div>;
+
+  return (
+    <div data-testid="panel-circuits" className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold">Circuits</h2>
+          <p className="text-sm text-muted-foreground">
+            The published weekly timetable — guaranteed seats, no surge.
+          </p>
+        </div>
+        <Button onClick={openCreate} data-testid="btn-new-circuit">
+          <Plus className="w-4 h-4 mr-2" />
+          New Circuit
+        </Button>
+      </div>
+
+      {circuits.length === 0 ? (
+        <Card>
+          <CardContent className="pt-6 text-center text-muted-foreground">
+            <Route className="w-10 h-10 mx-auto mb-3 opacity-40" />
+            <p>No circuits yet. Create the first one — e.g. a Sunday church run or a 4:30am warehouse shift circuit.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {circuits.map((c) => (
+            <Card key={c.id} className={c.isActive ? "" : "opacity-60"} data-testid={`circuit-${c.id}`}>
+              <CardContent className="pt-4 pb-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold">{c.name}</span>
+                      <Badge variant={c.isActive ? "default" : "secondary"}>
+                        {c.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                      {c.anchorName && <Badge variant="outline">{c.anchorName}</Badge>}
+                    </div>
+                    <p className="text-sm font-medium mt-1">{describeCircuitSchedule(c)}</p>
+                    <p className="text-sm text-muted-foreground mt-1 truncate">
+                      {c.pickup.address} → {c.destination.address}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {c.seatCount} seats · ${c.farePerSeat}/seat · booking closes {c.cutoffHoursBefore}h before
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2 shrink-0">
+                    <Button size="sm" variant="outline" onClick={() => openEdit(c)} data-testid={`btn-edit-circuit-${c.id}`}>
+                      <Pencil className="w-3 h-3 mr-1" />
+                      Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={c.isActive ? "ghost" : "default"}
+                      onClick={() => toggleActive.mutate(c)}
+                      disabled={toggleActive.isPending}
+                      data-testid={`btn-toggle-circuit-${c.id}`}
+                    >
+                      {c.isActive ? "Deactivate" : "Activate"}
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <Dialog open={formOpen} onOpenChange={setFormOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editing ? "Edit Circuit" : "New Circuit"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">Name</label>
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="Sunday Church Circuit"
+                data-testid="input-circuit-name"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Anchor (org or facility)</label>
+              <Input
+                value={form.anchorName}
+                onChange={(e) => setForm({ ...form, anchorName: e.target.value })}
+                placeholder="First Baptist Church"
+                data-testid="input-circuit-anchor"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Pickup</label>
+              <AddressAutocomplete
+                value={form.pickupAddress}
+                onChange={(v) => setForm({ ...form, pickupAddress: v, pickupCoords: null })}
+                onSelect={(s: AddressSuggestion) =>
+                  setForm({ ...form, pickupAddress: s.label, pickupCoords: { lat: s.lat, lng: s.lng } })
+                }
+                placeholder="Largo Town Center"
+                data-testid="input-circuit-pickup"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Destination</label>
+              <AddressAutocomplete
+                value={form.destinationAddress}
+                onChange={(v) => setForm({ ...form, destinationAddress: v, destinationCoords: null })}
+                onSelect={(s: AddressSuggestion) =>
+                  setForm({ ...form, destinationAddress: s.label, destinationCoords: { lat: s.lat, lng: s.lng } })
+                }
+                placeholder="Destination address"
+                data-testid="input-circuit-destination"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-medium">Day</label>
+                <Select value={form.dayOfWeek} onValueChange={(v) => setForm({ ...form, dayOfWeek: v })}>
+                  <SelectTrigger data-testid="select-circuit-day">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DAY_NAMES.map((d, i) => (
+                      <SelectItem key={d} value={String(i)}>{d}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Departure</label>
+                <Input
+                  type="time"
+                  value={form.departureTime}
+                  onChange={(e) => setForm({ ...form, departureTime: e.target.value })}
+                  data-testid="input-circuit-time"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-sm font-medium">Seats</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={form.seatCount}
+                  onChange={(e) => setForm({ ...form, seatCount: e.target.value })}
+                  data-testid="input-circuit-seats"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Fare/seat ($)</label>
+                <Input
+                  value={form.farePerSeat}
+                  onChange={(e) => setForm({ ...form, farePerSeat: e.target.value })}
+                  placeholder="6.00"
+                  data-testid="input-circuit-fare"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Cutoff (h)</label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={72}
+                  value={form.cutoffHoursBefore}
+                  onChange={(e) => setForm({ ...form, cutoffHoursBefore: e.target.value })}
+                  data-testid="input-circuit-cutoff"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Description (optional)</label>
+              <Textarea
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                placeholder="Notes riders should see — meeting spot, return run, etc."
+                rows={2}
+                data-testid="input-circuit-description"
+              />
+            </div>
+            {!formValid && (form.pickupAddress || form.destinationAddress) && (
+              <p className="text-xs text-muted-foreground">
+                Pick pickup and destination from the address suggestions so exact coordinates are set.
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setFormOpen(false)} data-testid="btn-cancel-circuit">
+                Cancel
+              </Button>
+              <Button onClick={() => save.mutate()} disabled={!formValid || save.isPending} data-testid="btn-save-circuit">
+                {save.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+                {editing ? "Save changes" : "Create circuit"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
