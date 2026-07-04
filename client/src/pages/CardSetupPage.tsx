@@ -10,8 +10,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { CreditCard, CheckCircle, AlertCircle } from 'lucide-react';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
+import { useStripeConfig } from '@/hooks/useStripeConfig';
 
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
+const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY as string | undefined;
+const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
 interface PaymentMethodsResponse {
   hasPaymentMethod: boolean;
@@ -127,6 +129,8 @@ export function CardSetupPage() {
   const { data: paymentMethods, isLoading } = useQuery<PaymentMethodsResponse>({
     queryKey: ['/api/payment/methods'],
   });
+  const { data: stripeConfig } = useStripeConfig();
+  const stripeReady = stripeConfig?.cardOnFileEnabled ?? !!stripePublishableKey;
 
   if (isLoading) {
     return (
@@ -195,9 +199,15 @@ export function CardSetupPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Elements stripe={stripePromise}>
-              <CardSetupForm />
-            </Elements>
+            {!stripeReady ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 dark:border-amber-900 p-4 text-sm text-amber-900 dark:text-amber-100">
+                Card payments are being activated. You can still ride using your Virtual PG Card balance.
+              </div>
+            ) : stripePromise ? (
+              <Elements stripe={stripePromise}>
+                <CardSetupForm />
+              </Elements>
+            ) : null}
           </CardContent>
         </Card>
 

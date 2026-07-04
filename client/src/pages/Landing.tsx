@@ -2,6 +2,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Link } from "wouter";
 
+import { BRAND } from "@shared/branding";
+
 export default function Landing() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-secondary/10 flex items-center justify-center p-4">
@@ -13,18 +15,18 @@ export default function Landing() {
               <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto">
                 <i className="fas fa-car text-2xl text-primary-foreground" />
               </div>
-              <h1 className="text-2xl font-bold text-foreground">PG Ride</h1>
-              <p className="text-muted-foreground text-sm">Community Rideshare</p>
+              <h1 className="text-2xl font-bold text-foreground">{BRAND.appName}</h1>
+              <p className="text-muted-foreground text-sm">{BRAND.tagline}</p>
             </div>
 
             {/* Welcome Message */}
             <div className="space-y-3">
               <h2 className="text-xl font-semibold text-foreground">
-                Welcome to Maryland's Community Ride-Share
+                Community-owned mobility
               </h2>
               <p className="text-muted-foreground text-sm leading-relaxed">
-                Connect with trusted neighbors for safe, transparent, and affordable rides
-                throughout Maryland. Your ride from neighbors, by neighbors.
+                {BRAND.shortDescription} Your ride from neighbors, by neighbors.
+                <span className="block mt-2 text-xs">{BRAND.foundedNote}</span>
               </p>
             </div>
 

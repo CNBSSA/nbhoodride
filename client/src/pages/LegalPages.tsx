@@ -1,6 +1,7 @@
 import { useLocation } from "wouter";
 import { ArrowLeft, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { BRAND } from "@shared/branding";
 
 function BackButton() {
   const [, navigate] = useLocation();
@@ -27,7 +28,13 @@ export function TermsOfService() {
 
           <section>
             <h2 className="font-semibold text-base mb-2">1. About PG Ride</h2>
-            <p>PG Ride ("PG Ride," "we," "us," or "our") is a community-owned rideshare platform serving the state of Maryland. By creating an account or using our services, you agree to these Terms of Service.</p>
+            <p>
+              PG Ride ("PG Ride," "we," "us," or "our") is the mobility app of{" "}
+              {BRAND.companyName} ({BRAND.companyDomain}) — a community-owned rideshare platform.
+              <strong> PG means {BRAND.pgMeans}.</strong> We connect verified riders and drivers
+              under cooperative governance. {BRAND.foundedNote} By creating an account or using our
+              services, you agree to these Terms of Service.
+            </p>
           </section>
 
           <section>

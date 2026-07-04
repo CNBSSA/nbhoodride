@@ -105,7 +105,7 @@
 ### Feature flip checklist
 
 1. **Deploy minimum:** `DATABASE_URL`, `SESSION_SECRET`, `SUPER_ADMIN_SETUP_TOKEN`
-2. **Payments:** Stripe keys + webhook secret
+2. **Payments:** Stripe keys + webhook — see **[STRIPE_SETUP.md](./STRIPE_SETUP.md)** (~10 min paste)
 3. **Driver docs:** GCS bucket + credentials
 4. **Comms:** Resend (email), Twilio (SMS), VAPID (push) — pick what you want live first
 5. **Maps:** `MAPBOX_TOKEN` from [mapbox.com](https://account.mapbox.com/) — recommended before real launch volume

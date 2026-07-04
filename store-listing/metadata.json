@@ -7,12 +7,12 @@
     "apple": "Travel",
     "google": "MAPS_AND_NAVIGATION"
   },
-  "privacyPolicyUrl": "https://nbhoodride-production.up.railway.app/privacy",
-  "termsUrl": "https://nbhoodride-production.up.railway.app/terms",
-  "supportEmail": "support@pgride.app",
-  "marketingUrl": "https://nbhoodride-production.up.railway.app",
-  "shortDescription": "Maryland's community ride-sharing platform. Safe, transparent rides from your neighbors.",
-  "fullDescription": "PG Ride is a community-owned rideshare platform serving Maryland. Connect with verified neighborhood drivers for safe, transparent, and affordable rides.\n\n• No surge pricing — fares based on distance and time only\n• Verified drivers with live tracking and SOS safety features\n• Virtual PG Card for easy payments\n• Choose trusted drivers from your community\n• Driver ownership program with profit sharing\n\nPG Ride keeps every dollar in the community. Download, create an account, and ride with neighbors — not strangers.",
+  "privacyPolicyUrl": "https://peoplegoverned.com/privacy",
+  "termsUrl": "https://peoplegoverned.com/terms",
+  "supportEmail": "support@peoplegoverned.com",
+  "marketingUrl": "https://peoplegoverned.com",
+  "shortDescription": "People-Governed, community-owned rideshare. Verified neighbors, fair fares, no surge.",
+  "fullDescription": "PG Ride is a People-Governed, community-owned rideshare platform. PG means People-Governed — mobility governed by the people who use it.\n\n• No surge pricing — fares based on distance and time only\n• Verified drivers with live tracking and SOS safety features\n• Virtual PG Card for easy payments\n• Choose trusted drivers from your community\n• Driver ownership program with profit sharing\n\nFounded in Maryland, built for communities everywhere. Ride with neighbors — not strangers.",
   "keywords": ["rideshare", "maryland", "community", "transportation", "pg county", "carpool"],
   "contentRating": {
     "apple": "4+",

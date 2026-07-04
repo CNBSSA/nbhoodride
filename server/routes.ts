@@ -3328,6 +3328,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Stripe card payment routes
+  app.get('/api/payment/config', (_req, res) => {
+    const enabled = stripeService.isEnabled && !!process.env.VITE_STRIPE_PUBLIC_KEY;
+    res.json({
+      enabled,
+      topUpEnabled: enabled,
+      cardOnFileEnabled: enabled,
+    });
+  });
+
   app.post('/api/payment/setup-card', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
