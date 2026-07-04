@@ -1,6 +1,8 @@
 # Daily audit — agent invocation prompt
 
-**Copy the block below** and paste it to your AI agent each morning (or schedule it).  
+**Auto-loaded in Cursor:** [`.cursor/rules/daily-audit-agent.mdc`](../.cursor/rules/daily-audit-agent.mdc) (`alwaysApply: true`) — agents get this prompt every session without pasting.
+
+**Manual copy** (if running outside Cursor): use the block below.  
 Full playbook: [DAILY_AUDIT_PROMPT.md](./DAILY_AUDIT_PROMPT.md)  
 **Branching:** [GIT_WORKFLOW.md](./GIT_WORKFLOW.md) — audit `main`, PR `develop`
 
