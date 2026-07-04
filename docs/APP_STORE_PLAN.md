@@ -100,6 +100,8 @@ Explicitly **out of scope for v1** (follow-up releases):
 
 **Exit criteria:** Production URL is the single source of truth; no critical bugs on core ride loop.
 
+**Runbook:** [PHASE_0_PRODUCTION.md](./PHASE_0_PRODUCTION.md) · `npm run smoke:production` · `GET /health/ready`
+
 ---
 
 ### Phase 1 — PWA polish (web distribution, no stores yet)

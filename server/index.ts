@@ -59,6 +59,17 @@ app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
+app.get('/health/ready', async (_req, res) => {
+  try {
+    const { getPhase0Readiness } = await import('./phase0Readiness');
+    const report = await getPhase0Readiness();
+    res.status(report.ready ? 200 : 503).json(report);
+  } catch (err) {
+    console.error('[health/ready]', err);
+    res.status(503).json({ phase: 0, ready: false, error: 'readiness_check_failed' });
+  }
+});
+
 app.use(helmet({ contentSecurityPolicy: false }));
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS

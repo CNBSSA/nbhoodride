@@ -59,8 +59,8 @@ function issueToken(req: Request, res: Response): string {
 function isExempt(req: Request): boolean {
   // Webhooks have their own signature verification (Stripe / Checkr).
   if (req.path.startsWith("/api/webhooks/")) return true;
-  // Health check.
-  if (req.path === "/health") return true;
+  // Health checks.
+  if (req.path === "/health" || req.path === "/health/ready") return true;
   return false;
 }
 

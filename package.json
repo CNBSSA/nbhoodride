@@ -11,7 +11,7 @@
     "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "node scripts/check-migration-drift.mjs && node scripts/check-pwa-assets.mjs && tsc",
-    "icons:generate": "python3 scripts/generate-app-icons.py",
+    "smoke:production": "node scripts/smoke-production.mjs",
     "build:mobile": "npm run build && npx cap sync",
     "cap:sync": "npx cap sync",
     "cap:open:android": "npx cap open android",
