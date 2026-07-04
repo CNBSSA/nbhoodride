@@ -982,6 +982,17 @@ CREATE INDEX IF NOT EXISTS idx_circuits_active ON circuits (is_active, day_of_we
 ALTER TABLE ride_groups ADD COLUMN IF NOT EXISTS circuit_id VARCHAR;
 CREATE INDEX IF NOT EXISTS idx_ride_groups_circuit_run ON ride_groups (circuit_id, scheduled_at);
 
+-- ── DB-backed object storage (driver docs fallback when GCS is unset) ────────
+CREATE TABLE IF NOT EXISTS stored_objects (
+  id VARCHAR PRIMARY KEY,
+  owner_user_id VARCHAR NOT NULL REFERENCES users(id),
+  content_type VARCHAR NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  data_base64 TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_stored_objects_owner ON stored_objects (owner_user_id);
+
 -- ── Idempotent constraints ────────────────────────────────────────────────────
 -- Dedupe driver_profiles before adding the UNIQUE constraint. Without this,
 -- the ALTER TABLE below throws "could not create unique index — Key (user_id)

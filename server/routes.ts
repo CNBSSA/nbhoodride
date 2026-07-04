@@ -6,7 +6,8 @@ import { db } from "./db";
 import { setupAuth, isAuthenticated, getSession } from "./replitAuth";
 import { csrfTokenEndpoint } from "./csrfProtection";
 import * as passwordPolicy from "./passwordPolicy";
-import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
+import { ObjectStorageService, ObjectNotFoundError, STORAGE_AVAILABLE } from "./objectStorage";
+import { randomUUID } from "crypto";
 import { ObjectPermission } from "./objectAcl";
 import { z } from "zod";
 import { nanoid } from "nanoid";
@@ -1046,10 +1047,81 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/objects/upload", isAuthenticated, async (req, res) => {
-    const objectStorageService = new ObjectStorageService();
-    const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-    res.json({ uploadURL });
+  app.post("/api/objects/upload", isAuthenticated, async (req: any, res) => {
+    try {
+      // GCS when configured; otherwise fall back to database-backed storage
+      // so driver document uploads work with zero external setup. The client
+      // contract is identical either way: PUT the file bytes to uploadURL,
+      // then save that URL on the driver profile.
+      if (!STORAGE_AVAILABLE) {
+        const id = randomUUID();
+        const base = resolveAppUrl(`${req.protocol}://${req.get("host")}`);
+        return res.json({ uploadURL: `${base}/api/objects/db-upload/${id}` });
+      }
+      const objectStorageService = new ObjectStorageService();
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+      res.json({ uploadURL });
+    } catch (error) {
+      console.error("Error creating upload URL:", error);
+      res.status(500).json({ message: "Failed to create upload URL" });
+    }
+  });
+
+  // DB-backed upload target (GCS fallback). Body is the raw file (express.raw
+  // is mounted for this path in server/index.ts, 10MB cap). Same id can be
+  // re-PUT to replace a botched upload before it's linked anywhere.
+  app.put('/api/objects/db-upload/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const id = String(req.params.id);
+      if (!/^[0-9a-f-]{36}$/i.test(id)) {
+        return res.status(400).json({ message: "Invalid object id" });
+      }
+      const body: Buffer = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        return res.status(400).json({ message: "Empty upload" });
+      }
+      const existing = await storage.getStoredObject(id);
+      if (existing && existing.ownerUserId !== userId) {
+        return res.status(403).json({ message: "Object id already in use" });
+      }
+      if (existing) {
+        // Replacement of own object: simplest correct behavior is reject —
+        // the client generates a fresh id per upload attempt anyway.
+        return res.status(409).json({ message: "Object already uploaded" });
+      }
+      await storage.createStoredObject({
+        id,
+        ownerUserId: userId,
+        contentType: req.get("content-type") || "application/octet-stream",
+        sizeBytes: body.length,
+        dataBase64: body.toString("base64"),
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("Error storing uploaded object:", error);
+      res.status(500).json({ message: "Failed to store upload" });
+    }
+  });
+
+  // Serve DB-stored objects: the uploader (owner) and admins (document
+  // reviewers) only.
+  app.get('/api/objects/db-upload/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const obj = await storage.getStoredObject(String(req.params.id));
+      if (!obj) return res.status(404).json({ message: "Not found" });
+      const user = await storage.getUser(userId);
+      if (obj.ownerUserId !== userId && !user?.isAdmin && !user?.isSuperAdmin) {
+        return res.status(403).json({ message: "Not allowed" });
+      }
+      res.set("Content-Type", obj.contentType);
+      res.set("Cache-Control", "private, max-age=3600");
+      res.send(Buffer.from(obj.dataBase64, "base64"));
+    } catch (error) {
+      console.error("Error serving stored object:", error);
+      res.status(500).json({ message: "Failed to load object" });
+    }
   });
 
   // Driver profile routes
@@ -2145,14 +2217,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
     try {
-      const objectStorageService = new ObjectStorageService();
-      const objectPath = await objectStorageService.trySetObjectEntityAclPolicy(
-        req.body.photoURL,
-        {
-          owner: userId,
-          visibility: "private", // Vehicle photos should be private
-        },
-      );
+      // DB-fallback objects carry owner-or-admin ACL inherently; GCS objects
+      // need the explicit ACL policy stamped here.
+      let objectPath: string = req.body.photoURL;
+      if (STORAGE_AVAILABLE) {
+        const objectStorageService = new ObjectStorageService();
+        objectPath = await objectStorageService.trySetObjectEntityAclPolicy(
+          req.body.photoURL,
+          {
+            owner: userId,
+            visibility: "private", // Vehicle photos should be private
+          },
+        );
+      }
 
       // Update vehicle photos array
       const vehicle = await storage.updateVehicle(req.body.vehicleId, {

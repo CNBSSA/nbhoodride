@@ -80,6 +80,10 @@ app.use(cors({ origin: allowedOrigins.length > 0 ? allowedOrigins : false, crede
 // Raw body for Stripe & Checkr webhook signature verification (must precede express.json)
 app.use('/api/webhooks', express.raw({ type: 'application/json' }));
 
+// Raw body for DB-backed document uploads (GCS fallback) — the client PUTs
+// the file bytes directly, any content type, up to 10MB per document.
+app.use('/api/objects/db-upload', express.raw({ type: () => true, limit: '10mb' }));
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
