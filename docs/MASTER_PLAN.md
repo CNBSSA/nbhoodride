@@ -152,7 +152,7 @@ Unlike Uber and Lyft, PG Ride offers:
 - A **Virtual PG Card** digital wallet
 - A **cooperative ownership model** where qualifying drivers earn equity and profit distributions
 
-The app is a **Progressive Web App (PWA)** — mobile-first, no app-store download required. Originally prototyped on Replit; deploy target is **Railway** with Neon PostgreSQL.
+The app is a **Progressive Web App (PWA)** — mobile-first. App Store / Play distribution is a phased extension; see [APP_STORE_PLAN.md](./APP_STORE_PLAN.md). Deploy target is **Railway** with Neon PostgreSQL.
 
 The vision (Part II) is to evolve PG Ride from a community rideshare into the **first AI-native, cooperative mobility network** — where intent replaces forms, agents replace dashboards, and the trust graph replaces opaque matching. We get there one promise-aligned shipment at a time.
 
@@ -612,7 +612,7 @@ Qualitative companion metrics ("soul metrics") are catalogued in [Appendix C](#a
 
 **Available outside PG County?** No — PG County residents only.
 
-**App store download?** No — PWA at the deployed URL; add to home screen for app-like experience.
+**App store download?** Planned in phases — web/PWA first, then Capacitor iOS/Android. See [APP_STORE_PLAN.md](./APP_STORE_PLAN.md). PWA installs from the browser today; store submission needs Apple/Google accounts (Track B).
 
 **vs Uber/Lyft pricing?** No surge; ~$11.40 for a typical 5-mile ride.
 

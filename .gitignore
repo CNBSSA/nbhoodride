@@ -7,3 +7,12 @@ vite.config.ts.*
 .env
 .env.local
 .env.*.local
+
+# Capacitor local overrides (committed: android/, ios/ scaffolding)
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+ios/App/Pods/
+ios/App/build/
+ios/DerivedData/

@@ -112,4 +112,21 @@
 6. **Transit:** `WMATA_API_KEY` from [WMATA developer portal](https://developer.wmata.com/)
 7. **Tax:** Choose `TAX_COMPLIANCE_PATH` with CPA input
 
+### App stores (iOS + Android)
+
+**Plan first:** [APP_STORE_PLAN.md](./APP_STORE_PLAN.md) — web production → PWA polish → Capacitor → listing → submit.  
+**Build runbook (Phase 2+):** [APP_STORE_READINESS.md](./APP_STORE_READINESS.md)
+
+| Item | Action |
+|------|--------|
+| Apple Developer Program | Enroll at developer.apple.com ($99/yr) |
+| Google Play Console | Create developer account ($25 one-time) |
+| `PUBLIC_APP_URL` | Set canonical HTTPS URL before store marketing |
+| `CAPACITOR_SERVER_URL` | Optional — override URL baked into native shell |
+| Signing keys | Xcode (iOS) + Android Studio keystore (you hold secrets — not in repo) |
+| Store screenshots | Replace placeholders with real device captures before submission |
+| Test accounts | Rider + driver credentials for Apple/Google review |
+
+Engineering: `npm run build:mobile` → open Android Studio / Xcode → signed release upload.
+
 *Update this file when new integrations ship. Track A agents add rows here; you flip variables in Railway.*

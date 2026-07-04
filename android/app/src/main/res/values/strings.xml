@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PG Ride</string>
+    <string name="title_activity_main">PG Ride</string>
+    <string name="package_name">com.pgride.app</string>
+    <string name="custom_url_scheme">com.pgride.app</string>
+</resources>

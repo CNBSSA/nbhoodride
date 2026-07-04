@@ -1,0 +1,26 @@
+{
+  "appName": "PG Ride",
+  "subtitle": "Community Rideshare for Maryland",
+  "bundleId": "com.pgride.app",
+  "packageName": "com.pgride.app",
+  "category": {
+    "apple": "Travel",
+    "google": "MAPS_AND_NAVIGATION"
+  },
+  "privacyPolicyUrl": "https://nbhoodride-production.up.railway.app/privacy",
+  "termsUrl": "https://nbhoodride-production.up.railway.app/terms",
+  "supportEmail": "support@pgride.app",
+  "marketingUrl": "https://nbhoodride-production.up.railway.app",
+  "shortDescription": "Maryland's community ride-sharing platform. Safe, transparent rides from your neighbors.",
+  "fullDescription": "PG Ride is a community-owned rideshare platform serving Maryland. Connect with verified neighborhood drivers for safe, transparent, and affordable rides.\n\n• No surge pricing — fares based on distance and time only\n• Verified drivers with live tracking and SOS safety features\n• Virtual PG Card for easy payments\n• Choose trusted drivers from your community\n• Driver ownership program with profit sharing\n\nPG Ride keeps every dollar in the community. Download, create an account, and ride with neighbors — not strangers.",
+  "keywords": ["rideshare", "maryland", "community", "transportation", "pg county", "carpool"],
+  "contentRating": {
+    "apple": "4+",
+    "google": "Everyone"
+  },
+  "screenshots": {
+    "iphone": ["client/public/screenshots/screen-rider.png", "client/public/screenshots/screen-driver.png"],
+    "android": ["client/public/screenshots/screen-rider.png", "client/public/screenshots/screen-driver.png"]
+  },
+  "storeIcon": "store-listing/icon-1024-store.png"
+}
