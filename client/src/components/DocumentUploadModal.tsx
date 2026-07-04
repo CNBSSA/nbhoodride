@@ -5,7 +5,6 @@ import { ObjectUploader } from "@/components/ObjectUploader";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { UploadResult } from "@uppy/core";
 
 interface DocumentUploadModalProps {
   isOpen: boolean;
@@ -65,12 +64,12 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
     };
   };
 
-  const handleUploadComplete = (type: string) => (result: UploadResult<Record<string, unknown>, Record<string, unknown>>) => {
+  const handleUploadComplete = (type: string) => (result: { successful: Array<{ uploadURL: string; name: string }> }) => {
     if (result.successful && result.successful[0]) {
       const file = result.successful[0];
       const newDoc: UploadedDocument = {
         type,
-        url: file.uploadURL!,
+        url: file.uploadURL,
         name: file.name ?? type,
       };
       
