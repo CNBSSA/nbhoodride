@@ -382,7 +382,33 @@ export default function RiderDashboard() {
       return;
     }
     if (!destCoords) {
-      toast({ title: "Address Not Found", description: "We couldn't locate that destination. Try a more specific address.", variant: "destructive" });
+      // The rider typed an address but never tapped a suggestion. Resolve it
+      // server-side (same geocoder that powers the dropdown) instead of
+      // punting the problem back to them.
+      apiRequest("GET", `/api/geocode/suggest?q=${encodeURIComponent(destinationAddress)}&limit=1`)
+        .then((r) => r.json())
+        .then(({ suggestions }: { suggestions: Array<{ label: string; lat: number; lng: number }> }) => {
+          const top = suggestions?.[0];
+          if (!top) {
+            toast({ title: "Address Not Found", description: "We couldn't locate that destination. Try a more specific address.", variant: "destructive" });
+            return;
+          }
+          // Apply the resolved address; fare re-estimates from the new
+          // distance, so ask for one confirming tap rather than booking
+          // against a stale/absent fare.
+          setDestinationAddress(top.label);
+          setDestCoords({ lat: top.lat, lng: top.lng });
+          const dLat = (top.lat - userLocation.lat) * Math.PI / 180;
+          const dLng = (top.lng - userLocation.lng) * Math.PI / 180;
+          const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(top.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+          const dist = Math.round(3959 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
+          setEstimatedDistance(dist);
+          setEstimatedDuration(Math.round((dist / 25) * 60));
+          toast({ title: "Address confirmed", description: `Going to ${top.label}. Tap Book again to confirm your ride.` });
+        })
+        .catch(() => {
+          toast({ title: "Address Not Found", description: "We couldn't locate that destination. Try a more specific address.", variant: "destructive" });
+        });
       return;
     }
     if (rideForFriend && passengerName.trim().length < 2) {
