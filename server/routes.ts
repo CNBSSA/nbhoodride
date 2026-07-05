@@ -3772,7 +3772,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               ? `Location: https://maps.google.com/?q=${location.lat},${location.lng}`
               : "Location: Not available";
             
-            const shareUrl = `${req.protocol}://${req.get('host')}/emergency/${shareToken}`;
+            const shareUrl = `${resolveAppUrl(`${req.protocol}://${req.get("host")}`)}/emergency/${shareToken}`;
 
             const smsBody = buildEmergencySmsBody(
               user.firstName || 'PG Ride user',
