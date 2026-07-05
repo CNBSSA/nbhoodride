@@ -24,6 +24,7 @@ import DriverRateCard from "@/pages/DriverRateCard";
 import { TermsOfService, PrivacyPolicy } from "@/pages/LegalPages";
 import NotFound from "@/pages/not-found";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
+import PwaInstallPrompt from "@/components/PwaInstallPrompt";
 import ErrorBoundary from "@/components/ErrorBoundary";
 
 function AuthRedirect({ component: Component }: { component: React.ComponentType }) {
@@ -82,6 +83,7 @@ function App() {
             <Toaster />
             <Router />
             <PushNotificationPrompt />
+            <PwaInstallPrompt />
           </TooltipProvider>
         </LocaleProvider>
       </QueryClientProvider>
