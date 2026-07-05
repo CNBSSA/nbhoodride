@@ -170,7 +170,7 @@ export default function DriverDashboard() {
         description: vars.isOnline ? "You'll start receiving ride requests" : "You won't receive ride requests",
       });
     },
-    onError: (error: any) => {
+    onError: (error: any, vars) => {
       // Surface the actual server message instead of a generic "Please try
       // again" — same pattern as the driver-profile fix in PR #20. If the
       // toggle silently fails (CSRF, validation, anything) the driver could
@@ -180,9 +180,16 @@ export default function DriverDashboard() {
         description: error?.message || "Unable to update your status. Please try again.",
         variant: "destructive",
       });
-      // Re-sync from the server's truth instead of guessing with !isOnline,
-      // which was racing the optimistic update and could land on the wrong
-      // value depending on timing.
+      // Explicitly revert the optimistic flip. The invalidate-and-resync
+      // path is NOT enough on its own: when the server refuses (e.g. the
+      // approval gate 403s an unapproved driver), the server value never
+      // changed — so the value-change sync effect never fires and the
+      // switch would stay lying at "Online" forever.
+      setIsOnline(!vars.isOnline);
+      if (vars.isOnline) {
+        setTodayCounties([]);
+        stopWatching();
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
     }
   });
@@ -406,6 +413,24 @@ export default function DriverDashboard() {
       </header>
 
       <main className="space-y-4 p-4">
+        {/* Application under review — don't offer a toggle that can only fail */}
+        {user?.driverProfile && user.driverProfile.approvalStatus !== "approved" && (
+          <Card className="border-amber-300 bg-amber-50" data-testid="banner-under-review">
+            <CardContent className="p-4">
+              <p className="font-semibold text-amber-800">
+                {user.driverProfile.approvalStatus === "rejected"
+                  ? "Application not approved"
+                  : "Application under review"}
+              </p>
+              <p className="text-sm text-amber-700 mt-1">
+                {user.driverProfile.approvalStatus === "rejected"
+                  ? "Your driver application was not approved. Contact support or re-submit your documents from Profile → Driver Documents."
+                  : "An admin is reviewing your documents. You'll be able to go online and accept rides as soon as you're approved. Make sure your license, insurance, and vehicle photos are uploaded (Profile → Driver Documents)."}
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Status Toggle */}
         <Card>
           <CardContent className="p-4">
@@ -418,7 +443,7 @@ export default function DriverDashboard() {
                 <Switch
                   checked={isOnline}
                   onCheckedChange={handleToggleStatus}
-                  disabled={toggleStatusMutation.isPending}
+                  disabled={toggleStatusMutation.isPending || user?.driverProfile?.approvalStatus !== "approved"}
                   data-testid="switch-driver-status"
                 />
                 <span className={`font-semibold ${isOnline ? 'text-secondary' : 'text-destructive'}`}>
