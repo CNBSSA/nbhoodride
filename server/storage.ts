@@ -545,6 +545,8 @@ export interface IStorage {
   // DB-backed object storage (driver docs fallback when GCS is unset)
   createStoredObject(data: InsertStoredObject): Promise<StoredObject>;
   getStoredObject(id: string): Promise<StoredObject | undefined>;
+  // Self-service profile edit (whitelisted fields only)
+  updateUserProfile(userId: string, updates: Partial<{ firstName: string; lastName: string; phone: string; emergencyContact: string }>): Promise<User>;
   // Ride groups (Mode 3: multi-stop, Mode 4: shared schedule)
   createRideGroup(data: InsertRideGroup): Promise<RideGroup>;
   getRideGroupByCode(code: string): Promise<RideGroup | undefined>;
@@ -3885,6 +3887,15 @@ export class DatabaseStorage implements IStorage {
       .from(rideGroups)
       .where(and(eq(rideGroups.circuitId, circuitId), eq(rideGroups.scheduledAt, scheduledAt)));
     return group;
+  }
+
+  async updateUserProfile(userId: string, updates: Partial<{ firstName: string; lastName: string; phone: string; emergencyContact: string }>): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(users.id, userId))
+      .returning();
+    return user;
   }
 
   async createStoredObject(data: InsertStoredObject): Promise<StoredObject> {

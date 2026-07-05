@@ -15,6 +15,7 @@ import IncomingRideRequest from "@/components/IncomingRideRequest";
 import { ActiveRideCard } from "@/components/ActiveRideCard";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import CountySelectionSheet from "@/components/CountySelectionSheet";
+import VehicleEditDialog from "@/components/VehicleEditDialog";
 import { NotificationBell } from "@/components/NotificationBell";
 import { Link } from "wouter";
 import { format } from "date-fns";
@@ -27,6 +28,7 @@ import { parseRideMessageWsEvent } from "@shared/rideChat";
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
   const [showPayoutModal, setShowPayoutModal] = useState(false);
+  const [showVehicleEdit, setShowVehicleEdit] = useState(false);
   const [showCountySheet, setShowCountySheet] = useState(false);
   const [incomingRideMessages, setIncomingRideMessages] = useState<Record<string, RideMessagePayload>>({});
   const [todayCounties, setTodayCounties] = useState<string[]>([]);
@@ -717,8 +719,14 @@ export default function DriverDashboard() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold">Your Vehicle</h3>
-              <Button variant="ghost" size="sm" className="text-primary" data-testid="button-edit-vehicle">
-                Edit
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-primary"
+                onClick={() => setShowVehicleEdit(true)}
+                data-testid="button-edit-vehicle"
+              >
+                {driverVehicles.length > 0 ? "Edit" : "Add"}
               </Button>
             </div>
             {driverVehicles.length > 0 ? (
@@ -819,6 +827,12 @@ export default function DriverDashboard() {
         open={showPayoutModal}
         onClose={() => setShowPayoutModal(false)}
         availableBalance={parseFloat(user?.virtualCardBalance || '0')}
+      />
+
+      <VehicleEditDialog
+        isOpen={showVehicleEdit}
+        onClose={() => setShowVehicleEdit(false)}
+        vehicle={driverVehicles[0] ?? null}
       />
     </>
   );

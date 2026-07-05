@@ -7,6 +7,7 @@ import { apiRequest, getCsrfToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import DocumentUploadModal from "@/components/DocumentUploadModal";
+import ProfileEditDialog from "@/components/ProfileEditDialog";
 import SafetyPrivacyModal from "@/components/SafetyPrivacyModal";
 import TopUpModal from "@/components/TopUpModal";
 import { isUnauthorizedError } from "@/lib/authUtils";
@@ -22,6 +23,7 @@ import type { Locale } from "@shared/i18n";
 
 export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
+  const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [isSafetyPrivacyModalOpen, setIsSafetyPrivacyModalOpen] = useState(false);
   const { permission, isSubscribed, isSupported, isLoading: pushLoading, subscribe, unsubscribe } = usePushNotifications();
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
@@ -245,7 +247,7 @@ export default function Profile() {
                   </span>
                 </div>
               </div>
-              <Button variant="ghost" size="sm" className="text-primary" data-testid="button-edit-profile">
+              <Button variant="ghost" size="sm" className="text-primary" onClick={() => setIsEditProfileOpen(true)} data-testid="button-edit-profile">
                 Edit
               </Button>
             </div>
@@ -606,6 +608,12 @@ export default function Profile() {
       <DocumentUploadModal
         isOpen={isDocumentModalOpen}
         onClose={() => setIsDocumentModalOpen(false)}
+      />
+
+      <ProfileEditDialog
+        isOpen={isEditProfileOpen}
+        onClose={() => setIsEditProfileOpen(false)}
+        user={user}
       />
 
       {/* Safety & Privacy Modal */}
