@@ -1275,6 +1275,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // County preference endpoints
+  // Own driver profile — approval status + which documents are on file.
+  // The documents modal uses this so drivers can SEE what they've already
+  // submitted (and know that re-uploading replaces it).
+  app.get('/api/driver/profile/me', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const profile = await storage.getDriverProfile(userId);
+      if (!profile) return res.status(404).json({ message: "No driver profile" });
+      res.json({
+        approvalStatus: profile.approvalStatus,
+        licenseImageUrl: profile.licenseImageUrl,
+        insuranceImageUrl: profile.insuranceImageUrl,
+        vehiclePhotoUrls: (profile as any).vehiclePhotoUrls ?? [],
+      });
+    } catch (error) {
+      console.error("Error fetching own driver profile:", error);
+      res.status(500).json({ message: "Failed to load driver profile" });
+    }
+  });
+
   app.get('/api/driver/counties', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;

@@ -31,29 +31,34 @@ export default function VehicleEditDialog({ isOpen, onClose, vehicle }: VehicleE
   const [licensePlate, setLicensePlate] = useState("");
 
   useEffect(() => {
-    if (isOpen && vehicle) {
-      setMake(vehicle.make ?? "");
-      setModel(vehicle.model ?? "");
-      setYear(vehicle.year ? String(vehicle.year) : "");
-      setColor(vehicle.color ?? "");
-      setLicensePlate(vehicle.licensePlate ?? "");
+    if (isOpen) {
+      setMake(vehicle?.make ?? "");
+      setModel(vehicle?.model ?? "");
+      setYear(vehicle?.year ? String(vehicle.year) : "");
+      setColor(vehicle?.color ?? "");
+      setLicensePlate(vehicle?.licensePlate ?? "");
     }
   }, [isOpen, vehicle]);
 
   const save = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("PUT", `/api/vehicles/${vehicle!.id}`, {
+      const payload = {
         make: make.trim(),
         model: model.trim(),
         year: parseInt(year, 10),
         color: color.trim(),
         licensePlate: licensePlate.trim(),
-      });
+      };
+      // Create when no vehicle exists yet (drivers who registered without
+      // vehicle details previously had NO way to add one), edit otherwise.
+      const res = vehicle
+        ? await apiRequest("PUT", `/api/vehicles/${vehicle.id}`, payload)
+        : await apiRequest("POST", "/api/vehicles", payload);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/vehicles"] });
-      toast({ title: "Vehicle updated" });
+      toast({ title: vehicle ? "Vehicle updated" : "Vehicle added" });
       onClose();
     },
     onError: (err: any) => {
@@ -74,13 +79,11 @@ export default function VehicleEditDialog({ isOpen, onClose, vehicle }: VehicleE
     color.trim().length > 0 &&
     /^[A-Z0-9\- ]{2,10}$/i.test(licensePlate.trim());
 
-  if (!vehicle) return null;
-
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Edit Vehicle</DialogTitle>
+          <DialogTitle>{vehicle ? "Edit Vehicle" : "Add Vehicle"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
@@ -111,7 +114,7 @@ export default function VehicleEditDialog({ isOpen, onClose, vehicle }: VehicleE
             <Button variant="ghost" onClick={onClose} data-testid="button-cancel-edit-vehicle">Cancel</Button>
             <Button onClick={() => save.mutate()} disabled={!valid || save.isPending} data-testid="button-save-vehicle">
               {save.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-              Save
+              {vehicle ? "Save" : "Add vehicle"}
             </Button>
           </div>
         </div>

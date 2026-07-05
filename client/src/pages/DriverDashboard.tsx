@@ -724,10 +724,9 @@ export default function DriverDashboard() {
                 size="sm"
                 className="text-primary"
                 onClick={() => setShowVehicleEdit(true)}
-                disabled={driverVehicles.length === 0}
                 data-testid="button-edit-vehicle"
               >
-                Edit
+                {driverVehicles.length > 0 ? "Edit" : "Add"}
               </Button>
             </div>
             {driverVehicles.length > 0 ? (
