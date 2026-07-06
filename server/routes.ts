@@ -4594,6 +4594,109 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Claim board: upcoming circuit runs for drivers. A run appears once the
+  // first seat is booked (lazy materialization); claiming takes the WHOLE
+  // run — the group and every unassigned ride in it.
+  app.get('/api/driver/circuit-runs', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const profile = await storage.getDriverProfile(userId);
+      if (!profile || profile.approvalStatus !== 'approved' || profile.isSuspended) {
+        return res.json({ open: [], mine: [] });
+      }
+      const groups = await storage.getUpcomingCircuitRunGroups();
+      const open: any[] = [];
+      const mine: any[] = [];
+      for (const group of groups) {
+        if (!group.circuitId) continue;
+        // Runs claimed by someone else aren't shown at all.
+        if (group.driverId && group.driverId !== userId) continue;
+        const circuit = await storage.getCircuit(group.circuitId);
+        if (!circuit) continue;
+        const groupRides = await storage.getRidesInGroup(group.id);
+        const seatsBooked = groupRides.filter((r) => r.status !== "cancelled").length;
+        if (seatsBooked === 0) continue;
+        const fare = parseFloat(circuit.farePerSeat);
+        const item = {
+          groupId: group.id,
+          circuitName: circuit.name,
+          anchorName: circuit.anchorName,
+          pickup: circuit.pickup,
+          destination: circuit.destination,
+          runAt: group.scheduledAt,
+          seatsBooked,
+          seatsTotal: circuit.seatCount,
+          farePerSeat: circuit.farePerSeat,
+          totalFare: (fare * seatsBooked).toFixed(2),
+        };
+        (group.driverId === userId ? mine : open).push(item);
+      }
+      res.json({ open, mine });
+    } catch (error) {
+      console.error("Error listing circuit runs:", error);
+      res.status(500).json({ message: "Failed to load circuit runs" });
+    }
+  });
+
+  app.post('/api/driver/circuit-runs/:groupId/claim', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const profile = await storage.getDriverProfile(userId);
+      if (!profile || profile.approvalStatus !== 'approved' || profile.isSuspended) {
+        return res.status(403).json({ message: "Your driver application is still under review." });
+      }
+      const group = await storage.getRideGroupById(req.params.groupId);
+      if (!group || group.groupType !== "circuit" || !group.circuitId) {
+        return res.status(404).json({ message: "Circuit run not found" });
+      }
+      if (!group.scheduledAt || new Date(group.scheduledAt) <= new Date()) {
+        return res.status(410).json({ message: "This run has already departed." });
+      }
+      const result = await storage.assignDriverToCircuitRun(group.id, userId);
+      if (!result) {
+        return res.status(409).json({ message: "Another driver already claimed this run." });
+      }
+
+      const circuit = await storage.getCircuit(group.circuitId);
+      const driverUser = await storage.getUser(userId);
+      const driverName = driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'A driver';
+      const runTime = new Date(group.scheduledAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+      // Tell every booked rider their run has a confirmed driver (in-app +
+      // push), and mirror over WebSocket for anyone currently in the app.
+      for (const ride of result.rides) {
+        if (ride.status === "cancelled") continue;
+        deliverUserNotification(ride.riderId, {
+          type: "circuit_run_claimed",
+          title: `Driver confirmed: ${circuit?.name ?? "your circuit"}`,
+          body: `${driverName} is driving your ${runTime} run.`,
+          url: "/",
+        }).catch(console.error);
+        const riderWs = activeConnections.get(ride.riderId);
+        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+          riderWs.send(JSON.stringify({
+            type: 'scheduled_ride_claimed',
+            rideId: ride.id,
+            driverName,
+            scheduledAt: group.scheduledAt,
+          }));
+        }
+      }
+
+      // Other drivers drop it from their open list.
+      const takenPayload = JSON.stringify({ type: 'circuit_run_taken', groupId: group.id });
+      activeConnections.forEach((ws, connUserId) => {
+        if (connUserId !== userId && ws.readyState === WebSocket.OPEN) ws.send(takenPayload);
+      });
+
+      console.log(`[AUDIT] circuit_run_claimed driverId=${userId} groupId=${group.id} circuitId=${group.circuitId} seats=${result.rides.length}`);
+      res.json({ ok: true, groupId: group.id, seats: result.rides.length });
+    } catch (error) {
+      console.error("Error claiming circuit run:", error);
+      res.status(500).json({ message: "Failed to claim run" });
+    }
+  });
+
   // One-tap seat booking. The week's run group is materialized lazily on the
   // first booking (no scheduler needed): find-or-create keyed on
   // (circuit_id, scheduled_at). No transaction — at launch seat counts are

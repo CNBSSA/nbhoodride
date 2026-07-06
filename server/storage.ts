@@ -542,6 +542,8 @@ export interface IStorage {
   listCircuits(opts?: { includeInactive?: boolean }): Promise<Circuit[]>;
   updateCircuit(id: string, updates: Partial<InsertCircuit>): Promise<Circuit>;
   getCircuitRunGroup(circuitId: string, scheduledAt: Date): Promise<RideGroup | undefined>;
+  getUpcomingCircuitRunGroups(): Promise<RideGroup[]>;
+  assignDriverToCircuitRun(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null>;
   // DB-backed object storage (driver docs fallback when GCS is unset)
   createStoredObject(data: InsertStoredObject): Promise<StoredObject>;
   getStoredObject(id: string): Promise<StoredObject | undefined>;
@@ -1042,7 +1044,11 @@ export class DatabaseStorage implements IStorage {
       eq(rides.status, "pending"),
       isNotNull(rides.scheduledAt),
       gt(rides.scheduledAt, sql`now()`),
-      sql`${rides.driverId} IS NULL`
+      sql`${rides.driverId} IS NULL`,
+      // Circuit seats are claimed as a whole RUN via the circuit-runs claim
+      // board — listing them individually here would let one driver claim a
+      // single seat and split the run.
+      or(isNull(rides.rideType), sql`${rides.rideType} <> 'circuit'`)
     );
 
     // If driver has specific county preferences, filter to rides in those counties.
@@ -3896,6 +3902,37 @@ export class DatabaseStorage implements IStorage {
       .where(eq(users.id, userId))
       .returning();
     return user;
+  }
+
+  async getUpcomingCircuitRunGroups(): Promise<RideGroup[]> {
+    return db
+      .select()
+      .from(rideGroups)
+      .where(
+        and(
+          eq(rideGroups.groupType, "circuit"),
+          gt(rideGroups.scheduledAt, sql`now()`),
+        ),
+      )
+      .orderBy(asc(rideGroups.scheduledAt));
+  }
+
+  async assignDriverToCircuitRun(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null> {
+    // Guard against double-claim: the UPDATE only wins if driver_id is
+    // still NULL; a second claimer gets zero rows back.
+    const [group] = await db
+      .update(rideGroups)
+      .set({ driverId })
+      .where(and(eq(rideGroups.id, groupId), isNull(rideGroups.driverId)))
+      .returning();
+    if (!group) return null;
+
+    const updatedRides = await db
+      .update(rides)
+      .set({ driverId, updatedAt: new Date() })
+      .where(and(eq(rides.groupId, groupId), isNull(rides.driverId)))
+      .returning();
+    return { group, rides: updatedRides };
   }
 
   async createStoredObject(data: InsertStoredObject): Promise<StoredObject> {
