@@ -412,3 +412,31 @@ export async function sendSignupPendingEmail(user: {
     `)
   );
 }
+
+export async function sendCircuitReminderEmail(
+  email: string,
+  firstName: string | null,
+  run: {
+    circuitName: string;
+    runTime: string;
+    pickupAddress: string;
+    driverName: string | null;
+  },
+): Promise<void> {
+  const name = firstName || "there";
+  await sendEmail(
+    email,
+    `Seat confirmed: ${run.circuitName} — ${run.runTime}`,
+    baseTemplate(`
+      <p>Hi ${name},</p>
+      <p>Booking is closed and your seat is <strong>confirmed</strong>.</p>
+      <div class="card">
+        <div class="card-row"><span class="card-label">Circuit</span> ${run.circuitName}</div>
+        <div class="card-row"><span class="card-label">Departs</span> ${run.runTime}</div>
+        <div class="card-row"><span class="card-label">Pickup</span> ${run.pickupAddress}</div>
+        <div class="card-row"><span class="card-label">Driver</span> ${run.driverName ?? "Being confirmed — you'll be notified"}</div>
+      </div>
+      <p>Please be at the pickup point about 5 minutes early. Guaranteed seat, fixed fare, no surge.</p>
+    `),
+  );
+}

@@ -68,3 +68,34 @@ export function bookingWindow(
   const cutoffAt = cutoffFor(runAt, c.cutoffHoursBefore);
   return { runAt, cutoffAt, open: now.getTime() < cutoffAt.getTime() };
 }
+
+/** Minutes before departure at which the pre-departure reminder fires. */
+export const DEPARTURE_REMINDER_LEAD_MINUTES = 60;
+
+export interface CircuitReminderInput {
+  runAt: Date;
+  cutoffHoursBefore: number;
+  cutoffNotifiedAt: Date | null;
+  departureNotifiedAt: Date | null;
+  now: Date;
+}
+
+/**
+ * Which circuit-run reminders are due right now. Pure decision logic for the
+ * minute sweep; idempotency comes from the *NotifiedAt stamps set after send.
+ * Both windows close at departure — a restart mid-window resumes cleanly,
+ * and a run that departed unnotified stays unnotified (no late spam).
+ */
+export function circuitRemindersDue(input: CircuitReminderInput): {
+  cutoff: boolean;
+  departure: boolean;
+} {
+  const now = input.now.getTime();
+  const runAt = input.runAt.getTime();
+  const cutoffAt = cutoffFor(input.runAt, input.cutoffHoursBefore).getTime();
+  const departureWindowStart = runAt - DEPARTURE_REMINDER_LEAD_MINUTES * 60_000;
+  return {
+    cutoff: !input.cutoffNotifiedAt && now >= cutoffAt && now < runAt,
+    departure: !input.departureNotifiedAt && now >= departureWindowStart && now < runAt,
+  };
+}

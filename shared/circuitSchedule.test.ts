@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeCircuitSchedule, nextRunAt, cutoffFor, bookingWindow } from "./circuitSchedule";
+import { describeCircuitSchedule, nextRunAt, cutoffFor, bookingWindow, circuitRemindersDue } from "./circuitSchedule";
 
 describe("describeCircuitSchedule", () => {
   it("formats a morning run", () => {
@@ -97,5 +97,35 @@ describe("bookingWindow", () => {
     const w = bookingWindow(sundayNineAm, sundayNoon);
     expect(w.runAt.getDate()).toBe(18); // next Sunday
     expect(w.open).toBe(true);
+  });
+});
+
+describe("circuitRemindersDue", () => {
+  const runAt = new Date(2026, 0, 11, 9, 0, 0, 0); // Sun 9am; 12h cutoff = Sat 9pm
+  const base = { runAt, cutoffHoursBefore: 12, cutoffNotifiedAt: null, departureNotifiedAt: null };
+
+  it("nothing due before the cutoff", () => {
+    const due = circuitRemindersDue({ ...base, now: new Date(2026, 0, 10, 18, 0) });
+    expect(due).toEqual({ cutoff: false, departure: false });
+  });
+
+  it("cutoff due after cutoff passes, departure not yet", () => {
+    const due = circuitRemindersDue({ ...base, now: new Date(2026, 0, 10, 21, 5) });
+    expect(due).toEqual({ cutoff: true, departure: false });
+  });
+
+  it("already-stamped cutoff never re-fires", () => {
+    const due = circuitRemindersDue({ ...base, cutoffNotifiedAt: new Date(2026, 0, 10, 21, 1), now: new Date(2026, 0, 10, 22, 0) });
+    expect(due.cutoff).toBe(false);
+  });
+
+  it("departure due inside the last hour", () => {
+    const due = circuitRemindersDue({ ...base, cutoffNotifiedAt: new Date(2026, 0, 10, 21, 1), now: new Date(2026, 0, 11, 8, 15) });
+    expect(due).toEqual({ cutoff: false, departure: true });
+  });
+
+  it("nothing fires after departure (no late spam)", () => {
+    const due = circuitRemindersDue({ ...base, now: new Date(2026, 0, 11, 9, 30) });
+    expect(due).toEqual({ cutoff: false, departure: false });
   });
 });
