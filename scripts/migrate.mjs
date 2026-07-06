@@ -244,6 +244,8 @@ CREATE TABLE IF NOT EXISTS ride_groups (
   discount_active BOOLEAN DEFAULT false,
   scheduled_at TIMESTAMP,
   circuit_id VARCHAR,
+  cutoff_notified_at TIMESTAMP,
+  departure_notified_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -980,6 +982,8 @@ CREATE TABLE IF NOT EXISTS circuits (
 CREATE INDEX IF NOT EXISTS idx_circuits_active ON circuits (is_active, day_of_week);
 -- ride_groups predates circuits in production, so the linkage column needs an ALTER.
 ALTER TABLE ride_groups ADD COLUMN IF NOT EXISTS circuit_id VARCHAR;
+ALTER TABLE ride_groups ADD COLUMN IF NOT EXISTS cutoff_notified_at TIMESTAMP;
+ALTER TABLE ride_groups ADD COLUMN IF NOT EXISTS departure_notified_at TIMESTAMP;
 CREATE INDEX IF NOT EXISTS idx_ride_groups_circuit_run ON ride_groups (circuit_id, scheduled_at);
 
 -- ── DB-backed object storage (driver docs fallback when GCS is unset) ────────

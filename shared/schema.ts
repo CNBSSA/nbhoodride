@@ -301,6 +301,11 @@ export const rideGroups = pgTable("ride_groups", {
   // Set when this group is a materialized weekly run of a circuit
   // (docs/CIRCUITS_LAUNCH_PLAN.md). Lazy-created on first seat booking.
   circuitId: varchar("circuit_id").references(() => circuits.id),
+  // Reminder idempotency stamps (circuit runs): set once when the cutoff /
+  // pre-departure notifications have been sent, so the minute sweep never
+  // re-sends across restarts.
+  cutoffNotifiedAt: timestamp("cutoff_notified_at"),
+  departureNotifiedAt: timestamp("departure_notified_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

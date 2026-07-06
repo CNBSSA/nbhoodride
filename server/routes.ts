@@ -86,6 +86,7 @@ import { mapRouteResponse, type RouteResult } from "@shared/routeGeometry";
 import type { RideMessage } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import { resolveAppUrl } from "./appUrl";
+import { processCircuitReminders } from "./circuitReminders";
 import { bookingWindow } from "@shared/circuitSchedule";
 import {
   insertDriverProfileSchema,
@@ -7501,6 +7502,11 @@ Generate the FAQ list.`;
   // ── Scheduled ride monitor: fires every minute ──
   // Handles: 30-min reminders, T-60/15/5 escalations, midnight county cleanup
   setInterval(async () => {
+    // Circuit run reminders (cutoff + pre-departure) — idempotent via
+    // NotifiedAt stamps, so failures here just retry next minute.
+    processCircuitReminders().catch((err) =>
+      console.error("circuit reminders sweep failed:", err),
+    );
     try {
       const { db: dbInst } = await import("./db");
       const { rides: ridesT, driverProfiles: dp } = await import("@shared/schema");

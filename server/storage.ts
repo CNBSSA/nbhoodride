@@ -543,6 +543,7 @@ export interface IStorage {
   updateCircuit(id: string, updates: Partial<InsertCircuit>): Promise<Circuit>;
   getCircuitRunGroup(circuitId: string, scheduledAt: Date): Promise<RideGroup | undefined>;
   getUpcomingCircuitRunGroups(): Promise<RideGroup[]>;
+  getAdminUserIds(): Promise<string[]>;
   assignDriverToCircuitRun(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null>;
   // DB-backed object storage (driver docs fallback when GCS is unset)
   createStoredObject(data: InsertStoredObject): Promise<StoredObject>;
@@ -3915,6 +3916,14 @@ export class DatabaseStorage implements IStorage {
         ),
       )
       .orderBy(asc(rideGroups.scheduledAt));
+  }
+
+  async getAdminUserIds(): Promise<string[]> {
+    const rows = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(or(eq(users.isAdmin, true), eq(users.isSuperAdmin, true)));
+    return rows.map((r) => r.id);
   }
 
   async assignDriverToCircuitRun(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null> {
