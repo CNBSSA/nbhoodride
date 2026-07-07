@@ -857,12 +857,12 @@ export default function RiderDashboard() {
       {/* ── BOTTOM SHEET: idle / drivers / confirm ── */}
       {panel !== "search" && (
       <div
-        className={`absolute left-0 right-0 z-[55] bg-white rounded-t-3xl shadow-2xl transition-all duration-300 ease-in-out flex flex-col ${
+        className={`absolute left-0 right-0 z-[55] bg-white rounded-t-3xl shadow-2xl transition-all duration-300 ease-in-out flex flex-col overflow-hidden ${
           panel === "idle" ? "h-auto" : panel === "drivers" ? "h-[65vh]" : "h-[70vh]"
         }`}
         style={{
           bottom: panel === "idle" ? "calc(64px + env(safe-area-inset-bottom, 0px))" : "0",
-          maxHeight: panel === "idle" ? "280px" : "80vh",
+          maxHeight: panel === "idle" ? "340px" : "80vh",
         }}
       >
         {/* Drag handle */}
@@ -875,7 +875,7 @@ export default function RiderDashboard() {
 
         {/* ── IDLE: "Where to?" bar ── */}
         {panel === "idle" && (
-          <div className="px-4 pb-5 pt-1 flex-shrink-0 space-y-3">
+          <div className="px-4 pb-5 pt-1 space-y-3 overflow-y-auto min-h-0">
             <MobilityIntentCard
               onResolved={handleMobilityIntent}
               onGuardianShare={(url) => {
