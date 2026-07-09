@@ -574,7 +574,14 @@ CREATE TABLE IF NOT EXISTS faq_entries (
 );
 
 -- ── RAG knowledge chunks (pgvector extension for future HNSW; JSONB embedding today) ─
-CREATE EXTENSION IF NOT EXISTS vector;
+-- Optional: local/dev Postgres images may not ship pgvector. knowledge_chunks
+-- stores embeddings as JSONB today, so the extension is not required to boot.
+DO $$ BEGIN
+  CREATE EXTENSION IF NOT EXISTS vector;
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE NOTICE 'pgvector unavailable (%); continuing without it', SQLERRM;
+END $$;
 
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

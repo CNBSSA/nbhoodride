@@ -1,5 +1,5 @@
 {
-  "install": "npm ci --no-audit --no-fund",
+  "install": "npm ci --no-audit --no-fund || bash scripts/restore-node-modules.sh",
   "start": "bash scripts/dev-up.sh",
   "terminals": [
     {
