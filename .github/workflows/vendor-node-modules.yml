@@ -8,12 +8,19 @@ on:
       - 'package-lock.json'
       - 'package.json'
 
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   vendor:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -28,15 +35,23 @@ jobs:
           ls -lh vendor/
           sha256sum /tmp/node_modules.tar.gz > vendor/node_modules.tar.gz.sha256
           wc -c /tmp/node_modules.tar.gz > vendor/SIZE.txt
+          # Keep a small marker for the branch tip
+          date -u +%Y-%m-%dT%H:%M:%SZ > vendor/BUILT_AT.txt
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-modules-vendor
+          path: vendor/
+          retention-days: 7
+          compression-level: 0
       - name: Push vendor branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin
-          git checkout -B vendor/node-modules-cache
-          # Keep only vendor artifacts on this branch tip (plus needed meta)
-          git rm -rf --cached . >/dev/null 2>&1 || true
+          git checkout --orphan vendor-node-modules-cache
+          git rm -rf . >/dev/null 2>&1 || true
           git add -f vendor/
-          git add -f package.json package-lock.json .github/workflows/vendor-node-modules.yml || true
-          git commit -m "chore: vendor node_modules tarball chunks for cloud agent setup" || echo "nothing to commit"
-          git push -f origin vendor/node-modules-cache
+          git commit -m "chore: vendor node_modules tarball chunks for cloud agent setup"
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:vendor/node-modules-cache

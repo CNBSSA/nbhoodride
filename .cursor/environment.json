@@ -1,0 +1,10 @@
+{
+  "install": "npm ci --no-audit --no-fund",
+  "start": "bash scripts/dev-up.sh",
+  "terminals": [
+    {
+      "name": "Dev server",
+      "command": "npm run dev"
+    }
+  ]
+}
