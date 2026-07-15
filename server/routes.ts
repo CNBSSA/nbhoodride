@@ -237,12 +237,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     message: { message: "Too many AI requests. Please slow down." },
   });
 
+  // Auth throttle. Keyed by IP, so an ENTIRE HOUSEHOLD or community signup
+  // table shares one budget (everyone on the same WiFi = one public IP behind
+  // NAT). The old 20/15min counted EVERY attempt, so three family members
+  // signing up + verifying + logging in around one table tripped it and got
+  // "Too many authentication attempts" — indistinguishable from "registration
+  // is broken."
+  //
+  // Fix: skipSuccessfulRequests so only FAILED attempts count toward the
+  // limit — a legitimate signup/login (which succeeds) never consumes budget.
+  // Brute-force on a single account is already handled by the per-account
+  // lockout (R-L5, 5 wrong passwords → 15-min lock), so this IP limiter only
+  // needs to blunt high-volume guessing, and can be far more generous.
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 20, // 20 login/signup attempts per 15 min
+    max: 50, // 50 FAILED auth attempts per IP / 15 min
+    skipSuccessfulRequests: true,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { message: "Too many authentication attempts. Please try again later." },
+    message: { message: "Too many failed attempts from this network. Please wait a few minutes and try again." },
   });
 
   // Per-user (falls back to per-IP) limiter for /api/mobility/intent.
