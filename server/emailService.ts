@@ -368,10 +368,16 @@ export async function sendRideReceiptEmail(params: {
 export async function sendEmailVerificationEmail(
   email: string,
   firstName: string | null,
-  verificationToken: string
+  verificationToken: string,
+  appUrlOverride?: string
 ): Promise<void> {
   const name = firstName || "there";
-  const verifyUrl = `${APP_URL}/verify-email?token=${verificationToken}`;
+  const base = (appUrlOverride || APP_URL || resolveAppUrl()).replace(/\/+$/, "");
+  if (!base) {
+    console.error("[EMAIL] Cannot build verification link — PUBLIC_APP_URL is not set");
+    throw new EmailNotConfiguredError();
+  }
+  const verifyUrl = `${base}/verify-email?token=${verificationToken}`;
 
   await sendEmail(
     email,
