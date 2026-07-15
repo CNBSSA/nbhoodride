@@ -4379,6 +4379,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Approve user (admin or super admin)
+  // Admin attests the user's email in person (family, signup tables, church
+  // onboarding) — removes the dependency on email delivery, which blocks ALL
+  // registration when the Resend domain isn't verified yet.
+  app.post('/api/admin/users/:userId/verify-email', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { userId } = req.params;
+      const adminId = req.adminUser.id;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      if (targetUser.emailVerifiedAt) return res.status(400).json({ message: "Email already verified" });
+
+      const user = await storage.markEmailVerified(userId);
+      await storage.logAdminAction(adminId, 'verify_email_manual', 'user', userId, { email: targetUser.email });
+      console.log(`[AUDIT] email_verified_by_admin adminId=${adminId} userId=${userId} email=${targetUser.email}`);
+      res.json(user);
+    } catch (error) {
+      console.error("Error manually verifying email:", error);
+      res.status(500).json({ message: "Failed to verify email" });
+    }
+  });
+
   app.post('/api/admin/users/:userId/approve', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const { userId } = req.params;
