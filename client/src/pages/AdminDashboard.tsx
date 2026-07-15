@@ -212,6 +212,17 @@ function UsersPanel() {
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  const verifyEmailManually = useMutation({
+    mutationFn: async (userId: string) => {
+      await apiRequest("POST", `/api/admin/users/${userId}/verify-email`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "Email marked verified", description: "The user can now log in (once approved)." });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   const revokeApproval = useMutation({
     mutationFn: async (userId: string) => {
       await apiRequest("POST", `/api/admin/users/${userId}/revoke-approval`);
@@ -379,7 +390,20 @@ function UsersPanel() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
+                    {u.registrationCompletedAt && !u.emailVerifiedAt && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-orange-400 text-orange-700"
+                        onClick={() => verifyEmailManually.mutate(u.id)}
+                        disabled={verifyEmailManually.isPending}
+                        title="User hasn't clicked their email link — verify manually if you've confirmed who they are"
+                        data-testid={`btn-verify-email-${u.id}`}
+                      >
+                        <AlertCircle className="w-3 h-3 mr-1" /> Email unverified — verify manually
+                      </Button>
+                    )}
                     <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => approveUser.mutate(u.id)} data-testid={`btn-approve-user-${u.id}`}>
                       <CheckCircle className="w-3 h-3 mr-1" /> Approve
                     </Button>
