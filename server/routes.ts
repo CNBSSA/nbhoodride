@@ -26,6 +26,7 @@ import {
   sendRideReceiptEmail,
   sendSignupPendingEmail,
   sendSignupRejectedEmail,
+  EmailNotConfiguredError,
 } from "./emailService";
 import { deliverUserNotification } from "./notificationService";
 import { retrieveKnowledgeContext, syncKnowledgeIndex } from "./ragService";
@@ -690,14 +691,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // ── Audit log ────────────────────────────────────────────────────────
       console.log(`[AUDIT] signup_success ip=${ip} userId=${user.id} email=${user.email}`);
 
-      // ── Emails (fire-and-forget) ─────────────────────────────────────────
-      sendEmailVerificationEmail(user.email!, user.firstName, verificationToken).catch(console.error);
+      const appUrl = resolveAppUrl(`https://${req.get("host")}`);
+      let emailVerificationSent = false;
+      let emailDeliveryWarning: string | undefined;
+      try {
+        await sendEmailVerificationEmail(
+          user.email!,
+          user.firstName,
+          verificationToken,
+          appUrl
+        );
+        emailVerificationSent = true;
+      } catch (emailErr) {
+        console.error("[EMAIL] signup verification failed:", emailErr);
+        emailDeliveryWarning =
+          emailErr instanceof EmailNotConfiguredError
+            ? "We could not send a verification email because email is not configured on the server. Contact support or ask an admin to verify your email from the dashboard."
+            : "We could not send the verification email right now. Use Resend verification on the login page or contact support.";
+      }
       sendSignupPendingEmail({ email: user.email, firstName: user.firstName }).catch(console.error);
 
       res.json({
-        message: "Account created! Please check your email to verify your address. Your account will also need administrator approval before you can log in.",
+        message: emailVerificationSent
+          ? "Account created! Check your email to verify your address, then wait for administrator approval before you can log in."
+          : "Account created! Your account needs administrator approval before you can log in.",
         pendingApproval: true,
-        emailVerificationSent: true,
+        emailVerificationSent,
+        emailDeliveryWarning,
         user: {
           id: user.id,
           email: user.email,
@@ -757,7 +777,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const verificationToken = nanoid(40);
       const verificationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
       await storage.setEmailVerificationToken(user.id, verificationToken, verificationExpiry);
-      sendEmailVerificationEmail(user.email!, user.firstName, verificationToken).catch(console.error);
+      const appUrl = resolveAppUrl(`https://${req.get("host")}`);
+      try {
+        await sendEmailVerificationEmail(user.email!, user.firstName, verificationToken, appUrl);
+      } catch (emailErr) {
+        console.error("[EMAIL] resend verification failed:", emailErr);
+        return res.status(503).json({
+          message:
+            "We could not send the verification email. Email may not be configured on the server — contact support or ask an admin to verify your email.",
+        });
+      }
 
       res.json({ message: "If the email exists and is unverified, a new verification link has been sent." });
     } catch (error) {
@@ -4852,9 +4881,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // All users
+  app.get('/api/admin/users/pending', isAdminOrSessionAuth, async (_req: any, res) => {
+    try {
+      const pending = await storage.getUsersPendingApproval();
+      res.json(pending);
+    } catch (error) {
+      console.error("Error fetching pending users:", error);
+      res.status(500).json({ message: "Failed to fetch pending users" });
+    }
+  });
+
   app.get('/api/admin/users', isAdminOrSessionAuth, async (req: any, res) => {
     try {
-      const { limit = 100, offset = 0 } = req.query;
+      const { limit = 500, offset = 0 } = req.query;
       const allUsers = await storage.getAllUsers(parseInt(limit), parseInt(offset));
       res.json(allUsers);
     } catch (error) {
@@ -5001,6 +5040,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (updates.approvalStatus === 'approved' && !wasApproved) {
         const targetUser = await storage.getUser(userId);
+        if (targetUser && !targetUser.isApproved && !targetUser.isAdmin && !targetUser.isSuperAdmin) {
+          await storage.adminUpdateUser(userId, { isApproved: true });
+        }
         if (targetUser?.email) {
           sendDriverApprovedEmail({
             email: targetUser.email,

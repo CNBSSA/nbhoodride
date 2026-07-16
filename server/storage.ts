@@ -2524,8 +2524,17 @@ export class DatabaseStorage implements IStorage {
   // ADMIN USER & DRIVER MANAGEMENT
   // ============================================================
 
-  async getAllUsers(limit = 100, offset = 0): Promise<User[]> {
+  async getAllUsers(limit = 500, offset = 0): Promise<User[]> {
     return await db.select().from(users).orderBy(desc(users.createdAt)).limit(limit).offset(offset);
+  }
+
+  /** Every account awaiting admin approval — not subject to the Users tab 100-row cap. */
+  async getUsersPendingApproval(): Promise<User[]> {
+    return await db
+      .select()
+      .from(users)
+      .where(and(eq(users.isApproved, false), eq(users.isSuperAdmin, false)))
+      .orderBy(desc(users.createdAt));
   }
 
   async getAllDrivers(): Promise<(DriverProfile & { user: User; vehicles: Vehicle[] })[]> {

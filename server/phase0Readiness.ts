@@ -149,6 +149,17 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
     detail: "Run npm run smoke:production — SPA serves /privacy and /terms",
   });
 
+  const resendReady = envPresent("RESEND_API_KEY");
+  checks.push({
+    id: "0.5-email",
+    label: "Transactional email (Resend)",
+    status: resendReady ? "pass" : "warn",
+    owner: "track_b",
+    detail: resendReady
+      ? "Verification and approval emails can be sent"
+      : "RESEND_API_KEY missing — signups see success but verification email will not send",
+  });
+
   const stripeReady =
     envPresent("STRIPE_SECRET_KEY") &&
     envPresent("VITE_STRIPE_PUBLIC_KEY") &&
