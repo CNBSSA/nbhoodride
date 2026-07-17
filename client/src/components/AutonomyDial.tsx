@@ -10,7 +10,7 @@ interface AutonomyDialProps {
 /** B5 — Autonomy dial control for Profile settings. */
 export function AutonomyDial({ level, onChange, disabled }: AutonomyDialProps) {
   return (
-    <div className="space-y-3" data-testid="autonomy-dial">
+    <div className="space-y-3" data-testid="autonomy-dial" role="radiogroup" aria-label="Booking autonomy level">
       <p className="text-sm text-muted-foreground">
         How much PG Ride can do for you before asking to confirm.
       </p>
@@ -19,6 +19,8 @@ export function AutonomyDial({ level, onChange, disabled }: AutonomyDialProps) {
           <button
             key={opt.level}
             type="button"
+            role="radio"
+            aria-checked={level === opt.level}
             disabled={disabled}
             onClick={() => onChange(opt.level)}
             className={cn(

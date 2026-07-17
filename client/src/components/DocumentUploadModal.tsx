@@ -100,12 +100,30 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
   };
 
   const handleSubmit = () => {
-    if (uploadedDocuments.length === 0) {
+    const hasLicense =
+      uploadedDocuments.some((d) => d.type === "license") || !!profileDocs?.licenseImageUrl;
+    const hasInsurance =
+      uploadedDocuments.some((d) => d.type === "insurance") || !!profileDocs?.insuranceImageUrl;
+    const hasVehicle =
+      uploadedDocuments.some((d) => d.type.startsWith("vehicle-")) ||
+      (profileDocs?.vehiclePhotoUrls?.length ?? 0) > 0;
+
+    if (!hasLicense || !hasInsurance || !hasVehicle) {
       toast({
-        title: "No Documents",
-        description: "Please upload at least one document.",
+        title: "Documents incomplete",
+        description:
+          "Please upload your license, insurance, and at least one vehicle photo before submitting.",
         variant: "destructive",
       });
+      return;
+    }
+
+    if (uploadedDocuments.length === 0) {
+      toast({
+        title: "Documents on file",
+        description: "Your uploads are already saved. We will email you when review is complete.",
+      });
+      onClose();
       return;
     }
 
@@ -133,8 +151,9 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
             size="sm"
             onClick={onClose}
             data-testid="button-close-documents"
+            aria-label="Close driver documents"
           >
-            <i className="fas fa-times" />
+            <i className="fas fa-times" aria-hidden />
           </Button>
         </div>
         
@@ -145,10 +164,10 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
             <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
               <i className="fas fa-id-card text-3xl text-muted-foreground mb-2" />
               <p className="text-sm text-muted-foreground mb-2">
-                Upload front and back of license
+                One clear photo of your driver&apos;s license (front is enough)
               </p>
               <ObjectUploader
-                maxNumberOfFiles={2}
+                maxNumberOfFiles={1}
                 onGetUploadParameters={getUploadParameters}
                 onComplete={handleUploadComplete('license')}
                 buttonClassName="bg-primary text-primary-foreground px-4 py-2 rounded text-sm"

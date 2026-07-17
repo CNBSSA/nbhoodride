@@ -9,6 +9,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { MapPin, Plus, X, Navigation, DollarSign, Shield, Loader2, CheckCircle, Trash2 } from "lucide-react";
+import { PG_CARD } from "@shared/userFacingCopy";
 
 interface Stop {
   address: string;
@@ -297,7 +298,7 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
             <div className="space-y-2">
               {fareEstimate && selectedDriver && (
                 <div className="flex justify-between text-xs text-gray-500 px-1">
-                  <span>Paid via Virtual PG Card</span>
+                  <span>{PG_CARD.payLine}</span>
                   <span className="font-bold text-sm text-gray-900">${fareEstimate.toFixed(2)}</span>
                 </div>
               )}

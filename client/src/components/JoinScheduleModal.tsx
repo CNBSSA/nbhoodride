@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { X, Search, Users, CheckCircle, Loader2, MapPin, DollarSign } from "lucide-react";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
+import { PG_CARD } from "@shared/userFacingCopy";
 
 interface JoinScheduleModalProps {
   isOpen: boolean;
@@ -225,7 +226,7 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
                   </div>
                   <p className="text-xs text-green-600 font-medium mt-1">30% off — you save ${(fareEstimate * 0.3).toFixed(2)}</p>
                   <p className="text-[10px] text-gray-400 mt-1 flex items-center justify-center gap-1">
-                    <DollarSign className="w-3 h-3" /> Paid via Virtual PG Card at driver acceptance
+                    <DollarSign className="w-3 h-3" /> {PG_CARD.confirmLine}
                   </p>
                 </CardContent>
               </Card>

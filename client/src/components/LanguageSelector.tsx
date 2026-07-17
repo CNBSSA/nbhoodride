@@ -14,11 +14,17 @@ export function LanguageSelector({ value, onChange, disabled }: LanguageSelector
   return (
     <div className="space-y-2" data-testid="language-selector">
       <p className="text-sm font-medium">{translate("language.title")}</p>
-      <div className="grid gap-2">
+      <p className="text-xs text-muted-foreground">
+        Beta: most of the app is still in English. This setting mainly affects Calm Ride labels and a few
+        prompts we are localizing first.
+      </p>
+      <div className="grid gap-2" role="radiogroup" aria-label={translate("language.title")}>
         {LOCALE_OPTIONS.map((opt) => (
           <button
             key={opt.value}
             type="button"
+            role="radio"
+            aria-checked={value === opt.value}
             disabled={disabled}
             onClick={() => onChange(opt.value)}
             className={`text-left rounded-xl border p-3 text-sm transition-colors ${

@@ -63,7 +63,11 @@ export function ExplainableMatchCard({
           )}
           <div className="flex flex-wrap gap-2 mt-2">
             {trust?.trustScore != null && (
-              <Badge variant="secondary" className="text-[10px]">
+              <Badge
+                variant="secondary"
+                className="text-[10px]"
+                title="Higher trust means stronger ride history, neighbor verification, and community ratings."
+              >
                 Trust {trust.trustScore}
               </Badge>
             )}
