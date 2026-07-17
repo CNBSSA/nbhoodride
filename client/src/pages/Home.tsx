@@ -15,7 +15,12 @@ import { Shield } from "lucide-react";
 
 export default function Home() {
   const { user } = useAuth();
-  const [currentMode, setCurrentMode] = useState<"rider" | "driver">("rider");
+  // Persisted so a reload (browser refresh, PWA relaunch) keeps an online
+  // driver on their dashboard instead of silently dropping them back to
+  // rider mode, where their active rides/claim board aren't visible.
+  const [currentMode, setCurrentMode] = useState<"rider" | "driver">(
+    () => (localStorage.getItem("pgride:lastMode") === "driver" ? "driver" : "rider")
+  );
   const [activeTab, setActiveTab] = useState("home");
   const [, setLocation] = useLocation();
 
@@ -25,6 +30,10 @@ export default function Home() {
       setCurrentMode("rider");
     }
   }, [user?.isDriver, currentMode]);
+
+  useEffect(() => {
+    localStorage.setItem("pgride:lastMode", currentMode);
+  }, [currentMode]);
 
   const handleModeChange = (mode: "rider" | "driver") => {
     if (mode === "driver" && !user?.isDriver) {
