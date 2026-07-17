@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useLocation, Link } from 'wouter';
 import { queryClient, getCsrfToken } from '@/lib/queryClient';
+import { PG_CARD } from '@shared/userFacingCopy';
 
 export default function Signup() {
   const [email, setEmail] = useState('');
@@ -127,8 +128,7 @@ export default function Signup() {
                 <span className="font-medium text-foreground">{signupEmail || email}</span>. Check spam/junk too.
               </li>
               <li>
-                <strong className="text-foreground">Admin approval</strong> — after you verify, an administrator must approve your account on the{" "}
-                <strong>Users</strong> tab (not Drivers). You will get another email when you can log in.
+                <strong className="text-foreground">Account approval</strong> — after you verify, our team reviews new accounts (usually within 24 hours). We will email you when you can log in.
               </li>
             </ol>
             {emailDeliveryWarning && (
@@ -137,7 +137,7 @@ export default function Signup() {
               </p>
             )}
             <p className="text-xs text-muted-foreground mb-4">
-              Want to drive? After you are approved and logged in, open Profile → upload documents. Driver review is separate under Admin → Drivers.
+              Want to drive? After you can log in, open Profile to upload driver documents. That review is separate from your account approval.
             </p>
             <Link href="/login">
               <Button variant="outline" className="w-full mb-2" data-testid="btn-back-to-login">Back to Login (resend verification)</Button>
@@ -336,7 +336,7 @@ export default function Signup() {
 
           <div className="mt-4 text-xs text-center">
             <p className="text-green-700 dark:text-green-400 font-medium">
-              🎉 New riders get $20 in Virtual PG Card credit + 4 rides with $5 off each!
+              🎉 New riders get $20 in {PG_CARD.name} credit + 4 rides with $5 off each!
             </p>
           </div>
         </CardContent>

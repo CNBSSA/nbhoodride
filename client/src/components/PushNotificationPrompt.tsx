@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Bell, BellOff, X } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
+const DISMISS_KEY = "pgride:pushPromptDismissed";
+
 export default function PushNotificationPrompt() {
   const { user } = useAuth();
   const { permission, isSubscribed, isSupported, isLoading, subscribe } = usePushNotifications();
@@ -15,16 +17,16 @@ export default function PushNotificationPrompt() {
     isSupported &&
     permission === "default" &&
     !isSubscribed &&
-    !dismissed;
+    !dismissed &&
+    !localStorage.getItem(DISMISS_KEY);
 
   useEffect(() => {
-    const key = "push-prompt-dismissed";
-    if (sessionStorage.getItem(key)) setDismissed(true);
+    if (localStorage.getItem(DISMISS_KEY)) setDismissed(true);
   }, []);
 
   const handleDismiss = () => {
     setDismissed(true);
-    sessionStorage.setItem("push-prompt-dismissed", "1");
+    localStorage.setItem(DISMISS_KEY, "1");
   };
 
   const handleEnable = async () => {

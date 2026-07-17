@@ -28,10 +28,24 @@ import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
 
 type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
+function useAdminNavPendingCounts() {
+  const { data: pendingUsers = [] } = useQuery<any[]>({
+    queryKey: ["/api/admin/users/pending"],
+  });
+  const { data: drivers = [] } = useQuery<any[]>({
+    queryKey: ["/api/admin/drivers"],
+  });
+  const pendingDrivers = drivers.filter(
+    (d) => !d.approvalStatus || d.approvalStatus === "pending",
+  ).length;
+  return { users: pendingUsers.length, drivers: pendingDrivers };
+}
+
 export default function AdminDashboard() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<AdminTab>("dashboard");
   const [, setLocation] = useLocation();
+  const pendingNav = useAdminNavPendingCounts();
 
   if (!user?.isAdmin && !user?.isSuperAdmin) {
     return (
@@ -87,7 +101,17 @@ export default function AdminDashboard() {
                 data-testid={`nav-${tab.id}`}
               >
                 <tab.icon className="w-4 h-4" />
-                {tab.label}
+                <span className="flex-1 text-left">{tab.label}</span>
+                {tab.id === "users" && pendingNav.users > 0 && (
+                  <Badge className="bg-orange-500 text-white text-[10px] px-1.5" data-testid="nav-badge-users">
+                    {pendingNav.users}
+                  </Badge>
+                )}
+                {tab.id === "drivers" && pendingNav.drivers > 0 && (
+                  <Badge className="bg-orange-500 text-white text-[10px] px-1.5" data-testid="nav-badge-drivers">
+                    {pendingNav.drivers}
+                  </Badge>
+                )}
               </button>
             ))}
           </nav>
@@ -108,6 +132,8 @@ export default function AdminDashboard() {
                 data-testid={`nav-mobile-${tab.id}`}
               >
                 {tab.label}
+                {tab.id === "users" && pendingNav.users > 0 && ` (${pendingNav.users})`}
+                {tab.id === "drivers" && pendingNav.drivers > 0 && ` (${pendingNav.drivers})`}
               </button>
             ))}
           </div>
@@ -434,7 +460,7 @@ function UsersPanel() {
                       </div>
                     ) : (
                       <Button size="sm" variant="destructive" onClick={() => setDeleteConfirm(u.id)} data-testid={`btn-delete-user-${u.id}`}>
-                        <XCircle className="w-3 h-3 mr-1" /> Reject
+                        <XCircle className="w-3 h-3 mr-1" /> Delete account
                       </Button>
                     )}
                   </div>
@@ -715,6 +741,9 @@ function DriversPanel() {
           </h3>
           <p className="text-sm text-muted-foreground mb-3">
             These drivers are waiting on Checkr or manual follow-up. They no longer appear under Pending — watch this section until approved or rejected.
+          </p>
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+            Only mark approved after Checkr clearance or documented manual review. Premature approval lets drivers go online before background check completes.
           </p>
           <div className="space-y-3 mb-6">
             {filteredBackgroundCheck.map((d: any) => (

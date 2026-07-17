@@ -22,6 +22,7 @@ import { format } from "date-fns";
 import { BarChart3, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote, Bus, Users } from "lucide-react";
 import PayoutModal from "@/components/PayoutModal";
 import { LostFoundDriverCard } from "@/components/LostFoundDriverCard";
+import { DriverStatusBanner } from "@/components/DriverStatusBanner";
 import type { RideMessagePayload } from "@shared/rideChat";
 import { parseRideMessageWsEvent } from "@shared/rideChat";
 
@@ -216,6 +217,18 @@ export default function DriverDashboard() {
   });
 
   const handleToggleStatus = (checked: boolean) => {
+    const approved =
+      user?.driverProfile?.isVerifiedNeighbor ||
+      user?.driverProfile?.approvalStatus === "approved";
+    if (checked && !approved) {
+      toast({
+        title: "Approval required",
+        description:
+          "Finish document upload and wait for administrator approval before going online.",
+        variant: "destructive",
+      });
+      return;
+    }
     if (checked) {
       // Show county selection before going online
       setShowCountySheet(true);
@@ -406,6 +419,10 @@ export default function DriverDashboard() {
     tip: parseFloat(ride.tipAmount || '0')
   }));
 
+  const driverApproved =
+    user?.driverProfile?.isVerifiedNeighbor ||
+    user?.driverProfile?.approvalStatus === "approved";
+
   return (
     <>
       <CountySelectionSheet
@@ -435,6 +452,11 @@ export default function DriverDashboard() {
         </div>
       </header>
 
+      <DriverStatusBanner
+        approvalStatus={user?.driverProfile?.approvalStatus}
+        isVerifiedNeighbor={user?.driverProfile?.isVerifiedNeighbor}
+      />
+
       <main className="space-y-4 p-4">
         {/* Status Toggle */}
         <Card>
@@ -448,7 +470,7 @@ export default function DriverDashboard() {
                 <Switch
                   checked={isOnline}
                   onCheckedChange={handleToggleStatus}
-                  disabled={toggleStatusMutation.isPending}
+                  disabled={toggleStatusMutation.isPending || !driverApproved}
                   data-testid="switch-driver-status"
                 />
                 <span className={`font-semibold ${isOnline ? 'text-secondary' : 'text-destructive'}`}>
@@ -456,6 +478,11 @@ export default function DriverDashboard() {
                 </span>
               </div>
             </div>
+            {locationError && (
+              <p className="text-sm text-destructive mt-2" data-testid="driver-location-error">
+                Location unavailable: {locationError}. Enable location services to receive nearby requests.
+              </p>
+            )}
             {/* Today's active counties */}
             {isOnline && todayCounties.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100 flex items-start gap-2">
