@@ -19,8 +19,8 @@
     "google": "Everyone"
   },
   "screenshots": {
-    "iphone": ["client/public/screenshots/screen-rider.png", "client/public/screenshots/screen-driver.png"],
-    "android": ["client/public/screenshots/screen-rider.png", "client/public/screenshots/screen-driver.png"]
+    "iphone": ["store-listing/screenshots/ios/screen-rider.png", "store-listing/screenshots/ios/screen-driver.png"],
+    "android": ["store-listing/screenshots/android/screen-rider.png", "store-listing/screenshots/android/screen-driver.png"]
   },
   "storeIcon": "store-listing/icon-1024-store.png"
 }
