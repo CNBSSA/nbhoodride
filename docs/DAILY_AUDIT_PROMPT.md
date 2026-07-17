@@ -4,6 +4,8 @@
 **Short prompt to start the agent:** [DAILY_AUDIT_AGENT_INVOKE.md](./DAILY_AUDIT_AGENT_INVOKE.md)  
 **Automated Phase 1:** `npm run audit:daily`
 
+**User-friendliness (UX/copy, no code):** [`USER_FRIENDLINESS_ASSESSMENT.md`](./USER_FRIENDLINESS_ASSESSMENT.md) — search repo for `USER_FRIENDLINESS`.
+
 ---
 
 ## Context
