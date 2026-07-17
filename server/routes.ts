@@ -221,11 +221,28 @@ async function notifyRideMessageRecipient(
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Rate limiting
+  // Mounted on EVERY /api/* route, so this is the budget that dashboard
+  // polling (pending-rides, active-rides, scheduled-rides, etc., every
+  // 30-60s) draws down all day. Keyed by IP alone, it silently merged the
+  // budgets of every distinct signed-in user behind one NAT address — the
+  // same "shared household WiFi" bug class as the auth limiter above, just
+  // hitting ordinary usage instead of the signup burst. A driver and two
+  // riders in one house polling their own dashboards could exhaust 200/15min
+  // as a HOUSEHOLD in minutes, well before any one of them was doing
+  // anything abusive.
+  //
+  // Fix: key by authenticated user (falls back to IP only for anonymous
+  // requests) — the same pattern already used below for mobilityIntentLimiter
+  // and adminAiLimiter — so each person gets their own budget instead of
+  // sharing one. Ceiling also raised for headroom against realistic
+  // multi-endpoint polling cadence.
   const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 200,
+    max: 300,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: (req: any) =>
+      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || req.ip,
     message: { message: "Too many requests, please try again later." },
     // NOTE: No skip for /api/admin — all endpoints are rate-limited
   });
