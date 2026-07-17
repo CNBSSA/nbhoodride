@@ -115,7 +115,7 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center max-w-[430px] mx-auto">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto">
       {/* Backdrop MUST be absolute, not fixed: a fixed sibling is a positioned
           element and paints ABOVE a plain-static Card regardless of DOM
           order, silently swallowing every click meant for the form

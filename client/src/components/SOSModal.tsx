@@ -99,7 +99,7 @@ export default function SOSModal({ isOpen, onClose, currentRideId }: SOSModalPro
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center max-w-[430px] mx-auto">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto">
       <div className="absolute inset-0 bg-black/70" onClick={onClose} />
       <Card className="relative z-10 w-full mx-4 bg-destructive text-destructive-foreground">
         <div className="flex items-center justify-between p-4 border-b border-white/20">
