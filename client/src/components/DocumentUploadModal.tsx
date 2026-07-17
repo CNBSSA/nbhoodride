@@ -115,9 +115,17 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center max-w-[430px] mx-auto">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <Card className="w-full mx-4 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto">
+      {/* Backdrop MUST be absolute, not fixed: a fixed sibling is a positioned
+          element and paints ABOVE a plain-static Card regardless of DOM
+          order, silently swallowing every click meant for the form
+          (uploads worked in testing because file pickers don't need real
+          hit-testing — but "Submit for Review" does, and never fired).
+          relative z-10 on the Card gives it its own higher stacking
+          context, matching the working pattern used elsewhere in this
+          codebase (SharedScheduleSheet, JoinScheduleModal, etc). */}
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <Card className="relative z-10 w-full mx-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Driver Documents</h2>
           <Button

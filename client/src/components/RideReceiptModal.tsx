@@ -48,9 +48,9 @@ export function RideReceiptModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center max-w-[430px] mx-auto">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <Card className="relative w-full mx-4 max-h-[90vh] overflow-y-auto" data-testid="ride-receipt-modal">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <Card className="relative z-10 w-full mx-4 max-h-[90vh] overflow-y-auto" data-testid="ride-receipt-modal">
         <div className="flex items-center justify-between p-4 border-b sticky top-0 bg-card z-10">
           <h2 className="text-lg font-semibold">Trip Receipt</h2>
           <Button variant="ghost" size="sm" onClick={onClose} data-testid="button-close-receipt">

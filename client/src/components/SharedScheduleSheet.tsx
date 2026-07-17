@@ -120,7 +120,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center max-w-[430px] mx-auto">
+    <div className="fixed inset-0 z-[60] flex items-end justify-center max-w-[430px] mx-auto">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={step === 4 ? onClose : undefined} />
       <Card className="relative z-10 w-full rounded-t-2xl border-0 shadow-2xl flex flex-col max-h-[90dvh]">
         {/* Header */}

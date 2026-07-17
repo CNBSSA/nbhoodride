@@ -59,7 +59,7 @@ export default function LostFoundModal({ isOpen, onClose, rideId }: LostFoundMod
   if (!isOpen || !rideId) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center max-w-[430px] mx-auto">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto">
       <div className="fixed inset-0 bg-black/50" onClick={onClose} />
       <Card className="w-full mx-4 max-h-[90vh] overflow-y-auto relative z-10" data-testid="lost-found-modal">
         <div className="flex items-center justify-between p-4 border-b">
