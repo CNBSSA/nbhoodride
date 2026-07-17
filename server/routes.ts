@@ -15,7 +15,7 @@ import twilio from "twilio";
 import { stripeService, stripe } from "./stripeService";
 import bcrypt from "bcrypt";
 import Anthropic from "@anthropic-ai/sdk";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import {
   sendAccountApprovedEmail,
@@ -26,6 +26,7 @@ import {
   sendRideReceiptEmail,
   sendSignupPendingEmail,
   sendSignupRejectedEmail,
+  EmailNotConfiguredError,
 } from "./emailService";
 import { deliverUserNotification } from "./notificationService";
 import { retrieveKnowledgeContext, syncKnowledgeIndex } from "./ragService";
@@ -86,6 +87,7 @@ import { mapRouteResponse, type RouteResult } from "@shared/routeGeometry";
 import type { RideMessage } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import { resolveAppUrl } from "./appUrl";
+import { processCircuitReminders } from "./circuitReminders";
 import { bookingWindow } from "@shared/circuitSchedule";
 import {
   insertDriverProfileSchema,
@@ -219,11 +221,28 @@ async function notifyRideMessageRecipient(
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Rate limiting
+  // Mounted on EVERY /api/* route, so this is the budget that dashboard
+  // polling (pending-rides, active-rides, scheduled-rides, etc., every
+  // 30-60s) draws down all day. Keyed by IP alone, it silently merged the
+  // budgets of every distinct signed-in user behind one NAT address — the
+  // same "shared household WiFi" bug class as the auth limiter above, just
+  // hitting ordinary usage instead of the signup burst. A driver and two
+  // riders in one house polling their own dashboards could exhaust 200/15min
+  // as a HOUSEHOLD in minutes, well before any one of them was doing
+  // anything abusive.
+  //
+  // Fix: key by authenticated user (falls back to IP only for anonymous
+  // requests) — the same pattern already used below for mobilityIntentLimiter
+  // and adminAiLimiter — so each person gets their own budget instead of
+  // sharing one. Ceiling also raised for headroom against realistic
+  // multi-endpoint polling cadence.
   const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 200,
+    max: 300,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: (req: any) =>
+      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || ipKeyGenerator(req.ip),
     message: { message: "Too many requests, please try again later." },
     // NOTE: No skip for /api/admin — all endpoints are rate-limited
   });
@@ -236,12 +255,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     message: { message: "Too many AI requests. Please slow down." },
   });
 
+  // Auth throttle. Keyed by IP, so an ENTIRE HOUSEHOLD or community signup
+  // table shares one budget (everyone on the same WiFi = one public IP behind
+  // NAT). The old 20/15min counted EVERY attempt, so three family members
+  // signing up + verifying + logging in around one table tripped it and got
+  // "Too many authentication attempts" — indistinguishable from "registration
+  // is broken."
+  //
+  // Fix: skipSuccessfulRequests so only FAILED attempts count toward the
+  // limit — a legitimate signup/login (which succeeds) never consumes budget.
+  // Brute-force on a single account is already handled by the per-account
+  // lockout (R-L5, 5 wrong passwords → 15-min lock), so this IP limiter only
+  // needs to blunt high-volume guessing, and can be far more generous.
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 20, // 20 login/signup attempts per 15 min
+    max: 50, // 50 FAILED auth attempts per IP / 15 min
+    skipSuccessfulRequests: true,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { message: "Too many authentication attempts. Please try again later." },
+    message: { message: "Too many failed attempts from this network. Please wait a few minutes and try again." },
   });
 
   // Per-user (falls back to per-IP) limiter for /api/mobility/intent.
@@ -255,7 +287,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) =>
-      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || req.ip,
+      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || ipKeyGenerator(req.ip),
     message: { message: "Too many intent requests, please slow down." },
   });
 
@@ -271,7 +303,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) =>
-      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || req.ip,
+      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || ipKeyGenerator(req.ip),
     message: { message: "AI generation rate-limited (5/15min per admin)." },
   });
 
@@ -676,14 +708,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // ── Audit log ────────────────────────────────────────────────────────
       console.log(`[AUDIT] signup_success ip=${ip} userId=${user.id} email=${user.email}`);
 
-      // ── Emails (fire-and-forget) ─────────────────────────────────────────
-      sendEmailVerificationEmail(user.email!, user.firstName, verificationToken).catch(console.error);
+      const appUrl = resolveAppUrl(`https://${req.get("host")}`);
+      let emailVerificationSent = false;
+      let emailDeliveryWarning: string | undefined;
+      try {
+        await sendEmailVerificationEmail(
+          user.email!,
+          user.firstName,
+          verificationToken,
+          appUrl
+        );
+        emailVerificationSent = true;
+      } catch (emailErr) {
+        console.error("[EMAIL] signup verification failed:", emailErr);
+        emailDeliveryWarning =
+          emailErr instanceof EmailNotConfiguredError
+            ? "We could not send a verification email because email is not configured on the server. Contact support or ask an admin to verify your email from the dashboard."
+            : "We could not send the verification email right now. Use Resend verification on the login page or contact support.";
+      }
       sendSignupPendingEmail({ email: user.email, firstName: user.firstName }).catch(console.error);
 
       res.json({
-        message: "Account created! Please check your email to verify your address. Your account will also need administrator approval before you can log in.",
+        message: emailVerificationSent
+          ? "Account created! Check your email to verify your address, then wait for administrator approval before you can log in."
+          : "Account created! Your account needs administrator approval before you can log in.",
         pendingApproval: true,
-        emailVerificationSent: true,
+        emailVerificationSent,
+        emailDeliveryWarning,
         user: {
           id: user.id,
           email: user.email,
@@ -743,7 +794,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const verificationToken = nanoid(40);
       const verificationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
       await storage.setEmailVerificationToken(user.id, verificationToken, verificationExpiry);
-      sendEmailVerificationEmail(user.email!, user.firstName, verificationToken).catch(console.error);
+      const appUrl = resolveAppUrl(`https://${req.get("host")}`);
+      try {
+        await sendEmailVerificationEmail(user.email!, user.firstName, verificationToken, appUrl);
+      } catch (emailErr) {
+        console.error("[EMAIL] resend verification failed:", emailErr);
+        return res.status(503).json({
+          message:
+            "We could not send the verification email. Email may not be configured on the server — contact support or ask an admin to verify your email.",
+        });
+      }
 
       res.json({ message: "If the email exists and is unverified, a new verification link has been sent." });
     } catch (error) {
@@ -753,6 +813,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // POST /api/auth/email-login - Login with email and password
+  // PATCH /api/user/profile — self-service edit of basic profile fields.
+  // Whitelisted columns only; email changes are deliberately excluded (email
+  // is the login identity and is verification-gated).
+  app.patch('/api/user/profile', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const schema = z.object({
+        firstName: z.string().trim().min(1, "First name is required").max(50).optional(),
+        lastName: z.string().trim().min(1, "Last name is required").max(50).optional(),
+        phone: z.string().trim().max(20).optional(),
+        emergencyContact: z.string().trim().max(100).optional(),
+      });
+      const updates = schema.parse(req.body);
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "Nothing to update" });
+      }
+      if (updates.phone !== undefined && updates.phone !== "") {
+        const normalized = normalizePhone(updates.phone);
+        if (!/^\+1\d{10}$/.test(normalized)) {
+          return res.status(400).json({ message: "Phone number must be a valid 10-digit US number (e.g. 301-555-1234)." });
+        }
+        updates.phone = normalized;
+      }
+      const user = await storage.updateUserProfile(userId, updates);
+      console.log(`[AUDIT] profile_updated userId=${userId} fields=${Object.keys(updates).join(",")}`);
+      res.json({
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone,
+        emergencyContact: user.emergencyContact,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Profile update error:", error);
+      res.status(500).json({ message: "Failed to update profile" });
+    }
+  });
+
   app.post('/api/auth/email-login', async (req, res) => {
     const ip = req.ip ?? "unknown";
     try {
@@ -1234,6 +1335,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // County preference endpoints
+  // Own driver profile — approval status + which documents are on file.
+  // The documents modal uses this so drivers can SEE what they've already
+  // submitted (and know that re-uploading replaces it).
+  app.get('/api/driver/profile/me', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const profile = await storage.getDriverProfile(userId);
+      if (!profile) return res.status(404).json({ message: "No driver profile" });
+      res.json({
+        approvalStatus: profile.approvalStatus,
+        licenseImageUrl: profile.licenseImageUrl,
+        insuranceImageUrl: profile.insuranceImageUrl,
+        vehiclePhotoUrls: (profile as any).vehiclePhotoUrls ?? [],
+      });
+    } catch (error) {
+      console.error("Error fetching own driver profile:", error);
+      res.status(500).json({ message: "Failed to load driver profile" });
+    }
+  });
+
   app.get('/api/driver/counties', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -2274,7 +2395,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { vehicleId } = req.params;
-      const updates = req.body;
+      // Whitelist editable fields — previously req.body was passed through
+      // verbatim, letting a driver set arbitrary vehicle columns.
+      const currentYear = new Date().getFullYear();
+      const vehicleUpdateSchema = z.object({
+        make: z.string().trim().min(1).max(50).optional(),
+        model: z.string().trim().min(1).max(50).optional(),
+        year: z.number().int().min(1990).max(currentYear + 1).optional(),
+        color: z.string().trim().min(1).max(30).optional(),
+        licensePlate: z.string().trim().regex(/^[A-Z0-9\- ]{2,10}$/i, "License plate must be 2–10 alphanumeric characters").optional(),
+      });
+      const updates = vehicleUpdateSchema.parse(req.body);
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "Nothing to update" });
+      }
 
       // SECURITY: Ensure the vehicle belongs to this driver before updating
       const driverProfile = await storage.getDriverProfile(userId);
@@ -3156,32 +3290,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
 
-      const ride = await storage.claimScheduledRide(rideId, userId);
+      const existing = await storage.getRide(rideId);
+      if (!existing) return res.status(404).json({ message: "Ride not found" });
 
-      // Notify the rider their scheduled ride has been claimed
-      if (activeConnections.has(ride.riderId)) {
-        const riderWs = activeConnections.get(ride.riderId);
-        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
-          const driverUser = await storage.getUser(userId);
-          riderWs.send(JSON.stringify({
-            type: 'scheduled_ride_claimed',
-            rideId: ride.id,
-            driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'A driver',
-            scheduledAt: ride.scheduledAt,
-          }));
+      let claimedRides: Awaited<ReturnType<typeof storage.claimScheduledRide>>[] = [];
+
+      if (existing.groupId && existing.rideType === "shared_schedule") {
+        const result = await storage.assignDriverToSharedScheduleGroup(existing.groupId, userId);
+        if (!result) {
+          return res.status(409).json({ message: "This group ride was just claimed by another driver." });
+        }
+        claimedRides = result.rides;
+      } else {
+        claimedRides = [await storage.claimScheduledRide(rideId, userId)];
+      }
+
+      const driverUser = await storage.getUser(userId);
+
+      for (const ride of claimedRides) {
+        if (activeConnections.has(ride.riderId)) {
+          const riderWs = activeConnections.get(ride.riderId);
+          if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+            riderWs.send(JSON.stringify({
+              type: 'scheduled_ride_claimed',
+              rideId: ride.id,
+              driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'A driver',
+              scheduledAt: ride.scheduledAt,
+            }));
+          }
         }
       }
 
-      // Let all other drivers know this ride is taken (so they remove it from open list)
-      const takenPayload = JSON.stringify({ type: 'scheduled_ride_taken', rideId: ride.id });
+      const takenPayloads = claimedRides.map((r) =>
+        JSON.stringify({ type: 'scheduled_ride_taken', rideId: r.id }),
+      );
       activeConnections.forEach((ws, connUserId) => {
-        if (connUserId !== userId && ws.readyState === WebSocket.OPEN) ws.send(takenPayload);
+        if (connUserId !== userId && ws.readyState === WebSocket.OPEN) {
+          for (const p of takenPayloads) ws.send(p);
+        }
       });
 
-      res.json(ride);
+      res.json(claimedRides[0]);
     } catch (error: any) {
       console.error("Error claiming scheduled ride:", error);
-      res.status(409).json({ message: "This ride is no longer available." });
+      res.status(409).json({ message: error?.message || "This ride is no longer available." });
     }
   });
 
@@ -3328,6 +3480,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Stripe card payment routes
+  app.get('/api/payment/config', (_req, res) => {
+    const enabled = stripeService.isEnabled && !!process.env.VITE_STRIPE_PUBLIC_KEY;
+    res.json({
+      enabled,
+      topUpEnabled: enabled,
+      cardOnFileEnabled: enabled,
+    });
+  });
+
   app.post('/api/payment/setup-card', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -3689,7 +3850,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               ? `Location: https://maps.google.com/?q=${location.lat},${location.lng}`
               : "Location: Not available";
             
-            const shareUrl = `${req.protocol}://${req.get('host')}/emergency/${shareToken}`;
+            const shareUrl = `${resolveAppUrl(`${req.protocol}://${req.get("host")}`)}/emergency/${shareToken}`;
 
             const smsBody = buildEmergencySmsBody(
               user.firstName || 'PG Ride user',
@@ -4295,6 +4456,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Approve user (admin or super admin)
+  // Admin attests the user's email in person (family, signup tables, church
+  // onboarding) — removes the dependency on email delivery, which blocks ALL
+  // registration when the Resend domain isn't verified yet.
+  app.post('/api/admin/users/:userId/verify-email', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { userId } = req.params;
+      const adminId = req.adminUser.id;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) return res.status(404).json({ message: "User not found" });
+      if (targetUser.emailVerifiedAt) return res.status(400).json({ message: "Email already verified" });
+
+      const user = await storage.markEmailVerified(userId);
+      await storage.logAdminAction(adminId, 'verify_email_manual', 'user', userId, { email: targetUser.email });
+      console.log(`[AUDIT] email_verified_by_admin adminId=${adminId} userId=${userId} email=${targetUser.email}`);
+      res.json(user);
+    } catch (error) {
+      console.error("Error manually verifying email:", error);
+      res.status(500).json({ message: "Failed to verify email" });
+    }
+  });
+
   app.post('/api/admin/users/:userId/approve', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const { userId } = req.params;
@@ -4511,6 +4693,109 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Claim board: upcoming circuit runs for drivers. A run appears once the
+  // first seat is booked (lazy materialization); claiming takes the WHOLE
+  // run — the group and every unassigned ride in it.
+  app.get('/api/driver/circuit-runs', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const profile = await storage.getDriverProfile(userId);
+      if (!profile || profile.approvalStatus !== 'approved' || profile.isSuspended) {
+        return res.json({ open: [], mine: [] });
+      }
+      const groups = await storage.getUpcomingCircuitRunGroups();
+      const open: any[] = [];
+      const mine: any[] = [];
+      for (const group of groups) {
+        if (!group.circuitId) continue;
+        // Runs claimed by someone else aren't shown at all.
+        if (group.driverId && group.driverId !== userId) continue;
+        const circuit = await storage.getCircuit(group.circuitId);
+        if (!circuit) continue;
+        const groupRides = await storage.getRidesInGroup(group.id);
+        const seatsBooked = groupRides.filter((r) => r.status !== "cancelled").length;
+        if (seatsBooked === 0) continue;
+        const fare = parseFloat(circuit.farePerSeat);
+        const item = {
+          groupId: group.id,
+          circuitName: circuit.name,
+          anchorName: circuit.anchorName,
+          pickup: circuit.pickup,
+          destination: circuit.destination,
+          runAt: group.scheduledAt,
+          seatsBooked,
+          seatsTotal: circuit.seatCount,
+          farePerSeat: circuit.farePerSeat,
+          totalFare: (fare * seatsBooked).toFixed(2),
+        };
+        (group.driverId === userId ? mine : open).push(item);
+      }
+      res.json({ open, mine });
+    } catch (error) {
+      console.error("Error listing circuit runs:", error);
+      res.status(500).json({ message: "Failed to load circuit runs" });
+    }
+  });
+
+  app.post('/api/driver/circuit-runs/:groupId/claim', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const profile = await storage.getDriverProfile(userId);
+      if (!profile || profile.approvalStatus !== 'approved' || profile.isSuspended) {
+        return res.status(403).json({ message: "Your driver application is still under review." });
+      }
+      const group = await storage.getRideGroupById(req.params.groupId);
+      if (!group || group.groupType !== "circuit" || !group.circuitId) {
+        return res.status(404).json({ message: "Circuit run not found" });
+      }
+      if (!group.scheduledAt || new Date(group.scheduledAt) <= new Date()) {
+        return res.status(410).json({ message: "This run has already departed." });
+      }
+      const result = await storage.assignDriverToCircuitRun(group.id, userId);
+      if (!result) {
+        return res.status(409).json({ message: "Another driver already claimed this run." });
+      }
+
+      const circuit = await storage.getCircuit(group.circuitId);
+      const driverUser = await storage.getUser(userId);
+      const driverName = driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'A driver';
+      const runTime = new Date(group.scheduledAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+      // Tell every booked rider their run has a confirmed driver (in-app +
+      // push), and mirror over WebSocket for anyone currently in the app.
+      for (const ride of result.rides) {
+        if (ride.status === "cancelled") continue;
+        deliverUserNotification(ride.riderId, {
+          type: "circuit_run_claimed",
+          title: `Driver confirmed: ${circuit?.name ?? "your circuit"}`,
+          body: `${driverName} is driving your ${runTime} run.`,
+          url: "/",
+        }).catch(console.error);
+        const riderWs = activeConnections.get(ride.riderId);
+        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+          riderWs.send(JSON.stringify({
+            type: 'scheduled_ride_claimed',
+            rideId: ride.id,
+            driverName,
+            scheduledAt: group.scheduledAt,
+          }));
+        }
+      }
+
+      // Other drivers drop it from their open list.
+      const takenPayload = JSON.stringify({ type: 'circuit_run_taken', groupId: group.id });
+      activeConnections.forEach((ws, connUserId) => {
+        if (connUserId !== userId && ws.readyState === WebSocket.OPEN) ws.send(takenPayload);
+      });
+
+      console.log(`[AUDIT] circuit_run_claimed driverId=${userId} groupId=${group.id} circuitId=${group.circuitId} seats=${result.rides.length}`);
+      res.json({ ok: true, groupId: group.id, seats: result.rides.length });
+    } catch (error) {
+      console.error("Error claiming circuit run:", error);
+      res.status(500).json({ message: "Failed to claim run" });
+    }
+  });
+
   // One-tap seat booking. The week's run group is materialized lazily on the
   // first booking (no scheduler needed): find-or-create keyed on
   // (circuit_id, scheduled_at). No transaction — at launch seat counts are
@@ -4631,9 +4916,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // All users
+  app.get('/api/admin/users/pending', isAdminOrSessionAuth, async (_req: any, res) => {
+    try {
+      const pending = await storage.getUsersPendingApproval();
+      res.json(pending);
+    } catch (error) {
+      console.error("Error fetching pending users:", error);
+      res.status(500).json({ message: "Failed to fetch pending users" });
+    }
+  });
+
   app.get('/api/admin/users', isAdminOrSessionAuth, async (req: any, res) => {
     try {
-      const { limit = 100, offset = 0 } = req.query;
+      const { limit = 500, offset = 0 } = req.query;
       const allUsers = await storage.getAllUsers(parseInt(limit), parseInt(offset));
       res.json(allUsers);
     } catch (error) {
@@ -4780,6 +5075,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (updates.approvalStatus === 'approved' && !wasApproved) {
         const targetUser = await storage.getUser(userId);
+        if (targetUser && !targetUser.isApproved && !targetUser.isAdmin && !targetUser.isSuperAdmin) {
+          await storage.adminUpdateUser(userId, { isApproved: true });
+        }
         if (targetUser?.email) {
           sendDriverApprovedEmail({
             email: targetUser.email,
@@ -4952,6 +5250,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!pickupLocation || !destinationLocation || !estimatedFare) {
         return res.status(400).json({ message: "Missing required fields" });
       }
+      if (!scheduledAt) {
+        return res.status(400).json({
+          message: "Pick when you leave work — departure time is required for a shared shift ride.",
+        });
+      }
+      const departAt = new Date(scheduledAt);
+      if (Number.isNaN(departAt.getTime()) || departAt.getTime() <= Date.now()) {
+        return res.status(400).json({ message: "Departure time must be in the future." });
+      }
 
       const scheduleCode = await generateScheduleCode();
 
@@ -4963,7 +5270,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         maxSlots: 3,
         filledSlots: 1,
         status: "open",
-        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+        scheduledAt: departAt,
       });
 
       // Create organizer's ride linked to the group
@@ -4978,8 +5285,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         paymentMethod: "card",
         rideType: "shared_schedule",
         groupId: group.id,
-        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+        scheduledAt: departAt,
       });
+
+      let pickupCounty: string | null = null;
+      try {
+        pickupCounty = await getCountyFromCoords(pickupLocation.lat, pickupLocation.lng);
+        if (pickupCounty) await storage.updateRideCounty(ride.id, pickupCounty);
+      } catch {
+        /* non-fatal */
+      }
+
+      const riderUser = await storage.getUser(userId);
+      if (!driverId) {
+        const payload = JSON.stringify({
+          type: "new_scheduled_ride",
+          rideId: ride.id,
+          riderId: userId,
+          riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ""}.` : "Rider",
+          riderRating: riderUser?.rating || "5.0",
+          pickupAddress: pickupLocation?.address || "",
+          destinationAddress: destinationLocation?.address || "",
+          estimatedFare: ride.estimatedFare,
+          scheduledAt: ride.scheduledAt,
+          pickupInstructions: pickupInstructions || "",
+          pickupCounty: pickupCounty || "",
+          sharedSchedule: true,
+          groupSlots: `1/${group.maxSlots ?? 3}`,
+          scheduleCode,
+        });
+        activeConnections.forEach((ws, connDriverId) => {
+          const counties = driverCountyCache.get(connDriverId) ?? [];
+          if (driverCoversCounty(counties, pickupCounty) && ws.readyState === WebSocket.OPEN) {
+            ws.send(payload);
+          }
+        });
+      }
 
       res.json({ ...ride, group, scheduleCode });
     } catch (error) {
@@ -5053,6 +5394,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         paymentMethod: paymentMethod || "card",
         rideType: "shared_schedule",
         groupId: group.id,
+        scheduledAt: group.scheduledAt ?? undefined,
       });
 
       // Increment filled slots
@@ -7315,6 +7657,11 @@ Generate the FAQ list.`;
   // ── Scheduled ride monitor: fires every minute ──
   // Handles: 30-min reminders, T-60/15/5 escalations, midnight county cleanup
   setInterval(async () => {
+    // Circuit run reminders (cutoff + pre-departure) — idempotent via
+    // NotifiedAt stamps, so failures here just retry next minute.
+    processCircuitReminders().catch((err) =>
+      console.error("circuit reminders sweep failed:", err),
+    );
     try {
       const { db: dbInst } = await import("./db");
       const { rides: ridesT, driverProfiles: dp } = await import("@shared/schema");

@@ -6,9 +6,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { X, Copy, CheckCircle, Users, Loader2, DollarSign, Shield, Star } from "lucide-react";
+import { X, Copy, CheckCircle, Users, Loader2, DollarSign, Shield, Star, Share2, Calendar as CalendarIcon, Clock } from "lucide-react";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
+import { Calendar } from "@/components/ui/calendar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { format } from "date-fns";
 
 interface Driver {
   id: string;
@@ -47,6 +50,10 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
+  const [scheduledDate, setScheduledDate] = useState<Date | undefined>();
+  const [scheduledHour, setScheduledHour] = useState("11");
+  const [scheduledMinute, setScheduledMinute] = useState("30");
+  const [scheduledPeriod, setScheduledPeriod] = useState<"AM" | "PM">("PM");
   // Coordinates resolved when the rider picks a destination from autocomplete.
   const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
 
@@ -63,6 +70,10 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
       setFareEstimate(null);
       setGeneratedCode(null);
       setCodeCopied(false);
+      setScheduledDate(undefined);
+      setScheduledHour("11");
+      setScheduledMinute("30");
+      setScheduledPeriod("PM");
     }
   }, [isOpen, userLocation]);
 
@@ -75,6 +86,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
       setGeneratedCode(data.scheduleCode);
       setStep(4);
       queryClient.invalidateQueries({ queryKey: ["/api/rides"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rides/scheduled"] });
     },
     onError: () => {
       toast({ title: "Booking Failed", description: "Please try again.", variant: "destructive" });
@@ -91,13 +103,35 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
       toast({ title: "Pick a destination", description: "Choose an address from the suggestions.", variant: "destructive" });
       return;
     }
+    if (!scheduledDate) {
+      toast({ title: "Pick shift end time", description: "Select a date and time when you leave work.", variant: "destructive" });
+      return;
+    }
     const fare = estimateFare(userLocation.lat, userLocation.lng, destCoords.lat, destCoords.lng);
     setFareEstimate(fare);
     setStep(2);
   };
 
+  const buildScheduledAt = (): string | null => {
+    if (!scheduledDate) return null;
+    const hour24 =
+      scheduledPeriod === "PM" && scheduledHour !== "12"
+        ? parseInt(scheduledHour, 10) + 12
+        : scheduledPeriod === "AM" && scheduledHour === "12"
+          ? 0
+          : parseInt(scheduledHour, 10);
+    const scheduleDateTime = new Date(scheduledDate);
+    scheduleDateTime.setHours(hour24, parseInt(scheduledMinute, 10), 0, 0);
+    return scheduleDateTime.toISOString();
+  };
+
   const handleConfirm = async () => {
     if (!destCoords) return;
+    const scheduledAt = buildScheduledAt();
+    if (!scheduledAt) {
+      toast({ title: "When do you leave?", description: "Pick a shift-end date and time.", variant: "destructive" });
+      return;
+    }
     bookMutation.mutate({
       pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: pickupAddress },
       destinationLocation: { lat: destCoords.lat, lng: destCoords.lng, address: destinationAddress },
@@ -106,7 +140,26 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
       estimatedFare: fareEstimate?.toFixed(2),
       paymentMethod: "card",
       rideType: "shared_schedule",
+      scheduledAt,
     });
+  };
+
+  const shareCode = async () => {
+    if (!generatedCode) return;
+    const depart =
+      scheduledDate &&
+      `${format(scheduledDate, "MMM d")} at ${scheduledHour}:${scheduledMinute} ${scheduledPeriod}`;
+    const text = `PG Ride — ride home after shift${depart ? ` (${depart})` : ""}. Join our group with code ${generatedCode} in the PG Ride app (Group code). Up to 3 of us, 30% off when 2+ join.`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "PG Ride shift group", text });
+        return;
+      } catch {
+        /* fall through */
+      }
+    }
+    await navigator.clipboard.writeText(text);
+    toast({ title: "Invite copied", description: "Paste in your work group chat." });
   };
 
   const copyCode = () => {
@@ -120,14 +173,14 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center max-w-[430px] mx-auto">
+    <div className="fixed inset-0 z-[60] flex items-end justify-center max-w-[430px] mx-auto">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={step === 4 ? onClose : undefined} />
       <Card className="relative z-10 w-full rounded-t-2xl border-0 shadow-2xl flex flex-col max-h-[90dvh]">
         {/* Header */}
         <div className="flex items-center justify-between px-4 pt-4 pb-2 flex-shrink-0">
           <div>
-            <h2 className="text-lg font-bold">Share My Schedule</h2>
-            <p className="text-xs text-gray-500">Book your ride · share code · everyone saves 30%</p>
+            <h2 className="text-lg font-bold">Ride home with coworkers</h2>
+            <p className="text-xs text-gray-500">Shift end time · share code · up to 3 riders</p>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose} className="rounded-full w-8 h-8 p-0" data-testid="button-close-shared-schedule">
             <X className="w-4 h-4 text-gray-400" />
@@ -160,12 +213,64 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
                 <Textarea value={pickupInstructions} onChange={(e) => setPickupInstructions(e.target.value)} placeholder="e.g., Meet at main entrance" rows={2} data-testid="textarea-shared-instructions" />
               </div>
 
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block flex items-center gap-1">
+                  <Clock className="w-3 h-3" /> When does your shift end? (pickup time)
+                </label>
+                <div className="border rounded-lg p-2">
+                  <Calendar
+                    mode="single"
+                    selected={scheduledDate}
+                    onSelect={setScheduledDate}
+                    disabled={(d) => d < new Date(new Date().setHours(0, 0, 0, 0))}
+                    className="mx-auto"
+                  />
+                  <div className="flex gap-2 mt-2">
+                    <Select value={scheduledHour} onValueChange={setScheduledHour}>
+                      <SelectTrigger className="flex-1" data-testid="shared-schedule-hour">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Array.from({ length: 12 }, (_, i) => String(i + 1)).map((h) => (
+                          <SelectItem key={h} value={h}>{h}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select value={scheduledMinute} onValueChange={setScheduledMinute}>
+                      <SelectTrigger className="w-20" data-testid="shared-schedule-minute">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {["00", "15", "30", "45"].map((m) => (
+                          <SelectItem key={m} value={m}>{m}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select value={scheduledPeriod} onValueChange={(v) => setScheduledPeriod(v as "AM" | "PM")}>
+                      <SelectTrigger className="w-20" data-testid="shared-schedule-period">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="AM">AM</SelectItem>
+                        <SelectItem value="PM">PM</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {scheduledDate && (
+                    <p className="text-xs text-center text-muted-foreground mt-2">
+                      <CalendarIcon className="w-3 h-3 inline mr-1" />
+                      Leaving {format(scheduledDate, "EEE, MMM d")} at {scheduledHour}:{scheduledMinute} {scheduledPeriod}
+                    </p>
+                  )}
+                </div>
+              </div>
+
               <Card className="bg-purple-50 border-purple-200">
                 <CardContent className="p-3 flex items-start gap-2">
                   <Users className="w-4 h-4 text-purple-600 flex-shrink-0 mt-0.5" />
                   <div>
                     <p className="text-xs font-semibold text-purple-800">How this works</p>
-                    <p className="text-[11px] text-purple-700 mt-0.5">After booking you'll get a PG-XXXXXX code. Share it with up to 2 friends. Everyone pays their own fare with 30% off the moment your first friend joins.</p>
+                    <p className="text-[11px] text-purple-700 mt-0.5">Built for warehouse & shift teams (Amazon, Target, FedEx, etc.). You get a PG-XXXXXX code — text it to your group. Each coworker books their own ride home; everyone saves 30% when at least two join.</p>
                   </div>
                 </CardContent>
               </Card>
@@ -224,7 +329,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
               <div className="space-y-2 text-sm text-gray-600">
                 <div className="flex gap-2"><span className="font-medium w-24 flex-shrink-0">Pickup:</span><span className="truncate">{pickupAddress}</span></div>
                 <div className="flex gap-2"><span className="font-medium w-24 flex-shrink-0">Destination:</span><span className="truncate">{destinationAddress}</span></div>
-                {selectedDriver && <div className="flex gap-2"><span className="font-medium w-24 flex-shrink-0">Driver:</span><span>{drivers.find((d) => d.id === selectedDriver)?.name || selectedDriver}</span></div>}
+                <div className="flex gap-2"><span className="font-medium w-24 flex-shrink-0">Leave at:</span><span>{scheduledDate ? `${format(scheduledDate, "MMM d")} ${scheduledHour}:${scheduledMinute} ${scheduledPeriod}` : "—"}</span></div>
                 <div className="flex gap-2"><span className="font-medium w-24 flex-shrink-0">Your fare:</span><span className="font-bold text-purple-700">${fareEstimate?.toFixed(2)}</span></div>
               </div>
 
@@ -253,6 +358,9 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
 
               <Button onClick={copyCode} variant="outline" className="w-full border-purple-300 text-purple-700 hover:bg-purple-50" data-testid="button-copy-schedule-code">
                 {codeCopied ? <><CheckCircle className="w-4 h-4 mr-2 text-green-500" /> Copied!</> : <><Copy className="w-4 h-4 mr-2" /> Copy Code</>}
+              </Button>
+              <Button onClick={shareCode} className="w-full bg-purple-600 hover:bg-purple-700" data-testid="button-share-schedule-invite">
+                <Share2 className="w-4 h-4 mr-2" /> Share invite with coworkers
               </Button>
 
               <Card className="bg-blue-50 border-blue-200">

@@ -88,9 +88,12 @@ export function AddressAutocomplete({
           } else if (e.key === "ArrowUp") {
             e.preventDefault();
             setActiveIdx((i) => Math.max(i - 1, 0));
-          } else if (e.key === "Enter" && activeIdx >= 0) {
+          } else if (e.key === "Enter") {
+            // No highlight → take the top suggestion. Riders who type a
+            // full address and hit Enter/Go expect it to resolve, not to
+            // be told "address not found" at booking time.
             e.preventDefault();
-            pick(suggestions[activeIdx]);
+            pick(suggestions[activeIdx >= 0 ? activeIdx : 0]);
           } else if (e.key === "Escape") {
             setOpen(false);
           }

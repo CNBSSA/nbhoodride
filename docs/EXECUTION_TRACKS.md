@@ -215,6 +215,9 @@ Decisions, credentials, or approvals only you can provide. Agent prepares; you f
 
 **App stores:** Phased plan — [APP_STORE_PLAN.md](./APP_STORE_PLAN.md) (web first). Build runbook: [APP_STORE_READINESS.md](./APP_STORE_READINESS.md).
 
+**Daily ops audit:** [DAILY_AUDIT_AGENT_INVOKE.md](./DAILY_AUDIT_AGENT_INVOKE.md) · `.cursor/rules/daily-audit-agent.mdc` (auto) · `npm run audit:daily`  
+**Git workflow:** Trunk-based — audit **`main`** (live), draft PRs to **`main`**, founder merges — [GIT_WORKFLOW.md](./GIT_WORKFLOW.md)
+
 ### Phase F — Post-engagement audit (2026-06-30)
 
 | Gate | Result |

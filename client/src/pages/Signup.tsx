@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useLocation, Link } from 'wouter';
 import { queryClient, getCsrfToken } from '@/lib/queryClient';
+import { PG_CARD } from '@shared/userFacingCopy';
 
 export default function Signup() {
   const [email, setEmail] = useState('');
@@ -28,6 +29,8 @@ export default function Signup() {
     /[0-9]/.test(password) &&
     /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
   const [pendingApproval, setPendingApproval] = useState(false);
+  const [emailDeliveryWarning, setEmailDeliveryWarning] = useState<string | null>(null);
+  const [signupEmail, setSignupEmail] = useState('');
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -78,10 +81,13 @@ export default function Signup() {
       const data = await response.json();
       
       if (data.pendingApproval) {
+        setSignupEmail(email);
+        setEmailDeliveryWarning(data.emailDeliveryWarning ?? null);
         setPendingApproval(true);
         toast({
-          title: "Account Created!",
-          description: data.message,
+          title: data.emailVerificationSent ? "Account Created!" : "Account Created — check email setup",
+          description: data.emailDeliveryWarning || data.message,
+          variant: data.emailVerificationSent ? "default" : "destructive",
         });
         return;
       }
@@ -115,12 +121,26 @@ export default function Signup() {
             <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <i className="fas fa-clock text-2xl text-orange-500" />
             </div>
-            <h2 className="text-xl font-bold mb-2" data-testid="text-pending-title">Account Pending Approval</h2>
-            <p className="text-muted-foreground mb-4" data-testid="text-pending-message">
-              Your account has been created successfully! An administrator needs to approve your account before you can log in. Please check back later.
+            <h2 className="text-xl font-bold mb-2" data-testid="text-pending-title">Almost there — two steps</h2>
+            <ol className="text-left text-sm text-muted-foreground mb-4 space-y-2 list-decimal list-inside">
+              <li>
+                <strong className="text-foreground">Verify your email</strong> — we sent a link to{" "}
+                <span className="font-medium text-foreground">{signupEmail || email}</span>. Check spam/junk too.
+              </li>
+              <li>
+                <strong className="text-foreground">Account approval</strong> — after you verify, our team reviews new accounts (usually within 24 hours). We will email you when you can log in.
+              </li>
+            </ol>
+            {emailDeliveryWarning && (
+              <p className="text-sm text-destructive mb-4" data-testid="text-email-warning">
+                {emailDeliveryWarning}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground mb-4">
+              Want to drive? After you can log in, open Profile to upload driver documents. That review is separate from your account approval.
             </p>
             <Link href="/login">
-              <Button variant="outline" className="w-full" data-testid="btn-back-to-login">Back to Login</Button>
+              <Button variant="outline" className="w-full mb-2" data-testid="btn-back-to-login">Back to Login (resend verification)</Button>
             </Link>
           </CardContent>
         </Card>
@@ -316,7 +336,7 @@ export default function Signup() {
 
           <div className="mt-4 text-xs text-center">
             <p className="text-green-700 dark:text-green-400 font-medium">
-              🎉 New riders get $20 in Virtual PG Card credit + 4 rides with $5 off each!
+              🎉 New riders get $20 in {PG_CARD.name} credit + 4 rides with $5 off each!
             </p>
           </div>
         </CardContent>

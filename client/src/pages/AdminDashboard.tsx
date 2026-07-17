@@ -28,10 +28,24 @@ import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
 
 type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
+function useAdminNavPendingCounts() {
+  const { data: pendingUsers = [] } = useQuery<any[]>({
+    queryKey: ["/api/admin/users/pending"],
+  });
+  const { data: drivers = [] } = useQuery<any[]>({
+    queryKey: ["/api/admin/drivers"],
+  });
+  const pendingDrivers = drivers.filter(
+    (d) => !d.approvalStatus || d.approvalStatus === "pending",
+  ).length;
+  return { users: pendingUsers.length, drivers: pendingDrivers };
+}
+
 export default function AdminDashboard() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<AdminTab>("dashboard");
   const [, setLocation] = useLocation();
+  const pendingNav = useAdminNavPendingCounts();
 
   if (!user?.isAdmin && !user?.isSuperAdmin) {
     return (
@@ -87,7 +101,17 @@ export default function AdminDashboard() {
                 data-testid={`nav-${tab.id}`}
               >
                 <tab.icon className="w-4 h-4" />
-                {tab.label}
+                <span className="flex-1 text-left">{tab.label}</span>
+                {tab.id === "users" && pendingNav.users > 0 && (
+                  <Badge className="bg-orange-500 text-white text-[10px] px-1.5" data-testid="nav-badge-users">
+                    {pendingNav.users}
+                  </Badge>
+                )}
+                {tab.id === "drivers" && pendingNav.drivers > 0 && (
+                  <Badge className="bg-orange-500 text-white text-[10px] px-1.5" data-testid="nav-badge-drivers">
+                    {pendingNav.drivers}
+                  </Badge>
+                )}
               </button>
             ))}
           </nav>
@@ -108,6 +132,8 @@ export default function AdminDashboard() {
                 data-testid={`nav-mobile-${tab.id}`}
               >
                 {tab.label}
+                {tab.id === "users" && pendingNav.users > 0 && ` (${pendingNav.users})`}
+                {tab.id === "drivers" && pendingNav.drivers > 0 && ` (${pendingNav.drivers})`}
               </button>
             ))}
           </div>
@@ -181,6 +207,9 @@ function DashboardOverview() {
 function UsersPanel() {
   const { user: currentUser } = useAuth();
   const { data: users = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/admin/users"] });
+  const { data: pendingUsersAll = [], isLoading: pendingLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/users/pending"],
+  });
   const { toast } = useToast();
   const [showCreateAdmin, setShowCreateAdmin] = useState(false);
   const [newAdmin, setNewAdmin] = useState({ email: '', password: '', firstName: '', lastName: '' });
@@ -195,6 +224,7 @@ function UsersPanel() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/pending"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard"] });
       toast({ title: "User updated" });
     },
@@ -207,7 +237,20 @@ function UsersPanel() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/pending"] });
       toast({ title: "User approved" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const verifyEmailManually = useMutation({
+    mutationFn: async (userId: string) => {
+      await apiRequest("POST", `/api/admin/users/${userId}/verify-email`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/pending"] });
+      toast({ title: "Email marked verified", description: "The user can now log in (once approved)." });
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
@@ -218,6 +261,7 @@ function UsersPanel() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/pending"] });
       toast({ title: "User approval revoked" });
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
@@ -251,6 +295,7 @@ function UsersPanel() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users/pending"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/dashboard"] });
       setDeleteConfirm(null);
       toast({ title: "User deleted" });
@@ -274,7 +319,7 @@ function UsersPanel() {
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
-  if (isLoading) return <div data-testid="loading-users">Loading users...</div>;
+  if (isLoading || pendingLoading) return <div data-testid="loading-users">Loading users...</div>;
 
   const filteredUsers = users.filter((u: any) => {
     if (!searchTerm) return true;
@@ -282,7 +327,11 @@ function UsersPanel() {
     return (u.firstName?.toLowerCase().includes(term) || u.lastName?.toLowerCase().includes(term) || u.email?.toLowerCase().includes(term));
   });
 
-  const pendingApproval = filteredUsers.filter((u: any) => !u.isApproved && !u.isSuperAdmin);
+  const pendingApproval = pendingUsersAll.filter((u: any) => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    return (u.firstName?.toLowerCase().includes(term) || u.lastName?.toLowerCase().includes(term) || u.email?.toLowerCase().includes(term));
+  });
   const approvedUsers = filteredUsers.filter((u: any) => u.isApproved || u.isSuperAdmin);
 
   return (
@@ -317,11 +366,19 @@ function UsersPanel() {
 
       <Input placeholder="Search users by name or email..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="mb-4" data-testid="input-search-users" />
 
+      <Card className="mb-4 border-blue-200 bg-blue-50/80 dark:bg-blue-950/20">
+        <CardContent className="pt-4 pb-3 text-sm text-muted-foreground">
+          <strong className="text-foreground">New signups always appear here (Users tab)</strong>, not under Drivers.
+          Drivers only show in the <strong>Drivers</strong> tab after they log in and submit license, insurance, and vehicle photos.
+          If email never arrives, use <strong>Email unverified — verify manually</strong> or fix <code className="text-xs">RESEND_API_KEY</code> on Railway.
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <Card className="border-orange-200 bg-orange-50 dark:bg-orange-950/20">
           <CardContent className="pt-4 pb-3 text-center">
             <Clock className="w-6 h-6 mx-auto mb-1 text-orange-500" />
-            <p className="text-2xl font-bold text-orange-600" data-testid="count-pending">{users.filter((u: any) => !u.isApproved && !u.isSuperAdmin).length}</p>
+            <p className="text-2xl font-bold text-orange-600" data-testid="count-pending">{pendingUsersAll.length}</p>
             <p className="text-xs text-muted-foreground">Pending</p>
           </CardContent>
         </Card>
@@ -379,7 +436,20 @@ function UsersPanel() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
+                    {u.registrationCompletedAt && !u.emailVerifiedAt && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-orange-400 text-orange-700"
+                        onClick={() => verifyEmailManually.mutate(u.id)}
+                        disabled={verifyEmailManually.isPending}
+                        title="User hasn't clicked their email link — verify manually if you've confirmed who they are"
+                        data-testid={`btn-verify-email-${u.id}`}
+                      >
+                        <AlertCircle className="w-3 h-3 mr-1" /> Email unverified — verify manually
+                      </Button>
+                    )}
                     <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => approveUser.mutate(u.id)} data-testid={`btn-approve-user-${u.id}`}>
                       <CheckCircle className="w-3 h-3 mr-1" /> Approve
                     </Button>
@@ -390,7 +460,7 @@ function UsersPanel() {
                       </div>
                     ) : (
                       <Button size="sm" variant="destructive" onClick={() => setDeleteConfirm(u.id)} data-testid={`btn-delete-user-${u.id}`}>
-                        <XCircle className="w-3 h-3 mr-1" /> Reject
+                        <XCircle className="w-3 h-3 mr-1" /> Delete account
                       </Button>
                     )}
                   </div>
@@ -536,6 +606,7 @@ function DriversPanel() {
   if (isLoading) return <div data-testid="loading-drivers">Loading drivers...</div>;
 
   const pendingDrivers = drivers.filter((d: any) => !d.approvalStatus || d.approvalStatus === 'pending');
+  const backgroundCheckDrivers = drivers.filter((d: any) => d.approvalStatus === 'background_check_pending');
   const rejectedDrivers = drivers.filter((d: any) => d.approvalStatus === 'rejected');
   const approvedDrivers = drivers.filter((d: any) => d.approvalStatus === 'approved');
 
@@ -546,6 +617,7 @@ function DriversPanel() {
   };
 
   const filteredPending = pendingDrivers.filter(searchFilter);
+  const filteredBackgroundCheck = backgroundCheckDrivers.filter(searchFilter);
   const filteredRejected = rejectedDrivers.filter(searchFilter);
   const filteredApproved = approvedDrivers.filter(searchFilter);
 
@@ -556,6 +628,9 @@ function DriversPanel() {
         <div className="flex items-center gap-2">
           <Badge variant="outline" className="text-sm">{drivers.length} total</Badge>
           <Badge className="bg-orange-500 text-white text-sm">{pendingDrivers.length} pending</Badge>
+          {backgroundCheckDrivers.length > 0 && (
+            <Badge className="bg-purple-600 text-white text-sm">{backgroundCheckDrivers.length} background check</Badge>
+          )}
           <Badge className="bg-green-500 text-white text-sm">{approvedDrivers.length} approved</Badge>
         </div>
       </div>
@@ -652,6 +727,36 @@ function DriversPanel() {
                       )}
                     </div>
                   </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+
+      {filteredBackgroundCheck.length > 0 && (
+        <>
+          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+            <Shield className="w-5 h-5 text-purple-600" /> Background check in progress ({filteredBackgroundCheck.length})
+          </h3>
+          <p className="text-sm text-muted-foreground mb-3">
+            These drivers are waiting on Checkr or manual follow-up. They no longer appear under Pending — watch this section until approved or rejected.
+          </p>
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+            Only mark approved after Checkr clearance or documented manual review. Premature approval lets drivers go online before background check completes.
+          </p>
+          <div className="space-y-3 mb-6">
+            {filteredBackgroundCheck.map((d: any) => (
+              <Card key={d.id} className="border-l-4 border-l-purple-500" data-testid={`driver-bgcheck-${d.id}`}>
+                <CardContent className="pt-4 flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <p className="font-semibold">{d.user?.firstName} {d.user?.lastName}</p>
+                    <p className="text-sm text-muted-foreground">{d.user?.email}</p>
+                    <Badge className="bg-purple-600 text-white mt-1">Background check</Badge>
+                  </div>
+                  <Button size="sm" className="bg-green-600" onClick={() => updateDriver.mutate({ userId: d.userId, updates: { approvalStatus: "approved", isVerifiedNeighbor: true } })}>
+                    Mark approved
+                  </Button>
                 </CardContent>
               </Card>
             ))}

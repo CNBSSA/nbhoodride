@@ -1,7 +1,7 @@
 {
-  "name": "PG Ride — Community Rideshare",
+  "name": "PG Ride — People-Governed Mobility",
   "short_name": "PG Ride",
-  "description": "Maryland's community ride-sharing platform. Safe, transparent rides from your neighbors.",
+  "description": "People-Governed, community-owned rideshare. Verified neighbors, transparent fares, no surge pricing.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

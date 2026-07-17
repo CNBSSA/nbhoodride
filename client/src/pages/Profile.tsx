@@ -7,6 +7,7 @@ import { apiRequest, getCsrfToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import DocumentUploadModal from "@/components/DocumentUploadModal";
+import ProfileEditDialog from "@/components/ProfileEditDialog";
 import SafetyPrivacyModal from "@/components/SafetyPrivacyModal";
 import TopUpModal from "@/components/TopUpModal";
 import { isUnauthorizedError } from "@/lib/authUtils";
@@ -17,11 +18,16 @@ import { TrustPreferences } from "@/components/TrustPreferences";
 import { ReferralProgramCard } from "@/components/ReferralProgramCard";
 import { CalmRideToggle } from "@/components/CalmRideToggle";
 import { LanguageSelector } from "@/components/LanguageSelector";
+import { DriverOnboardingChecklist } from "@/components/DriverOnboardingChecklist";
 import { MD_COUNTIES } from "../../../shared/schema";
 import type { Locale } from "@shared/i18n";
+import { useLocation, Link } from "wouter";
+import { PG_CARD, SUPPORT } from "@shared/userFacingCopy";
+import { BRAND } from "@shared/branding";
 
 export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
+  const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [isSafetyPrivacyModalOpen, setIsSafetyPrivacyModalOpen] = useState(false);
   const { permission, isSubscribed, isSupported, isLoading: pushLoading, subscribe, unsubscribe } = usePushNotifications();
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
@@ -30,6 +36,7 @@ export default function Profile() {
   const { user, isLoading } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
 
   const { data: autonomy = { autonomyLevel: 1 } } = useQuery<{ autonomyLevel: number }>({
     queryKey: ["/api/mobility/autonomy"],
@@ -211,8 +218,9 @@ export default function Profile() {
           onClick={handleLogout}
           className="text-destructive"
           data-testid="button-logout"
+          aria-label="Log out"
         >
-          <i className="fas fa-sign-out-alt" />
+          <i className="fas fa-sign-out-alt" aria-hidden />
         </Button>
       </header>
 
@@ -245,7 +253,7 @@ export default function Profile() {
                   </span>
                 </div>
               </div>
-              <Button variant="ghost" size="sm" className="text-primary" data-testid="button-edit-profile">
+              <Button variant="ghost" size="sm" className="text-primary" onClick={() => setIsEditProfileOpen(true)} data-testid="button-edit-profile">
                 Edit
               </Button>
             </div>
@@ -261,7 +269,7 @@ export default function Profile() {
                   <i className="fas fa-credit-card text-white text-xl" />
                 </div>
                 <div>
-                  <p className="text-xs text-green-800 dark:text-green-300 font-medium">PG Virtual Card</p>
+                  <p className="text-xs text-green-800 dark:text-green-300 font-medium">{PG_CARD.fullLabel}</p>
                   <h3 className="text-2xl font-bold text-green-900 dark:text-green-100" data-testid="text-virtual-balance">
                     ${parseFloat(user?.virtualCardBalance || "0").toFixed(2)}
                   </h3>
@@ -322,7 +330,7 @@ export default function Profile() {
           </Card>
         ) : (
           <Card className="border-secondary/20 bg-secondary/5">
-            <CardContent className="p-4">
+            <CardContent className="p-4 space-y-3">
               <div className="flex items-center space-x-3">
                 <i className="fas fa-check-circle text-secondary text-xl" />
                 <div>
@@ -338,6 +346,7 @@ export default function Profile() {
                   </p>
                 </div>
               </div>
+              <DriverOnboardingChecklist />
             </CardContent>
           </Card>
         )}
@@ -448,12 +457,13 @@ export default function Profile() {
             variant="outline"
             className="w-full justify-between p-4"
             data-testid="button-payment-methods"
+            onClick={() => setLocation("/card-setup")}
           >
             <div className="flex items-center space-x-3">
               <i className="fas fa-credit-card text-accent text-xl" />
               <div className="text-left">
                 <p className="font-medium">Payment Methods</p>
-                <p className="text-sm text-muted-foreground">Currently: Cash Only</p>
+                <p className="text-sm text-muted-foreground">{PG_CARD.profileMethods}</p>
               </div>
             </div>
             <i className="fas fa-chevron-right text-muted-foreground" />
@@ -463,21 +473,32 @@ export default function Profile() {
             variant="outline"
             className="w-full justify-between p-4"
             data-testid="button-help-support"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent("pgride:open-assistant"));
+              setLocation("/");
+            }}
           >
             <div className="flex items-center space-x-3">
               <i className="fas fa-question-circle text-primary text-xl" />
               <div className="text-left">
                 <p className="font-medium">Help & Support</p>
-                <p className="text-sm text-muted-foreground">Contact us, FAQ, community guidelines</p>
+                <p className="text-sm text-muted-foreground">{SUPPORT.faqHint}</p>
               </div>
             </div>
             <i className="fas fa-chevron-right text-muted-foreground" />
           </Button>
+          <p className="text-xs text-muted-foreground text-center -mt-1">
+            Email{" "}
+            <a className="underline" href={`mailto:${BRAND.supportEmail}`}>
+              {BRAND.supportEmail}
+            </a>
+          </p>
 
           {/* Autonomy dial (Phase B) */}
           <Card>
             <CardContent className="p-4">
-              <p className="font-medium mb-3">Booking Autonomy</p>
+              <p className="font-medium mb-1">How PG Ride books for you</p>
+              <p className="text-xs text-muted-foreground mb-3">Booking autonomy</p>
               <AutonomyDial
                 level={autonomy.autonomyLevel}
                 onChange={(level) => setAutonomy.mutate(level)}
@@ -591,11 +612,17 @@ export default function Profile() {
                 Community rideshare for Maryland
               </p>
               <div className="flex justify-center space-x-4 text-xs text-muted-foreground">
-                <span>Privacy Policy</span>
+                <Link href="/privacy" className="underline">
+                  Privacy Policy
+                </Link>
                 <span>•</span>
-                <span>Terms of Service</span>
+                <Link href="/terms" className="underline">
+                  Terms of Service
+                </Link>
                 <span>•</span>
-                <span>Support</span>
+                <a href={`mailto:${BRAND.supportEmail}`} className="underline">
+                  Support
+                </a>
               </div>
             </div>
           </CardContent>
@@ -606,6 +633,12 @@ export default function Profile() {
       <DocumentUploadModal
         isOpen={isDocumentModalOpen}
         onClose={() => setIsDocumentModalOpen(false)}
+      />
+
+      <ProfileEditDialog
+        isOpen={isEditProfileOpen}
+        onClose={() => setIsEditProfileOpen(false)}
+        user={user}
       />
 
       {/* Safety & Privacy Modal */}

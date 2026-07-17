@@ -12,6 +12,7 @@
     "start": "NODE_ENV=production node dist/index.js",
     "check": "node scripts/check-migration-drift.mjs && node scripts/check-pwa-assets.mjs && tsc",
     "smoke:production": "node scripts/smoke-production.mjs",
+    "audit:daily": "node scripts/daily-audit.mjs",
     "build:mobile": "npm run build && npx cap sync",
     "cap:sync": "npx cap sync",
     "cap:open:android": "npx cap open android",

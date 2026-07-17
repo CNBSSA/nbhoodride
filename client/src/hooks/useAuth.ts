@@ -13,6 +13,7 @@ interface User {
   isAdmin: boolean;
   isSuperAdmin: boolean;
   isApproved: boolean;
+  emailVerifiedAt?: string | null;
   approvedBy?: string;
   isSuspended: boolean;
   rating: string;

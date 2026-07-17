@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ObjectUploader } from "@/components/ObjectUploader";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -21,6 +21,19 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
   const [uploadedDocuments, setUploadedDocuments] = useState<UploadedDocument[]>([]);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  // What's already on file — so drivers can see their existing submission
+  // and understand that uploading again replaces it.
+  const { data: profileDocs } = useQuery<{
+    approvalStatus: string;
+    licenseImageUrl: string | null;
+    insuranceImageUrl: string | null;
+    vehiclePhotoUrls: string[];
+  }>({
+    queryKey: ["/api/driver/profile/me"],
+    enabled: isOpen,
+    retry: false,
+  });
 
   const submitDocumentsMutation = useMutation({
     mutationFn: async (documents: UploadedDocument[]) => {
@@ -44,6 +57,7 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
         description: "Your documents will be reviewed within 24 hours.",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/driver/profile/me"] });
       onClose();
     },
     onError: () => {
@@ -86,12 +100,30 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
   };
 
   const handleSubmit = () => {
-    if (uploadedDocuments.length === 0) {
+    const hasLicense =
+      uploadedDocuments.some((d) => d.type === "license") || !!profileDocs?.licenseImageUrl;
+    const hasInsurance =
+      uploadedDocuments.some((d) => d.type === "insurance") || !!profileDocs?.insuranceImageUrl;
+    const hasVehicle =
+      uploadedDocuments.some((d) => d.type.startsWith("vehicle-")) ||
+      (profileDocs?.vehiclePhotoUrls?.length ?? 0) > 0;
+
+    if (!hasLicense || !hasInsurance || !hasVehicle) {
       toast({
-        title: "No Documents",
-        description: "Please upload at least one document.",
+        title: "Documents incomplete",
+        description:
+          "Please upload your license, insurance, and at least one vehicle photo before submitting.",
         variant: "destructive",
       });
+      return;
+    }
+
+    if (uploadedDocuments.length === 0) {
+      toast({
+        title: "Documents on file",
+        description: "Your uploads are already saved. We will email you when review is complete.",
+      });
+      onClose();
       return;
     }
 
@@ -101,9 +133,17 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center max-w-[430px] mx-auto">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <Card className="w-full mx-4 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto">
+      {/* Backdrop MUST be absolute, not fixed: a fixed sibling is a positioned
+          element and paints ABOVE a plain-static Card regardless of DOM
+          order, silently swallowing every click meant for the form
+          (uploads worked in testing because file pickers don't need real
+          hit-testing — but "Submit for Review" does, and never fired).
+          relative z-10 on the Card gives it its own higher stacking
+          context, matching the working pattern used elsewhere in this
+          codebase (SharedScheduleSheet, JoinScheduleModal, etc). */}
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <Card className="relative z-10 w-full mx-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Driver Documents</h2>
           <Button
@@ -111,8 +151,9 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
             size="sm"
             onClick={onClose}
             data-testid="button-close-documents"
+            aria-label="Close driver documents"
           >
-            <i className="fas fa-times" />
+            <i className="fas fa-times" aria-hidden />
           </Button>
         </div>
         
@@ -123,19 +164,21 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
             <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
               <i className="fas fa-id-card text-3xl text-muted-foreground mb-2" />
               <p className="text-sm text-muted-foreground mb-2">
-                Upload front and back of license
+                One clear photo of your driver&apos;s license (front is enough)
               </p>
               <ObjectUploader
-                maxNumberOfFiles={2}
+                maxNumberOfFiles={1}
                 onGetUploadParameters={getUploadParameters}
                 onComplete={handleUploadComplete('license')}
                 buttonClassName="bg-primary text-primary-foreground px-4 py-2 rounded text-sm"
               >
                 <span data-testid="button-upload-license">Choose Files</span>
               </ObjectUploader>
-              {uploadedDocuments.find(d => d.type === 'license') && (
+              {uploadedDocuments.find(d => d.type === 'license') ? (
                 <p className="text-sm text-secondary mt-2">✓ License uploaded</p>
-              )}
+              ) : profileDocs?.licenseImageUrl ? (
+                <p className="text-sm text-green-600 mt-2" data-testid="license-on-file">✓ Already on file — uploading replaces it</p>
+              ) : null}
             </div>
           </div>
 
@@ -155,9 +198,11 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
               >
                 <span data-testid="button-upload-insurance">Choose File</span>
               </ObjectUploader>
-              {uploadedDocuments.find(d => d.type === 'insurance') && (
+              {uploadedDocuments.find(d => d.type === 'insurance') ? (
                 <p className="text-sm text-secondary mt-2">✓ Insurance uploaded</p>
-              )}
+              ) : profileDocs?.insuranceImageUrl ? (
+                <p className="text-sm text-green-600 mt-2" data-testid="insurance-on-file">✓ Already on file — uploading replaces it</p>
+              ) : null}
             </div>
           </div>
 
@@ -167,6 +212,11 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
             <p className="text-sm text-muted-foreground">
               Upload up to 4 photos. One must show the license plate clearly.
             </p>
+            {(profileDocs?.vehiclePhotoUrls?.length ?? 0) > 0 && uploadedDocuments.every(d => !d.type.startsWith('vehicle-')) && (
+              <p className="text-sm text-green-600" data-testid="vehicle-photos-on-file">
+                ✓ {profileDocs!.vehiclePhotoUrls.length} photo{profileDocs!.vehiclePhotoUrls.length === 1 ? "" : "s"} already on file — uploading replaces them
+              </p>
+            )}
             
             <div className="grid grid-cols-2 gap-3">
               {['Front with plate', 'Side view', 'Interior', 'Back view'].map((label, index) => (

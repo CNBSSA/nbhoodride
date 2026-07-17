@@ -21,6 +21,20 @@ export default function SOSModal({ isOpen, onClose, currentRideId }: SOSModalPro
   const { location } = useGeolocation();
   const { user } = useAuth();
 
+  const { data: readiness } = useQuery<{
+    checks?: { id: string; status: string }[];
+  }>({
+    queryKey: ["/health/ready"],
+    queryFn: async () => {
+      const res = await fetch("/health/ready");
+      return res.json();
+    },
+    enabled: isOpen,
+    staleTime: 60_000,
+  });
+  const serverSmsReady =
+    readiness?.checks?.find((c) => c.id === "0.5-twilio")?.status === "pass";
+
   const emergencyMutation = useMutation({
     mutationFn: async (incidentData: any) => {
       const response = await apiRequest('POST', '/api/emergency/start', incidentData);
@@ -99,9 +113,9 @@ export default function SOSModal({ isOpen, onClose, currentRideId }: SOSModalPro
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center max-w-[430px] mx-auto">
-      <div className="fixed inset-0 bg-black/70" onClick={onClose} />
-      <Card className="w-full mx-4 bg-destructive text-destructive-foreground">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto">
+      <div className="absolute inset-0 bg-black/70" onClick={onClose} />
+      <Card className="relative z-10 w-full mx-4 bg-destructive text-destructive-foreground">
         <div className="flex items-center justify-between p-4 border-b border-white/20">
           <h2 className="text-lg font-semibold text-white">Emergency SOS</h2>
           <Button
@@ -110,8 +124,9 @@ export default function SOSModal({ isOpen, onClose, currentRideId }: SOSModalPro
             onClick={onClose}
             className="text-white/80 hover:text-white"
             data-testid="button-close-sos"
+            aria-label="Close emergency SOS"
           >
-            <i className="fas fa-times" />
+            <i className="fas fa-times" aria-hidden />
           </Button>
         </div>
         
@@ -120,8 +135,14 @@ export default function SOSModal({ isOpen, onClose, currentRideId }: SOSModalPro
             <i className="fas fa-exclamation-triangle text-6xl mb-4" />
             <h3 className="text-xl font-semibold mb-2 text-white">Need Emergency Help?</h3>
             <p className="text-white/90">
-              Choose from the options below or call 911 immediately if you're in immediate danger.
+              Choose from the options below or call 911 immediately if you&apos;re in immediate danger.
             </p>
+            {serverSmsReady === false && (
+              <p className="text-xs text-white/80 mt-2 bg-white/10 rounded-lg p-2">
+                Automatic SMS from PG Ride is not configured in this environment. You can still call 911, call
+                your emergency contact, or use your phone&apos;s SMS app to share your link.
+              </p>
+            )}
           </div>
 
           <div className="space-y-3">
@@ -172,7 +193,11 @@ export default function SOSModal({ isOpen, onClose, currentRideId }: SOSModalPro
                 <div className="text-center text-white">
                   <i className="fas fa-check-circle text-4xl mb-2" />
                   <h4 className="font-semibold">Emergency Alert Active</h4>
-                  <p className="text-sm text-white/80">Your emergency contacts have been notified</p>
+                  <p className="text-sm text-white/80">
+                    {serverSmsReady
+                      ? "Your emergency contacts have been notified"
+                      : "Your alert was logged — use call or SMS below if you need to reach someone now"}
+                  </p>
                 </div>
                 
                 {user?.emergencyContact && (

@@ -18,8 +18,12 @@ import { Badge } from "@/components/ui/badge";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, CreditCard, CheckCircle } from "lucide-react";
+import { PG_CARD } from "@shared/userFacingCopy";
 
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
+import { useStripeConfig } from "@/hooks/useStripeConfig";
+
+const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY as string | undefined;
+const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
 const PRESET_AMOUNTS = [10, 20, 25, 50];
 
@@ -64,7 +68,7 @@ function TopUpForm({ amount, clientSecret, onSuccess, onCancel }: TopUpFormProps
         onSuccess(data.newBalance);
         toast({
           title: "Balance Added!",
-          description: `$${amount.toFixed(2)} added to your Virtual PG Card.`,
+          description: `$${amount.toFixed(2)} added to your ${PG_CARD.name}.`,
         });
       }
     } catch (err: any) {
@@ -111,6 +115,8 @@ interface TopUpModalProps {
 
 export default function TopUpModal({ isOpen, onClose, currentBalance }: TopUpModalProps) {
   const { toast } = useToast();
+  const { data: stripeConfig } = useStripeConfig();
+  const stripeReady = stripeConfig?.topUpEnabled ?? !!stripePublishableKey;
   const [step, setStep] = useState<"select" | "pay" | "done">("select");
   const [selectedAmount, setSelectedAmount] = useState<number>(20);
   const [customAmount, setCustomAmount] = useState<string>("");
@@ -156,14 +162,21 @@ export default function TopUpModal({ isOpen, onClose, currentBalance }: TopUpMod
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <CreditCard className="w-5 h-5 text-green-600" />
-            Add to Virtual PG Card
+            Add to {PG_CARD.name}
           </DialogTitle>
           <DialogDescription>
             Current balance: <span className="font-semibold text-foreground">${parseFloat(currentBalance || "0").toFixed(2)}</span>
           </DialogDescription>
         </DialogHeader>
 
-        {step === "select" && (
+        {!stripeReady && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 dark:border-amber-900 p-4 text-sm text-amber-900 dark:text-amber-100">
+            Card top-up is being activated. Your {PG_CARD.name} balance still works for rides —
+            card payments will be enabled shortly.
+          </div>
+        )}
+
+        {stripeReady && step === "select" && (
           <div className="space-y-4">
             <div>
               <p className="text-sm font-medium mb-3">Choose an amount</p>
@@ -218,7 +231,7 @@ export default function TopUpModal({ isOpen, onClose, currentBalance }: TopUpMod
           </div>
         )}
 
-        {step === "pay" && clientSecret && (
+        {stripeReady && step === "pay" && clientSecret && (
           <Elements
             stripe={stripePromise}
             options={{ clientSecret, appearance: { theme: "stripe" } }}
@@ -232,7 +245,7 @@ export default function TopUpModal({ isOpen, onClose, currentBalance }: TopUpMod
           </Elements>
         )}
 
-        {step === "done" && (
+        {stripeReady && step === "done" && (
           <div className="text-center py-4 space-y-4">
             <CheckCircle className="w-16 h-16 text-green-500 mx-auto" />
             <div>

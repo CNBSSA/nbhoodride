@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Bell, BellOff, X } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
+const DISMISS_KEY = "pgride:pushPromptDismissed";
+
 export default function PushNotificationPrompt() {
   const { user } = useAuth();
   const { permission, isSubscribed, isSupported, isLoading, subscribe } = usePushNotifications();
@@ -15,16 +17,16 @@ export default function PushNotificationPrompt() {
     isSupported &&
     permission === "default" &&
     !isSubscribed &&
-    !dismissed;
+    !dismissed &&
+    !localStorage.getItem(DISMISS_KEY);
 
   useEffect(() => {
-    const key = "push-prompt-dismissed";
-    if (sessionStorage.getItem(key)) setDismissed(true);
+    if (localStorage.getItem(DISMISS_KEY)) setDismissed(true);
   }, []);
 
   const handleDismiss = () => {
     setDismissed(true);
-    sessionStorage.setItem("push-prompt-dismissed", "1");
+    localStorage.setItem(DISMISS_KEY, "1");
   };
 
   const handleEnable = async () => {
@@ -36,7 +38,19 @@ export default function PushNotificationPrompt() {
 
   return (
     <div
-      className="fixed bottom-20 left-4 right-4 z-50 max-w-sm mx-auto"
+      // z-30, deliberately BELOW every modal/sheet in the app (all of which
+      // use z-50 or higher — DocumentUploadModal, CircuitsTimetableSheet,
+      // RiderDashboard's booking sheets at z-[55]/z-[60], BottomNavigation).
+      // This banner is mounted unconditionally at the App root (a sibling of
+      // Router, not inside any modal), so with an equal z-50 it could win
+      // the stacking fight against whatever modal happened to be open and
+      // intercept taps meant for it. Confirmed via automated testing: with
+      // the Driver Documents modal open, a tap on its "Submit for Review"
+      // button (which sits near bottom-20, the same zone this banner
+      // occupies) landed on this banner's Enable button instead, so
+      // submission silently never fired. Same bug class as PR #87 (a
+      // different fixed z-50 layer stealing taps from BottomNavigation).
+      className="fixed bottom-20 left-4 right-4 z-30 max-w-sm mx-auto"
       data-testid="push-notification-prompt"
     >
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl p-4 flex items-start gap-3">

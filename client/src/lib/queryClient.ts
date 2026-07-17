@@ -3,7 +3,22 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    // API errors are JSON like {"message":"…"} and err.message feeds
+    // user-facing toasts across the app — surface the human sentence, not
+    // `403: {"message":…}` raw JSON. The HTTP status travels as a structured
+    // property (isUnauthorizedError checks it).
+    let message = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.message === "string" && parsed.message.length > 0) {
+        message = parsed.message;
+      }
+    } catch {
+      // Non-JSON body (proxy/HTML error page) — keep the raw text.
+    }
+    const error = new Error(message) as Error & { status?: number };
+    error.status = res.status;
+    throw error;
   }
 }
 

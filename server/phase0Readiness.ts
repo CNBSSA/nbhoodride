@@ -149,6 +149,31 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
     detail: "Run npm run smoke:production — SPA serves /privacy and /terms",
   });
 
+  const resendReady = envPresent("RESEND_API_KEY");
+  checks.push({
+    id: "0.5-email",
+    label: "Transactional email (Resend)",
+    status: resendReady ? "pass" : "warn",
+    owner: "track_b",
+    detail: resendReady
+      ? "Verification and approval emails can be sent"
+      : "RESEND_API_KEY missing — signups see success but verification email will not send",
+  });
+
+  const twilioReady =
+    envPresent("TWILIO_ACCOUNT_SID") &&
+    envPresent("TWILIO_AUTH_TOKEN") &&
+    envPresent("TWILIO_PHONE_NUMBER");
+  checks.push({
+    id: "0.5-twilio",
+    label: "Emergency SMS (Twilio)",
+    status: twilioReady ? "pass" : "warn",
+    owner: "track_b",
+    detail: twilioReady
+      ? "Server can text emergency contacts during SOS"
+      : "Twilio not configured — SOS still supports 911, calls, and your phone's SMS app",
+  });
+
   const stripeReady =
     envPresent("STRIPE_SECRET_KEY") &&
     envPresent("VITE_STRIPE_PUBLIC_KEY") &&

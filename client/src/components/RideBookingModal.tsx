@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { MapPin, Navigation, User, DollarSign, CheckCircle, ChevronRight, Star, Shield, Loader2, Users } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { PG_CARD } from "@shared/userFacingCopy";
 
 interface Driver {
   id: string;
@@ -264,7 +265,7 @@ export default function RideBookingModal({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center max-w-[430px] mx-auto" style={viewportHeight ? { height: `${viewportHeight}px`, top: 'auto', bottom: 0 } : undefined}>
+    <div className="fixed inset-0 z-[60] flex items-end justify-center max-w-[430px] mx-auto" style={viewportHeight ? { height: `${viewportHeight}px`, top: 'auto', bottom: 0 } : undefined}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
       <Card className="relative z-10 w-full rounded-t-2xl border-0 shadow-2xl flex flex-col" style={{ maxHeight: viewportHeight ? `${viewportHeight - 16}px` : 'calc(100dvh - 2rem)' }}>
         <div className="flex items-center justify-between px-4 pt-4 pb-2 flex-shrink-0">
@@ -478,7 +479,7 @@ export default function RideBookingModal({
         <div className="p-4 bg-card border-t flex-shrink-0 space-y-2" style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 1rem))' }}>
           {fareEstimate && selectedDriver && (
             <div className="flex items-center justify-between text-xs text-gray-500 px-1">
-              <span>Paid via Virtual PG Card</span>
+              <span>{PG_CARD.payLine}</span>
               {wantsSharedRide ? (
                 <span className="text-right">
                   <span className="line-through text-gray-400 mr-1">${fareEstimate.total.toFixed(2)}</span>

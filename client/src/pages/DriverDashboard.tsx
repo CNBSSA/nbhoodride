@@ -15,18 +15,21 @@ import IncomingRideRequest from "@/components/IncomingRideRequest";
 import { ActiveRideCard } from "@/components/ActiveRideCard";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import CountySelectionSheet from "@/components/CountySelectionSheet";
+import VehicleEditDialog from "@/components/VehicleEditDialog";
 import { NotificationBell } from "@/components/NotificationBell";
 import { Link } from "wouter";
 import { format } from "date-fns";
-import { BarChart3, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote } from "lucide-react";
+import { BarChart3, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote, Bus, Users } from "lucide-react";
 import PayoutModal from "@/components/PayoutModal";
 import { LostFoundDriverCard } from "@/components/LostFoundDriverCard";
+import { DriverStatusBanner } from "@/components/DriverStatusBanner";
 import type { RideMessagePayload } from "@shared/rideChat";
 import { parseRideMessageWsEvent } from "@shared/rideChat";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
   const [showPayoutModal, setShowPayoutModal] = useState(false);
+  const [showVehicleEdit, setShowVehicleEdit] = useState(false);
   const [showCountySheet, setShowCountySheet] = useState(false);
   const [incomingRideMessages, setIncomingRideMessages] = useState<Record<string, RideMessagePayload>>({});
   const [todayCounties, setTodayCounties] = useState<string[]>([]);
@@ -133,6 +136,34 @@ export default function DriverDashboard() {
   const openScheduledRides = scheduledRidesData?.open ?? [];
   const myUpcomingRides = scheduledRidesData?.mine ?? [];
 
+  // Circuit runs — whole-run claim board (docs/CIRCUITS_LAUNCH_PLAN.md item 5)
+  const { data: circuitRunsData, refetch: refetchCircuitRuns } = useQuery<{ open: any[]; mine: any[] }>({
+    queryKey: ["/api/driver/circuit-runs"],
+    enabled: !!user?.isDriver,
+    refetchInterval: 60000,
+  });
+  const openCircuitRuns = circuitRunsData?.open ?? [];
+  const myCircuitRuns = circuitRunsData?.mine ?? [];
+
+  const claimCircuitRunMutation = useMutation({
+    mutationFn: async (groupId: string) => {
+      const response = await apiRequest('POST', `/api/driver/circuit-runs/${groupId}/claim`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      refetchCircuitRuns();
+      refetchScheduledRides();
+      toast({
+        title: "Run claimed!",
+        description: `You're driving this circuit run — ${data.seats} seat${data.seats === 1 ? "" : "s"} booked so far. Riders have been notified.`,
+      });
+    },
+    onError: (error: any) => {
+      toast({ title: "Claim failed", description: error.message || "Another driver may have claimed this run first.", variant: "destructive" });
+      refetchCircuitRuns();
+    },
+  });
+
   // Claim a scheduled ride
   const claimRideMutation = useMutation({
     mutationFn: async (rideId: string) => {
@@ -186,6 +217,18 @@ export default function DriverDashboard() {
   });
 
   const handleToggleStatus = (checked: boolean) => {
+    const approved =
+      user?.driverProfile?.isVerifiedNeighbor ||
+      user?.driverProfile?.approvalStatus === "approved";
+    if (checked && !approved) {
+      toast({
+        title: "Approval required",
+        description:
+          "Finish document upload and wait for administrator approval before going online.",
+        variant: "destructive",
+      });
+      return;
+    }
     if (checked) {
       // Show county selection before going online
       setShowCountySheet(true);
@@ -322,6 +365,8 @@ export default function DriverDashboard() {
       }
     } else if (lastMessage.type === 'scheduled_ride_taken') {
       refetchScheduledRides();
+    } else if (lastMessage.type === 'circuit_run_taken') {
+      refetchCircuitRuns();
     } else if (lastMessage.type === 'ride_reminder') {
       toast({
         title: "Ride Reminder",
@@ -374,6 +419,10 @@ export default function DriverDashboard() {
     tip: parseFloat(ride.tipAmount || '0')
   }));
 
+  const driverApproved =
+    user?.driverProfile?.isVerifiedNeighbor ||
+    user?.driverProfile?.approvalStatus === "approved";
+
   return (
     <>
       <CountySelectionSheet
@@ -403,6 +452,11 @@ export default function DriverDashboard() {
         </div>
       </header>
 
+      <DriverStatusBanner
+        approvalStatus={user?.driverProfile?.approvalStatus}
+        isVerifiedNeighbor={user?.driverProfile?.isVerifiedNeighbor}
+      />
+
       <main className="space-y-4 p-4">
         {/* Status Toggle */}
         <Card>
@@ -416,7 +470,7 @@ export default function DriverDashboard() {
                 <Switch
                   checked={isOnline}
                   onCheckedChange={handleToggleStatus}
-                  disabled={toggleStatusMutation.isPending}
+                  disabled={toggleStatusMutation.isPending || !driverApproved}
                   data-testid="switch-driver-status"
                 />
                 <span className={`font-semibold ${isOnline ? 'text-secondary' : 'text-destructive'}`}>
@@ -424,6 +478,11 @@ export default function DriverDashboard() {
                 </span>
               </div>
             </div>
+            {locationError && (
+              <p className="text-sm text-destructive mt-2" data-testid="driver-location-error">
+                Location unavailable: {locationError}. Enable location services to receive nearby requests.
+              </p>
+            )}
             {/* Today's active counties */}
             {isOnline && todayCounties.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100 flex items-start gap-2">
@@ -494,6 +553,70 @@ export default function DriverDashboard() {
           </div>
         )}
 
+        {/* Circuit runs — claim the whole run (docs/CIRCUITS_LAUNCH_PLAN.md) */}
+        {(openCircuitRuns.length > 0 || myCircuitRuns.length > 0) && (
+          <div className="space-y-3">
+            <h3 className="text-lg font-semibold text-primary flex items-center gap-2">
+              <Bus className="w-5 h-5" />
+              Circuit Runs
+            </h3>
+            {myCircuitRuns.map((run: any) => (
+              <Card key={run.groupId} className="border-green-300 bg-green-50/50" data-testid={`my-circuit-run-${run.groupId}`}>
+                <CardContent className="p-4 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-sm">{run.circuitName}</span>
+                      <Badge className="bg-green-600 text-white">Yours</Badge>
+                      {run.anchorName && <Badge variant="outline">{run.anchorName}</Badge>}
+                    </div>
+                    <span className="font-semibold text-green-700">${run.totalFare}</span>
+                  </div>
+                  <p className="text-sm text-gray-700">
+                    {run.runAt ? format(new Date(run.runAt), "EEE, MMM d 'at' h:mm a") : ''}
+                    <span className="text-gray-500"> · {run.seatsBooked} of {run.seatsTotal} seats booked</span>
+                  </p>
+                  <p className="text-xs text-gray-500 truncate">
+                    {run.pickup?.address} → {run.destination?.address}
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
+            {openCircuitRuns.map((run: any) => (
+              <Card key={run.groupId} className="border-primary/30" data-testid={`open-circuit-run-${run.groupId}`}>
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-sm">{run.circuitName}</span>
+                      {run.anchorName && <Badge variant="outline">{run.anchorName}</Badge>}
+                    </div>
+                    <span className="font-semibold text-green-700">${run.totalFare}</span>
+                  </div>
+                  <p className="text-sm text-gray-700">
+                    {run.runAt ? format(new Date(run.runAt), "EEE, MMM d 'at' h:mm a") : ''}
+                  </p>
+                  <p className="text-xs text-gray-500 truncate">
+                    {run.pickup?.address} → {run.destination?.address}
+                  </p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-600 flex items-center gap-1">
+                      <Users className="w-3 h-3" />
+                      {run.seatsBooked} of {run.seatsTotal} seats booked · ${run.farePerSeat}/seat
+                    </span>
+                    <Button
+                      size="sm"
+                      onClick={() => claimCircuitRunMutation.mutate(run.groupId)}
+                      disabled={claimCircuitRunMutation.isPending}
+                      data-testid={`button-claim-run-${run.groupId}`}
+                    >
+                      {claimCircuitRunMutation.isPending ? "Claiming..." : "Claim run"}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+
         {/* Open Scheduled Rides — available to claim */}
         {openScheduledRides.length > 0 && (
           <div className="space-y-3">
@@ -534,6 +657,9 @@ export default function DriverDashboard() {
                   </div>
                   <div className="flex items-center justify-between text-sm text-gray-600">
                     <span>Rider: {ride.rider?.firstName || 'Rider'} {ride.rider?.lastName?.[0] || ''}. ★{parseFloat(ride.rider?.rating || '5').toFixed(1)}</span>
+                    {ride.rideType === "shared_schedule" && (
+                      <Badge variant="secondary" className="text-[10px]">Coworker group · claim all seats</Badge>
+                    )}
                   </div>
                   {ride.pickupInstructions && (
                     <p className="text-xs text-gray-500 italic">"{ride.pickupInstructions}"</p>
@@ -717,8 +843,14 @@ export default function DriverDashboard() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold">Your Vehicle</h3>
-              <Button variant="ghost" size="sm" className="text-primary" data-testid="button-edit-vehicle">
-                Edit
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-primary"
+                onClick={() => setShowVehicleEdit(true)}
+                data-testid="button-edit-vehicle"
+              >
+                {driverVehicles.length > 0 ? "Edit" : "Add"}
               </Button>
             </div>
             {driverVehicles.length > 0 ? (
@@ -819,6 +951,12 @@ export default function DriverDashboard() {
         open={showPayoutModal}
         onClose={() => setShowPayoutModal(false)}
         availableBalance={parseFloat(user?.virtualCardBalance || '0')}
+      />
+
+      <VehicleEditDialog
+        isOpen={showVehicleEdit}
+        onClose={() => setShowVehicleEdit(false)}
+        vehicle={driverVehicles[0] ?? null}
       />
     </>
   );

@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { X, Search, Users, CheckCircle, Loader2, MapPin, DollarSign } from "lucide-react";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
+import { PG_CARD } from "@shared/userFacingCopy";
 
 interface JoinScheduleModalProps {
   isOpen: boolean;
@@ -114,7 +115,7 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center max-w-[430px] mx-auto">
+    <div className="fixed inset-0 z-[60] flex items-end justify-center max-w-[430px] mx-auto">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
       <Card className="relative z-10 w-full rounded-t-2xl border-0 shadow-2xl flex flex-col max-h-[90dvh]">
         <div className="flex items-center justify-between px-4 pt-4 pb-2 flex-shrink-0">
@@ -225,7 +226,7 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
                   </div>
                   <p className="text-xs text-green-600 font-medium mt-1">30% off — you save ${(fareEstimate * 0.3).toFixed(2)}</p>
                   <p className="text-[10px] text-gray-400 mt-1 flex items-center justify-center gap-1">
-                    <DollarSign className="w-3 h-3" /> Paid via Virtual PG Card at driver acceptance
+                    <DollarSign className="w-3 h-3" /> {PG_CARD.confirmLine}
                   </p>
                 </CardContent>
               </Card>

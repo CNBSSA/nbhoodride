@@ -5,6 +5,7 @@ import { Separator } from "@/components/ui/separator";
 import { Loader2, Download, X } from "lucide-react";
 import type { RideReceipt } from "@shared/rideReceipt";
 import { formatReceiptAsText } from "@shared/rideReceipt";
+import { humanizePaymentStatus, PG_CARD } from "@shared/userFacingCopy";
 import { VEHICLE_TYPE_LABELS, type VehicleType } from "@shared/vehicleTypes";
 
 interface RideReceiptModalProps {
@@ -47,13 +48,20 @@ export function RideReceiptModal({
     URL.revokeObjectURL(url);
   };
 
+  const handleEmailReceipt = () => {
+    if (!receipt) return;
+    const subject = encodeURIComponent(`PG Ride receipt — $${receipt.totalCharged.toFixed(2)}`);
+    const body = encodeURIComponent(formatReceiptAsText(receipt));
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center max-w-[430px] mx-auto">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <Card className="relative w-full mx-4 max-h-[90vh] overflow-y-auto" data-testid="ride-receipt-modal">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <Card className="relative z-10 w-full mx-4 max-h-[90vh] overflow-y-auto" data-testid="ride-receipt-modal">
         <div className="flex items-center justify-between p-4 border-b sticky top-0 bg-card z-10">
           <h2 className="text-lg font-semibold">Trip Receipt</h2>
-          <Button variant="ghost" size="sm" onClick={onClose} data-testid="button-close-receipt">
+          <Button variant="ghost" size="sm" onClick={onClose} data-testid="button-close-receipt" aria-label="Close receipt">
             <X className="w-4 h-4" />
           </Button>
         </div>
@@ -143,8 +151,8 @@ export function RideReceiptModal({
                     <span data-testid="receipt-total">${receipt.totalCharged.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>{receipt.paymentMethodLabel}</span>
-                    <span>{receipt.paymentStatus}</span>
+                    <span>{receipt.paymentMethodLabel || PG_CARD.payLine}</span>
+                    <span>{humanizePaymentStatus(receipt.paymentStatus)}</span>
                   </div>
                 </CardContent>
               </Card>
@@ -165,6 +173,9 @@ export function RideReceiptModal({
             <Button className="w-full" onClick={handleDownload} data-testid="button-download-receipt">
               <Download className="w-4 h-4 mr-2" />
               Download Receipt
+            </Button>
+            <Button variant="outline" className="w-full" onClick={handleEmailReceipt} data-testid="button-email-receipt">
+              Email me this receipt
             </Button>
             {onReportIssue && (
               <Button variant="outline" className="w-full" onClick={onReportIssue} data-testid="button-report-issue-receipt">
