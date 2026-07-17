@@ -657,6 +657,9 @@ export default function DriverDashboard() {
                   </div>
                   <div className="flex items-center justify-between text-sm text-gray-600">
                     <span>Rider: {ride.rider?.firstName || 'Rider'} {ride.rider?.lastName?.[0] || ''}. ★{parseFloat(ride.rider?.rating || '5').toFixed(1)}</span>
+                    {ride.rideType === "shared_schedule" && (
+                      <Badge variant="secondary" className="text-[10px]">Coworker group · claim all seats</Badge>
+                    )}
                   </div>
                   {ride.pickupInstructions && (
                     <p className="text-xs text-gray-500 italic">"{ride.pickupInstructions}"</p>

@@ -545,6 +545,7 @@ export interface IStorage {
   getUpcomingCircuitRunGroups(): Promise<RideGroup[]>;
   getAdminUserIds(): Promise<string[]>;
   assignDriverToCircuitRun(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null>;
+  assignDriverToSharedScheduleGroup(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null>;
   // DB-backed object storage (driver docs fallback when GCS is unset)
   createStoredObject(data: InsertStoredObject): Promise<StoredObject>;
   getStoredObject(id: string): Promise<StoredObject | undefined>;
@@ -1061,11 +1062,13 @@ export class DatabaseStorage implements IStorage {
         ))
       : baseWhere;
 
-    return await db
+    const rows = await db
       .select({
         id: rides.id,
         riderId: rides.riderId,
         driverId: rides.driverId,
+        groupId: rides.groupId,
+        rideType: rides.rideType,
         pickupLocation: rides.pickupLocation,
         destinationLocation: rides.destinationLocation,
         pickupInstructions: rides.pickupInstructions,
@@ -1085,6 +1088,15 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(riderAlias, eq(rides.riderId, riderAlias.id))
       .where(countyWhere)
       .orderBy(asc(rides.scheduledAt));
+
+    // One claim board row per coworker group (organizer ride is the anchor).
+    const seenGroups = new Set<string>();
+    return rows.filter((r) => {
+      if (!r.groupId || r.rideType !== "shared_schedule") return true;
+      if (seenGroups.has(r.groupId)) return false;
+      seenGroups.add(r.groupId);
+      return true;
+    });
   }
 
   async updateRideCounty(rideId: string, county: string): Promise<void> {
@@ -3942,6 +3954,32 @@ export class DatabaseStorage implements IStorage {
       .update(rideGroups)
       .set({ driverId })
       .where(and(eq(rideGroups.id, groupId), isNull(rideGroups.driverId)))
+      .returning();
+    if (!group) return null;
+
+    const updatedRides = await db
+      .update(rides)
+      .set({ driverId, updatedAt: new Date() })
+      .where(and(eq(rides.groupId, groupId), isNull(rides.driverId)))
+      .returning();
+    return { group, rides: updatedRides };
+  }
+
+  /** Mode 4 — assign driver to every seat; lock group so no more joiners after accept. */
+  async assignDriverToSharedScheduleGroup(
+    groupId: string,
+    driverId: string,
+  ): Promise<{ group: RideGroup; rides: Ride[] } | null> {
+    const [group] = await db
+      .update(rideGroups)
+      .set({ driverId, status: "active" })
+      .where(
+        and(
+          eq(rideGroups.id, groupId),
+          eq(rideGroups.groupType, "shared_schedule"),
+          isNull(rideGroups.driverId),
+        ),
+      )
       .returning();
     if (!group) return null;
 

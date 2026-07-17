@@ -882,7 +882,7 @@ export default function RiderDashboard() {
         }`}
         style={{
           bottom: panel === "idle" ? "calc(64px + env(safe-area-inset-bottom, 0px))" : "0",
-          maxHeight: panel === "idle" ? "340px" : "80vh",
+          maxHeight: panel === "idle" ? "420px" : "80vh",
         }}
       >
         {/* Drag handle */}
@@ -897,6 +897,27 @@ export default function RiderDashboard() {
         {panel === "idle" && (
           <div className="px-4 pb-5 pt-1 space-y-3 overflow-y-auto min-h-0">
             <button
+              className="w-full flex items-center gap-3 bg-purple-600 text-white active:bg-purple-700 transition-colors rounded-2xl px-4 py-3.5 text-left shadow-md"
+              onClick={() => setIsSharedScheduleOpen(true)}
+              data-testid="button-shift-coworker-ride"
+            >
+              <Users className="w-5 h-5 flex-shrink-0" />
+              <div>
+                <p className="font-semibold text-sm">Ride home with coworkers</p>
+                <p className="text-[11px] text-purple-100">Pick shift end · share code · up to 3 riders · 30% off</p>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              className="w-full text-left text-sm font-semibold text-primary"
+              onClick={() => setIsJoinScheduleOpen(true)}
+              data-testid="button-join-coworker-code"
+            >
+              Have a coworker&apos;s group code? Join here
+            </button>
+
+            <button
               className="w-full flex items-center gap-3 bg-gray-100 active:bg-gray-200 transition-colors rounded-2xl px-4 py-3 text-left"
               onClick={() => {
                 trackRideSearch();
@@ -906,7 +927,7 @@ export default function RiderDashboard() {
               data-testid="button-book-ride"
             >
               <Search className="w-5 h-5 text-gray-400 flex-shrink-0" />
-              <span className="text-gray-500 text-base font-medium">Where to?</span>
+              <span className="text-gray-500 text-base font-medium">Book now — where to?</span>
             </button>
 
             <button
@@ -915,7 +936,7 @@ export default function RiderDashboard() {
               onClick={() => setShowMoreWays((v) => !v)}
               data-testid="button-more-ways"
             >
-              {showMoreWays ? "▾ Hide more ways to ride" : "▸ More ways to ride (schedule, group, shuttles…)"}
+              {showMoreWays ? "▾ Hide more ways to ride" : "▸ More ways to ride (solo schedule, shuttles…)"}
             </button>
 
             {showMoreWays && (
