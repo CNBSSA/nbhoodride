@@ -3290,32 +3290,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
 
-      const ride = await storage.claimScheduledRide(rideId, userId);
+      const existing = await storage.getRide(rideId);
+      if (!existing) return res.status(404).json({ message: "Ride not found" });
 
-      // Notify the rider their scheduled ride has been claimed
-      if (activeConnections.has(ride.riderId)) {
-        const riderWs = activeConnections.get(ride.riderId);
-        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
-          const driverUser = await storage.getUser(userId);
-          riderWs.send(JSON.stringify({
-            type: 'scheduled_ride_claimed',
-            rideId: ride.id,
-            driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'A driver',
-            scheduledAt: ride.scheduledAt,
-          }));
+      let claimedRides: Awaited<ReturnType<typeof storage.claimScheduledRide>>[] = [];
+
+      if (existing.groupId && existing.rideType === "shared_schedule") {
+        const result = await storage.assignDriverToSharedScheduleGroup(existing.groupId, userId);
+        if (!result) {
+          return res.status(409).json({ message: "This group ride was just claimed by another driver." });
+        }
+        claimedRides = result.rides;
+      } else {
+        claimedRides = [await storage.claimScheduledRide(rideId, userId)];
+      }
+
+      const driverUser = await storage.getUser(userId);
+
+      for (const ride of claimedRides) {
+        if (activeConnections.has(ride.riderId)) {
+          const riderWs = activeConnections.get(ride.riderId);
+          if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+            riderWs.send(JSON.stringify({
+              type: 'scheduled_ride_claimed',
+              rideId: ride.id,
+              driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'A driver',
+              scheduledAt: ride.scheduledAt,
+            }));
+          }
         }
       }
 
-      // Let all other drivers know this ride is taken (so they remove it from open list)
-      const takenPayload = JSON.stringify({ type: 'scheduled_ride_taken', rideId: ride.id });
+      const takenPayloads = claimedRides.map((r) =>
+        JSON.stringify({ type: 'scheduled_ride_taken', rideId: r.id }),
+      );
       activeConnections.forEach((ws, connUserId) => {
-        if (connUserId !== userId && ws.readyState === WebSocket.OPEN) ws.send(takenPayload);
+        if (connUserId !== userId && ws.readyState === WebSocket.OPEN) {
+          for (const p of takenPayloads) ws.send(p);
+        }
       });
 
-      res.json(ride);
+      res.json(claimedRides[0]);
     } catch (error: any) {
       console.error("Error claiming scheduled ride:", error);
-      res.status(409).json({ message: "This ride is no longer available." });
+      res.status(409).json({ message: error?.message || "This ride is no longer available." });
     }
   });
 
@@ -5232,6 +5250,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!pickupLocation || !destinationLocation || !estimatedFare) {
         return res.status(400).json({ message: "Missing required fields" });
       }
+      if (!scheduledAt) {
+        return res.status(400).json({
+          message: "Pick when you leave work — departure time is required for a shared shift ride.",
+        });
+      }
+      const departAt = new Date(scheduledAt);
+      if (Number.isNaN(departAt.getTime()) || departAt.getTime() <= Date.now()) {
+        return res.status(400).json({ message: "Departure time must be in the future." });
+      }
 
       const scheduleCode = await generateScheduleCode();
 
@@ -5243,7 +5270,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         maxSlots: 3,
         filledSlots: 1,
         status: "open",
-        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+        scheduledAt: departAt,
       });
 
       // Create organizer's ride linked to the group
@@ -5258,8 +5285,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         paymentMethod: "card",
         rideType: "shared_schedule",
         groupId: group.id,
-        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+        scheduledAt: departAt,
       });
+
+      let pickupCounty: string | null = null;
+      try {
+        pickupCounty = await getCountyFromCoords(pickupLocation.lat, pickupLocation.lng);
+        if (pickupCounty) await storage.updateRideCounty(ride.id, pickupCounty);
+      } catch {
+        /* non-fatal */
+      }
+
+      const riderUser = await storage.getUser(userId);
+      if (!driverId) {
+        const payload = JSON.stringify({
+          type: "new_scheduled_ride",
+          rideId: ride.id,
+          riderId: userId,
+          riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ""}.` : "Rider",
+          riderRating: riderUser?.rating || "5.0",
+          pickupAddress: pickupLocation?.address || "",
+          destinationAddress: destinationLocation?.address || "",
+          estimatedFare: ride.estimatedFare,
+          scheduledAt: ride.scheduledAt,
+          pickupInstructions: pickupInstructions || "",
+          pickupCounty: pickupCounty || "",
+          sharedSchedule: true,
+          groupSlots: `1/${group.maxSlots ?? 3}`,
+          scheduleCode,
+        });
+        activeConnections.forEach((ws, connDriverId) => {
+          const counties = driverCountyCache.get(connDriverId) ?? [];
+          if (driverCoversCounty(counties, pickupCounty) && ws.readyState === WebSocket.OPEN) {
+            ws.send(payload);
+          }
+        });
+      }
 
       res.json({ ...ride, group, scheduleCode });
     } catch (error) {
@@ -5333,6 +5394,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         paymentMethod: paymentMethod || "card",
         rideType: "shared_schedule",
         groupId: group.id,
+        scheduledAt: group.scheduledAt ?? undefined,
       });
 
       // Increment filled slots
