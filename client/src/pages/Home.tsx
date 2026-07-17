@@ -11,10 +11,14 @@ import RatingsPage from "@/pages/RatingsPage";
 import { PaymentsPage } from "@/pages/PaymentsPage";
 import Profile from "@/pages/Profile";
 import AIAssistant from "@/pages/AIAssistant";
+import { WelcomeRiderSheet } from "@/components/WelcomeRiderSheet";
 import { Shield } from "lucide-react";
+
+const WELCOME_KEY = "pgride:welcomeSeen";
 
 export default function Home() {
   const { user } = useAuth();
+  const [showWelcome, setShowWelcome] = useState(false);
   // Persisted so a reload (browser refresh, PWA relaunch) keeps an online
   // driver on their dashboard instead of silently dropping them back to
   // rider mode, where their active rides/claim board aren't visible.
@@ -34,6 +38,28 @@ export default function Home() {
   useEffect(() => {
     localStorage.setItem("pgride:lastMode", currentMode);
   }, [currentMode]);
+
+  useEffect(() => {
+    const openProfile = () => setActiveTab("profile");
+    window.addEventListener("pgride:open-profile", openProfile);
+    const openAssistant = () => setActiveTab("assistant");
+    window.addEventListener("pgride:open-assistant", openAssistant);
+    return () => {
+      window.removeEventListener("pgride:open-profile", openProfile);
+      window.removeEventListener("pgride:open-assistant", openAssistant);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user?.isApproved) return;
+    if (localStorage.getItem(WELCOME_KEY)) return;
+    setShowWelcome(true);
+  }, [user?.isApproved, user?.id]);
+
+  const dismissWelcome = () => {
+    localStorage.setItem(WELCOME_KEY, "1");
+    setShowWelcome(false);
+  };
 
   const handleModeChange = (mode: "rider" | "driver") => {
     if (mode === "driver" && !user?.isDriver) {
@@ -116,6 +142,18 @@ export default function Home() {
         activeTab={activeTab} 
         onTabChange={setActiveTab}
         currentMode={currentMode}
+      />
+
+      <WelcomeRiderSheet
+        open={showWelcome && currentMode === "rider"}
+        balance={user?.virtualCardBalance ?? "0"}
+        promoRidesRemaining={user?.promoRidesRemaining ?? 0}
+        onDismiss={dismissWelcome}
+        onBook={() => {
+          dismissWelcome();
+          setActiveTab("home");
+          window.dispatchEvent(new CustomEvent("pgride:open-booking"));
+        }}
       />
     </div>
   );

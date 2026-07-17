@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Link } from "wouter";
 
 import { BRAND } from "@shared/branding";
+import { PG_CARD } from "@shared/userFacingCopy";
 
 export default function Landing() {
   return (
@@ -48,7 +49,7 @@ export default function Landing() {
                 <div className="w-8 h-8 bg-accent/20 rounded-full flex items-center justify-center">
                   <i className="fas fa-hand-holding-usd text-accent text-sm" />
                 </div>
-                <span className="text-sm">Cash-friendly payments</span>
+                <span className="text-sm">{PG_CARD.landingFeature}</span>
               </div>
               <div className="flex items-center space-x-3">
                 <div className="w-8 h-8 bg-destructive/20 rounded-full flex items-center justify-center">
@@ -80,7 +81,10 @@ export default function Landing() {
             </div>
 
             <p className="text-xs text-muted-foreground">
-              By continuing, you agree to our community guidelines and terms of service.
+              By continuing, you agree to our{" "}
+              <Link href="/terms" className="underline text-primary">Terms of Service</Link>
+              {" "}and{" "}
+              <Link href="/privacy" className="underline text-primary">Privacy Policy</Link>.
             </p>
 
             {/* Test Login Link - Development Only */}

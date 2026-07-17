@@ -34,6 +34,7 @@ import { rankDriversByTrustAndEta } from "@shared/trustScore";
 import { updateRideWidget, clearRideWidget } from "@/hooks/useRideWidget";
 import { useLocale } from "@/hooks/useLocale";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { PG_CARD, parseBookingErrorMessage } from "@shared/userFacingCopy";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import {
@@ -112,6 +113,7 @@ export default function RiderDashboard() {
   const [isSharedScheduleOpen, setIsSharedScheduleOpen] = useState(false);
   const [isJoinScheduleOpen, setIsJoinScheduleOpen] = useState(false);
   const [isCircuitsOpen, setIsCircuitsOpen] = useState(false);
+  const [showMoreWays, setShowMoreWays] = useState(false);
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
   const [isLostFoundOpen, setIsLostFoundOpen] = useState(false);
   const [incomingRideMessage, setIncomingRideMessage] = useState<RideMessagePayload | null>(null);
@@ -306,8 +308,12 @@ export default function RiderDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/rides"] });
       resetBooking();
     },
-    onError: () => {
-      toast({ title: "Booking Failed", description: "Unable to book your ride. Please try again.", variant: "destructive" });
+    onError: (error: Error) => {
+      toast({
+        title: "Booking Failed",
+        description: parseBookingErrorMessage(error.message),
+        variant: "destructive",
+      });
     }
   });
 
@@ -413,6 +419,20 @@ export default function RiderDashboard() {
     }
     if (rideForFriend && passengerName.trim().length < 2) {
       toast({ title: "Passenger name required", description: "Enter who will be riding.", variant: "destructive" });
+      return;
+    }
+    const fareDue =
+      (fareEstimate?.promoDiscount ?? 0) > 0
+        ? Number(fareEstimate?.totalAfterPromo ?? 0)
+        : Number(fareEstimate?.total ?? 0);
+    const balance = parseFloat(user?.virtualCardBalance || "0");
+    const promos = user?.promoRidesRemaining ?? 0;
+    if (fareDue > 0 && balance < fareDue && promos <= 0) {
+      toast({
+        title: PG_CARD.lowBalanceTitle,
+        description: PG_CARD.lowBalanceBody,
+        variant: "destructive",
+      });
       return;
     }
     bookRideMutation.mutate({
@@ -876,16 +896,6 @@ export default function RiderDashboard() {
         {/* ── IDLE: "Where to?" bar ── */}
         {panel === "idle" && (
           <div className="px-4 pb-5 pt-1 space-y-3 overflow-y-auto min-h-0">
-            <MobilityIntentCard
-              onResolved={handleMobilityIntent}
-              onGuardianShare={(url) => {
-                navigator.clipboard?.writeText(url).catch(() => {});
-                toast({ title: "Link copied", description: "Share with family to track your ride." });
-              }}
-              disabled={!!activeRide}
-            />
-            <TransitAlertsCard />
-            <CommunityRoutesCard onSelectRoute={handleCommunityRouteSelect} disabled={!!activeRide} />
             <button
               className="w-full flex items-center gap-3 bg-gray-100 active:bg-gray-200 transition-colors rounded-2xl px-4 py-3 text-left"
               onClick={() => {
@@ -898,10 +908,32 @@ export default function RiderDashboard() {
               <Search className="w-5 h-5 text-gray-400 flex-shrink-0" />
               <span className="text-gray-500 text-base font-medium">Where to?</span>
             </button>
-            <div className="flex gap-2 mt-3">
+
+            <button
+              type="button"
+              className="w-full text-left text-sm font-semibold text-primary py-1"
+              onClick={() => setShowMoreWays((v) => !v)}
+              data-testid="button-more-ways"
+            >
+              {showMoreWays ? "▾ Hide more ways to ride" : "▸ More ways to ride (schedule, group, shuttles…)"}
+            </button>
+
+            {showMoreWays && (
+              <>
+            <MobilityIntentCard
+              onResolved={handleMobilityIntent}
+              onGuardianShare={(url) => {
+                navigator.clipboard?.writeText(url).catch(() => {});
+                toast({ title: "Link copied", description: "Share with family to track your ride." });
+              }}
+              disabled={!!activeRide}
+            />
+            <TransitAlertsCard />
+            <CommunityRoutesCard onSelectRoute={handleCommunityRouteSelect} disabled={!!activeRide} />
+            <div className="flex flex-wrap gap-2 mt-1">
               <button
                 onClick={() => setIsScheduleModalOpen(true)}
-                className="flex-1 flex items-center gap-1.5 justify-center bg-orange-50 text-orange-600 rounded-xl py-3 text-xs font-semibold active:bg-orange-100 transition-colors"
+                className="flex-1 min-w-[45%] flex items-center gap-1.5 justify-center bg-orange-50 text-orange-600 rounded-xl py-3 text-xs font-semibold active:bg-orange-100 transition-colors"
                 data-testid="button-schedule-ride"
               >
                 <Calendar className="w-3.5 h-3.5" />
@@ -909,7 +941,7 @@ export default function RiderDashboard() {
               </button>
               <button
                 onClick={() => setIsMultiStopOpen(true)}
-                className="flex-1 flex items-center gap-1.5 justify-center bg-blue-50 text-blue-600 rounded-xl py-3 text-xs font-semibold active:bg-blue-100 transition-colors"
+                className="flex-1 min-w-[45%] flex items-center gap-1.5 justify-center bg-blue-50 text-blue-600 rounded-xl py-3 text-xs font-semibold active:bg-blue-100 transition-colors"
                 data-testid="button-multi-stop"
               >
                 <MapPin className="w-3.5 h-3.5" />
@@ -917,34 +949,38 @@ export default function RiderDashboard() {
               </button>
               <button
                 onClick={() => setIsSharedScheduleOpen(true)}
-                className="flex-1 flex items-center gap-1.5 justify-center bg-purple-50 text-purple-600 rounded-xl py-3 text-xs font-semibold active:bg-purple-100 transition-colors"
+                className="flex-1 min-w-[45%] flex items-center gap-1.5 justify-center bg-purple-50 text-purple-600 rounded-xl py-3 text-xs font-semibold active:bg-purple-100 transition-colors"
                 data-testid="button-share-schedule"
               >
                 <Users className="w-3.5 h-3.5" />
-                Share
+                Group schedule
               </button>
               <button
                 onClick={() => setIsJoinScheduleOpen(true)}
-                className="flex-1 flex items-center gap-1.5 justify-center bg-green-50 text-green-600 rounded-xl py-3 text-xs font-semibold active:bg-green-100 transition-colors"
+                className="flex-1 min-w-[45%] flex items-center gap-1.5 justify-center bg-green-50 text-green-600 rounded-xl py-3 text-xs font-semibold active:bg-green-100 transition-colors"
                 data-testid="button-join-schedule"
               >
                 <UserCheck className="w-3.5 h-3.5" />
-                Join
+                Group code
               </button>
             </div>
 
-            {/* Circuits — the published weekly timetable (launch centerpiece) */}
             <button
               onClick={() => setIsCircuitsOpen(true)}
-              className="w-full mt-2 flex items-center justify-between bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 active:bg-primary/10 transition-colors"
+              className="w-full mt-1 flex items-center justify-between bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 active:bg-primary/10 transition-colors"
               data-testid="button-circuits"
             >
-              <span className="flex items-center gap-2 text-sm font-semibold text-primary">
-                <Bus className="w-4 h-4" />
-                This Week's Circuits
+              <span className="flex flex-col items-start gap-0.5 text-sm font-semibold text-primary">
+                <span className="flex items-center gap-2">
+                  <Bus className="w-4 h-4" />
+                  Community shuttle runs
+                </span>
+                <span className="text-xs font-normal text-gray-500">Weekly circuits — guaranteed seats</span>
               </span>
-              <span className="text-xs text-gray-500">Guaranteed seats · no surge</span>
+              <span className="text-xs text-gray-500">No surge</span>
             </button>
+              </>
+            )}
 
             {/* Upcoming scheduled rides */}
             {scheduledRides.length > 0 && (
@@ -1189,7 +1225,7 @@ export default function RiderDashboard() {
               >
                 {fareEstimate && selectedDriverId && (
                   <div className="flex items-center justify-between text-xs text-gray-500 mb-2 px-1">
-                    <span>Via Virtual PG Card</span>
+                    <span>{PG_CARD.payLine}</span>
                     <span className="font-bold text-sm text-gray-800">
                       ${(fareEstimate.promoDiscount ?? 0) > 0 ? fareEstimate.totalAfterPromo?.toFixed(2) : fareEstimate.total?.toFixed(2)}
                     </span>
