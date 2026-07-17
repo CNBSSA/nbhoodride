@@ -15,7 +15,7 @@ import twilio from "twilio";
 import { stripeService, stripe } from "./stripeService";
 import bcrypt from "bcrypt";
 import Anthropic from "@anthropic-ai/sdk";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import {
   sendAccountApprovedEmail,
@@ -242,7 +242,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) =>
-      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || req.ip,
+      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || ipKeyGenerator(req.ip),
     message: { message: "Too many requests, please try again later." },
     // NOTE: No skip for /api/admin — all endpoints are rate-limited
   });
@@ -287,7 +287,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) =>
-      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || req.ip,
+      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || ipKeyGenerator(req.ip),
     message: { message: "Too many intent requests, please slow down." },
   });
 
@@ -303,7 +303,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) =>
-      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || req.ip,
+      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || ipKeyGenerator(req.ip),
     message: { message: "AI generation rate-limited (5/15min per admin)." },
   });
 
