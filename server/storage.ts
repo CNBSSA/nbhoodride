@@ -546,6 +546,8 @@ export interface IStorage {
   getAdminUserIds(): Promise<string[]>;
   assignDriverToCircuitRun(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null>;
   assignDriverToSharedScheduleGroup(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null>;
+  claimScheduleSlot(groupId: string): Promise<RideGroup | null>;
+  releaseScheduleSlot(groupId: string): Promise<void>;
   // DB-backed object storage (driver docs fallback when GCS is unset)
   createStoredObject(data: InsertStoredObject): Promise<StoredObject>;
   getStoredObject(id: string): Promise<StoredObject | undefined>;
@@ -1187,6 +1189,8 @@ export class DatabaseStorage implements IStorage {
         id: rides.id,
         riderId: rides.riderId,
         driverId: rides.driverId,
+        groupId: rides.groupId,
+        rideType: rides.rideType,
         pickupLocation: rides.pickupLocation,
         destinationLocation: rides.destinationLocation,
         pickupInstructions: rides.pickupInstructions,
@@ -1735,6 +1739,21 @@ export class DatabaseStorage implements IStorage {
         const distanceCharge = rates.perMileRate * actualDistance;
         let fareAmount = baseFare + timeCharge + distanceCharge + rates.surgeAdjustment;
         fareAmount = Math.max(rates.minimumFare, Math.min(100, fareAmount));
+
+        // This GPS-based recalculation has no idea a discount was promised at
+        // booking/accept time — without reapplying it here, a group/shared-ride
+        // split or a promo ride silently reverts to full price (or the
+        // completion settlement even charges the rider extra to erase it).
+        const originalFareNum = parseFloat(ride.originalFare || "0");
+        const estimatedFareNum = parseFloat(ride.estimatedFare || "0");
+        if (originalFareNum > 0 && estimatedFareNum > 0 && estimatedFareNum < originalFareNum) {
+          fareAmount = fareAmount * (estimatedFareNum / originalFareNum);
+        }
+        const promoDiscount = parseFloat(ride.promoDiscountApplied || "0");
+        if (promoDiscount > 0) {
+          fareAmount = Math.max(0, fareAmount - promoDiscount);
+        }
+
         calculatedFare = Math.round(fareAmount * 100) / 100;
       }
     }
@@ -3989,6 +4008,36 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(rides.groupId, groupId), isNull(rides.driverId)))
       .returning();
     return { group, rides: updatedRides };
+  }
+
+  /**
+   * Mode 4 joiner flow — atomically reserves one seat before the joiner's
+   * ride row is created, so two riders racing to grab the last seat can't
+   * both win (the UPDATE only matches while filled_slots < max_slots; a
+   * losing racer gets no row back). Mirrors the assignDriverTo* claim
+   * pattern above rather than the old read-then-write increment.
+   */
+  async claimScheduleSlot(groupId: string): Promise<RideGroup | null> {
+    const [group] = await db
+      .update(rideGroups)
+      .set({ filledSlots: sql`${rideGroups.filledSlots} + 1` })
+      .where(
+        and(
+          eq(rideGroups.id, groupId),
+          eq(rideGroups.status, "open"),
+          sql`${rideGroups.filledSlots} < ${rideGroups.maxSlots}`,
+        ),
+      )
+      .returning();
+    return group ?? null;
+  }
+
+  /** Compensating action for claimScheduleSlot when ride creation fails after the claim succeeds. */
+  async releaseScheduleSlot(groupId: string): Promise<void> {
+    await db
+      .update(rideGroups)
+      .set({ filledSlots: sql`GREATEST(0, ${rideGroups.filledSlots} - 1)` })
+      .where(eq(rideGroups.id, groupId));
   }
 
   async createStoredObject(data: InsertStoredObject): Promise<StoredObject> {
