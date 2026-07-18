@@ -3187,6 +3187,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         passengerPhone: bookedForFriend ? passengerPhone : undefined,
         requestedVehicleType,
         rideType: bookedForFriend ? 'friend' : (req.body.rideType ?? 'solo'),
+        // "No driver chosen" arrives as an empty string from the schedule
+        // modal — normalize it away or the insert trips the users FK.
+        driverId: req.body.driverId || undefined,
       };
       if (typeof bodyData.estimatedFare === 'number') {
         bodyData.estimatedFare = bodyData.estimatedFare.toString();

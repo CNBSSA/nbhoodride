@@ -1254,6 +1254,16 @@ export const insertRideSchema = createInsertSchema(rides).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+}).extend({
+  // Clients send scheduledAt as an ISO string (JSON has no Date type);
+  // the raw drizzle-zod schema demanded a Date object, which made EVERY
+  // "Schedule a Ride" booking fail with "Expected date, received string".
+  // Coerce valid date strings, pass real Dates through, keep null/undefined
+  // as-is (z.coerce.date() alone would turn null into 1970-01-01).
+  scheduledAt: z.preprocess(
+    (v) => (typeof v === "string" && v ? new Date(v) : v),
+    z.date().nullish(),
+  ),
 });
 
 // Constrain issueType to a closed enum so the support auto-resolver can't be
