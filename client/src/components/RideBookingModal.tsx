@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { MapPin, Navigation, User, DollarSign, CheckCircle, ChevronRight, Star, Shield, Loader2, Users } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
-import { PG_CARD } from "@shared/userFacingCopy";
+import { PG_CARD, parseBookingErrorMessage } from "@shared/userFacingCopy";
 
 interface Driver {
   id: string;
@@ -125,10 +125,10 @@ export default function RideBookingModal({
       queryClient.invalidateQueries({ queryKey: ["/api/rides"] });
       onClose();
     },
-    onError: () => {
+    onError: (error: Error) => {
       toast({
         title: "Booking Failed",
-        description: "Unable to book your ride. Please try again.",
+        description: parseBookingErrorMessage(error.message),
         variant: "destructive",
       });
     }

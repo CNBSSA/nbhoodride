@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { parseBookingErrorMessage } from "@shared/userFacingCopy";
 import { useToast } from "@/hooks/use-toast";
 import { Calendar as CalendarIcon, Clock, Search, X, Users } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
@@ -144,10 +145,12 @@ export default function ScheduleRideModal({
       queryClient.invalidateQueries({ queryKey: ["/api/rides/scheduled"] });
       onClose();
     },
-    onError: () => {
+    onError: (error: Error) => {
+      // Surface the server's actual reason (service area, rate limit,
+      // validation) — the old generic copy hid every real cause.
       toast({
         title: "Booking Failed",
-        description: "Unable to book your ride. Please try again.",
+        description: parseBookingErrorMessage(error.message),
         variant: "destructive",
       });
     }
