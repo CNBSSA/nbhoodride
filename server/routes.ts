@@ -85,7 +85,7 @@ import {
 } from "@shared/rideChat";
 import { pushRideMessageToUser, setRideMessageConnections } from "./rideMessageHub";
 import { mapRouteResponse, type RouteResult } from "@shared/routeGeometry";
-import type { RideMessage } from "@shared/schema";
+import type { RideMessage, Ride, User } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import { resolveAppUrl } from "./appUrl";
 import { processCircuitReminders } from "./circuitReminders";
@@ -1584,6 +1584,175 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Driver-level info needed for ride-accepted notifications — fetched once
+  // and reused across every ride in a group-confirm, instead of re-querying
+  // the driver's profile/vehicles per rider.
+  async function getDriverAcceptInfo(driverUserId: string) {
+    const driverUser = await storage.getUser(driverUserId);
+    const driverProfile = await storage.getDriverProfile(driverUserId);
+    const driverVehicles = driverProfile ? await storage.getVehiclesByDriverId(driverProfile.id) : [];
+    const vehicleDesc = driverVehicles[0]
+      ? `${driverVehicles[0].year} ${driverVehicles[0].make} ${driverVehicles[0].model} - ${driverVehicles[0].color}`
+      : null;
+    return { driverUser, vehicleDesc, licensePlate: driverVehicles[0]?.licensePlate ?? null };
+  }
+
+  async function sendRideAcceptedNotifications(
+    ride: Ride,
+    rider: User | undefined,
+    driverUserId: string,
+    driverInfo: Awaited<ReturnType<typeof getDriverAcceptInfo>>,
+  ) {
+    const { driverUser, vehicleDesc, licensePlate } = driverInfo;
+    const rideAcceptedMessage = {
+      type: 'ride_accepted',
+      rideId: ride.id,
+      driverId: driverUserId,
+      riderId: ride.riderId,
+      driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'Your driver',
+      driverPhone: driverUser?.phone,
+      driverRating: driverUser?.rating,
+      vehicle: vehicleDesc,
+      licensePlate: licensePlate ?? null,
+    };
+
+    if (activeConnections.has(driverUserId)) {
+      const driverWs = activeConnections.get(driverUserId);
+      if (driverWs && driverWs.readyState === WebSocket.OPEN) {
+        driverWs.send(JSON.stringify(rideAcceptedMessage));
+      }
+    }
+
+    if (activeConnections.has(ride.riderId)) {
+      const riderWs = activeConnections.get(ride.riderId);
+      if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+        riderWs.send(JSON.stringify(rideAcceptedMessage));
+      }
+    }
+
+    if (rider) {
+      sendRideAcceptedEmail({
+        riderEmail: rider.email,
+        riderFirstName: rider.firstName,
+        driverName: rideAcceptedMessage.driverName,
+        driverPhone: driverUser?.phone,
+        vehicleDescription: vehicleDesc ?? undefined,
+        pickupAddress: (ride.pickupLocation as any)?.address ?? null,
+        destinationAddress: (ride.destinationLocation as any)?.address ?? null,
+        estimatedFare: ride.estimatedFare,
+        promoDiscount: ride.promoDiscountApplied,
+      }).catch(console.error);
+
+      deliverUserNotification(ride.riderId, {
+        type: "ride-accepted",
+        title: "Driver On The Way! 🚗",
+        body: `${rideAcceptedMessage.driverName} accepted your ride. They'll pick you up soon.`,
+        tag: "ride-accepted",
+        url: "/",
+        data: { rideId: ride.id },
+      }).catch(console.error);
+    }
+  }
+
+  // Authorizes card payment for a just-accepted ride: splits the charge
+  // between virtual balance and a Stripe hold, applies the welcome promo,
+  // and rolls everything back (including the ride's status) if any step
+  // fails. Shared by the immediate-accept endpoint below and the
+  // confirm-scheduled endpoint (claimed scheduled/shared/circuit rides),
+  // so both paths authorize payment identically instead of one silently
+  // skipping it.
+  async function authorizeCardPaymentForRide(
+    rideId: string,
+    ride: Ride,
+    rider: User | undefined,
+    actorUserId: string,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    if (ride.paymentMethod !== 'card') return { ok: true };
+
+    const rawFare = parseFloat(ride.estimatedFare || "0");
+
+    // Apply $5 promo discount if rider has promo rides remaining
+    const promoRemaining = rider?.promoRidesRemaining ?? 0;
+    const promoDiscount = promoRemaining > 0 ? Math.min(5, rawFare) : 0;
+    const chargeAmount = Math.max(0, rawFare - promoDiscount);
+
+    let virtualDeducted = 0;
+    let stripeAuthAmount = 0;
+    let stripeIntentId: string = `virtual-${rideId}`;
+
+    try {
+      if (chargeAmount > 0) {
+        // 1. Take what we can from the rider's virtual balance, leave the
+        //    rest for Stripe to authorize.
+        const split = await storage.splitDeductForRide(ride.riderId, chargeAmount, rideId);
+        virtualDeducted = split.virtualDeducted;
+        stripeAuthAmount = split.stripeAmount;
+
+        // 2. If the virtual balance didn't fully cover it, authorize the
+        //    shortfall on the rider's saved Stripe card.
+        if (stripeAuthAmount > 0) {
+          if (!stripeService.isEnabled) {
+            throw new Error("Stripe is not configured. Top up your virtual balance to cover the fare or contact support.");
+          }
+          if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
+            throw new Error("Insufficient virtual balance and no card on file. Please add a card or top up your wallet.");
+          }
+          const intent = await stripeService.authorizeRideShortfall({
+            amount: stripeAuthAmount,
+            customerId: rider.stripeCustomerId,
+            paymentMethodId: rider.stripePaymentMethodId,
+            rideId,
+            riderId: ride.riderId,
+          });
+          stripeIntentId = intent.id;
+        }
+      }
+
+      if (promoDiscount > 0 && rider) {
+        await storage.consumePromoRide(ride.riderId, promoDiscount, rideId);
+      }
+      await storage.setRidePaymentAuthorization(rideId, stripeIntentId, virtualDeducted, stripeAuthAmount);
+
+      await logRideAudit({
+        rideId,
+        event: "payment_authorized",
+        actorId: actorUserId,
+        details: {
+          chargeAmount,
+          promoDiscount,
+          virtualDeducted,
+          stripeAuthAmount,
+          stripeIntentId,
+          paymentMethod: stripeAuthAmount > 0 ? "split_virtual_card" : "virtual_card",
+        },
+      });
+      return { ok: true };
+    } catch (error: any) {
+      console.error("Failed to authorize ride payment:", error);
+
+      // Roll back any virtual deduction we made before the Stripe step failed.
+      if (virtualDeducted > 0) {
+        try {
+          await storage.addVirtualCardBalance(ride.riderId, virtualDeducted, "ride_authorization_refund", rideId);
+        } catch (refundErr) {
+          console.error("Failed to refund virtual balance after Stripe auth failure:", refundErr);
+        }
+      }
+
+      try {
+        const { db: dbInstance } = await import("./db");
+        const { rides: ridesTable } = await import("@shared/schema");
+        const { eq, and } = await import("drizzle-orm");
+        await dbInstance.update(ridesTable)
+          .set({ status: "pending", acceptedAt: null, updatedAt: new Date() })
+          .where(and(eq(ridesTable.id, rideId), eq(ridesTable.status, "accepted")));
+      } catch (revertError) {
+        console.error("Failed to revert ride status after payment failure:", revertError);
+      }
+      return { ok: false, message: error?.message || "Payment authorization failed. Please try a different payment method." };
+    }
+  }
+
   app.post('/api/driver/rides/:rideId/accept', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -1621,149 +1790,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         metadata: { estimatedFare: ride.estimatedFare },
       }).catch((err) => console.error("agent_audit_log write failed:", err));
 
-      if (ride.paymentMethod === 'card') {
-        const rawFare = parseFloat(ride.estimatedFare || "0");
-
-        // Apply $5 promo discount if rider has promo rides remaining
-        const promoRemaining = rider?.promoRidesRemaining ?? 0;
-        const promoDiscount = promoRemaining > 0 ? Math.min(5, rawFare) : 0;
-        const chargeAmount = Math.max(0, rawFare - promoDiscount);
-
-        let virtualDeducted = 0;
-        let stripeAuthAmount = 0;
-        let stripeIntentId: string = `virtual-${rideId}`;
-
-        try {
-          if (chargeAmount > 0) {
-            // 1. Take what we can from the rider's virtual balance, leave the
-            //    rest for Stripe to authorize.
-            const split = await storage.splitDeductForRide(ride.riderId, chargeAmount, rideId);
-            virtualDeducted = split.virtualDeducted;
-            stripeAuthAmount = split.stripeAmount;
-
-            // 2. If the virtual balance didn't fully cover it, authorize the
-            //    shortfall on the rider's saved Stripe card.
-            if (stripeAuthAmount > 0) {
-              if (!stripeService.isEnabled) {
-                throw new Error("Stripe is not configured. Top up your virtual balance to cover the fare or contact support.");
-              }
-              if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
-                throw new Error("Insufficient virtual balance and no card on file. Please add a card or top up your wallet.");
-              }
-              const intent = await stripeService.authorizeRideShortfall({
-                amount: stripeAuthAmount,
-                customerId: rider.stripeCustomerId,
-                paymentMethodId: rider.stripePaymentMethodId,
-                rideId,
-                riderId: ride.riderId,
-              });
-              stripeIntentId = intent.id;
-            }
-          }
-
-          if (promoDiscount > 0 && rider) {
-            await storage.consumePromoRide(ride.riderId, promoDiscount, rideId);
-          }
-          await storage.setRidePaymentAuthorization(rideId, stripeIntentId, virtualDeducted, stripeAuthAmount);
-
-          await logRideAudit({
-            rideId,
-            event: "payment_authorized",
-            actorId: userId,
-            details: {
-              chargeAmount,
-              promoDiscount,
-              virtualDeducted,
-              stripeAuthAmount,
-              stripeIntentId,
-              paymentMethod: stripeAuthAmount > 0 ? "split_virtual_card" : "virtual_card",
-            },
-          });
-        } catch (error: any) {
-          console.error("Failed to authorize ride payment:", error);
-
-          // Roll back any virtual deduction we made before the Stripe step failed.
-          if (virtualDeducted > 0) {
-            try {
-              await storage.addVirtualCardBalance(ride.riderId, virtualDeducted, "ride_authorization_refund", rideId);
-            } catch (refundErr) {
-              console.error("Failed to refund virtual balance after Stripe auth failure:", refundErr);
-            }
-          }
-
-          try {
-            const { db: dbInstance } = await import("./db");
-            const { rides: ridesTable } = await import("@shared/schema");
-            const { eq, and } = await import("drizzle-orm");
-            await dbInstance.update(ridesTable)
-              .set({ status: "pending", acceptedAt: null, updatedAt: new Date() })
-              .where(and(eq(ridesTable.id, rideId), eq(ridesTable.status, "accepted")));
-          } catch (revertError) {
-            console.error("Failed to revert ride status after payment failure:", revertError);
-          }
-          return res.status(402).json({ message: error?.message || "Payment authorization failed. Please try a different payment method." });
-        }
+      const paymentResult = await authorizeCardPaymentForRide(rideId, ride, rider, userId);
+      if (!paymentResult.ok) {
+        return res.status(402).json({ message: paymentResult.message });
       }
 
-      const driverUser = await storage.getUser(userId);
-      const driverProfile = await storage.getDriverProfile(userId);
-      const driverVehicles = driverProfile ? await storage.getVehiclesByDriverId(driverProfile.id) : [];
-      const vehicleDesc = driverVehicles[0]
-        ? `${driverVehicles[0].year} ${driverVehicles[0].make} ${driverVehicles[0].model} - ${driverVehicles[0].color}`
-        : null;
-
-      const rideAcceptedMessage = {
-        type: 'ride_accepted',
-        rideId: ride.id,
-        driverId: userId,
-        riderId: ride.riderId,
-        driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] || ''}.` : 'Your driver',
-        driverPhone: driverUser?.phone,
-        driverRating: driverUser?.rating,
-        vehicle: vehicleDesc,
-        licensePlate: driverVehicles[0]?.licensePlate ?? null,
-      };
-
-      // Send to driver
-      if (activeConnections.has(userId)) {
-        const driverWs = activeConnections.get(userId);
-        if (driverWs && driverWs.readyState === WebSocket.OPEN) {
-          driverWs.send(JSON.stringify(rideAcceptedMessage));
-        }
-      }
-
-      // Send to rider
-      if (activeConnections.has(ride.riderId)) {
-        const riderWs = activeConnections.get(ride.riderId);
-        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
-          riderWs.send(JSON.stringify(rideAcceptedMessage));
-        }
-      }
-
-      // Send ride-accepted email to rider
-      if (rider) {
-        sendRideAcceptedEmail({
-          riderEmail: rider.email,
-          riderFirstName: rider.firstName,
-          driverName: rideAcceptedMessage.driverName,
-          driverPhone: driverUser?.phone,
-          vehicleDescription: vehicleDesc ?? undefined,
-          pickupAddress: (ride.pickupLocation as any)?.address ?? null,
-          destinationAddress: (ride.destinationLocation as any)?.address ?? null,
-          estimatedFare: ride.estimatedFare,
-          promoDiscount: ride.promoDiscountApplied,
-        }).catch(console.error);
-
-        // Notify rider — driver accepted
-        deliverUserNotification(ride.riderId, {
-          type: "ride-accepted",
-          title: "Driver On The Way! 🚗",
-          body: `${rideAcceptedMessage.driverName} accepted your ride. They'll pick you up soon.`,
-          tag: "ride-accepted",
-          url: "/",
-          data: { rideId: ride.id },
-        }).catch(console.error);
-      }
+      const driverInfo = await getDriverAcceptInfo(userId);
+      await sendRideAcceptedNotifications(ride, rider, userId, driverInfo);
 
       res.json(ride);
     } catch (error) {
@@ -1772,6 +1805,167 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(400).json({ message: error.message });
       } else {
         res.status(500).json({ message: "Failed to accept ride" });
+      }
+    }
+  });
+
+  // Scheduled rides (solo, shared/coworker groups) are CLAIMED ahead of time
+  // via /claim, which only assigns driverId — it deliberately does not
+  // authorize payment or transition status, so a driver can browse and
+  // reserve rides well before the scheduled time without holding a charge
+  // that long. This endpoint is the second, explicit step: the driver taps
+  // "Confirm & Accept" when they're ready to actually do the ride, which
+  // runs the exact same acceptRide + payment-authorization path as an
+  // immediate accept. If the ride belongs to a group (shared_schedule or
+  // circuit), every sibling ride assigned to this driver is confirmed
+  // atomically — if any one fails (e.g. a joiner's card was declined), the
+  // ones already confirmed in this request are rolled back rather than
+  // leaving the group half-committed.
+  // Core of "confirm a claimed scheduled ride": accepts + authorizes payment
+  // for every ride in `targets` (a solo ride, or every pending sibling in a
+  // group), atomically — if any one fails, everything this call already
+  // confirmed gets rolled back rather than leaving the group half-committed.
+  // Shared by the rideId-keyed endpoint (solo + shared_schedule) and the
+  // groupId-keyed one (circuits, which are already addressed by groupId
+  // everywhere else in their API).
+  async function confirmRidesForDriver(
+    targets: Ride[],
+    driverUserId: string,
+  ): Promise<{ ok: true; confirmed: Ride[] } | { ok: false; message: string; failedRideId: string }> {
+    const driverInfo = await getDriverAcceptInfo(driverUserId);
+    const confirmed: Ride[] = [];
+    for (const target of targets) {
+      try {
+        const accepted = await storage.acceptRide(target.id, driverUserId);
+        const rider = await storage.getUser(accepted.riderId);
+
+        await logRideAudit({
+          rideId: accepted.id,
+          event: "ride_accepted",
+          actorId: driverUserId,
+          details: { riderId: accepted.riderId, estimatedFare: accepted.estimatedFare, viaScheduledConfirm: true },
+        });
+
+        const paymentResult = await authorizeCardPaymentForRide(accepted.id, accepted, rider, driverUserId);
+        if (!paymentResult.ok) {
+          throw new Error(paymentResult.message);
+        }
+
+        // Re-fetch: `accepted` was captured before payment authorization ran,
+        // so its virtualAmountAuthorized is still "0.00". The rollback path
+        // below reads that field off whatever we push here to decide how much
+        // to refund — pushing the stale object would silently skip refunding
+        // this rider if a LATER rider in the same group fails to pay.
+        const settledRide = (await storage.getRide(accepted.id)) ?? accepted;
+
+        await sendRideAcceptedNotifications(settledRide, rider, driverUserId, driverInfo);
+        confirmed.push(settledRide);
+      } catch (err: any) {
+        for (const done of confirmed) {
+          try {
+            const virtualAuth = parseFloat(done.virtualAmountAuthorized || "0");
+            if (virtualAuth > 0) {
+              await storage.addVirtualCardBalance(done.riderId, virtualAuth, "ride_authorization_refund", done.id);
+            }
+            const { db: dbInstance } = await import("./db");
+            const { rides: ridesTable } = await import("@shared/schema");
+            const { eq } = await import("drizzle-orm");
+            await dbInstance.update(ridesTable)
+              .set({ status: "pending", acceptedAt: null, updatedAt: new Date() })
+              .where(eq(ridesTable.id, done.id));
+          } catch (rollbackErr) {
+            console.error(`Failed to roll back ride ${done.id} after group-confirm failure:`, rollbackErr);
+          }
+        }
+        console.error(`Failed to confirm ride ${target.id}:`, err);
+        return {
+          ok: false,
+          message: err?.message || "Couldn't confirm this ride. Please try again.",
+          failedRideId: target.id,
+        };
+      }
+    }
+    return { ok: true, confirmed };
+  }
+
+  app.post('/api/driver/rides/:rideId/confirm-scheduled', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+
+      const approvalProfile = await storage.getDriverProfile(userId);
+      if (!approvalProfile || approvalProfile.approvalStatus !== 'approved' || approvalProfile.isSuspended) {
+        return res.status(403).json({
+          message: "Your driver application is still under review. You'll be able to accept rides once an admin approves your documents.",
+        });
+      }
+
+      const anchor = await storage.getRide(rideId);
+      if (!anchor) return res.status(404).json({ message: "Ride not found" });
+      if (anchor.driverId !== userId) return res.status(403).json({ message: "This ride isn't claimed by you." });
+
+      // Already confirmed (e.g. a double-tap) — treat as success, not an error.
+      if (anchor.status !== "pending") {
+        return res.json({ confirmed: [anchor], alreadyConfirmed: true });
+      }
+
+      const targets = anchor.groupId
+        ? (await storage.getRidesInGroup(anchor.groupId)).filter(
+            (r) => r.driverId === userId && r.status === "pending",
+          )
+        : [anchor];
+
+      const result = await confirmRidesForDriver(targets, userId);
+      if (!result.ok) {
+        return res.status(402).json({ message: result.message, failedRideId: result.failedRideId });
+      }
+      res.json({ confirmed: result.confirmed });
+    } catch (error) {
+      console.error("Error confirming scheduled ride:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ message: error.message });
+      } else {
+        res.status(500).json({ message: "Failed to confirm ride" });
+      }
+    }
+  });
+
+  // Circuit runs are already addressed by groupId everywhere else in their
+  // API (claim, etc.) — this is the confirm/accept step for a claimed run,
+  // same underlying logic as confirm-scheduled above.
+  app.post('/api/driver/circuit-runs/:groupId/confirm', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { groupId } = req.params;
+
+      const approvalProfile = await storage.getDriverProfile(userId);
+      if (!approvalProfile || approvalProfile.approvalStatus !== 'approved' || approvalProfile.isSuspended) {
+        return res.status(403).json({
+          message: "Your driver application is still under review. You'll be able to accept rides once an admin approves your documents.",
+        });
+      }
+
+      const group = await storage.getRideGroupById(groupId);
+      if (!group || group.groupType !== "circuit") return res.status(404).json({ message: "Circuit run not found" });
+      if (group.driverId !== userId) return res.status(403).json({ message: "This run isn't claimed by you." });
+
+      const groupRides = await storage.getRidesInGroup(groupId);
+      const targets = groupRides.filter((r) => r.driverId === userId && r.status === "pending");
+      if (targets.length === 0) {
+        return res.json({ confirmed: groupRides.filter((r) => r.driverId === userId), alreadyConfirmed: true });
+      }
+
+      const result = await confirmRidesForDriver(targets, userId);
+      if (!result.ok) {
+        return res.status(402).json({ message: result.message, failedRideId: result.failedRideId });
+      }
+      res.json({ confirmed: result.confirmed });
+    } catch (error) {
+      console.error("Error confirming circuit run:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ message: error.message });
+      } else {
+        res.status(500).json({ message: "Failed to confirm circuit run" });
       }
     }
   });
@@ -4717,6 +4911,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const seatsBooked = groupRides.filter((r) => r.status !== "cancelled").length;
         if (seatsBooked === 0) continue;
         const fare = parseFloat(circuit.farePerSeat);
+        const myRides = groupRides.filter((r) => r.driverId === userId && r.status !== "cancelled");
         const item = {
           groupId: group.id,
           circuitName: circuit.name,
@@ -4728,6 +4923,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           seatsTotal: circuit.seatCount,
           farePerSeat: circuit.farePerSeat,
           totalFare: (fare * seatsBooked).toFixed(2),
+          // Claiming (assignDriverToCircuitRun) only assigns the driver —
+          // it doesn't authorize payment or move rides out of "pending".
+          // The client needs this to know whether to show Confirm & Accept.
+          allConfirmed: group.driverId === userId ? myRides.every((r) => r.status === "accepted") : undefined,
         };
         (group.driverId === userId ? mine : open).push(item);
       }
@@ -4837,28 +5036,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (active.some((r) => r.riderId === userId)) {
         return res.status(409).json({ message: "You already have a seat on this run." });
       }
-      if (active.length >= circuit.seatCount) {
+
+      // Same TOCTOU class as the join-schedule race (see claimScheduleSlot):
+      // reading active.length then writing filledSlots as separate steps lets
+      // two riders racing for the last seat both pass the capacity check and
+      // both get seated past seatCount. Claim atomically before creating the
+      // ride so a losing racer gets a clean 409 instead of an overbooked seat.
+      const claimedGroup = await storage.claimScheduleSlot(group.id);
+      if (!claimedGroup) {
         return res.status(409).json({ message: "This run is full. Try next week's run or another circuit." });
       }
 
-      const ride = await storage.createRide({
-        riderId: userId,
-        driverId: group.driverId || null,
-        pickupLocation: circuit.pickup,
-        destinationLocation: circuit.destination,
-        estimatedFare: circuit.farePerSeat,
-        originalFare: circuit.farePerSeat,
-        paymentMethod: req.body?.paymentMethod || "card",
-        rideType: "circuit",
-        groupId: group.id,
-        scheduledAt: w.runAt,
-      });
+      let ride;
+      try {
+        ride = await storage.createRide({
+          riderId: userId,
+          driverId: group.driverId || null,
+          pickupLocation: circuit.pickup,
+          destinationLocation: circuit.destination,
+          estimatedFare: circuit.farePerSeat,
+          originalFare: circuit.farePerSeat,
+          paymentMethod: req.body?.paymentMethod || "card",
+          rideType: "circuit",
+          groupId: group.id,
+          scheduledAt: w.runAt,
+        });
+      } catch (createErr) {
+        await storage.releaseScheduleSlot(group.id).catch((releaseErr) =>
+          console.error(`Failed to release claimed seat on circuit run ${group.id} after ride creation failure:`, releaseErr),
+        );
+        throw createErr;
+      }
 
-      const seatsBooked = active.length + 1;
-      await storage.updateRideGroup(group.id, {
-        filledSlots: seatsBooked,
-        ...(seatsBooked >= circuit.seatCount ? { status: "active" } : {}),
-      });
+      const seatsBooked = claimedGroup.filledSlots ?? active.length + 1;
+      if (seatsBooked >= circuit.seatCount) {
+        await storage.updateRideGroup(group.id, { status: "active" });
+      }
 
       console.log(`[AUDIT] circuit_seat_booked userId=${userId} circuitId=${circuit.id} rideId=${ride.id} runAt=${w.runAt.toISOString()} seats=${seatsBooked}/${circuit.seatCount}`);
       res.json({
@@ -5371,6 +5584,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (group.status !== "open") return res.status(410).json({ message: "This schedule is no longer accepting riders" });
       if ((group.filledSlots ?? 0) >= (group.maxSlots ?? 3)) return res.status(409).json({ message: "This schedule is full" });
 
+      // Atomic slot claim BEFORE creating the joiner's ride: the old code read
+      // filledSlots then wrote filledSlots+1 as two separate steps, so two
+      // riders racing for the last seat could both pass the check above and
+      // both get seated past maxSlots. This conditional UPDATE only succeeds
+      // while filled_slots < max_slots, so a losing racer gets null back —
+      // and we do it before createRide so a losing racer never gets an
+      // orphaned ride row for a seat they didn't actually win.
+      const claimedGroup = await storage.claimScheduleSlot(group.id);
+      if (!claimedGroup) return res.status(409).json({ message: "This schedule is full" });
+
       // Estimate fare for the joiner's route
       const { lat: pLat, lng: pLng } = pickupLocation;
       const { lat: dLat, lng: dLng } = destinationLocation;
@@ -5383,24 +5606,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fullFare = Math.max(5, 2.5 + dist * 1.5 + duration * 0.3);
       const discountedFare = fullFare * 0.7;
 
-      // Create the joiner's ride
-      const ride = await storage.createRide({
-        riderId: userId,
-        driverId: group.driverId || null,
-        pickupLocation,
-        destinationLocation,
-        estimatedFare: discountedFare.toFixed(2),
-        originalFare: fullFare.toFixed(2),
-        groupDiscountAmount: (fullFare * 0.3).toFixed(2),
-        paymentMethod: paymentMethod || "card",
-        rideType: "shared_schedule",
-        groupId: group.id,
-        scheduledAt: group.scheduledAt ?? undefined,
-      });
+      // Create the joiner's ride. The seat is already claimed above; if this
+      // fails, release it rather than leaving a phantom seat nobody occupies.
+      let ride;
+      try {
+        ride = await storage.createRide({
+          riderId: userId,
+          driverId: group.driverId || null,
+          pickupLocation,
+          destinationLocation,
+          estimatedFare: discountedFare.toFixed(2),
+          originalFare: fullFare.toFixed(2),
+          groupDiscountAmount: (fullFare * 0.3).toFixed(2),
+          paymentMethod: paymentMethod || "card",
+          rideType: "shared_schedule",
+          groupId: group.id,
+          scheduledAt: group.scheduledAt ?? undefined,
+        });
+      } catch (createErr) {
+        await storage.releaseScheduleSlot(group.id).catch((releaseErr) =>
+          console.error(`Failed to release claimed slot on group ${group.id} after ride creation failure:`, releaseErr),
+        );
+        throw createErr;
+      }
 
-      // Increment filled slots
-      const newFilledSlots = (group.filledSlots ?? 1) + 1;
-      await storage.updateRideGroup(group.id, { filledSlots: newFilledSlots });
+      const newFilledSlots = claimedGroup.filledSlots ?? 1;
 
       // Apply 30% discount to ALL rides in the group (including organizer) if first joiner
       if (newFilledSlots === 2 && !group.discountActive) {
@@ -5408,7 +5638,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Close group if full
-      if (newFilledSlots >= (group.maxSlots ?? 3)) {
+      if (newFilledSlots >= (claimedGroup.maxSlots ?? 3)) {
         await storage.updateRideGroup(group.id, { status: "active" });
       }
 

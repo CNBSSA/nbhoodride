@@ -23,6 +23,7 @@ import { BarChart3, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPi
 import PayoutModal from "@/components/PayoutModal";
 import { LostFoundDriverCard } from "@/components/LostFoundDriverCard";
 import { DriverStatusBanner } from "@/components/DriverStatusBanner";
+import { UpcomingRideGroupCard } from "@/components/UpcomingRideGroupCard";
 import type { RideMessagePayload } from "@shared/rideChat";
 import { parseRideMessageWsEvent } from "@shared/rideChat";
 
@@ -136,6 +137,26 @@ export default function DriverDashboard() {
   const openScheduledRides = scheduledRidesData?.open ?? [];
   const myUpcomingRides = scheduledRidesData?.mine ?? [];
 
+  // Group upcoming rides by groupId — a shared_schedule (coworker) group
+  // shows up as one card per rider in myUpcomingRides, but they're all one
+  // ride to confirm/claim together. Ungrouped (solo scheduled) rides get a
+  // synthetic single-ride "group" so the same rendering path covers both.
+  const upcomingGroups = (() => {
+    const byKey = new Map<string, any[]>();
+    for (const ride of myUpcomingRides) {
+      const key = ride.groupId || ride.id;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key)!.push(ride);
+    }
+    return Array.from(byKey.entries()).map(([key, groupRides]) => ({
+      key,
+      rides: groupRides,
+      isGroup: groupRides.length > 1,
+      allConfirmed: groupRides.every((r) => r.status === "accepted"),
+      totalFare: groupRides.reduce((sum, r) => sum + parseFloat(r.estimatedFare || "0"), 0),
+    }));
+  })();
+
   // Circuit runs — whole-run claim board (docs/CIRCUITS_LAUNCH_PLAN.md item 5)
   const { data: circuitRunsData, refetch: refetchCircuitRuns } = useQuery<{ open: any[]; mine: any[] }>({
     queryKey: ["/api/driver/circuit-runs"],
@@ -164,6 +185,28 @@ export default function DriverDashboard() {
     },
   });
 
+  // Confirm & accept a claimed circuit run — same two-step reason as
+  // confirmScheduledMutation below: claiming a run doesn't authorize
+  // payment, so this is the explicit step that does.
+  const confirmCircuitRunMutation = useMutation({
+    mutationFn: async (groupId: string) => {
+      const response = await apiRequest('POST', `/api/driver/circuit-runs/${groupId}/confirm`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      refetchCircuitRuns();
+      const count = data?.confirmed?.length ?? 1;
+      toast({
+        title: "Run Confirmed!",
+        description: `You're set for ${count} rider${count === 1 ? "" : "s"} on this run. Payment authorized.`,
+      });
+    },
+    onError: (error: any) => {
+      toast({ title: "Couldn't Confirm Run", description: error.message || "Please try again.", variant: "destructive" });
+      refetchCircuitRuns();
+    },
+  });
+
   // Claim a scheduled ride
   const claimRideMutation = useMutation({
     mutationFn: async (rideId: string) => {
@@ -176,6 +219,31 @@ export default function DriverDashboard() {
     },
     onError: (error: any) => {
       toast({ title: "Claim Failed", description: error.message || "Another driver may have claimed this first.", variant: "destructive" });
+      refetchScheduledRides();
+    },
+  });
+
+  // Confirm & accept a claimed scheduled ride (or every ride in its group) —
+  // this is the step that actually authorizes payment and unblocks arrival
+  // confirmation. Claiming alone deliberately does neither, so this has to
+  // be a separate, explicit driver action.
+  const confirmScheduledMutation = useMutation({
+    mutationFn: async (rideId: string) => {
+      const response = await apiRequest('POST', `/api/driver/rides/${rideId}/confirm-scheduled`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      refetchScheduledRides();
+      const count = data?.confirmed?.length ?? 1;
+      toast({
+        title: "Ride Confirmed!",
+        description: count > 1
+          ? `You're set for all ${count} riders in this group. Payment authorized.`
+          : "Payment authorized. You're all set for pickup.",
+      });
+    },
+    onError: (error: any) => {
+      toast({ title: "Couldn't Confirm Ride", description: error.message || "Please try again.", variant: "destructive" });
       refetchScheduledRides();
     },
   });
@@ -524,31 +592,16 @@ export default function DriverDashboard() {
               <CheckCircle2 className="w-5 h-5" />
               Your Upcoming Rides ({myUpcomingRides.length})
             </h3>
-            {myUpcomingRides.map((ride: any) => (
-              <Card key={ride.id} className="border-green-200 bg-green-50" data-testid={`upcoming-ride-${ride.id}`}>
-                <CardContent className="p-4 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Badge className="bg-green-600 text-white">Claimed</Badge>
-                    <span className="text-sm font-semibold text-green-700">
-                      {ride.scheduledAt ? format(new Date(ride.scheduledAt), "MMM d 'at' h:mm a") : ''}
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2 text-sm">
-                    <MapPin className="w-4 h-4 text-green-600 mt-0.5 shrink-0" />
-                    <div>
-                      <p className="font-medium">{ride.pickupLocation?.address || 'Pickup'}</p>
-                      <p className="text-gray-500">→ {ride.destinationLocation?.address || 'Destination'}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between text-sm text-gray-600">
-                    <span>Rider: {ride.rider?.firstName || 'Unknown'} {ride.rider?.lastName?.[0] || ''}.</span>
-                    <span className="font-semibold text-green-700">${parseFloat(ride.estimatedFare || '0').toFixed(2)}</span>
-                  </div>
-                  {ride.pickupInstructions && (
-                    <p className="text-xs text-gray-500 italic">"{ride.pickupInstructions}"</p>
-                  )}
-                </CardContent>
-              </Card>
+            {upcomingGroups.map((group) => (
+              <UpcomingRideGroupCard
+                key={group.key}
+                group={group}
+                onConfirm={(rideId) => confirmScheduledMutation.mutate(rideId)}
+                isConfirming={
+                  confirmScheduledMutation.isPending &&
+                  confirmScheduledMutation.variables === group.rides[0].id
+                }
+              />
             ))}
           </div>
         )}
@@ -566,7 +619,9 @@ export default function DriverDashboard() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-sm">{run.circuitName}</span>
-                      <Badge className="bg-green-600 text-white">Yours</Badge>
+                      <Badge className={run.allConfirmed ? "bg-green-700 text-white" : "bg-green-600 text-white"}>
+                        {run.allConfirmed ? "Confirmed" : "Claimed"}
+                      </Badge>
                       {run.anchorName && <Badge variant="outline">{run.anchorName}</Badge>}
                     </div>
                     <span className="font-semibold text-green-700">${run.totalFare}</span>
@@ -578,6 +633,18 @@ export default function DriverDashboard() {
                   <p className="text-xs text-gray-500 truncate">
                     {run.pickup?.address} → {run.destination?.address}
                   </p>
+                  {!run.allConfirmed && (
+                    <Button
+                      className="w-full mt-1"
+                      onClick={() => confirmCircuitRunMutation.mutate(run.groupId)}
+                      disabled={confirmCircuitRunMutation.isPending && confirmCircuitRunMutation.variables === run.groupId}
+                      data-testid={`button-confirm-circuit-run-${run.groupId}`}
+                    >
+                      {confirmCircuitRunMutation.isPending && confirmCircuitRunMutation.variables === run.groupId
+                        ? "Confirming..."
+                        : "Confirm & Accept Run"}
+                    </Button>
+                  )}
                 </CardContent>
               </Card>
             ))}
