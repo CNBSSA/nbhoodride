@@ -7,8 +7,27 @@ const VAPID_EMAIL       = rawVapidEmail.startsWith("mailto:") || rawVapidEmail.s
   ? rawVapidEmail
   : `mailto:${rawVapidEmail}`;
 
+// web-push validates key format synchronously and throws on a malformed
+// key. Letting that escape here crashes the whole import chain before the
+// HTTP server ever binds its port — Railway's healthcheck then fails
+// forever and the ENTIRE app goes down over an optional feature. Web push
+// is optional; degrade to disabled instead of crashing the process.
+let vapidReady = false;
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
-  webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  try {
+    webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    vapidReady = true;
+  } catch (err: any) {
+    console.error(
+      "[push] Invalid VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY — web push disabled. " +
+      "Set valid VAPID key values in the service Variables tab, or clear both to disable web push. " +
+      `(${err.message})`
+    );
+  }
+}
+
+export function isPushConfigured(): boolean {
+  return vapidReady;
 }
 
 export interface PushPayload {
@@ -31,7 +50,7 @@ export async function sendPushNotification(
   subscription: PushSubscriptionRecord,
   payload: PushPayload
 ): Promise<boolean> {
-  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return false;
+  if (!vapidReady) return false;
   try {
     await webpush.sendNotification(
       { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },

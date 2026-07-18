@@ -17,6 +17,7 @@ import bcrypt from "bcrypt";
 import Anthropic from "@anthropic-ai/sdk";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { getCountyFromCoords, driverCoversCounty } from "./countyService";
+import { isPushConfigured } from "./pushService";
 import {
   sendAccountApprovedEmail,
   sendDriverApprovedEmail,
@@ -5434,9 +5435,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ── PUSH NOTIFICATIONS ──────────────────────────────────────────────────────
 
-  // Expose VAPID public key so the frontend can subscribe
+  // Expose VAPID public key so the frontend can subscribe. Gated on actual
+  // web-push readiness, not just the raw env var — an invalid key still
+  // sits in VAPID_PUBLIC_KEY, and handing it to the frontend would make it
+  // try (and fail) to subscribe with a key the server can't actually use.
   app.get('/api/push/vapid-key', (_req, res) => {
-    res.json({ publicKey: process.env.VAPID_PUBLIC_KEY || "" });
+    res.json({ publicKey: isPushConfigured() ? process.env.VAPID_PUBLIC_KEY || "" : "" });
   });
 
   // Save a new push subscription for the current user
