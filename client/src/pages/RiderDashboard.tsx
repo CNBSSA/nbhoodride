@@ -114,6 +114,16 @@ export default function RiderDashboard() {
   const [isJoinScheduleOpen, setIsJoinScheduleOpen] = useState(false);
   const [isCircuitsOpen, setIsCircuitsOpen] = useState(false);
   const [showMoreWays, setShowMoreWays] = useState(false);
+  // Dismissible per-browser: riders who don't work shifts with coworkers
+  // had no way to remove this large, always-visible banner from the idle
+  // home screen — it just sat there permanently.
+  const [showCoworkerBanner, setShowCoworkerBanner] = useState(
+    () => localStorage.getItem("pgride:coworkerBannerDismissed") !== "1"
+  );
+  const dismissCoworkerBanner = () => {
+    localStorage.setItem("pgride:coworkerBannerDismissed", "1");
+    setShowCoworkerBanner(false);
+  };
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
   const [isLostFoundOpen, setIsLostFoundOpen] = useState(false);
   const [incomingRideMessage, setIncomingRideMessage] = useState<RideMessagePayload | null>(null);
@@ -896,17 +906,30 @@ export default function RiderDashboard() {
         {/* ── IDLE: "Where to?" bar ── */}
         {panel === "idle" && (
           <div className="px-4 pb-5 pt-1 space-y-3 overflow-y-auto min-h-0">
-            <button
-              className="w-full flex items-center gap-3 bg-purple-600 text-white active:bg-purple-700 transition-colors rounded-2xl px-4 py-3.5 text-left shadow-md"
-              onClick={() => setIsSharedScheduleOpen(true)}
-              data-testid="button-shift-coworker-ride"
-            >
-              <Users className="w-5 h-5 flex-shrink-0" />
-              <div>
-                <p className="font-semibold text-sm">Ride home with coworkers</p>
-                <p className="text-[11px] text-purple-100">Pick shift end · share code · up to 3 riders · 30% off</p>
+            {showCoworkerBanner && (
+              <div className="relative">
+                <button
+                  className="w-full flex items-center gap-3 bg-purple-600 text-white active:bg-purple-700 transition-colors rounded-2xl px-4 py-3.5 pr-10 text-left shadow-md"
+                  onClick={() => setIsSharedScheduleOpen(true)}
+                  data-testid="button-shift-coworker-ride"
+                >
+                  <Users className="w-5 h-5 flex-shrink-0" />
+                  <div>
+                    <p className="font-semibold text-sm">Ride home with coworkers</p>
+                    <p className="text-[11px] text-purple-100">Pick shift end · share code · up to 3 riders · 30% off</p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className="absolute top-2 right-2 p-1.5 rounded-full text-purple-100 hover:bg-purple-700/50 active:bg-purple-700/70 transition-colors"
+                  onClick={(e) => { e.stopPropagation(); dismissCoworkerBanner(); }}
+                  aria-label="Dismiss"
+                  data-testid="button-dismiss-coworker-banner"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-            </button>
+            )}
 
             <button
               type="button"
