@@ -105,8 +105,13 @@ import {
   haversineMiles,
   startAcceptanceTimer,
   clearAcceptanceTimer,
+  getTriedDriversForRide,
   isWithinPickupGeofence,
   calculateCancellationFee,
+  RIDER_NO_SHOW_FEE,
+  NO_SHOW_WAIT_MINUTES,
+  FAIRNESS_FUND_RATE,
+  GOODWILL_CREDIT,
   optimizePickupOrder,
   getSharedDiscountPct,
   buildRideReceipt,
@@ -142,10 +147,11 @@ declare module "express-session" {
 const VALID_RIDE_TRANSITIONS: Record<string, string[]> = {
   pending:        ["accepted", "cancelled"],
   accepted:       ["driver_arriving", "cancelled"],
-  driver_arriving:["in_progress", "cancelled"],
+  driver_arriving:["in_progress", "cancelled", "no_show"],
   in_progress:    ["completed", "cancelled"],
   completed:      [],   // terminal
   cancelled:      [],   // terminal
+  no_show:        [],   // terminal
 };
 
 // In-process cache for address-suggest lookups. Keyed by "query|limit".
@@ -1974,38 +1980,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
-      
+
+      // Un-assigns the ride (driverId → null) but leaves it pending — one
+      // driver saying no must not kill the rider's request.
       await storage.declineRide(rideId, userId);
-      
-      // Get the ride to access riderId for targeted messaging
+      clearAcceptanceTimer(rideId);
+
+      await logRideAudit({
+        rideId,
+        event: "driver_declined",
+        actorId: userId,
+        details: {},
+      });
+
       const ride = await storage.getRide(rideId);
-      if (ride) {
-        // Send targeted WebSocket messages to driver and rider only
-        const rideDeclinedMessage = {
-          type: 'ride_declined',
-          rideId,
-          driverId: userId,
-          riderId: ride.riderId
-        };
-        
-        // Send to driver
-        if (activeConnections.has(userId)) {
-          const driverWs = activeConnections.get(userId);
-          if (driverWs && driverWs.readyState === WebSocket.OPEN) {
-            driverWs.send(JSON.stringify(rideDeclinedMessage));
+      let reassigned = false;
+
+      // Confirm the driver is no longer holding it, then immediately re-run
+      // matching for immediate rides. Scheduled rides just return to the open
+      // claim board (no assignment loop to restart).
+      const isScheduledFuture = ride?.scheduledAt && new Date(ride.scheduledAt) > new Date();
+      if (ride && ride.status === "pending" && !ride.driverId && !isScheduledFuture) {
+        const pickup = ride.pickupLocation as { lat: number; lng: number; address: string };
+        // Exclude everyone who has already declined/timed out on this ride —
+        // handing it back to a driver who said no just bounces it forever.
+        const tried = await getTriedDriversForRide(rideId).catch(() => [] as string[]);
+        const nextDriver = await findBestDriver(pickup, ride.pickupCounty ?? null, Array.from(new Set([...tried, userId])), {
+          riderId: ride.riderId,
+          requestedVehicleType: ride.requestedVehicleType ?? undefined,
+        }).catch(() => null);
+
+        if (nextDriver) {
+          await storage.updateRide(rideId, { driverId: nextDriver.userId } as any);
+          reassigned = true;
+
+          await logRideAudit({
+            rideId,
+            event: "reassigned_to_driver",
+            actorId: nextDriver.userId,
+            details: { previousDriverId: userId, viaDecline: true, etaMinutes: nextDriver.etaMinutes },
+          });
+
+          const newDriverWs = activeConnections.get(nextDriver.userId);
+          if (newDriverWs?.readyState === WebSocket.OPEN) {
+            newDriverWs.send(JSON.stringify({
+              type: 'new_ride_request',
+              rideId,
+              riderId: ride.riderId,
+              pickupAddress: pickup?.address || '',
+              destinationAddress: (ride.destinationLocation as any)?.address || '',
+              estimatedFare: ride.estimatedFare,
+              acceptanceTimeoutSeconds: ACCEPTANCE_TIMEOUT_SECONDS,
+            }));
           }
-        }
-        
-        // Send to rider
-        if (activeConnections.has(ride.riderId)) {
+          startAcceptanceTimer(
+            rideId, nextDriver.userId, pickup, ride.pickupCounty ?? null, 1,
+            () => {}, () => {},
+          );
+
+          // The rider just sees "still finding your driver" — no scary
+          // decline message when a replacement is already lined up.
           const riderWs = activeConnections.get(ride.riderId);
-          if (riderWs && riderWs.readyState === WebSocket.OPEN) {
-            riderWs.send(JSON.stringify(rideDeclinedMessage));
+          if (riderWs?.readyState === WebSocket.OPEN) {
+            riderWs.send(JSON.stringify({
+              type: 'ride_reassigned',
+              rideId,
+              message: 'Finding you a new driver…',
+              etaMinutes: nextDriver.etaMinutes,
+            }));
           }
+        } else {
+          // Nobody else available — now it really is dead.
+          await storage.updateRide(rideId, {
+            status: "cancelled",
+            cancellationReason: "No available drivers in your area",
+            cancelledBy: "system",
+            cancelledByRole: "system",
+          } as any);
+          const riderWs = activeConnections.get(ride.riderId);
+          if (riderWs?.readyState === WebSocket.OPEN) {
+            riderWs.send(JSON.stringify({
+              type: 'ride_cancelled',
+              rideId,
+              reason: 'No drivers available in your area right now. Please try again.',
+            }));
+          }
+          deliverUserNotification(ride.riderId, {
+            type: "ride-cancelled",
+            title: "No Drivers Available",
+            body: "We couldn't find a driver for your ride. Please try again.",
+            tag: "ride-cancelled",
+            url: "/",
+            data: { rideId },
+          }).catch(console.error);
         }
       }
-      
-      res.json({ success: true });
+
+      res.json({ success: true, reassigned });
     } catch (error) {
       console.error("Error declining ride:", error);
       if (error instanceof Error) {
@@ -2102,8 +2173,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Transition to driver_arriving
-      await storage.updateRide(rideId, { status: "driver_arriving", updatedAt: new Date() } as any);
+      // Transition to driver_arriving. arrivedAt anchors the rider no-show
+      // wait timer — the driver can only file a no-show once NO_SHOW_WAIT_MINUTES
+      // have passed from this stamp.
+      const arrivedAt = new Date();
+      await storage.updateRide(rideId, { status: "driver_arriving", arrivedAt, updatedAt: arrivedAt } as any);
 
       await logRideAudit({
         rideId,
@@ -2134,10 +2208,106 @@ export async function registerRoutes(app: Express): Promise<Server> {
         data: { rideId },
       }).catch(console.error);
 
-      res.json({ success: true, withinGeofence, status: "driver_arriving" });
+      res.json({
+        success: true,
+        withinGeofence,
+        status: "driver_arriving",
+        arrivedAt: arrivedAt.toISOString(),
+        noShowEligibleAt: new Date(arrivedAt.getTime() + NO_SHOW_WAIT_MINUTES * 60_000).toISOString(),
+      });
     } catch (error) {
       console.error("Error confirming arrival:", error);
       res.status(500).json({ message: "Failed to confirm arrival" });
+    }
+  });
+
+  // ── Rider no-show: driver waited the full window at the pickup point ──
+  // Hard preconditions, all server-verified: the ride is still at the
+  // driver_arriving stage, NO_SHOW_WAIT_MINUTES have elapsed since the
+  // arrivedAt stamp, and the driver's CURRENT GPS position is inside the
+  // pickup geofence — a driver can't collect a no-show fee from their couch.
+  app.post('/api/driver/rides/:rideId/no-show', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const { driverLat, driverLng } = req.body;
+
+      const ride = await storage.getRide(rideId);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+      if (ride.driverId !== userId) return res.status(403).json({ message: "Not authorized" });
+      if (ride.status !== "driver_arriving") {
+        return res.status(400).json({ message: `Cannot report a no-show for a ride in status: ${ride.status}` });
+      }
+      if (!ride.arrivedAt) {
+        return res.status(400).json({ message: "Arrival was never confirmed for this ride." });
+      }
+
+      const waitedMs = Date.now() - new Date(ride.arrivedAt).getTime();
+      const requiredMs = NO_SHOW_WAIT_MINUTES * 60_000;
+      if (waitedMs < requiredMs) {
+        const remainingSec = Math.ceil((requiredMs - waitedMs) / 1000);
+        return res.status(400).json({
+          message: `Please wait the full ${NO_SHOW_WAIT_MINUTES} minutes before reporting a no-show (${remainingSec}s remaining).`,
+          remainingSec,
+        });
+      }
+
+      if (typeof driverLat !== 'number' || typeof driverLng !== 'number') {
+        return res.status(400).json({ message: "Your current location is required to report a no-show." });
+      }
+      const pickup = ride.pickupLocation as { lat: number; lng: number } | null;
+      if (!pickup || !isWithinPickupGeofence(driverLat, driverLng, pickup.lat, pickup.lng)) {
+        return res.status(400).json({ message: "You must be at the pickup location to report a no-show." });
+      }
+
+      // Collect the flat no-show fee from the rider's authorization (or
+      // wallet on cash rides) and split it with the fairness fund.
+      const collected = await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE);
+      const split = await routeFeeWithFairnessSplit(collected, userId, rideId);
+      const updated = await storage.markRideNoShow(rideId, RIDER_NO_SHOW_FEE, "Rider did not appear at pickup");
+      await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
+
+      await logRideAudit({
+        rideId,
+        event: "rider_no_show",
+        actorId: userId,
+        details: {
+          fee: RIDER_NO_SHOW_FEE,
+          collected,
+          driverCut: split.driverCut,
+          fairnessFundCut: split.fundCut,
+          waitedMinutes: Math.floor(waitedMs / 60_000),
+          driverLat, driverLng,
+        },
+      });
+
+      const noShowMessage = JSON.stringify({
+        type: 'ride_no_show',
+        rideId,
+        fee: RIDER_NO_SHOW_FEE,
+      });
+      for (const partyId of [ride.riderId, userId]) {
+        const ws = activeConnections.get(partyId);
+        if (ws?.readyState === WebSocket.OPEN) ws.send(noShowMessage);
+      }
+
+      deliverUserNotification(ride.riderId, {
+        type: "ride-no-show",
+        title: "Missed Ride",
+        body: `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point. A $${RIDER_NO_SHOW_FEE.toFixed(2)} no-show fee was applied.`,
+        tag: "ride-no-show",
+        url: "/",
+        data: { rideId, fee: RIDER_NO_SHOW_FEE },
+      }).catch(console.error);
+
+      res.json({ success: true, ride: updated, fee: RIDER_NO_SHOW_FEE, driverCut: split.driverCut });
+    } catch (error) {
+      console.error("Error reporting no-show:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ message: error.message });
+      } else {
+        res.status(500).json({ message: "Failed to report no-show" });
+      }
     }
   });
 
@@ -2238,6 +2408,203 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Reconcile a completed ride's card payment against the auth taken at
+  // accept time (virtual portion + Stripe hold together cover what was
+  // promised; here we settle to actualFare + tip). Shared by the normal
+  // driver /complete flow and the mid-trip early-completion path in /cancel.
+  async function settleCardPaymentForCompletedRide(
+    ride: Ride,
+    actualFare: number | undefined,
+    tipAmount: number | undefined,
+  ): Promise<void> {
+    if (ride.paymentMethod !== 'card' || !ride.stripePaymentIntentId) return;
+    const rideId = ride.id;
+    try {
+      const finalFare = actualFare ?? parseFloat(ride.actualFare || "0");
+      const tip = tipAmount || 0;
+      const finalAmount = Number((finalFare + tip).toFixed(2));
+
+      const virtualAuthorized = parseFloat(ride.virtualAmountAuthorized || "0");
+      const stripeAuthorized = parseFloat(ride.stripeAuthorizedAmount || "0");
+      const totalAuthorized = Number((virtualAuthorized + stripeAuthorized).toFixed(2));
+
+      const hasRealStripeAuth =
+        stripeAuthorized > 0 &&
+        !!ride.stripePaymentIntentId &&
+        !ride.stripePaymentIntentId.startsWith("virtual-");
+
+      const rider = await storage.getUser(ride.riderId);
+
+      // Branch 1: final ≤ virtual already deducted
+      //   → refund the unused virtual; cancel any Stripe auth (no charge).
+      if (finalAmount <= virtualAuthorized) {
+        const refund = Number((virtualAuthorized - finalAmount).toFixed(2));
+        if (refund > 0) {
+          await storage.addVirtualCardBalance(ride.riderId, refund, "ride_refund", rideId);
+        }
+        if (hasRealStripeAuth) {
+          try {
+            await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!);
+          } catch (cancelErr) {
+            console.error(`Failed to cancel Stripe auth ${ride.stripePaymentIntentId} on underage settlement:`, cancelErr);
+          }
+        }
+      }
+      // Branch 2: virtual < final ≤ virtual + Stripe authorization
+      //   → partial-capture only what we still need from the existing Stripe auth.
+      else if (finalAmount <= totalAuthorized) {
+        const stripeNeeded = Number((finalAmount - virtualAuthorized).toFixed(2));
+        if (hasRealStripeAuth && stripeNeeded > 0) {
+          await stripeService.capturePaymentIntent(ride.stripePaymentIntentId!, stripeNeeded);
+        } else if (hasRealStripeAuth && stripeNeeded === 0) {
+          // virtual covered everything despite an authorization — release the hold.
+          try {
+            await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!);
+          } catch (cancelErr) {
+            console.error(`Failed to cancel unused Stripe auth ${ride.stripePaymentIntentId}:`, cancelErr);
+          }
+        }
+      }
+      // Branch 3: final > virtual + Stripe authorization
+      //   → capture full Stripe auth, then charge the extra (virtual first, then a new Stripe PI).
+      else {
+        if (hasRealStripeAuth && stripeAuthorized > 0) {
+          await stripeService.capturePaymentIntent(ride.stripePaymentIntentId!, stripeAuthorized);
+        }
+        const overage = Number((finalAmount - totalAuthorized).toFixed(2));
+        if (overage > 0) {
+          const split = await storage.splitDeductForRide(ride.riderId, overage, rideId);
+          if (split.stripeAmount > 0) {
+            if (!stripeService.isEnabled) {
+              throw new Error("Stripe is not configured; cannot collect overage.");
+            }
+            if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
+              // Roll back the virtual deduction we just made; surface error.
+              if (split.virtualDeducted > 0) {
+                await storage.addVirtualCardBalance(ride.riderId, split.virtualDeducted, "ride_settlement_refund", rideId);
+              }
+              throw new Error("Insufficient virtual balance and no card on file to collect overage.");
+            }
+            try {
+              await stripeService.chargeRideShortfall({
+                amount: split.stripeAmount,
+                customerId: rider.stripeCustomerId,
+                paymentMethodId: rider.stripePaymentMethodId,
+                rideId,
+                riderId: ride.riderId,
+              });
+            } catch (chargeErr) {
+              // Roll back the virtual portion of the overage; the original
+              // authorization has already been captured, so we don't undo that.
+              if (split.virtualDeducted > 0) {
+                await storage.addVirtualCardBalance(ride.riderId, split.virtualDeducted, "ride_settlement_refund", rideId);
+              }
+              throw chargeErr;
+            }
+          }
+        }
+      }
+
+      // Driver still gets credited to their virtual balance — admins fulfil
+      // payouts via the existing manual payout-request flow.
+      if (ride.driverId && finalAmount > 0) {
+        await storage.addVirtualCardBalance(ride.driverId, finalAmount, "ride_earnings", rideId);
+      }
+
+      await storage.captureRidePayment(rideId, actualFare, tipAmount);
+
+      console.log(`Card payment settled for ride ${rideId}: final $${finalAmount} (virtualAuth $${virtualAuthorized}, stripeAuth $${stripeAuthorized})`);
+    } catch (error: any) {
+      console.error("Failed to settle card payment:", error);
+      throw new Error("Payment processing failed. Please try again.");
+    }
+  }
+
+  // Split a collected cancellation/no-show fee: the driver keeps the bulk,
+  // and FAIRNESS_FUND_RATE of it feeds the community bonus pool that pays
+  // for goodwill credits when a driver lets a rider down (see /cancel).
+  // The fee never routes anywhere when there's no driver to compensate.
+  async function routeFeeWithFairnessSplit(
+    fee: number,
+    driverId: string | null | undefined,
+    rideId: string,
+  ): Promise<{ driverCut: number; fundCut: number }> {
+    if (fee <= 0 || !driverId) return { driverCut: 0, fundCut: 0 };
+    const fundCut = Number((fee * FAIRNESS_FUND_RATE).toFixed(2));
+    const driverCut = Number((fee - fundCut).toFixed(2));
+    if (driverCut > 0) {
+      await storage.addVirtualCardBalance(driverId, driverCut, "cancellation_fee", rideId);
+    }
+    if (fundCut > 0) {
+      await storage.fundCommunityBonusPool(fundCut);
+    }
+    return { driverCut, fundCut };
+  }
+
+  // Release the full authorization taken at accept time — virtual portion
+  // refunded to the rider, Stripe hold voided. Used whenever the rider owes
+  // nothing: driver-initiated cancels, admin cancels, requeue-for-rematch.
+  async function refundRideAuthorizationInFull(ride: Ride): Promise<void> {
+    const virtualAuthorized = parseFloat(ride.virtualAmountAuthorized || "0");
+    if (virtualAuthorized > 0) {
+      await storage.addVirtualCardBalance(ride.riderId, virtualAuthorized, "cancellation_refund", ride.id);
+    }
+    const hasRealStripeAuth =
+      parseFloat(ride.stripeAuthorizedAmount || "0") > 0 &&
+      !!ride.stripePaymentIntentId &&
+      !ride.stripePaymentIntentId.startsWith("virtual-");
+    if (hasRealStripeAuth) {
+      try { await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!); }
+      catch (err) { console.error(`Failed to void Stripe auth on refund for ride ${ride.id}:`, err); }
+    }
+  }
+
+  // Charge a fee against the ride's existing card authorization, refunding
+  // whatever's left of the virtual portion to the rider. For cash rides
+  // (no authorization exists) the fee comes straight out of the rider's
+  // virtual wallet — as much of it as the balance covers.
+  async function collectFeeFromRide(ride: Ride, fee: number): Promise<number> {
+    const virtualAuthorized = parseFloat(ride.virtualAmountAuthorized || "0");
+    const stripeAuthorized = parseFloat(ride.stripeAuthorizedAmount || "0");
+    const hasRealStripeAuth =
+      stripeAuthorized > 0 &&
+      !!ride.stripePaymentIntentId &&
+      !ride.stripePaymentIntentId.startsWith("virtual-");
+
+    if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
+      if (fee <= virtualAuthorized) {
+        const refund = Number((virtualAuthorized - fee).toFixed(2));
+        if (refund > 0) {
+          await storage.addVirtualCardBalance(ride.riderId, refund, "cancellation_refund", ride.id);
+        }
+        if (hasRealStripeAuth) {
+          try { await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!); }
+          catch (err) { console.error(`Failed to void Stripe auth on fee collection:`, err); }
+        }
+        return fee;
+      }
+      const stripeNeeded = Number((fee - virtualAuthorized).toFixed(2));
+      if (hasRealStripeAuth && stripeNeeded > 0) {
+        const captureAmount = Math.min(stripeNeeded, stripeAuthorized);
+        await stripeService.capturePaymentIntent(ride.stripePaymentIntentId!, captureAmount);
+        return Number((virtualAuthorized + captureAmount).toFixed(2));
+      }
+      if (hasRealStripeAuth) {
+        try { await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!); }
+        catch (err) { console.error(`Failed to void Stripe auth on fee collection:`, err); }
+      }
+      return virtualAuthorized;
+    }
+
+    // Cash ride: no authorization to settle against — take what the wallet
+    // covers (splitDeductForRide floors at the balance) and log any shortfall.
+    const split = await storage.splitDeductForRide(ride.riderId, fee, ride.id);
+    if (split.stripeAmount > 0) {
+      console.warn(`Cash-ride cancellation fee shortfall of $${split.stripeAmount.toFixed(2)} on ride ${ride.id} — rider wallet couldn't cover the full fee.`);
+    }
+    return split.virtualDeducted;
+  }
+
   app.post('/api/driver/rides/:rideId/complete', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -2273,109 +2640,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       // If ride uses card payment, settle against the auth taken at accept time.
-      // Virtual portion + Stripe authorization portion together cover what was
-      // promised at accept; here we reconcile to (actualFare + tip).
-      if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
-        try {
-          const finalFare = actualFare ?? parseFloat(ride.actualFare || "0");
-          const tip = tipAmount || 0;
-          const finalAmount = Number((finalFare + tip).toFixed(2));
-
-          const virtualAuthorized = parseFloat(ride.virtualAmountAuthorized || "0");
-          const stripeAuthorized = parseFloat(ride.stripeAuthorizedAmount || "0");
-          const totalAuthorized = Number((virtualAuthorized + stripeAuthorized).toFixed(2));
-
-          const hasRealStripeAuth =
-            stripeAuthorized > 0 &&
-            !!ride.stripePaymentIntentId &&
-            !ride.stripePaymentIntentId.startsWith("virtual-");
-
-          const rider = await storage.getUser(ride.riderId);
-
-          // Branch 1: final ≤ virtual already deducted
-          //   → refund the unused virtual; cancel any Stripe auth (no charge).
-          if (finalAmount <= virtualAuthorized) {
-            const refund = Number((virtualAuthorized - finalAmount).toFixed(2));
-            if (refund > 0) {
-              await storage.addVirtualCardBalance(ride.riderId, refund, "ride_refund", rideId);
-            }
-            if (hasRealStripeAuth) {
-              try {
-                await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!);
-              } catch (cancelErr) {
-                console.error(`Failed to cancel Stripe auth ${ride.stripePaymentIntentId} on underage settlement:`, cancelErr);
-              }
-            }
-          }
-          // Branch 2: virtual < final ≤ virtual + Stripe authorization
-          //   → partial-capture only what we still need from the existing Stripe auth.
-          else if (finalAmount <= totalAuthorized) {
-            const stripeNeeded = Number((finalAmount - virtualAuthorized).toFixed(2));
-            if (hasRealStripeAuth && stripeNeeded > 0) {
-              await stripeService.capturePaymentIntent(ride.stripePaymentIntentId!, stripeNeeded);
-            } else if (hasRealStripeAuth && stripeNeeded === 0) {
-              // virtual covered everything despite an authorization — release the hold.
-              try {
-                await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!);
-              } catch (cancelErr) {
-                console.error(`Failed to cancel unused Stripe auth ${ride.stripePaymentIntentId}:`, cancelErr);
-              }
-            }
-          }
-          // Branch 3: final > virtual + Stripe authorization
-          //   → capture full Stripe auth, then charge the extra (virtual first, then a new Stripe PI).
-          else {
-            if (hasRealStripeAuth && stripeAuthorized > 0) {
-              await stripeService.capturePaymentIntent(ride.stripePaymentIntentId!, stripeAuthorized);
-            }
-            const overage = Number((finalAmount - totalAuthorized).toFixed(2));
-            if (overage > 0) {
-              const split = await storage.splitDeductForRide(ride.riderId, overage, rideId);
-              if (split.stripeAmount > 0) {
-                if (!stripeService.isEnabled) {
-                  throw new Error("Stripe is not configured; cannot collect overage.");
-                }
-                if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
-                  // Roll back the virtual deduction we just made; surface error.
-                  if (split.virtualDeducted > 0) {
-                    await storage.addVirtualCardBalance(ride.riderId, split.virtualDeducted, "ride_settlement_refund", rideId);
-                  }
-                  throw new Error("Insufficient virtual balance and no card on file to collect overage.");
-                }
-                try {
-                  await stripeService.chargeRideShortfall({
-                    amount: split.stripeAmount,
-                    customerId: rider.stripeCustomerId,
-                    paymentMethodId: rider.stripePaymentMethodId,
-                    rideId,
-                    riderId: ride.riderId,
-                  });
-                } catch (chargeErr) {
-                  // Roll back the virtual portion of the overage; the original
-                  // authorization has already been captured, so we don't undo that.
-                  if (split.virtualDeducted > 0) {
-                    await storage.addVirtualCardBalance(ride.riderId, split.virtualDeducted, "ride_settlement_refund", rideId);
-                  }
-                  throw chargeErr;
-                }
-              }
-            }
-          }
-
-          // Driver still gets credited to their virtual balance — admins fulfil
-          // payouts via the existing manual payout-request flow.
-          if (ride.driverId && finalAmount > 0) {
-            await storage.addVirtualCardBalance(ride.driverId, finalAmount, "ride_earnings", rideId);
-          }
-
-          await storage.captureRidePayment(rideId, actualFare, tipAmount);
-
-          console.log(`Card payment settled for ride ${rideId}: final $${finalAmount} (virtualAuth $${virtualAuthorized}, stripeAuth $${stripeAuthorized})`);
-        } catch (error: any) {
-          console.error("Failed to settle card payment:", error);
-          throw new Error("Payment processing failed. Please try again.");
-        }
-      }
+      await settleCardPaymentForCompletedRide(ride, actualFare, tipAmount);
       
       // Track driver hours for ownership qualification
       if (ride.startedAt && ride.driverId) {
@@ -3201,11 +3466,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Preview what cancelling right now would cost — the client shows this in
+  // a confirmation dialog BEFORE the rider commits. Same server-side math as
+  // the real cancel; never trusts anything from the client.
+  app.get('/api/rides/:rideId/cancel-preview', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const ride = await storage.getRide(req.params.rideId);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+      if (ride.riderId !== userId && ride.driverId !== userId) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      const role = userId === ride.riderId ? "rider" : "driver";
+      if (["completed", "cancelled", "no_show"].includes(ride.status ?? "")) {
+        return res.status(400).json({ message: `Ride is already ${ride.status}.` });
+      }
+      if (ride.status === "in_progress") {
+        return res.json({
+          role,
+          fee: 0,
+          endsRideEarly: true,
+          reason: "Ending mid-trip charges the fare for the distance already traveled — not a cancellation fee.",
+        });
+      }
+      // Drivers never pass a fee to the rider; they take a reliability strike instead.
+      const feeResult = role === "driver"
+        ? { fee: 0, reason: "Driver cancellations are free for the rider; repeated cancellations affect your reliability standing." }
+        : calculateCancellationFee(ride);
+      res.json({ role, fee: feeResult.fee, endsRideEarly: false, reason: feeResult.reason });
+    } catch (error) {
+      console.error("Error previewing cancellation:", error);
+      res.status(500).json({ message: "Failed to preview cancellation" });
+    }
+  });
+
+  // Rolling 30-day reliability window for the signed-in user, both roles.
+  // Shown transparently in the app — nobody should discover their standing
+  // only when a consequence kicks in.
+  app.get('/api/users/me/reliability', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const stats = await storage.getCancellationStats(userId, 30);
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching reliability stats:", error);
+      res.status(500).json({ message: "Failed to fetch reliability stats" });
+    }
+  });
+
   app.post('/api/rides/:rideId/cancel', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
-      const { reason, driverTraveledDistance, driverTraveledTime } = req.body;
+      const { reason } = req.body;
 
       const ride = await storage.getRide(rideId);
 
@@ -3218,146 +3531,277 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized to cancel this ride" });
       }
 
+      const role: "rider" | "driver" = userId === ride.riderId ? "rider" : "driver";
+
+      // ── Status guards: terminal rides can't be re-cancelled ──
+      if (["completed", "cancelled", "no_show"].includes(ride.status ?? "")) {
+        return res.status(400).json({ message: `Ride is already ${ride.status} and can't be cancelled.` });
+      }
+
       // ── Clear acceptance timer if ride is still pending ──
       clearAcceptanceTimer(rideId);
 
-      // ── Calculate cancellation fee using workflow service ──
-      const feeResult = calculateCancellationFee(
-        ride.status ?? "pending",
-        driverTraveledDistance || 0,
-        driverTraveledTime || 0
-      );
-      const cancellationFee = feeResult.fee;
+      // ── Mid-trip: this is an early completion, not a cancellation ──
+      // The pre-pickup fee ladder is the wrong formula once the passenger is
+      // aboard; charge the fare actually earned so far (GPS-based, same path
+      // as a normal completion, discounts preserved) and settle normally.
+      if (ride.status === "in_progress") {
+        const completed = await storage.completeRide(rideId, ride.driverId!, undefined);
+        await settleCardPaymentForCompletedRide(completed, undefined, 0);
+        await storage.updateRide(rideId, {
+          cancellationReason: reason || `Ride ended early by ${role}`,
+          cancelledBy: userId,
+          cancelledByRole: role,
+        } as any);
 
-      if (ride.paymentMethod === 'card' && ride.stripePaymentIntentId) {
-        const virtualAuthorized = parseFloat(ride.virtualAmountAuthorized || "0");
-        const stripeAuthorized = parseFloat(ride.stripeAuthorizedAmount || "0");
-        const hasRealStripeAuth =
-          stripeAuthorized > 0 &&
-          !!ride.stripePaymentIntentId &&
-          !ride.stripePaymentIntentId.startsWith("virtual-");
+        await logRideAudit({
+          rideId,
+          event: "ride_ended_early",
+          actorId: userId,
+          details: { endedBy: role, actualFare: completed.actualFare },
+        });
 
-        console.log(`Processing cancellation for ride ${rideId}: virtualAuth $${virtualAuthorized}, stripeAuth $${stripeAuthorized}, fee $${cancellationFee} (${feeResult.reason})`);
+        const endedMessage = JSON.stringify({
+          type: 'ride_completed',
+          rideId,
+          endedEarly: true,
+          endedBy: role,
+          actualFare: completed.actualFare,
+        });
+        for (const partyId of [ride.riderId, ride.driverId]) {
+          const ws = partyId ? activeConnections.get(partyId) : undefined;
+          if (ws?.readyState === WebSocket.OPEN) ws.send(endedMessage);
+        }
+
+        return res.json({
+          success: true,
+          endedEarly: true,
+          ride: await storage.getRide(rideId),
+          actualFare: completed.actualFare,
+        });
+      }
+
+      let cancellationFee = 0;
+      let feeReason = "";
+      let goodwillCredit = 0;
+      let requeued = false;
+
+      if (role === "driver") {
+        // ── Driver-initiated: the rider never pays for a driver's bail. ──
+        feeReason = "Driver-initiated cancellation — no charge to rider";
+
+        // Goodwill credit when the driver bails after the rider was told
+        // "your driver has arrived" — funded by the fairness pool, so it
+        // only pays out while the pool has money. Never let a credit hiccup
+        // block the refund/rematch below.
+        if (ride.status === "driver_arriving") {
+          try {
+            const funded = await storage.tryDeductCommunityBonusPool(GOODWILL_CREDIT);
+            if (funded) {
+              await storage.addVirtualCardBalance(ride.riderId, GOODWILL_CREDIT, "goodwill_credit", rideId);
+              goodwillCredit = GOODWILL_CREDIT;
+            }
+          } catch (goodwillErr) {
+            console.error(`Goodwill credit failed for ride ${rideId} (continuing with cancel):`, goodwillErr);
+          }
+        }
+
+        await refundRideAuthorizationInFull(ride);
+
+        const isScheduledFuture = ride.scheduledAt && new Date(ride.scheduledAt) > new Date();
+
+        if (ride.groupId && (ride.rideType === "shared_schedule" || ride.rideType === "circuit")) {
+          // Whole confirmed group loses its driver: refund every sibling this
+          // driver held, reset them to pending, and put the group back on the
+          // claim board with fares locked as-is.
+          const siblings = (await storage.getRidesInGroup(ride.groupId))
+            .filter((r) => r.driverId === userId && r.id !== rideId &&
+              !["completed", "cancelled", "no_show", "in_progress"].includes(r.status ?? ""));
+          for (const sib of siblings) {
+            await refundRideAuthorizationInFull(sib);
+            await storage.updateRide(sib.id, {
+              status: "pending", driverId: null, acceptedAt: null, arrivedAt: null,
+              virtualAmountAuthorized: "0.00", stripeAuthorizedAmount: "0.00",
+              stripePaymentIntentId: null, paymentStatus: "pending_payment",
+            } as any);
+            const sibWs = activeConnections.get(sib.riderId);
+            if (sibWs?.readyState === WebSocket.OPEN) {
+              sibWs.send(JSON.stringify({
+                type: 'ride_driver_cancelled',
+                rideId: sib.id,
+                message: "Your driver had to cancel. Your group is back on the driver board — your fare is unchanged.",
+              }));
+            }
+          }
+          await storage.updateRide(rideId, {
+            status: "pending", driverId: null, acceptedAt: null, arrivedAt: null,
+            virtualAmountAuthorized: "0.00", stripeAuthorizedAmount: "0.00",
+            stripePaymentIntentId: null, paymentStatus: "pending_payment",
+          } as any);
+          await storage.updateRideGroup(ride.groupId, { driverId: null, status: "open" } as any);
+          requeued = true;
+        } else if (isScheduledFuture) {
+          // Scheduled solo ride: back onto the claim board unassigned.
+          await storage.updateRide(rideId, {
+            status: "pending", driverId: null, acceptedAt: null, arrivedAt: null,
+            virtualAmountAuthorized: "0.00", stripeAuthorizedAmount: "0.00",
+            stripePaymentIntentId: null, paymentStatus: "pending_payment",
+          } as any);
+          requeued = true;
+        } else {
+          // Immediate ride: try to hand it straight to the next best driver
+          // so the rider often never has to rebook at all.
+          await storage.updateRide(rideId, {
+            status: "pending", driverId: null, acceptedAt: null, arrivedAt: null,
+            virtualAmountAuthorized: "0.00", stripeAuthorizedAmount: "0.00",
+            stripePaymentIntentId: null, paymentStatus: "pending_payment",
+          } as any);
+
+          const pickup = ride.pickupLocation as { lat: number; lng: number; address: string };
+          // Exclude the cancelling driver AND anyone who previously declined
+          // this ride — same rule as the decline path.
+          const tried = await getTriedDriversForRide(rideId).catch(() => [] as string[]);
+          const nextDriver = await findBestDriver(pickup, ride.pickupCounty ?? null, Array.from(new Set([...tried, userId])), {
+            riderId: ride.riderId,
+            requestedVehicleType: ride.requestedVehicleType ?? undefined,
+          }).catch(() => null);
+
+          if (nextDriver) {
+            await storage.updateRide(rideId, { driverId: nextDriver.userId } as any);
+            const newDriverWs = activeConnections.get(nextDriver.userId);
+            if (newDriverWs?.readyState === WebSocket.OPEN) {
+              newDriverWs.send(JSON.stringify({
+                type: 'new_ride_request',
+                rideId,
+                riderId: ride.riderId,
+                pickupAddress: pickup?.address || '',
+                destinationAddress: (ride.destinationLocation as any)?.address || '',
+                estimatedFare: ride.estimatedFare,
+                acceptanceTimeoutSeconds: ACCEPTANCE_TIMEOUT_SECONDS,
+              }));
+            }
+            startAcceptanceTimer(
+              rideId, nextDriver.userId, pickup, ride.pickupCounty ?? null, 1,
+              () => {}, () => {},
+            );
+            requeued = true;
+          } else {
+            // Nobody left to take it — cancel outright, rider already refunded.
+            await storage.updateRide(rideId, {
+              status: "cancelled",
+              cancellationReason: "Driver cancelled and no replacement driver was available",
+              paymentStatus: "cancelled",
+              cancelledBy: userId,
+              cancelledByRole: "driver",
+            } as any);
+          }
+        }
+      } else {
+        // ── Rider-initiated: server-verified fee ladder. ──
+        const feeResult = calculateCancellationFee(ride);
+        cancellationFee = feeResult.fee;
+        feeReason = feeResult.reason;
+
+        console.log(`Processing rider cancellation for ride ${rideId}: fee $${cancellationFee} (${feeReason})`);
 
         if (cancellationFee > 0) {
-          // Settle the fee against the existing authorization, refunding only
-          // the unused portion of the virtual deduction. If the fee exceeds
-          // the virtual portion, capture the difference from Stripe; otherwise
-          // release the full Stripe hold.
-          if (cancellationFee <= virtualAuthorized) {
-            const refund = Number((virtualAuthorized - cancellationFee).toFixed(2));
-            if (refund > 0) {
-              await storage.addVirtualCardBalance(ride.riderId, refund, "cancellation_refund", rideId);
-            }
-            if (hasRealStripeAuth) {
-              try { await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!); }
-              catch (err) { console.error(`Failed to cancel Stripe auth on small-fee cancel:`, err); }
-            }
-          } else {
-            const stripeNeeded = Number((cancellationFee - virtualAuthorized).toFixed(2));
-            if (hasRealStripeAuth && stripeNeeded > 0) {
-              const captureAmount = Math.min(stripeNeeded, stripeAuthorized);
-              await stripeService.capturePaymentIntent(ride.stripePaymentIntentId!, captureAmount);
-            } else if (hasRealStripeAuth) {
-              try { await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!); }
-              catch (err) { console.error(`Failed to cancel Stripe auth on cancel:`, err); }
-            }
-          }
-
-          if (ride.driverId) {
-            await storage.addVirtualCardBalance(ride.driverId, cancellationFee, "cancellation_fee", rideId);
-            console.log(`Added $${cancellationFee} cancellation fee to driver's balance`);
-          }
-
+          const collected = await collectFeeFromRide(ride, cancellationFee);
+          await routeFeeWithFairnessSplit(collected, ride.driverId, rideId);
           await storage.cancelRideWithFee(
-            rideId,
-            cancellationFee,
-            reason || "Ride cancelled",
-            driverTraveledDistance,
-            driverTraveledTime
+            rideId, cancellationFee, reason || "Ride cancelled",
+            undefined, undefined, userId, "rider",
           );
         } else {
-          // No fee — release the Stripe authorization and refund the virtual
-          // portion (if any).
-          if (virtualAuthorized > 0) {
-            await storage.addVirtualCardBalance(ride.riderId, virtualAuthorized, "cancellation_refund", rideId);
-            console.log(`Refunded $${virtualAuthorized} virtual to rider (no cancellation fee)`);
-          }
-          if (hasRealStripeAuth) {
-            try { await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!); }
-            catch (err) { console.error(`Failed to cancel Stripe auth on no-fee cancel:`, err); }
-          }
-
+          await refundRideAuthorizationInFull(ride);
           await storage.updateRide(rideId, {
             status: "cancelled",
             cancellationReason: reason || "Ride cancelled",
-            paymentStatus: "cancelled",
-          });
+            paymentStatus: ride.paymentMethod === "card" ? "cancelled" : undefined,
+            cancelledBy: userId,
+            cancelledByRole: "rider",
+          } as any);
         }
-      } else {
-        // No card payment or not applicable for fee
-        await storage.updateRide(rideId, {
-          status: "cancelled",
-          cancellationReason: reason || "Ride cancelled",
-        });
+
+        // Free the seat the rider was holding in a coworker group / circuit
+        // run so someone else can take it; reopen the group if it had closed
+        // as full and departure hasn't passed.
+        if (ride.groupId && (ride.rideType === "shared_schedule" || ride.rideType === "circuit")) {
+          try {
+            await storage.releaseScheduleSlot(ride.groupId);
+            const group = await storage.getRideGroupById(ride.groupId);
+            if (group && group.status === "active" &&
+                group.scheduledAt && new Date(group.scheduledAt) > new Date()) {
+              await storage.updateRideGroup(ride.groupId, { status: "open" } as any);
+            }
+          } catch (seatErr) {
+            console.error(`Failed to release group seat on cancel of ride ${rideId}:`, seatErr);
+          }
+        }
       }
 
       // ── Audit: ride cancelled ──
       await logRideAudit({
         rideId,
-        event: "ride_cancelled",
+        event: role === "driver" ? "driver_cancelled_ride" : "ride_cancelled",
         actorId: userId,
         details: {
           reason: reason || "Ride cancelled",
           cancellationFee,
-          feeReason: feeResult.reason,
-          cancelledBy: userId === ride.riderId ? "rider" : "driver",
-          driverTraveledDistance,
-          driverTraveledTime,
+          feeReason,
+          cancelledBy: role,
+          requeued,
+          goodwillCredit,
         },
       });
 
       const updatedRide = await storage.getRide(rideId);
 
-      // Send WebSocket notification
-      const cancelMessage = {
-        type: 'ride_cancelled',
-        rideId: ride.id,
-        cancellationFee,
-        reason: reason || "Ride cancelled",
-        cancelledBy: userId === ride.riderId ? "rider" : "driver",
-      };
+      // Send WebSocket notification. A driver-cancel that got requeued is a
+      // different message for the rider — their ride is still alive.
+      const cancelMessage = JSON.stringify(requeued
+        ? {
+            type: 'ride_driver_cancelled',
+            rideId: ride.id,
+            requeued: true,
+            goodwillCredit,
+            message: goodwillCredit > 0
+              ? `Your driver had to cancel — we've added a $${goodwillCredit.toFixed(2)} credit to your wallet and are finding you a new driver.`
+              : "Your driver had to cancel. We're finding you a new driver — your fare is unchanged.",
+          }
+        : {
+            type: 'ride_cancelled',
+            rideId: ride.id,
+            cancellationFee,
+            goodwillCredit,
+            reason: reason || "Ride cancelled",
+            cancelledBy: role,
+          });
 
-      if (activeConnections.has(ride.riderId)) {
-        const riderWs = activeConnections.get(ride.riderId);
-        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
-          riderWs.send(JSON.stringify(cancelMessage));
-        }
-      }
-
-      if (ride.driverId && activeConnections.has(ride.driverId)) {
-        const driverWs = activeConnections.get(ride.driverId);
-        if (driverWs && driverWs.readyState === WebSocket.OPEN) {
-          driverWs.send(JSON.stringify(cancelMessage));
-        }
+      for (const partyId of [ride.riderId, ride.driverId]) {
+        const ws = partyId ? activeConnections.get(partyId) : undefined;
+        if (ws?.readyState === WebSocket.OPEN) ws.send(cancelMessage);
       }
 
       // Push notification to the other party
-      const notifyUserId = userId === ride.riderId ? ride.driverId : ride.riderId;
+      const notifyUserId = role === "rider" ? ride.driverId : ride.riderId;
       if (notifyUserId) {
         deliverUserNotification(notifyUserId, {
           type: "ride-cancelled",
-          title: "Ride Cancelled",
-          body: cancellationFee > 0
-            ? `Ride cancelled. A $${cancellationFee.toFixed(2)} cancellation fee has been applied.`
-            : "Your ride has been cancelled.",
+          title: requeued ? "Finding You a New Driver" : "Ride Cancelled",
+          body: requeued
+            ? (goodwillCredit > 0
+                ? `Your driver had to cancel — a $${goodwillCredit.toFixed(2)} credit was added to your wallet while we rematch you.`
+                : "Your driver had to cancel. We're finding you a new driver — your fare is unchanged.")
+            : cancellationFee > 0
+              ? `Ride cancelled. A $${cancellationFee.toFixed(2)} cancellation fee has been applied.`
+              : "Your ride has been cancelled.",
           tag: "ride-cancelled",
           url: "/",
           data: { rideId, cancellationFee },
         }).catch(console.error);
       }
 
-      res.json({ success: true, ride: updatedRide, cancellationFee, feeReason: feeResult.reason });
+      res.json({ success: true, ride: updatedRide, cancellationFee, feeReason, requeued, goodwillCredit });
     } catch (error: any) {
       console.error("Error cancelling ride:", error);
       res.status(500).json({ message: "Failed to cancel ride. Please try again." });
@@ -4760,6 +5204,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error revoking approval:", error);
       res.status(500).json({ message: "Failed to revoke approval" });
+    }
+  });
+
+  // Admin cancellation — fraud/policy/ops. Its own path so it never runs the
+  // rider fee ladder: full refund, no fee, mandatory reason, its own audit
+  // trail. Payment settlement mirrors the no-fee rider path.
+  app.post('/api/admin/rides/:rideId/cancel', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.adminUser.id;
+      const { rideId } = req.params;
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      if (!reason) {
+        return res.status(400).json({ message: "A reason is required for admin cancellations." });
+      }
+
+      const ride = await storage.getRide(rideId);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+      if (["completed", "cancelled", "no_show"].includes(ride.status ?? "")) {
+        return res.status(400).json({ message: `Ride is already ${ride.status}.` });
+      }
+
+      clearAcceptanceTimer(rideId);
+      await refundRideAuthorizationInFull(ride);
+      await storage.updateRide(rideId, {
+        status: "cancelled",
+        cancellationReason: `Cancelled by admin: ${reason}`,
+        paymentStatus: ride.paymentMethod === "card" ? "cancelled" : undefined,
+        cancelledBy: adminId,
+        cancelledByRole: "admin",
+      } as any);
+
+      // Free any group seat the ride was holding.
+      if (ride.groupId && (ride.rideType === "shared_schedule" || ride.rideType === "circuit")) {
+        await storage.releaseScheduleSlot(ride.groupId).catch((err) =>
+          console.error(`Failed to release group seat on admin cancel of ride ${rideId}:`, err));
+      }
+
+      await storage.logAdminAction(adminId, 'cancel_ride', 'ride', rideId, { reason });
+      await logRideAudit({
+        rideId,
+        event: "admin_cancelled_ride",
+        actorId: adminId,
+        details: { reason },
+      });
+
+      const cancelMessage = JSON.stringify({
+        type: 'ride_cancelled',
+        rideId,
+        cancellationFee: 0,
+        reason: "Cancelled by PG Ride support",
+        cancelledBy: "admin",
+      });
+      for (const partyId of [ride.riderId, ride.driverId]) {
+        const ws = partyId ? activeConnections.get(partyId) : undefined;
+        if (ws?.readyState === WebSocket.OPEN) ws.send(cancelMessage);
+      }
+
+      res.json({ success: true, ride: await storage.getRide(rideId) });
+    } catch (error) {
+      console.error("Error in admin ride cancellation:", error);
+      res.status(500).json({ message: "Failed to cancel ride" });
     }
   });
 

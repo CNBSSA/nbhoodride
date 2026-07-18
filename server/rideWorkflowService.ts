@@ -558,6 +558,8 @@ export function startAcceptanceTimer(
           .set({
             status: "cancelled",
             cancellationReason: "No driver accepted the ride after multiple attempts",
+            cancelledBy: "system",
+            cancelledByRole: "system",
             updatedAt: new Date(),
           })
           .where(and(eq(rides.id, rideId), eq(rides.status, "pending")));
@@ -597,6 +599,8 @@ export function startAcceptanceTimer(
           .set({
             status: "cancelled",
             cancellationReason: "No available drivers in your area",
+            cancelledBy: "system",
+            cancelledByRole: "system",
             updatedAt: new Date(),
           })
           .where(and(eq(rides.id, rideId), eq(rides.status, "pending")));
@@ -660,8 +664,10 @@ export function clearAcceptanceTimer(rideId: string): void {
 /**
  * Track which drivers have been tried for a ride by reading the audit log.
  * Falls back to just the current driverId if audit log is unavailable.
+ * Exported so decline/driver-cancel reassignment never hands a ride back to
+ * a driver who already said no to it.
  */
-async function getTriedDriversForRide(rideId: string): Promise<string[]> {
+export async function getTriedDriversForRide(rideId: string): Promise<string[]> {
   try {
     const entries = await db
       .select({ details: adminActivityLog.details })
@@ -704,38 +710,79 @@ export function isWithinPickupGeofence(
 
 // ── 6. Cancellation Fee Calculation ──────────────────────────────────────────
 
+/** Cancellation & no-show policy constants (docs: cancellation policy memo). */
+export const CANCELLATION_FEE_MID = 3.5;      // driver committed ≥3 min ago
+export const CANCELLATION_FEE_LATE = 5.0;     // driver committed ≥5 min ago
+export const CANCELLATION_FEE_ARRIVED = 7.0;  // driver already waiting at pickup
+export const RIDER_NO_SHOW_FEE = 8.0;         // full wait window burned at pickup
+export const NO_SHOW_WAIT_MINUTES = 5;        // driver must wait this long after arrival
+export const SCHEDULED_FREE_CANCEL_HOURS = 2; // scheduled rides cancel free outside this window
+export const FAIRNESS_FUND_RATE = 0.2;        // slice of every fee routed to the community pool
+export const GOODWILL_CREDIT = 5.0;           // rider credit when a driver cancels after arriving
+
 export interface CancellationFeeResult {
   fee: number;
   reason: string;
 }
 
 /**
- * Calculate the cancellation fee based on driver travel distance and time.
- * Only applies when the ride has been accepted and driver has traveled.
+ * Calculate the rider's cancellation fee from server-held facts only.
+ *
+ * Previous version trusted driverTraveledDistance/Time from the cancelling
+ * client's request body — trivially spoofable in either direction. This one
+ * uses acceptedAt (server-stamped at accept) as the measure of how long the
+ * driver has been committed, plus the ride status itself:
+ *
+ *   pending                      → free (nobody committed)
+ *   scheduled, >2h to departure  → free (driver hasn't meaningfully started)
+ *   accepted <3 min ago          → free (grace window)
+ *   accepted 3–5 min ago         → $3.50
+ *   accepted ≥5 min ago          → $5.00
+ *   driver_arriving              → $7.00 (driver is physically waiting)
+ *
+ * Driver-initiated and admin/system cancellations never use this ladder —
+ * the rider owes $0 in those paths regardless.
  */
 export function calculateCancellationFee(
-  rideStatus: string,
-  driverTraveledDistance: number,
-  driverTraveledTime: number
+  ride: {
+    status?: string | null;
+    acceptedAt?: Date | string | null;
+    scheduledAt?: Date | string | null;
+  },
+  now: Date = new Date()
 ): CancellationFeeResult {
-  if (rideStatus !== "accepted" && rideStatus !== "driver_arriving") {
-    return { fee: 0, reason: "No fee — ride not yet accepted" };
+  const status = ride.status ?? "pending";
+
+  if (status !== "accepted" && status !== "driver_arriving") {
+    return { fee: 0, reason: "No fee — no driver committed to this ride yet" };
   }
 
-  if (driverTraveledDistance >= 3 && driverTraveledTime >= 5) {
-    return {
-      fee: 5.0,
-      reason: `Driver traveled ${driverTraveledDistance.toFixed(1)} mi in ${driverTraveledTime} min`,
-    };
+  // Scheduled rides: free cancellation while departure is still far away,
+  // even after a driver has confirmed — nobody is en route days in advance.
+  if (ride.scheduledAt) {
+    const hoursOut = (new Date(ride.scheduledAt).getTime() - now.getTime()) / 3_600_000;
+    if (hoursOut > SCHEDULED_FREE_CANCEL_HOURS) {
+      return { fee: 0, reason: `No fee — scheduled ride is more than ${SCHEDULED_FREE_CANCEL_HOURS}h away` };
+    }
   }
-  if (driverTraveledDistance >= 1.5 && driverTraveledTime >= 3) {
+
+  if (status === "driver_arriving") {
     return {
-      fee: 3.5,
-      reason: `Driver traveled ${driverTraveledDistance.toFixed(1)} mi in ${driverTraveledTime} min`,
+      fee: CANCELLATION_FEE_ARRIVED,
+      reason: "Driver has already arrived and is waiting at the pickup point",
     };
   }
 
-  return { fee: 0, reason: "Driver had not traveled far enough to incur a fee" };
+  const acceptedAt = ride.acceptedAt ? new Date(ride.acceptedAt).getTime() : null;
+  const minutesCommitted = acceptedAt ? (now.getTime() - acceptedAt) / 60_000 : 0;
+
+  if (minutesCommitted >= 5) {
+    return { fee: CANCELLATION_FEE_LATE, reason: `Driver has been en route for ${Math.floor(minutesCommitted)} min` };
+  }
+  if (minutesCommitted >= 3) {
+    return { fee: CANCELLATION_FEE_MID, reason: `Driver has been en route for ${Math.floor(minutesCommitted)} min` };
+  }
+  return { fee: 0, reason: "No fee — cancelled within the grace window after acceptance" };
 }
 
 // ── 7. Shared Ride Optimization ───────────────────────────────────────────────
