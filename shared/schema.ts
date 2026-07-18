@@ -264,6 +264,14 @@ export const rides = pgTable("rides", {
   completedAt: timestamp("completed_at"),
   /** Stamped by confirm-arrival; anchors the rider no-show wait timer. */
   arrivedAt: timestamp("arrived_at"),
+  /**
+   * Idempotency stamps for the scheduled-ride minute sweep (same pattern as
+   * circuit cutoffNotifiedAt): each key records when that reminder/warning
+   * stage fired, so a 1-minute sweep never re-sends a stage and restarts
+   * don't duplicate. Keys: w120/w15/w5 (rider warnings), b120/b60/b15
+   * (driver re-broadcasts), r30 (reminder), c60/c30 (confirm nudges).
+   */
+  reminderStamps: jsonb("reminder_stamps").$type<Record<string, string>>().default({}),
   /** Who ended the ride early — userId, or "system" for auto-cancellations. */
   cancelledBy: varchar("cancelled_by"),
   /** rider | driver | system | admin — drives reliability stats. */
@@ -1254,6 +1262,16 @@ export const insertRideSchema = createInsertSchema(rides).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+}).extend({
+  // Clients send scheduledAt as an ISO string (JSON has no Date type);
+  // the raw drizzle-zod schema demanded a Date object, which made EVERY
+  // "Schedule a Ride" booking fail with "Expected date, received string".
+  // Coerce valid date strings, pass real Dates through, keep null/undefined
+  // as-is (z.coerce.date() alone would turn null into 1970-01-01).
+  scheduledAt: z.preprocess(
+    (v) => (typeof v === "string" && v ? new Date(v) : v),
+    z.date().nullish(),
+  ),
 });
 
 // Constrain issueType to a closed enum so the support auto-resolver can't be

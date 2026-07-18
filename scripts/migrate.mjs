@@ -218,6 +218,10 @@ ALTER TABLE rides ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMP;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by_role VARCHAR;
 
+-- Scheduled-ride sweep idempotency: per-stage stamps so warnings/reminders
+-- fire exactly once per ride per stage across restarts.
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS reminder_stamps JSONB DEFAULT '{}';
+
 -- Driver-mode invariant: is_driver means "approved driver", full stop.
 -- Historically, tapping "Get Started" on the driver form flipped is_driver
 -- immediately, handing unvetted riders the driver dashboard and mode
