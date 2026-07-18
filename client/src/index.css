@@ -368,6 +368,15 @@
     font-weight: 700;
   }
 
+  /* Horizontal chip rows scroll without showing a scrollbar */
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
   .text-tip {
     color: var(--secondary);
     font-weight: 600;
