@@ -315,6 +315,14 @@ export const rideGroups = pgTable("ride_groups", {
   status: varchar("status").default("open"),
   driverId: varchar("driver_id").references(() => users.id),
   discountActive: boolean("discount_active").default(false),
+  /**
+   * Who can join a shared_schedule group:
+   *   "code" — invite code only (private crew; the default, and what all
+   *            legacy groups become)
+   *   "open" — also published in the app so nearby workers heading the same
+   *            way can take an empty seat (codeless join, corridor-checked)
+   */
+  visibility: varchar("visibility").default("code"),
   scheduledAt: timestamp("scheduled_at"),
   // Set when this group is a materialized weekly run of a circuit
   // (docs/CIRCUITS_LAUNCH_PLAN.md). Lazy-created on first seat booking.
