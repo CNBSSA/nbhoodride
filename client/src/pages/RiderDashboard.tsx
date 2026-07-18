@@ -114,16 +114,6 @@ export default function RiderDashboard() {
   const [isJoinScheduleOpen, setIsJoinScheduleOpen] = useState(false);
   const [isCircuitsOpen, setIsCircuitsOpen] = useState(false);
   const [showMoreWays, setShowMoreWays] = useState(false);
-  // Dismissible per-browser: riders who don't work shifts with coworkers
-  // had no way to remove this large, always-visible banner from the idle
-  // home screen — it just sat there permanently.
-  const [showCoworkerBanner, setShowCoworkerBanner] = useState(
-    () => localStorage.getItem("pgride:coworkerBannerDismissed") !== "1"
-  );
-  const dismissCoworkerBanner = () => {
-    localStorage.setItem("pgride:coworkerBannerDismissed", "1");
-    setShowCoworkerBanner(false);
-  };
   const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
   const [isLostFoundOpen, setIsLostFoundOpen] = useState(false);
   const [incomingRideMessage, setIncomingRideMessage] = useState<RideMessagePayload | null>(null);
@@ -683,15 +673,19 @@ export default function RiderDashboard() {
         />
       </div>
 
-      {/* Top header */}
-      <div className="relative z-20 flex items-center justify-between px-4 pt-3 pb-2">
+      {/* Top header — overlays the full-bleed map (the ModeSelector bar no
+          longer renders on rider home, so this row is the top of the screen). */}
+      <div
+        className="relative z-20 flex items-start justify-between px-4 pb-2"
+        style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top, 0px))' }}
+      >
         <div className="flex items-center gap-2 bg-white/90 backdrop-blur-sm rounded-2xl px-3 py-2 shadow-sm">
           <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center">
             <MapPin className="w-4 h-4 text-white" />
           </div>
           <div>
             <p className="text-[10px] text-gray-500 font-medium leading-none">Your location</p>
-            <p className="text-xs font-semibold text-gray-900 leading-tight max-w-[180px] truncate">
+            <p className="text-xs font-semibold text-gray-900 leading-tight max-w-[150px] truncate">
               {locationError ? "Location unavailable" : userLocation.address}
             </p>
           </div>
@@ -699,13 +693,37 @@ export default function RiderDashboard() {
             <Navigation className="w-3.5 h-3.5" />
           </button>
         </div>
-        <div className="flex items-center gap-2">
-          <NotificationBell
-            buttonClassName="w-9 h-9 bg-white/90 backdrop-blur-sm rounded-full shadow-sm flex items-center justify-center"
-          />
-          <div className="w-9 h-9 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm">
-            {user?.firstName?.[0] || 'U'}{user?.lastName?.[0] || ''}
+
+        {/* Map control cluster: mode switch (drivers only), bell, avatar, and
+            SOS — grouped here so nothing ever overlaps the bottom sheet. */}
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            {user?.isDriver && (
+              <button
+                onClick={() => window.dispatchEvent(new CustomEvent('pgride:switch-mode', { detail: { mode: 'driver' } }))}
+                className="h-9 px-3 bg-white/90 backdrop-blur-sm rounded-full shadow-sm flex items-center gap-1.5 text-xs font-bold text-gray-700 active:bg-gray-100"
+                data-testid="button-switch-drive"
+              >
+                <Car className="w-4 h-4 text-blue-600" />
+                Drive
+              </button>
+            )}
+            <NotificationBell
+              buttonClassName="w-9 h-9 bg-white/90 backdrop-blur-sm rounded-full shadow-sm flex items-center justify-center"
+            />
+            <div className="w-9 h-9 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm">
+              {user?.firstName?.[0] || 'U'}{user?.lastName?.[0] || ''}
+            </div>
           </div>
+          {panel === "idle" && !activeRide && (
+            <button
+              onClick={() => { trackFeatureUsed("sos_activated"); setIsSOSModalOpen(true); }}
+              className="w-9 h-9 rounded-full bg-red-600 text-white shadow-md shadow-red-600/30 flex items-center justify-center text-[10px] font-black active:scale-95 transition-transform"
+              data-testid="button-sos"
+            >
+              SOS
+            </button>
+          )}
         </div>
       </div>
 
@@ -828,18 +846,6 @@ export default function RiderDashboard() {
         </div>
       )}
 
-      {/* SOS button — only in idle mode */}
-      {panel === "idle" && (
-        <button
-          onClick={() => { trackFeatureUsed("sos_activated"); setIsSOSModalOpen(true); }}
-          className="absolute right-4 z-[56] w-12 h-12 rounded-full bg-red-600 text-white shadow-lg shadow-red-600/40 flex items-center justify-center text-xs font-black transition-all active:scale-95"
-          style={{ bottom: 'calc(192px + env(safe-area-inset-bottom, 0px))' }}
-          data-testid="button-sos"
-        >
-          SOS
-        </button>
-      )}
-
       {/* ── FULL-SCREEN SEARCH OVERLAY (keyboard-safe: input at top, keyboard opens below) ── */}
       {panel === "search" && (
         <div className="absolute inset-0 z-[60] bg-white flex flex-col">
@@ -943,45 +949,13 @@ export default function RiderDashboard() {
           <div className="w-10 h-1 bg-gray-200 rounded-full" />
         </div>
 
-        {/* ── IDLE: "Where to?" bar ── */}
+        {/* ── IDLE: destination-first. The one thing most riders open the app
+            to do is book a ride, so "Where to?" is the first and biggest
+            control; everything else is a compact chip row below it. ── */}
         {panel === "idle" && (
           <div className="px-4 pb-5 pt-1 space-y-3 overflow-y-auto min-h-0">
-            {showCoworkerBanner && (
-              <div className="relative">
-                <button
-                  className="w-full flex items-center gap-3 bg-purple-600 text-white active:bg-purple-700 transition-colors rounded-2xl px-4 py-3.5 pr-10 text-left shadow-md"
-                  onClick={() => setIsSharedScheduleOpen(true)}
-                  data-testid="button-shift-coworker-ride"
-                >
-                  <Users className="w-5 h-5 flex-shrink-0" />
-                  <div>
-                    <p className="font-semibold text-sm">Ride home with coworkers</p>
-                    <p className="text-[11px] text-purple-100">Pick shift end · share code · up to 3 riders · 30% off</p>
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  className="absolute top-2 right-2 p-1.5 rounded-full text-purple-100 hover:bg-purple-700/50 active:bg-purple-700/70 transition-colors"
-                  onClick={(e) => { e.stopPropagation(); dismissCoworkerBanner(); }}
-                  aria-label="Dismiss"
-                  data-testid="button-dismiss-coworker-banner"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            )}
-
             <button
-              type="button"
-              className="w-full text-left text-sm font-semibold text-primary"
-              onClick={() => setIsJoinScheduleOpen(true)}
-              data-testid="button-join-coworker-code"
-            >
-              Have a coworker&apos;s group code? Join here
-            </button>
-
-            <button
-              className="w-full flex items-center gap-3 bg-gray-100 active:bg-gray-200 transition-colors rounded-2xl px-4 py-3 text-left"
+              className="w-full flex items-center gap-3 bg-gray-100 active:bg-gray-200 transition-colors rounded-2xl px-4 py-4 text-left"
               onClick={() => {
                 trackRideSearch();
                 setPanel("search");
@@ -989,80 +963,85 @@ export default function RiderDashboard() {
               }}
               data-testid="button-book-ride"
             >
-              <Search className="w-5 h-5 text-gray-400 flex-shrink-0" />
-              <span className="text-gray-500 text-base font-medium">Book now — where to?</span>
+              <Search className="w-5 h-5 text-gray-500 flex-shrink-0" />
+              <span className="text-gray-800 text-lg font-semibold">Where to?</span>
             </button>
 
-            <button
-              type="button"
-              className="w-full text-left text-sm font-semibold text-primary py-1"
-              onClick={() => setShowMoreWays((v) => !v)}
-              data-testid="button-more-ways"
-            >
-              {showMoreWays ? "▾ Hide more ways to ride" : "▸ More ways to ride (solo schedule, shuttles…)"}
-            </button>
-
-            {showMoreWays && (
-              <>
-            <MobilityIntentCard
-              onResolved={handleMobilityIntent}
-              onGuardianShare={(url) => {
-                navigator.clipboard?.writeText(url).catch(() => {});
-                toast({ title: "Link copied", description: "Share with family to track your ride." });
-              }}
-              disabled={!!activeRide}
-            />
-            <TransitAlertsCard />
-            <CommunityRoutesCard onSelectRoute={handleCommunityRouteSelect} disabled={!!activeRide} />
-            <div className="flex flex-wrap gap-2 mt-1">
+            {/* Ride modes — one scrollable row replaces the old promo banner,
+                the duplicate join-code link, and half the "more ways" list. */}
+            <div className="flex gap-2 overflow-x-auto pb-0.5 -mx-4 px-4 scrollbar-none">
+              <button
+                onClick={() => setIsSharedScheduleOpen(true)}
+                className="flex-shrink-0 flex items-center gap-1.5 bg-purple-50 text-purple-700 rounded-full pl-3 pr-3.5 py-2 text-xs font-semibold active:bg-purple-100 transition-colors whitespace-nowrap"
+                data-testid="button-shift-coworker-ride"
+              >
+                <Users className="w-4 h-4" />
+                Coworkers · 30% off
+              </button>
               <button
                 onClick={() => setIsScheduleModalOpen(true)}
-                className="flex-1 min-w-[45%] flex items-center gap-1.5 justify-center bg-orange-50 text-orange-600 rounded-xl py-3 text-xs font-semibold active:bg-orange-100 transition-colors"
+                className="flex-shrink-0 flex items-center gap-1.5 bg-orange-50 text-orange-700 rounded-full pl-3 pr-3.5 py-2 text-xs font-semibold active:bg-orange-100 transition-colors whitespace-nowrap"
                 data-testid="button-schedule-ride"
               >
-                <Calendar className="w-3.5 h-3.5" />
+                <Calendar className="w-4 h-4" />
                 Schedule
               </button>
               <button
-                onClick={() => setIsMultiStopOpen(true)}
-                className="flex-1 min-w-[45%] flex items-center gap-1.5 justify-center bg-blue-50 text-blue-600 rounded-xl py-3 text-xs font-semibold active:bg-blue-100 transition-colors"
-                data-testid="button-multi-stop"
+                onClick={() => setIsCircuitsOpen(true)}
+                className="flex-shrink-0 flex items-center gap-1.5 bg-blue-50 text-blue-700 rounded-full pl-3 pr-3.5 py-2 text-xs font-semibold active:bg-blue-100 transition-colors whitespace-nowrap"
+                data-testid="button-circuits"
               >
-                <MapPin className="w-3.5 h-3.5" />
-                Multi-Stop
-              </button>
-              <button
-                onClick={() => setIsSharedScheduleOpen(true)}
-                className="flex-1 min-w-[45%] flex items-center gap-1.5 justify-center bg-purple-50 text-purple-600 rounded-xl py-3 text-xs font-semibold active:bg-purple-100 transition-colors"
-                data-testid="button-share-schedule"
-              >
-                <Users className="w-3.5 h-3.5" />
-                Group schedule
+                <Bus className="w-4 h-4" />
+                Shuttles
               </button>
               <button
                 onClick={() => setIsJoinScheduleOpen(true)}
-                className="flex-1 min-w-[45%] flex items-center gap-1.5 justify-center bg-green-50 text-green-600 rounded-xl py-3 text-xs font-semibold active:bg-green-100 transition-colors"
+                className="flex-shrink-0 flex items-center gap-1.5 bg-green-50 text-green-700 rounded-full pl-3 pr-3.5 py-2 text-xs font-semibold active:bg-green-100 transition-colors whitespace-nowrap"
                 data-testid="button-join-schedule"
               >
-                <UserCheck className="w-3.5 h-3.5" />
-                Group code
+                <UserCheck className="w-4 h-4" />
+                Join code
               </button>
             </div>
 
             <button
-              onClick={() => setIsCircuitsOpen(true)}
-              className="w-full mt-1 flex items-center justify-between bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 active:bg-primary/10 transition-colors"
-              data-testid="button-circuits"
+              type="button"
+              className="w-full text-left text-sm font-semibold text-primary py-0.5"
+              onClick={() => setShowMoreWays((v) => !v)}
+              data-testid="button-more-ways"
             >
-              <span className="flex flex-col items-start gap-0.5 text-sm font-semibold text-primary">
-                <span className="flex items-center gap-2">
-                  <Bus className="w-4 h-4" />
-                  Community shuttle runs
-                </span>
-                <span className="text-xs font-normal text-gray-500">Weekly circuits — guaranteed seats</span>
-              </span>
-              <span className="text-xs text-gray-500">No surge</span>
+              {showMoreWays ? "▾ Fewer options" : "▸ More options"}
             </button>
+
+            {showMoreWays && (
+              <>
+                <MobilityIntentCard
+                  onResolved={handleMobilityIntent}
+                  onGuardianShare={(url) => {
+                    navigator.clipboard?.writeText(url).catch(() => {});
+                    toast({ title: "Link copied", description: "Share with family to track your ride." });
+                  }}
+                  disabled={!!activeRide}
+                />
+                <TransitAlertsCard />
+                <CommunityRoutesCard onSelectRoute={handleCommunityRouteSelect} disabled={!!activeRide} />
+                <button
+                  onClick={() => setIsMultiStopOpen(true)}
+                  className="w-full flex items-center gap-2 justify-center bg-blue-50 text-blue-600 rounded-xl py-3 text-xs font-semibold active:bg-blue-100 transition-colors"
+                  data-testid="button-multi-stop"
+                >
+                  <MapPin className="w-4 h-4" />
+                  Multi-stop ride (organizer pays)
+                </button>
+                {!user?.isDriver && (
+                  <button
+                    onClick={() => window.dispatchEvent(new CustomEvent('pgride:open-profile'))}
+                    className="w-full text-left text-sm font-semibold text-primary py-1"
+                    data-testid="button-become-driver"
+                  >
+                    Want to earn with your car? Become a driver →
+                  </button>
+                )}
               </>
             )}
 

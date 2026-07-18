@@ -44,9 +44,20 @@ export default function Home() {
     window.addEventListener("pgride:open-profile", openProfile);
     const openAssistant = () => setActiveTab("assistant");
     window.addEventListener("pgride:open-assistant", openAssistant);
+    // Rider home no longer renders the ModeSelector bar — the map's "Drive"
+    // pill dispatches this to flip into driver mode.
+    const switchMode = (e: Event) => {
+      const mode = (e as CustomEvent).detail?.mode;
+      if (mode === "driver" || mode === "rider") {
+        setCurrentMode(mode);
+        setActiveTab("home");
+      }
+    };
+    window.addEventListener("pgride:switch-mode", switchMode);
     return () => {
       window.removeEventListener("pgride:open-profile", openProfile);
       window.removeEventListener("pgride:open-assistant", openAssistant);
+      window.removeEventListener("pgride:switch-mode", switchMode);
     };
   }, []);
 
@@ -107,11 +118,14 @@ export default function Home() {
         </button>
       )}
 
-      {activeTab === "home" && (
+      {/* Rider home is a full-bleed map — the mode switch lives as a compact
+          "Drive" pill on the map itself. The selector bar only renders on the
+          driver dashboard (a list layout where the bar fits naturally). */}
+      {activeTab === "home" && currentMode === "driver" && (
         <div className="flex-shrink-0">
-          <ModeSelector 
-            currentMode={currentMode} 
-            onModeChange={handleModeChange} 
+          <ModeSelector
+            currentMode={currentMode}
+            onModeChange={handleModeChange}
           />
         </div>
       )}
