@@ -332,11 +332,34 @@ export default function RiderDashboard() {
       const response = await apiRequest('POST', `/api/rides/${rideId}/cancel`);
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ['/api/rides/active'] });
-      toast({ title: "Ride Cancelled", description: "Your ride has been cancelled." });
+      queryClient.invalidateQueries({ queryKey: ['/api/virtual-card/balance'] });
+      toast({
+        title: "Ride Cancelled",
+        description: data?.cancellationFee > 0
+          ? `Your ride has been cancelled. A $${Number(data.cancellationFee).toFixed(2)} fee was applied.`
+          : "Your ride has been cancelled at no charge.",
+      });
     },
   });
+
+  // Fee is shown BEFORE the rider confirms — never discovered afterward.
+  const [cancelConfirm, setCancelConfirm] = useState<{ rideId: string; fee: number; reason: string } | null>(null);
+  const [cancelPreviewLoading, setCancelPreviewLoading] = useState(false);
+  const requestCancel = async (rideId: string) => {
+    setCancelPreviewLoading(true);
+    try {
+      const res = await apiRequest('GET', `/api/rides/${rideId}/cancel-preview`);
+      const preview = await res.json();
+      setCancelConfirm({ rideId, fee: Number(preview.fee) || 0, reason: preview.reason || "" });
+    } catch {
+      // Preview unavailable — still let them cancel, just without the number.
+      setCancelConfirm({ rideId, fee: 0, reason: "" });
+    } finally {
+      setCancelPreviewLoading(false);
+    }
+  };
 
   const submitQuickRating = useMutation({
     mutationFn: async ({ rideId, rating }: { rideId: string; rating: number }) => {
@@ -546,6 +569,23 @@ export default function RiderDashboard() {
     } else if (lastMessage.type === 'ride_cancelled') {
       refetchActiveRides();
       toast({ title: "Ride Cancelled", description: "Your ride has been cancelled.", variant: "destructive" });
+    } else if (lastMessage.type === 'ride_driver_cancelled') {
+      refetchActiveRides();
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/virtual-card/balance'] });
+      toast({
+        title: "Finding You a New Driver",
+        description: lastMessage.message || "Your driver had to cancel. Your fare is unchanged.",
+      });
+      navigator.vibrate?.([300, 100, 300]);
+    } else if (lastMessage.type === 'ride_no_show') {
+      refetchActiveRides();
+      queryClient.invalidateQueries({ queryKey: ['/api/virtual-card/balance'] });
+      toast({
+        title: "Missed Ride",
+        description: `Your driver waited at the pickup point but couldn't find you. A $${(lastMessage.fee ?? 8).toFixed(2)} no-show fee was applied.`,
+        variant: "destructive",
+      });
     } else if (lastMessage.type === 'ride_update') {
       refetchActiveRides();
     } else if (lastMessage.type === 'scheduled_ride_claimed') {
@@ -722,14 +762,14 @@ export default function RiderDashboard() {
                 />
               </div>
             )}
-            {(activeRide.status === 'pending' || activeRide.status === 'accepted') && (
+            {['pending', 'accepted', 'driver_arriving'].includes(activeRide.status) && (
               <button
-                onClick={() => cancelRide.mutate(activeRide.id)}
-                disabled={cancelRide.isPending}
+                onClick={() => requestCancel(activeRide.id)}
+                disabled={cancelRide.isPending || cancelPreviewLoading}
                 className="mt-2 w-full text-xs text-red-500 border border-red-200 rounded-xl py-1.5 hover:bg-red-50 transition-colors"
                 data-testid={`btn-cancel-ride-${activeRide.id}`}
               >
-                {cancelRide.isPending ? <Loader2 className="w-3 h-3 animate-spin inline mr-1" /> : <X className="w-3 h-3 inline mr-1" />}
+                {(cancelRide.isPending || cancelPreviewLoading) ? <Loader2 className="w-3 h-3 animate-spin inline mr-1" /> : <X className="w-3 h-3 inline mr-1" />}
                 Cancel Ride
               </button>
             )}
@@ -1302,6 +1342,43 @@ export default function RiderDashboard() {
 
       {/* Modals */}
       <ScheduleRideModal isOpen={isScheduleModalOpen} onClose={() => setIsScheduleModalOpen(false)} drivers={drivers} userLocation={userLocation} />
+      {/* Cancel confirmation — fee shown before the rider commits */}
+      {cancelConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" data-testid="cancel-confirm-overlay">
+          <div className="bg-white rounded-2xl p-5 w-full max-w-sm shadow-xl">
+            <h3 className="font-bold text-gray-900 mb-1">Cancel this ride?</h3>
+            {cancelConfirm.fee > 0 ? (
+              <p className="text-sm text-gray-700 mb-1">
+                A <span className="font-bold text-red-600">${cancelConfirm.fee.toFixed(2)}</span> cancellation fee will apply.
+              </p>
+            ) : (
+              <p className="text-sm font-medium text-green-700 mb-1">No cancellation fee.</p>
+            )}
+            {cancelConfirm.reason && (
+              <p className="text-xs text-gray-500 mb-3">{cancelConfirm.reason}</p>
+            )}
+            <div className="flex gap-2 mt-2">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setCancelConfirm(null)}
+                data-testid="btn-cancel-dialog-keep"
+              >
+                Keep Ride
+              </Button>
+              <Button
+                variant="destructive"
+                className="flex-1"
+                onClick={() => { cancelRide.mutate(cancelConfirm.rideId); setCancelConfirm(null); }}
+                data-testid="btn-cancel-dialog-confirm"
+              >
+                {cancelConfirm.fee > 0 ? `Cancel · $${cancelConfirm.fee.toFixed(2)} fee` : "Cancel Ride"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <SOSModal isOpen={isSOSModalOpen} onClose={() => setIsSOSModalOpen(false)} />
       <LostFoundModal
         isOpen={isLostFoundOpen}

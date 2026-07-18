@@ -65,12 +65,12 @@ export class RideService {
     return response.json();
   }
 
-  // Cancel a ride
+  // Cancel a ride — always goes through the dedicated /cancel endpoint so
+  // the server's fee/refund/seat-release logic runs. (A previous version
+  // PATCHed status directly, silently bypassing all of that.)
   static async cancelRide(rideId: string, reason?: string) {
-    return this.updateRide(rideId, { 
-      status: "cancelled",
-      message: reason 
-    });
+    const response = await apiRequest('POST', `/api/rides/${rideId}/cancel`, reason ? { reason } : undefined);
+    return response.json();
   }
 
   // Accept a ride (for drivers)

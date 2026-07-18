@@ -166,7 +166,11 @@ export const rideStatusEnum = pgEnum("ride_status", [
   "driver_arriving",
   "in_progress",
   "completed",
-  "cancelled"
+  "cancelled",
+  // Terminal outcome distinct from `cancelled`: driver arrived, waited the
+  // full no-show window inside the pickup geofence, rider never appeared.
+  // Kept separate so reliability stats and disputes can tell the two apart.
+  "no_show"
 ]);
 
 // Payment status enum
@@ -258,6 +262,12 @@ export const rides = pgTable("rides", {
   acceptedAt: timestamp("accepted_at"),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
+  /** Stamped by confirm-arrival; anchors the rider no-show wait timer. */
+  arrivedAt: timestamp("arrived_at"),
+  /** Who ended the ride early — userId, or "system" for auto-cancellations. */
+  cancelledBy: varchar("cancelled_by"),
+  /** rider | driver | system | admin — drives reliability stats. */
+  cancelledByRole: varchar("cancelled_by_role"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [

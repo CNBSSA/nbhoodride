@@ -261,7 +261,13 @@ export interface IStorage {
   updateUserStripeInfo(userId: string, stripeCustomerId?: string, stripePaymentMethodId?: string): Promise<User>;
   setRidePaymentAuthorization(rideId: string, paymentIntentId: string, virtualAmount?: number, stripeAmount?: number): Promise<Ride>;
   captureRidePayment(rideId: string, capturedAmount?: number, tipAmount?: number): Promise<Ride>;
-  cancelRideWithFee(rideId: string, cancellationFee: number, reason: string, traveledDistance?: number, traveledTime?: number): Promise<Ride>;
+  cancelRideWithFee(rideId: string, cancellationFee: number, reason: string, traveledDistance?: number, traveledTime?: number, cancelledBy?: string, cancelledByRole?: string): Promise<Ride>;
+  markRideNoShow(rideId: string, fee: number, reason: string): Promise<Ride>;
+  getCancellationStats(userId: string, windowDays?: number): Promise<{
+    windowDays: number;
+    asRider: { lateCancellations: number; noShows: number };
+    asDriver: { cancellations: number };
+  }>;
 
   // Virtual card operations
   deductVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
@@ -1653,12 +1659,13 @@ export class DatabaseStorage implements IStorage {
       throw new Error("Ride is no longer available");
     }
 
-    // For now, we'll just mark as cancelled. In production, you might want to 
-    // reassign to another driver or set status to "declined" and find another driver
+    // A decline releases the ride back to the pool — it must NOT kill the
+    // ride. The route layer re-runs driver matching immediately after this;
+    // one driver saying no is invisible to the rider unless nobody is left.
     await db
       .update(rides)
-      .set({ 
-        status: "cancelled",
+      .set({
+        driverId: null,
         updatedAt: new Date()
       })
       .where(eq(rides.id, rideId));
@@ -1808,6 +1815,7 @@ export class DatabaseStorage implements IStorage {
         driverReview: rides.driverReview,
         scheduledAt: rides.scheduledAt,
         acceptedAt: rides.acceptedAt,
+        arrivedAt: rides.arrivedAt,
         startedAt: rides.startedAt,
         completedAt: rides.completedAt,
         createdAt: rides.createdAt,
@@ -2118,15 +2126,17 @@ export class DatabaseStorage implements IStorage {
     return ride;
   }
 
-  async cancelRideWithFee(rideId: string, cancellationFee: number, reason: string, traveledDistance?: number, traveledTime?: number): Promise<Ride> {
+  async cancelRideWithFee(rideId: string, cancellationFee: number, reason: string, traveledDistance?: number, traveledTime?: number, cancelledBy?: string, cancelledByRole?: string): Promise<Ride> {
     const updates: any = {
       status: "cancelled",
       paymentStatus: "cancelled_with_fee",
       cancellationFee: cancellationFee.toString(),
       cancellationReason: reason,
+      cancelledBy: cancelledBy ?? null,
+      cancelledByRole: cancelledByRole ?? null,
       updatedAt: new Date()
     };
-    
+
     if (traveledDistance !== undefined) {
       updates.driverTraveledDistance = traveledDistance.toString();
     }
@@ -2139,8 +2149,89 @@ export class DatabaseStorage implements IStorage {
       .set(updates)
       .where(eq(rides.id, rideId))
       .returning();
-    
+
     return ride;
+  }
+
+  /**
+   * Terminal no-show: driver arrived, waited the full window inside the
+   * pickup geofence, rider never appeared. Distinct from `cancelled` so
+   * reliability stats and disputes can tell the two apart. The no-show is
+   * attributed to the rider (cancelledByRole "rider") even though the driver
+   * files it — reliability counts track whose behavior ended the ride.
+   */
+  async markRideNoShow(rideId: string, fee: number, reason: string): Promise<Ride> {
+    const [ride] = await db
+      .update(rides)
+      .set({
+        status: "no_show",
+        paymentStatus: fee > 0 ? "cancelled_with_fee" : "cancelled",
+        cancellationFee: fee.toString(),
+        cancellationReason: reason,
+        cancelledByRole: "rider",
+        updatedAt: new Date(),
+      })
+      .where(and(eq(rides.id, rideId), eq(rides.status, "driver_arriving")))
+      .returning();
+    if (!ride) {
+      throw new Error("Ride is no longer waiting at pickup — cannot mark as no-show.");
+    }
+    return ride;
+  }
+
+  /**
+   * Rolling reliability window for one user, both directions. "Late" rider
+   * cancellations are the ones that actually cost a driver something (fee
+   * charged); driver-side counts every post-accept bail (rider fee is always
+   * $0 in that path, so fee can't be the filter).
+   */
+  async getCancellationStats(userId: string, windowDays = 30): Promise<{
+    windowDays: number;
+    asRider: { lateCancellations: number; noShows: number };
+    asDriver: { cancellations: number };
+  }> {
+    const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+
+    const [riderLate] = await db
+      .select({ n: count() })
+      .from(rides)
+      .where(and(
+        eq(rides.riderId, userId),
+        eq(rides.status, "cancelled"),
+        eq(rides.cancelledByRole, "rider"),
+        gt(rides.cancellationFee, "0"),
+        gte(rides.updatedAt, since),
+      ));
+
+    const [riderNoShows] = await db
+      .select({ n: count() })
+      .from(rides)
+      .where(and(
+        eq(rides.riderId, userId),
+        eq(rides.status, "no_show"),
+        gte(rides.updatedAt, since),
+      ));
+
+    // Driver strikes live in the ride audit log, not the ride row — a
+    // driver-cancel usually REQUEUES the ride (it ends up completed by a
+    // different driver, or cancelled by someone else later), so the ride's
+    // own cancelled_by_role can't attribute it. Every driver cancel writes a
+    // driver_cancelled_ride audit event regardless of what happens next.
+    const driverCancelRows = await db.execute(sql`
+      SELECT count(*) AS n
+      FROM admin_activity_log
+      WHERE action = 'ride_audit'
+        AND details->>'event' = 'driver_cancelled_ride'
+        AND details->>'actorId' = ${userId}
+        AND created_at >= ${since}
+    `);
+    const driverCancels = Number((driverCancelRows.rows?.[0] as any)?.n ?? 0);
+
+    return {
+      windowDays,
+      asRider: { lateCancellations: riderLate?.n ?? 0, noShows: riderNoShows?.n ?? 0 },
+      asDriver: { cancellations: driverCancels },
+    };
   }
 
   // Virtual card operations
@@ -4185,13 +4276,16 @@ export class DatabaseStorage implements IStorage {
     // succeed when there's only enough for one. Previously this was a
     // read-then-write race that let dispatch + admin allocations
     // double-spend the pool.
+    // Note: balance/total_allocated are DECIMAL columns — an earlier version
+    // cast the new value to ::text, which Postgres rejects (42804) the first
+    // time this ever runs. Keep everything numeric.
     const result = await db.execute(sql`
       UPDATE community_bonus_pool
-      SET balance = (balance::numeric - ${amount})::text,
-          total_allocated = (total_allocated::numeric + ${amount})::text,
+      SET balance = balance - ${amount},
+          total_allocated = total_allocated + ${amount},
           updated_at = NOW()
       WHERE id = 'default'
-        AND balance::numeric >= ${amount}
+        AND balance >= ${amount}
       RETURNING id
     `);
     return (result.rowCount ?? 0) > 0;

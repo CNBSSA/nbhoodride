@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest } from '@/lib/queryClient';
-import { MapPin, Clock, User, DollarSign, Navigation, CheckCircle, Route, ExternalLink } from 'lucide-react';
+import { MapPin, Clock, User, DollarSign, Navigation, CheckCircle, Route, ExternalLink, UserX, XCircle } from 'lucide-react';
 import { RideHelpers } from '@/services/rideService';
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
@@ -36,6 +36,7 @@ interface ActiveRideCardProps {
     actualFare?: string;
     acceptedAt?: string;
     startedAt?: string;
+    arrivedAt?: string;
     rider?: {
       firstName: string;
       lastName: string;
@@ -164,6 +165,75 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
     completeRideMutation.mutate(ride.id);
   };
 
+  // ── Rider no-show wait timer ──────────────────────────────────────────────
+  // Ticks while waiting at pickup; the server enforces the same 5-minute
+  // window and a geofence check, this just keeps the driver informed.
+  const NO_SHOW_WAIT_MS = 5 * 60 * 1000;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (ride.status !== 'driver_arriving' || !ride.arrivedAt) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [ride.status, ride.arrivedAt]);
+
+  const waitedMs = ride.arrivedAt ? now - new Date(ride.arrivedAt).getTime() : 0;
+  const noShowRemainingMs = Math.max(0, NO_SHOW_WAIT_MS - waitedMs);
+  const noShowReady = !!ride.arrivedAt && noShowRemainingMs === 0;
+  const remainingLabel = `${Math.floor(noShowRemainingMs / 60000)}:${String(Math.floor((noShowRemainingMs % 60000) / 1000)).padStart(2, '0')}`;
+
+  const noShowMutation = useMutation({
+    mutationFn: async (rideId: string) => {
+      const coords = await new Promise<{ driverLat?: number; driverLng?: number }>((resolve, reject) => {
+        if (!navigator.geolocation) return reject(new Error("Location access is required to report a no-show."));
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({ driverLat: pos.coords.latitude, driverLng: pos.coords.longitude }),
+          () => reject(new Error("Couldn't read your location — location access is required to report a no-show.")),
+          { timeout: 6000, maximumAge: 10000 },
+        );
+      });
+      const response = await apiRequest('POST', `/api/driver/rides/${rideId}/no-show`, coords);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.message || "Couldn't report the no-show.");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/driver/active-rides"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/driver/earnings/today"] });
+      toast({
+        title: "No-Show Recorded",
+        description: `You've been credited $${Number(data.driverCut ?? 0).toFixed(2)} for your time. You're free to take new rides.`,
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Couldn't Report No-Show", description: err.message, variant: "destructive" });
+    },
+    onSettled: () => setIsUpdating(false),
+  });
+
+  // ── Driver cancel (post-accept) ───────────────────────────────────────────
+  // Free for the rider, but counts against the driver's reliability standing —
+  // the confirm step says so plainly.
+  const [showDriverCancelConfirm, setShowDriverCancelConfirm] = useState(false);
+  const driverCancelMutation = useMutation({
+    mutationFn: async (rideId: string) => {
+      const response = await apiRequest('POST', `/api/rides/${rideId}/cancel`, { reason: "Driver cancelled" });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/driver/active-rides"] });
+      toast({
+        title: "Ride Cancelled",
+        description: "The rider was fully refunded and is being rematched. Repeated cancellations affect your reliability standing.",
+      });
+    },
+    onError: () => {
+      toast({ title: "Couldn't Cancel", description: "Please try again.", variant: "destructive" });
+    },
+    onSettled: () => { setIsUpdating(false); setShowDriverCancelConfirm(false); },
+  });
+
   const openNavigation = (lat: number, lng: number, label: string) => {
     const encodedLabel = encodeURIComponent(label);
     const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&destination_place_id=&travelmode=driving`;
@@ -208,6 +278,16 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
               <MapPin className="w-4 h-4 mr-2" />
               {isUpdating ? "Notifying rider..." : "I've Arrived at Pickup"}
             </Button>
+            <Button
+              variant="ghost"
+              onClick={() => setShowDriverCancelConfirm(true)}
+              disabled={isUpdating}
+              className="w-full text-red-500 hover:text-red-600 hover:bg-red-50"
+              data-testid={`button-driver-cancel-${ride.id}`}
+            >
+              <XCircle className="w-4 h-4 mr-2" />
+              Cancel This Ride
+            </Button>
           </div>
         );
       case 'driver_arriving':
@@ -238,6 +318,38 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
             >
               <Navigation className="w-4 h-4 mr-2" />
               {isUpdating ? "Starting..." : "Start Ride"}
+            </Button>
+
+            {/* Rider no-show: unlocks after the full wait window at pickup.
+                The server independently verifies both the wait and that the
+                driver's GPS is still inside the pickup geofence. */}
+            {ride.arrivedAt && (
+              noShowReady ? (
+                <Button
+                  variant="outline"
+                  onClick={() => { setIsUpdating(true); noShowMutation.mutate(ride.id); }}
+                  disabled={isUpdating}
+                  className="w-full border-amber-300 text-amber-700 hover:bg-amber-50"
+                  data-testid={`button-no-show-${ride.id}`}
+                >
+                  <UserX className="w-4 h-4 mr-2" />
+                  {isUpdating ? "Reporting..." : "Rider Didn't Show — End Ride"}
+                </Button>
+              ) : (
+                <p className="text-xs text-center text-muted-foreground" data-testid={`text-no-show-timer-${ride.id}`}>
+                  If your rider doesn't show, you can end this ride in {remainingLabel}
+                </p>
+              )
+            )}
+            <Button
+              variant="ghost"
+              onClick={() => setShowDriverCancelConfirm(true)}
+              disabled={isUpdating}
+              className="w-full text-red-500 hover:text-red-600 hover:bg-red-50"
+              data-testid={`button-driver-cancel-${ride.id}`}
+            >
+              <XCircle className="w-4 h-4 mr-2" />
+              Cancel This Ride
             </Button>
           </div>
         );
@@ -418,6 +530,38 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
         {/* Action Buttons Based on Status */}
         {getStatusDisplay()}
       </CardContent>
+
+      {/* Driver-cancel confirmation — free for the rider, a strike for the driver */}
+      {showDriverCancelConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" data-testid="driver-cancel-confirm-overlay">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl p-5 w-full max-w-sm shadow-xl">
+            <h3 className="font-bold mb-1">Cancel this ride?</h3>
+            <p className="text-sm text-muted-foreground mb-3">
+              Your rider will be fully refunded and rematched at no charge to them.
+              Cancelling accepted rides counts against your reliability standing.
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setShowDriverCancelConfirm(false)}
+                data-testid="btn-driver-cancel-keep"
+              >
+                Keep Ride
+              </Button>
+              <Button
+                variant="destructive"
+                className="flex-1"
+                disabled={driverCancelMutation.isPending}
+                onClick={() => { setIsUpdating(true); driverCancelMutation.mutate(ride.id); }}
+                data-testid="btn-driver-cancel-confirm"
+              >
+                {driverCancelMutation.isPending ? "Cancelling..." : "Cancel Ride"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
