@@ -113,6 +113,12 @@ import {
   NO_SHOW_WAIT_MINUTES,
   FAIRNESS_FUND_RATE,
   GOODWILL_CREDIT,
+  RELIABILITY_WINDOW_DAYS,
+  RIDER_REVIEW_LATE_CANCELS,
+  RIDER_REVIEW_NO_SHOWS,
+  DRIVER_REVIEW_STRIKES,
+  riderStanding,
+  driverStanding,
   optimizePickupOrder,
   getSharedDiscountPct,
   buildRideReceipt,
@@ -2280,6 +2286,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
       });
 
+      // Alert admins exactly when the rider crosses the no-show review threshold.
+      try {
+        const riderStats = await storage.getCancellationStats(ride.riderId, RELIABILITY_WINDOW_DAYS);
+        if (riderStats.asRider.noShows === RIDER_REVIEW_NO_SHOWS) {
+          await storage.createSafetyAlert({
+            alertType: "rider_reliability_review",
+            severity: "medium",
+            targetUserId: ride.riderId,
+            title: "Rider crossed the no-show review threshold",
+            description: `${riderStats.asRider.noShows} no-shows in the last ${RELIABILITY_WINDOW_DAYS} days.`,
+            data: { ...riderStats.asRider, windowDays: RELIABILITY_WINDOW_DAYS },
+          });
+        }
+      } catch (reliabilityErr) {
+        console.error("No-show reliability check failed (non-fatal):", reliabilityErr);
+      }
+
       const noShowMessage = JSON.stringify({
         type: 'ride_no_show',
         rideId,
@@ -3505,9 +3528,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       // Drivers never pass a fee to the rider; they take a reliability strike instead.
-      const feeResult = role === "driver"
-        ? { fee: 0, reason: "Driver cancellations are free for the rider; repeated cancellations affect your reliability standing." }
-        : calculateCancellationFee(ride);
+      let feeResult;
+      if (role === "driver") {
+        feeResult = { fee: 0, reason: "Driver cancellations are free for the rider; repeated cancellations affect your reliability standing." };
+      } else {
+        const stats = await storage.getCancellationStats(userId, RELIABILITY_WINDOW_DAYS);
+        feeResult = calculateCancellationFee(ride, new Date(), {
+          graceWindowRemoved: riderStanding(stats.asRider) !== "good",
+        });
+      }
       res.json({ role, fee: feeResult.fee, endsRideEarly: false, reason: feeResult.reason });
     } catch (error) {
       console.error("Error previewing cancellation:", error);
@@ -3521,8 +3550,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/users/me/reliability', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const stats = await storage.getCancellationStats(userId, 30);
-      res.json(stats);
+      const stats = await storage.getCancellationStats(userId, RELIABILITY_WINDOW_DAYS);
+      res.json({
+        ...stats,
+        asRider: { ...stats.asRider, standing: riderStanding(stats.asRider) },
+        asDriver: { ...stats.asDriver, standing: driverStanding(stats.asDriver) },
+      });
     } catch (error) {
       console.error("Error fetching reliability stats:", error);
       res.status(500).json({ message: "Failed to fetch reliability stats" });
@@ -3713,7 +3746,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else {
         // ── Rider-initiated: server-verified fee ladder. ──
-        const feeResult = calculateCancellationFee(ride);
+        // Reduced reliability standing removes the post-accept grace window.
+        const priorStats = await storage.getCancellationStats(userId, RELIABILITY_WINDOW_DAYS);
+        const feeResult = calculateCancellationFee(ride, new Date(), {
+          graceWindowRemoved: riderStanding(priorStats.asRider) !== "good",
+        });
         cancellationFee = feeResult.fee;
         feeReason = feeResult.reason;
 
@@ -3768,6 +3805,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
           goodwillCredit,
         },
       });
+
+      // ── Reliability review thresholds ──
+      // Recount AFTER this cancellation is recorded; alert exactly when the
+      // review threshold is crossed, so admins get one alert per escalation
+      // rather than one per subsequent cancellation.
+      try {
+        const stats = await storage.getCancellationStats(userId, RELIABILITY_WINDOW_DAYS);
+        if (role === "rider" && cancellationFee > 0 && stats.asRider.lateCancellations === RIDER_REVIEW_LATE_CANCELS) {
+          await storage.createSafetyAlert({
+            alertType: "rider_reliability_review",
+            severity: "medium",
+            targetUserId: userId,
+            title: "Rider crossed the late-cancellation review threshold",
+            description: `${stats.asRider.lateCancellations} fee-charged cancellations in the last ${RELIABILITY_WINDOW_DAYS} days.`,
+            data: { ...stats.asRider, windowDays: RELIABILITY_WINDOW_DAYS },
+          });
+        }
+        if (role === "driver" && stats.asDriver.cancellations === DRIVER_REVIEW_STRIKES) {
+          await storage.createSafetyAlert({
+            alertType: "driver_reliability_review",
+            severity: "medium",
+            targetUserId: userId,
+            title: "Driver crossed the cancellation review threshold",
+            description: `${stats.asDriver.cancellations} post-accept cancellations in the last ${RELIABILITY_WINDOW_DAYS} days. Driver is already deprioritized in matching.`,
+            data: { ...stats.asDriver, windowDays: RELIABILITY_WINDOW_DAYS },
+          });
+        }
+      } catch (reliabilityErr) {
+        console.error("Reliability threshold check failed (non-fatal):", reliabilityErr);
+      }
 
       const updatedRide = await storage.getRide(rideId);
 
@@ -8431,7 +8498,7 @@ Generate the FAQ list.`;
     try {
       const { db: dbInst } = await import("./db");
       const { rides: ridesT, driverProfiles: dp } = await import("@shared/schema");
-      const { and: _and, isNotNull: _isNotNull, isNull: _isNull, gte: _gte, lte: _lte, sql: _sql } = await import("drizzle-orm");
+      const { and: _and, isNotNull: _isNotNull, isNull: _isNull, gte: _gte, lte: _lte, sql: _sql, eq: _eq } = await import("drizzle-orm");
 
       const now = new Date();
 
@@ -8441,40 +8508,37 @@ Generate the FAQ list.`;
         driverCountyCache.clear();
       }
 
-      // Helper: fetch unclaimed scheduled rides in a time window (minutes from now)
-      const unclaimedInWindow = async (minFrom: number, minTo: number) => {
-        return await dbInst
-          .select()
-          .from(ridesT)
-          .where(
-            _and(
-              _isNotNull(ridesT.scheduledAt),
-              _gte(ridesT.scheduledAt, new Date(now.getTime() + minFrom * 60 * 1000)),
-              _lte(ridesT.scheduledAt, new Date(now.getTime() + minTo   * 60 * 1000)),
-              _isNull(ridesT.driverId),
-              _sql`${ridesT.status} = 'pending'`
-            )
-          );
-      };
+      // ── Scheduled-ride warning & reminder stages ──
+      // One horizon query per sweep; every stage is stamped in
+      // reminder_stamps so it fires exactly once per ride (the old
+      // 4-minute-wide windows on a 1-minute sweep re-sent everything ~4
+      // times, and nothing reached riders whose app was closed — every
+      // rider-facing stage now also goes out as a push notification).
+      const horizon = await dbInst
+        .select()
+        .from(ridesT)
+        .where(
+          _and(
+            _isNotNull(ridesT.scheduledAt),
+            _gte(ridesT.scheduledAt, now),
+            _lte(ridesT.scheduledAt, new Date(now.getTime() + 125 * 60 * 1000)),
+            _sql`${ridesT.status} IN ('pending', 'accepted')`
+          )
+        );
 
-      // Helper: fetch ALL scheduled rides (claimed or not) in a time window
-      const allInWindow = async (minFrom: number, minTo: number) => {
-        return await dbInst
-          .select()
-          .from(ridesT)
-          .where(
-            _and(
-              _isNotNull(ridesT.scheduledAt),
-              _gte(ridesT.scheduledAt, new Date(now.getTime() + minFrom * 60 * 1000)),
-              _lte(ridesT.scheduledAt, new Date(now.getTime() + minTo   * 60 * 1000)),
-              _sql`${ridesT.status} IN ('pending', 'accepted')`
-            )
-          );
+      const stamped = (ride: any, key: string) => !!(ride.reminderStamps ?? {})[key];
+      const stamp = async (ride: any, ...keys: string[]) => {
+        const stamps = { ...(ride.reminderStamps ?? {}) };
+        for (const k of keys) stamps[k] = now.toISOString();
+        ride.reminderStamps = stamps;
+        await dbInst.update(ridesT).set({ reminderStamps: stamps }).where(_eq(ridesT.id, ride.id));
       };
-
-      // ── T-60 min: re-broadcast unclaimed rides to all online drivers (urgency = medium) ──
-      const at60 = await unclaimedInWindow(58, 62);
-      for (const ride of at60) {
+      const wsSend = (userId: string | null | undefined, payload: any) => {
+        if (!userId) return;
+        const ws = activeConnections.get(userId);
+        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+      };
+      const broadcastToCountyDrivers = (ride: any, urgentReason: string) => {
         const payload = JSON.stringify({
           type: 'new_scheduled_ride',
           rideId: ride.id,
@@ -8486,7 +8550,7 @@ Generate the FAQ list.`;
           scheduledAt: ride.scheduledAt,
           pickupCounty: ride.pickupCounty || '',
           urgent: true,
-          urgentReason: 'no_driver_60min',
+          urgentReason,
         });
         activeConnections.forEach((ws, driverId) => {
           const counties = driverCountyCache.get(driverId) ?? [];
@@ -8494,81 +8558,138 @@ Generate the FAQ list.`;
             ws.send(payload);
           }
         });
-      }
+      };
 
-      // ── T-15 min: re-broadcast unclaimed + warn rider ──
-      const at15 = await unclaimedInWindow(13, 17);
-      for (const ride of at15) {
-        const payload = JSON.stringify({
-          type: 'new_scheduled_ride',
-          rideId: ride.id,
-          riderId: ride.riderId,
-          riderName: 'Rider',
-          pickupAddress: (ride.pickupLocation as any)?.address || '',
-          destinationAddress: (ride.destinationLocation as any)?.address || '',
-          estimatedFare: ride.estimatedFare,
-          scheduledAt: ride.scheduledAt,
-          pickupCounty: ride.pickupCounty || '',
-          urgent: true,
-          urgentReason: 'no_driver_15min',
-        });
-        activeConnections.forEach((ws, driverId) => {
-          const counties = driverCountyCache.get(driverId) ?? [];
-          if (driverCoversCounty(counties, ride.pickupCounty) && ws.readyState === WebSocket.OPEN) {
-            ws.send(payload);
-          }
-        });
-        // Warn the rider
-        if (ride.riderId && activeConnections.has(ride.riderId)) {
-          const riderWs = activeConnections.get(ride.riderId);
-          if (riderWs?.readyState === WebSocket.OPEN) {
-            riderWs.send(JSON.stringify({
-              type: 'scheduled_ride_at_risk',
-              rideId: ride.id,
-              message: 'No driver has claimed your ride yet. We\'re urgently notifying available drivers.',
-              minutesAway: 15,
-            }));
-          }
-        }
-      }
+      for (const ride of horizon) {
+        const mins = (new Date(ride.scheduledAt!).getTime() - now.getTime()) / 60_000;
+        const unclaimed = ride.status === 'pending' && !ride.driverId;
+        const claimedUnconfirmed = ride.status === 'pending' && !!ride.driverId;
 
-      // ── T-5 min: last-chance alert to rider if still unclaimed ──
-      const at5 = await unclaimedInWindow(3, 7);
-      for (const ride of at5) {
-        if (ride.riderId && activeConnections.has(ride.riderId)) {
-          const riderWs = activeConnections.get(ride.riderId);
-          if (riderWs?.readyState === WebSocket.OPEN) {
-            riderWs.send(JSON.stringify({
+        if (unclaimed) {
+          // Rider warnings, most urgent due stage wins; firing a stage also
+          // stamps the milder ones so a late-booked ride gets one warning,
+          // not a burst of three.
+          if (mins <= 7 && !stamped(ride, 'w5')) {
+            wsSend(ride.riderId, {
               type: 'scheduled_ride_no_driver',
               rideId: ride.id,
-              message: 'We haven\'t found a driver yet. You can cancel this ride with no charge.',
-              minutesAway: 5,
-            }));
+              message: "We haven't found a driver yet. You can cancel this ride with no charge.",
+              minutesAway: Math.round(mins),
+            });
+            deliverUserNotification(ride.riderId, {
+              type: 'scheduled-ride-no-driver',
+              title: 'No Driver Found Yet',
+              body: `Your ride leaves in ${Math.round(mins)} min and no driver has claimed it. You can cancel free of charge.`,
+              tag: `sched-${ride.id}`, url: '/', data: { rideId: ride.id },
+            }).catch(console.error);
+            await stamp(ride, 'w5', 'w15', 'w120');
+          } else if (mins <= 17 && !stamped(ride, 'w15')) {
+            wsSend(ride.riderId, {
+              type: 'scheduled_ride_at_risk',
+              rideId: ride.id,
+              message: "No driver has claimed your ride yet. We're urgently notifying available drivers.",
+              minutesAway: Math.round(mins),
+            });
+            deliverUserNotification(ride.riderId, {
+              type: 'scheduled-ride-at-risk',
+              title: 'Still Looking for Your Driver',
+              body: `Your ride leaves in ${Math.round(mins)} min. We're urgently notifying available drivers.`,
+              tag: `sched-${ride.id}`, url: '/', data: { rideId: ride.id },
+            }).catch(console.error);
+            await stamp(ride, 'w15', 'w120');
+          } else if (mins <= 122 && !stamped(ride, 'w120')) {
+            // Early warning (~2h out): tell the rider while there's still
+            // time to make another plan — cancellation is free while
+            // unclaimed, and the free window stays open until 2h out even
+            // after a driver confirms.
+            wsSend(ride.riderId, {
+              type: 'scheduled_ride_at_risk',
+              rideId: ride.id,
+              message: 'No driver has claimed your scheduled ride yet. We\'re notifying drivers — you can also cancel free while unclaimed.',
+              minutesAway: Math.round(mins),
+            });
+            deliverUserNotification(ride.riderId, {
+              type: 'scheduled-ride-at-risk',
+              title: 'Heads Up — No Driver Yet',
+              body: `Your ride in ~${Math.round(mins / 60 * 10) / 10}h hasn't been claimed yet. We're notifying drivers; cancelling is free while unclaimed.`,
+              tag: `sched-${ride.id}`, url: '/', data: { rideId: ride.id },
+            }).catch(console.error);
+            await stamp(ride, 'w120');
+          }
+
+          // Driver-board re-broadcasts (independent cadence).
+          if (mins <= 17 && !stamped(ride, 'b15')) {
+            broadcastToCountyDrivers(ride, 'no_driver_15min');
+            await stamp(ride, 'b15', 'b60', 'b120');
+          } else if (mins <= 62 && !stamped(ride, 'b60')) {
+            broadcastToCountyDrivers(ride, 'no_driver_60min');
+            await stamp(ride, 'b60', 'b120');
+          } else if (mins <= 122 && !stamped(ride, 'b120')) {
+            broadcastToCountyDrivers(ride, 'no_driver_2h');
+            await stamp(ride, 'b120');
           }
         }
-      }
 
-      // ── T-30 min: standard reminder to rider + driver ──
-      const at30 = await allInWindow(28, 32);
-      for (const ride of at30) {
-        const formattedTime = ride.scheduledAt
-          ? new Date(ride.scheduledAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-          : '';
-        const reminderMsg = JSON.stringify({
-          type: 'ride_reminder',
-          rideId: ride.id,
-          scheduledAt: ride.scheduledAt,
-          message: `Your ride is in 30 minutes at ${formattedTime}`,
-          pickupAddress: (ride.pickupLocation as any)?.address || '',
-          destinationAddress: (ride.destinationLocation as any)?.address || '',
-        });
-        if (ride.riderId && activeConnections.has(ride.riderId)) {
-          const riderWs = activeConnections.get(ride.riderId);
-          if (riderWs?.readyState === WebSocket.OPEN) riderWs.send(reminderMsg);
+        if (claimedUnconfirmed && ride.driverId) {
+          // A claim without a confirm is still an at-risk ride: nudge the
+          // driver to Confirm & Accept, and warn the rider if it's getting
+          // close and nothing has happened.
+          if (mins <= 32 && !stamped(ride, 'c30')) {
+            wsSend(ride.driverId, { type: 'ride_reminder', rideId: ride.id, message: 'Your claimed ride leaves in 30 minutes — confirm it now to lock it in.' });
+            deliverUserNotification(ride.driverId, {
+              type: 'confirm-claimed-ride',
+              title: 'Confirm Your Upcoming Ride',
+              body: 'Your claimed ride leaves in about 30 minutes. Tap Confirm & Accept so your rider knows you\'re coming.',
+              tag: `confirm-${ride.id}`, url: '/', data: { rideId: ride.id },
+            }).catch(console.error);
+            await stamp(ride, 'c30', 'c60');
+          } else if (mins <= 62 && !stamped(ride, 'c60')) {
+            deliverUserNotification(ride.driverId, {
+              type: 'confirm-claimed-ride',
+              title: 'Confirm Your Upcoming Ride',
+              body: 'You claimed a ride leaving in about an hour. Confirm & Accept it to lock it in.',
+              tag: `confirm-${ride.id}`, url: '/', data: { rideId: ride.id },
+            }).catch(console.error);
+            await stamp(ride, 'c60');
+          }
+          if (mins <= 17 && !stamped(ride, 'w15')) {
+            wsSend(ride.riderId, {
+              type: 'scheduled_ride_at_risk',
+              rideId: ride.id,
+              message: 'Your driver claimed this ride but hasn\'t confirmed yet. We\'ve reminded them.',
+              minutesAway: Math.round(mins),
+            });
+            deliverUserNotification(ride.riderId, {
+              type: 'scheduled-ride-at-risk',
+              title: 'Waiting on Driver Confirmation',
+              body: `Your ride leaves in ${Math.round(mins)} min and your driver hasn't confirmed yet. We've reminded them.`,
+              tag: `sched-${ride.id}`, url: '/', data: { rideId: ride.id },
+            }).catch(console.error);
+            await stamp(ride, 'w15', 'w120');
+          }
         }
-        if (ride.driverId && activeConnections.has(ride.driverId)) {
-          const driverWs = activeConnections.get(ride.driverId);
-          if (driverWs?.readyState === WebSocket.OPEN) driverWs.send(reminderMsg);
+
+        // T-30 reminder for rides that are actually on track (confirmed, or
+        // pending-with-driver still counts as a plan for the rider).
+        if (mins <= 32 && !stamped(ride, 'r30') && (ride.status === 'accepted' || claimedUnconfirmed)) {
+          const formattedTime = new Date(ride.scheduledAt!).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+          const reminderMsg = {
+            type: 'ride_reminder',
+            rideId: ride.id,
+            scheduledAt: ride.scheduledAt,
+            message: `Your ride is in 30 minutes at ${formattedTime}`,
+            pickupAddress: (ride.pickupLocation as any)?.address || '',
+            destinationAddress: (ride.destinationLocation as any)?.address || '',
+          };
+          wsSend(ride.riderId, reminderMsg);
+          wsSend(ride.driverId, reminderMsg);
+          deliverUserNotification(ride.riderId, {
+            type: 'ride-reminder',
+            title: 'Ride in 30 Minutes',
+            body: `Pickup at ${formattedTime} — ${(ride.pickupLocation as any)?.address?.split(',')[0] || 'your pickup point'}.`,
+            tag: `sched-${ride.id}`, url: '/', data: { rideId: ride.id },
+          }).catch(console.error);
+          await stamp(ride, 'r30');
         }
       }
     } catch (err) {

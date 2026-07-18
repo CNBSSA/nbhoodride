@@ -29,6 +29,7 @@ import {
   inArray,
   gte,
   count,
+  sql,
 } from "drizzle-orm";
 import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import { storage } from "./storage";
@@ -473,6 +474,22 @@ export async function findBestDriver(
     });
   }
 
+  // Reliability penalty box: drivers with repeated recent cancellations only
+  // match when nobody cleaner is realistically available. Stable ordering —
+  // the ranking above is preserved within each tier — with availability
+  // outranking the box: an online boxed driver still beats an offline clean
+  // one (offline drivers were never excluded from matching, only ranked
+  // down, and they'd just time out and bounce the ride anyway).
+  if (pool.length > 1) {
+    const strikes = await getDriverStrikesBatch(pool.map((d) => d.userId));
+    const tier = (d: { userId: string; isOnline?: boolean | null }) =>
+      (d.isOnline ? 0 : 2) + ((strikes.get(d.userId) ?? 0) >= DRIVER_DEPRIORITIZED_STRIKES ? 1 : 0);
+    pool = pool
+      .map((d, i) => ({ d, i }))
+      .sort((a, b) => tier(a.d) - tier(b.d) || a.i - b.i)
+      .map((x) => x.d);
+  }
+
   const best = pool[0] as typeof pool[0] & {
     trustScore?: number;
     separationDegrees?: number;
@@ -720,6 +737,33 @@ export const SCHEDULED_FREE_CANCEL_HOURS = 2; // scheduled rides cancel free out
 export const FAIRNESS_FUND_RATE = 0.2;        // slice of every fee routed to the community pool
 export const GOODWILL_CREDIT = 5.0;           // rider credit when a driver cancels after arriving
 
+/**
+ * Reliability consequences (rolling 30-day window, both roles).
+ * "Reduced" standing changes behavior; "review" additionally raises an
+ * admin safety alert the moment the threshold is crossed.
+ */
+export const RELIABILITY_WINDOW_DAYS = 30;
+export const RIDER_REDUCED_LATE_CANCELS = 3;  // grace window removed at this many fee'd cancels
+export const RIDER_REDUCED_NO_SHOWS = 1;      // ...or this many no-shows
+export const RIDER_REVIEW_LATE_CANCELS = 5;   // admin review alert
+export const RIDER_REVIEW_NO_SHOWS = 2;
+export const DRIVER_DEPRIORITIZED_STRIKES = 3; // penalty box in driver matching
+export const DRIVER_REVIEW_STRIKES = 5;        // admin review alert
+
+export type ReliabilityStanding = "good" | "reduced" | "under_review";
+
+export function riderStanding(stats: { lateCancellations: number; noShows: number }): ReliabilityStanding {
+  if (stats.lateCancellations >= RIDER_REVIEW_LATE_CANCELS || stats.noShows >= RIDER_REVIEW_NO_SHOWS) return "under_review";
+  if (stats.lateCancellations >= RIDER_REDUCED_LATE_CANCELS || stats.noShows >= RIDER_REDUCED_NO_SHOWS) return "reduced";
+  return "good";
+}
+
+export function driverStanding(stats: { cancellations: number }): ReliabilityStanding {
+  if (stats.cancellations >= DRIVER_REVIEW_STRIKES) return "under_review";
+  if (stats.cancellations >= DRIVER_DEPRIORITIZED_STRIKES) return "reduced";
+  return "good";
+}
+
 export interface CancellationFeeResult {
   fee: number;
   reason: string;
@@ -749,7 +793,17 @@ export function calculateCancellationFee(
     acceptedAt?: Date | string | null;
     scheduledAt?: Date | string | null;
   },
-  now: Date = new Date()
+  now: Date = new Date(),
+  options?: {
+    /**
+     * Reliability consequence: riders in "reduced" standing (repeated late
+     * cancellations / a no-show in the rolling window) lose the free
+     * post-accept grace window — the fee ladder starts at accept. The
+     * scheduled >2h window stays free regardless (that's a scheduling
+     * policy, not a grace period), as does pending (nobody committed).
+     */
+    graceWindowRemoved?: boolean;
+  }
 ): CancellationFeeResult {
   const status = ride.status ?? "pending";
 
@@ -782,7 +836,44 @@ export function calculateCancellationFee(
   if (minutesCommitted >= 3) {
     return { fee: CANCELLATION_FEE_MID, reason: `Driver has been en route for ${Math.floor(minutesCommitted)} min` };
   }
+  if (options?.graceWindowRemoved) {
+    return {
+      fee: CANCELLATION_FEE_MID,
+      reason: "Due to recent cancellations on your account, the free cancellation window doesn't apply",
+    };
+  }
   return { fee: 0, reason: "No fee — cancelled within the grace window after acceptance" };
+}
+
+/**
+ * Rolling-window driver strike counts, batched for matching. Strikes live in
+ * the ride audit log (driver_cancelled_ride events) because a driver-cancel
+ * usually requeues the ride — the ride row can't attribute it.
+ */
+export async function getDriverStrikesBatch(driverIds: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (driverIds.length === 0) return out;
+  const since = new Date(Date.now() - RELIABILITY_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  try {
+    // IN-list rather than = ANY(param): the sql template serializes a JS
+    // array as JSON, which ANY() rejects (42809).
+    const idList = sql.join(driverIds.map((id) => sql`${id}`), sql`, `);
+    const rows = await db.execute(sql`
+      SELECT details->>'actorId' AS driver_id, count(*) AS n
+      FROM admin_activity_log
+      WHERE action = 'ride_audit'
+        AND details->>'event' = 'driver_cancelled_ride'
+        AND details->>'actorId' IN (${idList})
+        AND created_at >= ${since}
+      GROUP BY details->>'actorId'
+    `);
+    for (const row of (rows.rows ?? []) as Array<{ driver_id: string; n: string }>) {
+      out.set(row.driver_id, Number(row.n));
+    }
+  } catch (err) {
+    console.error("[reliability] strike batch lookup failed (treating all as clean):", err);
+  }
+  return out;
 }
 
 // ── 7. Shared Ride Optimization ───────────────────────────────────────────────

@@ -264,6 +264,14 @@ export const rides = pgTable("rides", {
   completedAt: timestamp("completed_at"),
   /** Stamped by confirm-arrival; anchors the rider no-show wait timer. */
   arrivedAt: timestamp("arrived_at"),
+  /**
+   * Idempotency stamps for the scheduled-ride minute sweep (same pattern as
+   * circuit cutoffNotifiedAt): each key records when that reminder/warning
+   * stage fired, so a 1-minute sweep never re-sends a stage and restarts
+   * don't duplicate. Keys: w120/w15/w5 (rider warnings), b120/b60/b15
+   * (driver re-broadcasts), r30 (reminder), c60/c30 (confirm nudges).
+   */
+  reminderStamps: jsonb("reminder_stamps").$type<Record<string, string>>().default({}),
   /** Who ended the ride early — userId, or "system" for auto-cancellations. */
   cancelledBy: varchar("cancelled_by"),
   /** rider | driver | system | admin — drives reliability stats. */
