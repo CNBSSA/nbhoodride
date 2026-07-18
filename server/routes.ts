@@ -88,6 +88,7 @@ import { mapRouteResponse, type RouteResult } from "@shared/routeGeometry";
 import type { RideMessage, Ride, User } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import { resolveAppUrl } from "./appUrl";
+import { matchLocalLandmarks } from "./localLandmarks";
 import { processCircuitReminders } from "./circuitReminders";
 import { bookingWindow } from "@shared/circuitSchedule";
 import {
@@ -1118,12 +1119,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
       
-      // Get driver profile if user is a driver
-      let driverProfile = null;
-      if (user.isDriver) {
-        driverProfile = await storage.getDriverProfile(userId);
-      }
-      
+      // Fetch the driver profile unconditionally: an APPLICANT (submitted a
+      // driver application, not yet approved) has a profile but isDriver is
+      // still false — the Profile page needs the application status either way.
+      const driverProfile = await storage.getDriverProfile(userId) ?? null;
+
       res.json({ ...user, driverProfile });
     } catch (error) {
       console.error("Error fetching user:", error);
@@ -1239,10 +1239,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Idempotent: if a profile already exists for this user, return it
       // rather than failing with a duplicate-row / constraint error. The
-      // client's "Get Started" button is safe to press more than once.
+      // client's "Apply" button is safe to press more than once.
+      // NOTE: creating a driver profile is an APPLICATION — it deliberately
+      // does NOT set isDriver. That flag (and with it the Drive switch and
+      // driver dashboard) is only granted when an admin approves the
+      // application (see PATCH /api/admin/drivers/:userId).
       const existing = await storage.getDriverProfile(userId);
       if (existing) {
-        await storage.upsertUser({ id: userId, isDriver: true });
         return res.json(existing);
       }
 
@@ -1294,7 +1297,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (code === "23505" || /unique|duplicate key/i.test(msg)) {
           const fallback = await storage.getDriverProfile(userId);
           if (fallback) {
-            await storage.upsertUser({ id: userId, isDriver: true });
             return res.json(fallback);
           }
         }
@@ -1310,10 +1312,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.createVehicle(vehicleData);
       }
 
-      // Update user to mark as driver
-      await storage.upsertUser({ id: userId, isDriver: true });
-
-      console.log(`[AUDIT] driver_profile_created userId=${userId} licenseNumber=${validatedDriverData.licenseNumber}`);
+      console.log(`[AUDIT] driver_application_started userId=${userId} licenseNumber=${validatedDriverData.licenseNumber}`);
 
       res.json(profile);
     } catch (error) {
@@ -2909,10 +2908,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ suggestions: cached.suggestions });
       }
 
+      // Curated local landmarks first: geocoders don't know colloquial names
+      // ("PG Mall", "UMD"), which are exactly what riders type. Provider
+      // results are appended after any alias hits.
+      const landmarkHits = matchLocalLandmarks(q, limit);
+
       let suggestions: Array<{ label: string; lat: number; lng: number }> = [];
       const mapboxToken = process.env.MAPBOX_TOKEN;
 
-      if (mapboxToken) {
+      if (landmarkHits.length >= limit) {
+        // Local aliases already fill the list — skip the provider round-trip.
+      } else if (mapboxToken) {
         // Mapbox geocoding — bias to the PG County area, US only.
         const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json`
           + `?access_token=${mapboxToken}&autocomplete=true&country=us&limit=${limit}`
@@ -2926,6 +2932,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           + `&viewbox=-77.6,39.4,-76.0,38.4&bounded=0`;
         const r = await fetch(url, { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } });
         if (r.ok) suggestions = mapNominatimResults(await r.json());
+      }
+
+      // Merge: landmark hits lead, provider results follow, deduped by label.
+      if (landmarkHits.length > 0) {
+        const seen = new Set(landmarkHits.map((s) => s.label.toLowerCase()));
+        suggestions = [...landmarkHits, ...suggestions.filter((s) => !seen.has(s.label.toLowerCase()))].slice(0, limit);
       }
 
       geocodeSuggestCache.set(cacheKey, { at: Date.now(), suggestions });
@@ -5794,6 +5806,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (updates.approvalStatus === 'approved' && !wasApproved) {
         const targetUser = await storage.getUser(userId);
+        // Approval is the ONLY thing that makes someone a driver: this flips
+        // isDriver on, which unlocks the Drive switch and driver dashboard.
+        // Riders who merely applied stay riders until this moment.
+        await storage.adminUpdateUser(userId, { isDriver: true });
         if (targetUser && !targetUser.isApproved && !targetUser.isAdmin && !targetUser.isSuperAdmin) {
           await storage.adminUpdateUser(userId, { isApproved: true });
         }
@@ -5804,6 +5820,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }).catch((err) => console.error("Failed to send driver-approved email:", err));
         }
         console.log(`[AUDIT] driver_approved adminId=${adminId} userId=${userId}`);
+      } else if (updates.approvalStatus && updates.approvalStatus !== 'approved') {
+        // Symmetry: revoking/suspending/rejecting the application also takes
+        // driver mode away — approval status is the single source of truth.
+        await storage.adminUpdateUser(userId, { isDriver: false });
+        console.log(`[AUDIT] driver_mode_revoked adminId=${adminId} userId=${userId} approvalStatus=${updates.approvalStatus}`);
       }
 
       res.json(profile);
@@ -8135,7 +8156,9 @@ Generate the FAQ list.`;
         if (profile) {
           if (report.result === 'clear') {
             await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'approved' } as any);
-            await storage.adminUpdateUser(profile.userId, { isApproved: true });
+            // Background check cleared = application approved = driver mode
+            // unlocks (isDriver gates the Drive switch + driver dashboard).
+            await storage.adminUpdateUser(profile.userId, { isApproved: true, isDriver: true });
             const user = await storage.getUser(profile.userId);
             // R-M5: send the DRIVER approved email (not the rider one). Drivers
             // need the driver-specific guidance about going online, payouts,
@@ -8150,6 +8173,7 @@ Generate the FAQ list.`;
             console.log(`[AUDIT] driver_approved source=checkr_webhook userId=${profile.userId} reportId=${report.id}`);
           } else {
             await storage.adminUpdateDriverProfile(profile.userId, { approvalStatus: 'rejected' } as any);
+            await storage.adminUpdateUser(profile.userId, { isDriver: false });
             await storage.createSafetyAlert({
               alertType: 'background_check_failed', severity: 'high', targetUserId: profile.userId,
               title: 'Driver background check returned non-clear result',

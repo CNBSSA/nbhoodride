@@ -135,8 +135,8 @@ export default function Profile() {
     },
     onSuccess: () => {
       toast({
-        title: "Driver Profile Created",
-        description: "You can now upload your documents to start driving.",
+        title: "Application Started",
+        description: "Upload your license, insurance, and vehicle photos — an admin will review and approve your application.",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       setIsDocumentModalOpen(true);
@@ -306,29 +306,13 @@ export default function Profile() {
           currentBalance={user?.virtualCardBalance || "0"}
         />
 
-        {/* Driver Section */}
-        {!user?.isDriver ? (
-          <Card className="border-primary/20 bg-primary/5">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold text-foreground">Become a Driver</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Start earning by giving rides to your neighbors
-                  </p>
-                </div>
-                <Button
-                  onClick={() => becomeDriverMutation.mutate()}
-                  disabled={becomeDriverMutation.isPending}
-                  className="bg-primary text-primary-foreground"
-                  data-testid="button-become-driver"
-                >
-                  {becomeDriverMutation.isPending ? "Setting up..." : "Get Started"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ) : (
+        {/* Driver Section — three states:
+            1. No application  → "Become a Driver" (starts an application)
+            2. Applied, not yet approved → application status + document checklist.
+               Driver mode (the Drive switch + dashboard) stays LOCKED here —
+               only admin approval makes someone a driver.
+            3. Approved (isDriver) → active driver account */}
+        {user?.isDriver ? (
           <Card className="border-secondary/20 bg-secondary/5">
             <CardContent className="p-4 space-y-3">
               <div className="flex items-center space-x-3">
@@ -338,22 +322,60 @@ export default function Profile() {
                   <p className="text-sm text-muted-foreground">
                     {user?.driverProfile?.isVerifiedNeighbor
                       ? "Verified Neighbor • Ready to drive"
-                      : (user?.driverProfile as any)?.approvalStatus === 'background_check_pending'
-                      ? "Background check in progress — we'll email you when done"
-                      : (user?.driverProfile as any)?.approvalStatus === 'rejected'
-                      ? "Background check could not be cleared — contact support"
-                      : "Documents under review"}
+                      : "Approved • Switch to Drive mode from the home screen"}
                   </p>
                 </div>
               </div>
               <DriverOnboardingChecklist />
             </CardContent>
           </Card>
+        ) : user?.driverProfile ? (
+          <Card className="border-amber-200 bg-amber-50/50">
+            <CardContent className="p-4 space-y-3">
+              <div className="flex items-center space-x-3">
+                <i className="fas fa-hourglass-half text-amber-600 text-xl" />
+                <div>
+                  <h3 className="font-semibold text-foreground" data-testid="text-driver-application-status">Driver Application</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {(user?.driverProfile as any)?.approvalStatus === 'background_check_pending'
+                      ? "Background check in progress — we'll email you when it's done"
+                      : (user?.driverProfile as any)?.approvalStatus === 'rejected'
+                      ? "Your application could not be approved — contact support"
+                      : "Under review — you'll be able to drive once an admin approves your application"}
+                  </p>
+                </div>
+              </div>
+              <DriverOnboardingChecklist />
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="border-primary/20 bg-primary/5">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold text-foreground">Become a Driver</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Apply to start earning by giving rides to your neighbors
+                  </p>
+                </div>
+                <Button
+                  onClick={() => becomeDriverMutation.mutate()}
+                  disabled={becomeDriverMutation.isPending}
+                  className="bg-primary text-primary-foreground"
+                  data-testid="button-become-driver"
+                >
+                  {becomeDriverMutation.isPending ? "Starting..." : "Apply"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Quick Actions */}
         <div className="space-y-3">
-          {user?.isDriver && (
+          {/* Applicants need document access BEFORE approval — gate on having
+              an application (driverProfile), not on isDriver. */}
+          {(user?.isDriver || user?.driverProfile) && (
             <Button
               variant="outline"
               className="w-full justify-between p-4"

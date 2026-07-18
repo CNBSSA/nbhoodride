@@ -5,9 +5,9 @@ import { useAuth } from "@/hooks/useAuth";
 const STEPS = [
   { key: "email", label: "Verify your email" },
   { key: "account", label: "Account approved by PG Ride" },
-  { key: "profile", label: "Start driver setup (Profile)" },
+  { key: "profile", label: "Submit your driver application" },
   { key: "documents", label: "Upload license, insurance & vehicle photos" },
-  { key: "driver", label: "Driver approved — go online & pick counties" },
+  { key: "driver", label: "Application approved — driver mode unlocked" },
 ] as const;
 
 /** Driver onboarding progress (Wave B.11). */
@@ -19,14 +19,16 @@ export function DriverOnboardingChecklist() {
     vehiclePhotoUrls: string[];
   }>({
     queryKey: ["/api/driver/profile/me"],
-    enabled: !!user?.isDriver,
+    // Applicants have a driver profile but isDriver stays false until an
+    // admin approves — they still need to see their document progress.
+    enabled: !!user?.isDriver || !!user?.driverProfile,
     retry: false,
   });
   if (!user) return null;
 
   const emailDone = !!user.emailVerifiedAt;
   const accountDone = !!user.isApproved;
-  const profileDone = !!user.isDriver;
+  const profileDone = !!user.driverProfile || !!user.isDriver;
   const docsOnFile =
     !!profileDocs?.licenseImageUrl &&
     !!profileDocs?.insuranceImageUrl &&

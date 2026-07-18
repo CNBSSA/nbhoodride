@@ -218,6 +218,16 @@ ALTER TABLE rides ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMP;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by_role VARCHAR;
 
+-- Driver-mode invariant: is_driver means "approved driver", full stop.
+-- Historically, tapping "Get Started" on the driver form flipped is_driver
+-- immediately, handing unvetted riders the driver dashboard and mode
+-- switch. Enforce the rule on every deploy so drift always self-corrects:
+-- anyone without an APPROVED driver application goes (back) to rider-only,
+-- and regains driver mode the moment an admin approves them.
+UPDATE users SET is_driver = false
+WHERE is_driver = true
+  AND id NOT IN (SELECT user_id FROM driver_profiles WHERE approval_status = 'approved');
+
 -- ── Shared ride groups ───────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS shared_ride_groups (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
