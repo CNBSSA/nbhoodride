@@ -88,6 +88,7 @@ import { mapRouteResponse, type RouteResult } from "@shared/routeGeometry";
 import type { RideMessage, Ride, User } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import { resolveAppUrl } from "./appUrl";
+import { matchLocalLandmarks } from "./localLandmarks";
 import { processCircuitReminders } from "./circuitReminders";
 import { bookingWindow } from "@shared/circuitSchedule";
 import {
@@ -2909,10 +2910,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ suggestions: cached.suggestions });
       }
 
+      // Curated local landmarks first: geocoders don't know colloquial names
+      // ("PG Mall", "UMD"), which are exactly what riders type. Provider
+      // results are appended after any alias hits.
+      const landmarkHits = matchLocalLandmarks(q, limit);
+
       let suggestions: Array<{ label: string; lat: number; lng: number }> = [];
       const mapboxToken = process.env.MAPBOX_TOKEN;
 
-      if (mapboxToken) {
+      if (landmarkHits.length >= limit) {
+        // Local aliases already fill the list — skip the provider round-trip.
+      } else if (mapboxToken) {
         // Mapbox geocoding — bias to the PG County area, US only.
         const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json`
           + `?access_token=${mapboxToken}&autocomplete=true&country=us&limit=${limit}`
@@ -2926,6 +2934,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           + `&viewbox=-77.6,39.4,-76.0,38.4&bounded=0`;
         const r = await fetch(url, { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } });
         if (r.ok) suggestions = mapNominatimResults(await r.json());
+      }
+
+      // Merge: landmark hits lead, provider results follow, deduped by label.
+      if (landmarkHits.length > 0) {
+        const seen = new Set(landmarkHits.map((s) => s.label.toLowerCase()));
+        suggestions = [...landmarkHits, ...suggestions.filter((s) => !seen.has(s.label.toLowerCase()))].slice(0, limit);
       }
 
       geocodeSuggestCache.set(cacheKey, { at: Date.now(), suggestions });
