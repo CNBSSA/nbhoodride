@@ -15,7 +15,7 @@ const pool = new Pool({
 const SQL = `
 -- ── Enums ──────────────────────────────────────────────────────────────────
 DO $$ BEGIN
-  CREATE TYPE ride_status AS ENUM ('pending','accepted','driver_arriving','in_progress','completed','cancelled');
+  CREATE TYPE ride_status AS ENUM ('pending','accepted','driver_arriving','in_progress','completed','cancelled','no_show');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -211,6 +211,12 @@ CREATE INDEX IF NOT EXISTS idx_rides_created_at ON rides (created_at);
 -- authorized from each source at ride accept time.
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS virtual_amount_authorized DECIMAL(8,2) DEFAULT 0.00;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS stripe_authorized_amount DECIMAL(8,2) DEFAULT 0.00;
+
+-- Cancellation policy: arrival stamp anchors the rider no-show wait timer;
+-- cancelled_by/_role feed the rolling reliability stats for both sides.
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMP;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by_role VARCHAR;
 
 -- ── Shared ride groups ───────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS shared_ride_groups (
@@ -1164,6 +1170,14 @@ async function migrate() {
   const client = await pool.connect();
   try {
     console.log('PGRide migration starting — creating all tables...');
+    // ALTER TYPE ... ADD VALUE cannot run inside the multi-statement implicit
+    // transaction below, so add the no_show ride status as its own statement
+    // first (idempotent via IF NOT EXISTS; enum may not exist on a fresh DB).
+    try {
+      await client.query(`ALTER TYPE ride_status ADD VALUE IF NOT EXISTS 'no_show'`);
+    } catch (err) {
+      if (err.code !== '42704') throw err; // 42704 = type doesn't exist yet (fresh DB — CREATE TYPE below includes it)
+    }
     await client.query(SQL);
     console.log('Migration complete — all tables ready.');
   } catch (err) {
