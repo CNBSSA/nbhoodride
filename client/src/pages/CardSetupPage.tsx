@@ -2,15 +2,33 @@ import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
+import { Link } from 'wouter';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { CreditCard, CheckCircle, AlertCircle } from 'lucide-react';
+import { CreditCard, CheckCircle, AlertCircle, ArrowLeft } from 'lucide-react';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import { useStripeConfig } from '@/hooks/useStripeConfig';
+
+/** Header with a back link to Profile — this route is reached from Profile's
+ *  "Payment Methods" button but lives outside the tab-shell (Home.tsx), so
+ *  without this there was no way back except an OS/browser back gesture,
+ *  which doesn't exist in the Capacitor app shell. Riders got stuck here. */
+function CardSetupHeader() {
+  return (
+    <div className="flex items-center gap-3 mb-6">
+      <Link href="/">
+        <button className="p-1 -ml-1" data-testid="button-back-card-setup" aria-label="Back">
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+      </Link>
+      <h1 className="text-2xl font-bold" data-testid="text-page-title">Payment Methods</h1>
+    </div>
+  );
+}
 
 const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY as string | undefined;
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
@@ -135,13 +153,7 @@ export function CardSetupPage() {
   if (isLoading) {
     return (
       <div className="container mx-auto px-4 py-6 max-w-2xl">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold mb-2">Payment Methods</h1>
-          <p className="text-muted-foreground">
-            Manage your payment methods for rides
-          </p>
-        </div>
-        
+        <CardSetupHeader />
         <Card>
           <CardHeader>
             <Skeleton className="h-6 w-48" />
@@ -156,8 +168,8 @@ export function CardSetupPage() {
 
   return (
     <div className="container mx-auto px-4 py-6 max-w-2xl">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2" data-testid="text-page-title">Payment Methods</h1>
+      <CardSetupHeader />
+      <div className="-mt-4 mb-6">
         <p className="text-muted-foreground">
           Manage your payment methods for rides
         </p>
