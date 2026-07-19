@@ -88,7 +88,7 @@ import { mapRouteResponse, type RouteResult } from "@shared/routeGeometry";
 import type { RideMessage, Ride, User } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import { resolveAppUrl } from "./appUrl";
-import { matchLocalLandmarks } from "./localLandmarks";
+import { matchLocalLandmarks, nearestLandmarkLabel } from "./localLandmarks";
 import { processCircuitReminders } from "./circuitReminders";
 import { bookingWindow } from "@shared/circuitSchedule";
 import {
@@ -166,6 +166,16 @@ const VALID_RIDE_TRANSITIONS: Record<string, string[]> = {
 // results are stable minute-to-minute. Bounded to 500 entries in the handler.
 const GEOCODE_CACHE_TTL_MS = 5 * 60 * 1000;
 const geocodeSuggestCache = new Map<string, { at: number; suggestions: Array<{ label: string; lat: number; lng: number }> }>();
+
+// Every external geo provider call (Nominatim, Mapbox, OSRM) gets a hard
+// timeout. The free providers don't just fail when they throttle a cloud
+// IP — they black-hole the connection, and an un-timed fetch then hangs
+// the request forever. That's how "the map stops working": search AND
+// pickup reverse-geocode share the provider, so one hang takes out both.
+const GEO_FETCH_TIMEOUT_MS = 4000;
+function fetchGeoWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, { ...init, signal: AbortSignal.timeout(GEO_FETCH_TIMEOUT_MS) });
+}
 
 function isValidRideTransition(from: string, to: string): boolean {
   return VALID_RIDE_TRANSITIONS[from]?.includes(to) ?? false;
@@ -2932,42 +2942,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Curated local landmarks first: geocoders don't know colloquial names
-      // ("PG Mall", "UMD"), which are exactly what riders type. Provider
-      // results are appended after any alias hits.
+      // ("PG Mall", "UMD"), which are exactly what riders type.
       const landmarkHits = matchLocalLandmarks(q, limit);
 
       let suggestions: Array<{ label: string; lat: number; lng: number }> = [];
       const mapboxToken = process.env.MAPBOX_TOKEN;
 
-      if (landmarkHits.length >= limit) {
-        // Local aliases already fill the list — skip the provider round-trip.
+      if (landmarkHits.length > 0) {
+        // ANY alias hit answers instantly and never touches the provider.
+        // (An earlier version still awaited the provider to append results
+        // after alias hits — so when Nominatim started hanging, even
+        // "PG Mall"/"Bowie Town Center" stopped resolving in production.)
+        suggestions = landmarkHits;
       } else if (mapboxToken) {
         // Mapbox geocoding — bias to the PG County area, US only.
         const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json`
           + `?access_token=${mapboxToken}&autocomplete=true&country=us&limit=${limit}`
           + `&proximity=-76.85,38.83&types=address,poi,place,neighborhood`;
-        const r = await fetch(url);
+        const r = await fetchGeoWithTimeout(url);
         if (r.ok) suggestions = mapMapboxResults(await r.json());
       } else {
         // Nominatim fallback — server-side with required UA + viewbox bias.
         const url = `https://nominatim.openstreetmap.org/search?format=json`
           + `&q=${encodeURIComponent(q)}&limit=${limit}&countrycodes=us&addressdetails=1`
           + `&viewbox=-77.6,39.4,-76.0,38.4&bounded=0`;
-        const r = await fetch(url, { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } });
+        const r = await fetchGeoWithTimeout(url, { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } });
         if (r.ok) suggestions = mapNominatimResults(await r.json());
       }
 
-      // Merge: landmark hits lead, provider results follow, deduped by label.
-      if (landmarkHits.length > 0) {
-        const seen = new Set(landmarkHits.map((s) => s.label.toLowerCase()));
-        suggestions = [...landmarkHits, ...suggestions.filter((s) => !seen.has(s.label.toLowerCase()))].slice(0, limit);
-      }
-
-      geocodeSuggestCache.set(cacheKey, { at: Date.now(), suggestions });
-      // Bound the cache so it can't grow unbounded on a long-running process.
-      if (geocodeSuggestCache.size > 500) {
-        const oldest = geocodeSuggestCache.keys().next().value;
-        if (oldest) geocodeSuggestCache.delete(oldest);
+      // Only cache real results — caching a provider-outage [] would keep
+      // showing "no matches" for the TTL after the provider recovers.
+      if (suggestions.length > 0) {
+        geocodeSuggestCache.set(cacheKey, { at: Date.now(), suggestions });
+        // Bound the cache so it can't grow unbounded on a long-running process.
+        if (geocodeSuggestCache.size > 500) {
+          const oldest = geocodeSuggestCache.keys().next().value;
+          if (oldest) geocodeSuggestCache.delete(oldest);
+        }
       }
       res.json({ suggestions });
     } catch (error) {
@@ -3017,7 +3028,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let route: RouteResult | null = null;
       try {
-        const r = await fetch(url);
+        const r = await fetchGeoWithTimeout(url);
         if (r.ok) route = mapRouteResponse(await r.json());
       } catch (err) {
         console.warn("Routing provider unreachable, using straight line:", err);
@@ -3038,19 +3049,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Reverse geocoding - convert coordinates to address
+  // Reverse geocoding - convert coordinates to address.
+  // ALWAYS answers 200 with a usable label: if the provider is down or
+  // hanging, fall back to the nearest curated landmark ("Near The Mall at
+  // Prince George's…") or plain coordinates — the booking flow must never
+  // sit on "Getting address…" because a free geocoder is having a bad day.
   app.get('/api/geocode/reverse', isAuthenticated, async (req: any, res) => {
+    const { lat, lng } = req.query;
+    if (!lat || !lng) {
+      return res.status(400).json({ message: "lat and lng required" });
+    }
+    const latN = parseFloat(lat as string);
+    const lngN = parseFloat(lng as string);
+    const offlineLabel = () => {
+      const near = nearestLandmarkLabel(latN, lngN, 3);
+      return near ? `Near ${near}` : `${latN.toFixed(4)}, ${lngN.toFixed(4)}`;
+    };
     try {
-      const { lat, lng } = req.query;
-      if (!lat || !lng) {
-        return res.status(400).json({ message: "lat and lng required" });
-      }
-      const response = await fetch(
+      const response = await fetchGeoWithTimeout(
         `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=16&addressdetails=1`,
         { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } }
       );
       if (!response.ok) {
-        return res.status(502).json({ message: "Geocoding service unavailable" });
+        return res.json({ address: offlineLabel(), lat: latN, lng: lngN, degraded: true });
       }
       const data = await response.json() as any;
       const addr = data.address || {};
@@ -3069,11 +3090,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (state) {
         parts.push(state);
       }
-      const address = parts.length > 0 ? parts.join(', ') : data.display_name || 'Unknown location';
-      res.json({ address, lat: parseFloat(lat as string), lng: parseFloat(lng as string) });
+      const address = parts.length > 0 ? parts.join(', ') : data.display_name || offlineLabel();
+      res.json({ address, lat: latN, lng: lngN });
     } catch (error) {
-      console.error("Reverse geocoding error:", error);
-      res.status(500).json({ message: "Failed to get address" });
+      console.error("Reverse geocoding error (serving offline fallback):", error);
+      res.json({ address: offlineLabel(), lat: latN, lng: lngN, degraded: true });
     }
   });
 
