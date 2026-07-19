@@ -30,6 +30,8 @@
 
 6. **Audits on `develop` for in-flight work; validate `main` matches what is deployed** when checking production.
 
+Daily reliability agent: [DAILY_AUDIT_AGENT_INVOKE.md](./DAILY_AUDIT_AGENT_INVOKE.md) — **audit `develop`**, report **develop ↔ main parity**, recommend promote when aligned and tested.
+
 ## Promote `develop` → `main` (founder / release)
 
 When integration testing on `develop` is complete:
