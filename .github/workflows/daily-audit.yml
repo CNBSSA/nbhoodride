@@ -1,0 +1,63 @@
+# PG Ride — automated daily-audit gate (Phase 1 tripwire).
+#
+# This is the cheap, always-on complement to the investigative Daily
+# Reliability Agent (docs/DAILY_AUDIT_AGENT_INVOKE.md). It runs only the
+# deterministic gate — `npm run audit:daily` — which needs no database and
+# no secrets: static checks (migration drift, PWA assets, tsc), the test
+# suite, and read-only network probes of production (/health/ready,
+# /api/payment/config, custom-domain DNS). The script exits non-zero on any
+# hard failure, so a red run here means "a deploy broke the build or
+# production health" — surfaced within minutes, for free.
+#
+# It does NOT replace the agent: the agent investigates rider/driver/admin
+# failure modes and writes the tagged P0/P1/P2 report. This just catches
+# the deterministic regressions between agent runs.
+
+name: Daily Audit Gate
+
+on:
+  schedule:
+    # 11:00 UTC daily = 7am ET (EDT) / 6am ET (EST). Offset ~1h after the
+    # 6am-ET investigative agent Routine so they don't collide.
+    - cron: "0 11 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Production base URL to probe (defaults to the Railway app)"
+        required: false
+        default: "https://nbhoodride-production.up.railway.app"
+
+# Never let overlapping runs (a push during the scheduled run) pile up.
+concurrency:
+  group: daily-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (full history for develop↔main parity check)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run daily audit gate
+        env:
+          # The script also accepts BASE_URL; honour a manual override.
+          BASE_URL: ${{ github.event.inputs.base_url || 'https://nbhoodride-production.up.railway.app' }}
+        run: npm run audit:daily
