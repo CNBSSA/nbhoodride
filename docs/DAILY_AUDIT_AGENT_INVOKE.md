@@ -1,5 +1,7 @@
 # Daily audit — agent invocation prompt
 
+**Founder checklist:** Run or schedule the daily agent on **`develop`** → read the report (parity, Phase 3b E/F, promote readiness) → merge agent **draft PRs** into **`develop`** → **promote `develop` → `main`** when GREEN/YELLOW and you approve → handle **Track B** yourself (Stripe, DNS, app stores).
+
 **Auto-loaded in Cursor:** [`.cursor/rules/daily-audit-agent.mdc`](../.cursor/rules/daily-audit-agent.mdc) (`alwaysApply: true`) — agents get this prompt every session without pasting.
 
 **Manual copy** (if running outside Cursor): use the block below.  
