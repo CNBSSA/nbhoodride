@@ -58,6 +58,20 @@ Flag any failure. Note warnings on: `0.5-stripe`, `0.2-public-url`, `0.7-domain`
 | **Receipt** | Missing after complete | `/api/rides/:id/receipt` |
 | **Promo/referral** | Welcome credit not applied | signup credits, `promoRidesRemaining` |
 
+### Phase 3b — Scheduled & coworker group rides (daily)
+
+| Area | What can go wrong | Where to look |
+|------|-------------------|---------------|
+| **Solo schedule** | No `scheduledAt`; not on upcoming list | `ScheduleRideModal`, `GET /api/rides/scheduled` |
+| **Driver board** | Open scheduled not visible / can't claim | `GET /api/driver/scheduled-rides`, claim route |
+| **Urgency** | No driver near departure | WS `scheduled_ride_*`, reminder jobs |
+| **Coworker group (Mode 4)** | No shift-end time; code join fails | `create-shared-schedule`, `join-schedule`, `SharedScheduleSheet` |
+| **Group slots** | 4th joiner accepted; discount not applied | `maxSlots: 3`, `applyGroupDiscount` |
+| **Group driver** | Claim only one seat; joiners orphaned | `assignDriverToSharedScheduleGroup`, group `status` |
+| **Share invite** | Code not copy/shareable | UI step 4, clipboard / `navigator.share` |
+
+See [SHIFT_WORKER_LAUNCH_PLAN.md](./SHIFT_WORKER_LAUNCH_PLAN.md).
+
 **Read-only DB patterns (if access):**
 
 - `is_approved = false` users older than 48h
@@ -153,6 +167,8 @@ See [STRIPE_SETUP.md](./STRIPE_SETUP.md).
 
 ## Summary
 - Overall: GREEN / YELLOW / RED
+- **develop ↔ main parity:** (0 ahead / 0 behind, or explain skew)
+- **Promote develop → main:** READY / NOT READY / N/A (already aligned)
 - Biggest risk to riders or drivers today: …
 
 ## Automated gates
@@ -195,8 +211,8 @@ See [STRIPE_SETUP.md](./STRIPE_SETUP.md).
 1. **Read-only** on production DB unless authorized
 2. **Never** log secrets (Stripe, `SESSION_SECRET`)
 3. Cite evidence: route, log tag, query count, curl output
-4. **Branching (mandatory):** audit/review **`main`** (live); create fix branches from **`main`**; open **draft PRs with base `main`** — the founder reviews and merges. See [GIT_WORKFLOW.md](./GIT_WORKFLOW.md)
-5. Code fixes: `git checkout main && git pull` → `cursor/daily-audit-YYYYMMDD-a737` → **draft PR → `main`**
+4. **Branching (mandatory):** Audit and test on **`develop`**. Fix branches from **`develop`**. **Draft PRs base `develop`**. Promote **`develop` → `main`** only after audit + founder sign-off. After promote, **`develop` and `main` should match** — report parity each run. See [GIT_WORKFLOW.md](./GIT_WORKFLOW.md)
+5. Code fixes: `git checkout develop && git pull` → `cursor/daily-audit-YYYYMMDD-a737` → **draft PR → `develop`**
 6. Tag findings: `[RIDER]` `[DRIVER]` `[ADMIN]` `[PAYMENT]` `[SAFETY]` `[INFRA]`
 
 ---
@@ -205,7 +221,9 @@ See [STRIPE_SETUP.md](./STRIPE_SETUP.md).
 
 | Resource | Path |
 |----------|------|
-| **Git workflow (trunk-based: audit main, PR main)** | [GIT_WORKFLOW.md](./GIT_WORKFLOW.md) |
+| **Git workflow (develop → main)** | [GIT_WORKFLOW.md](./GIT_WORKFLOW.md) |
+| Shift / coworker rides | [SHIFT_WORKER_LAUNCH_PLAN.md](./SHIFT_WORKER_LAUNCH_PLAN.md) |
+| UX assessment | [USER_FRIENDLINESS_ASSESSMENT.md](./USER_FRIENDLINESS_ASSESSMENT.md) |
 | Invoke prompt | [DAILY_AUDIT_AGENT_INVOKE.md](./DAILY_AUDIT_AGENT_INVOKE.md) |
 | Phase 0 / production | [PHASE_0_PRODUCTION.md](./PHASE_0_PRODUCTION.md) |
 | Stripe | [STRIPE_SETUP.md](./STRIPE_SETUP.md) |

@@ -1,5 +1,5 @@
 ---
-description: PG Ride daily reliability audit — review main (live), draft PRs to main; run on every agent session
+description: PG Ride daily reliability audit — test on develop, PR develop, promote to main after sign-off
 alwaysApply: true
 ---
 
@@ -8,11 +8,14 @@ alwaysApply: true
 You are the **PG Ride Daily Reliability Agent** for **People-Governed** (PG Ride).
 
 - **Repository:** `CNBSSA/nbhoodride` (local: `/agent/repos/nbhoodride`)
-- **Production:** https://nbhoodride-production.up.railway.app
+- **Integration branch:** **`develop`** — audit and test here daily
+- **Production branch:** **`main`** — Railway deploys after founder promotes `develop` → `main`
+- **Production URL:** https://nbhoodride-production.up.railway.app
 - **Target domain:** https://peoplegoverned.com
-- **Product:** Community-owned rideshare — riders, drivers, admin approval, Virtual PG Card, Stripe, WebSocket live rides, SOS/guardian safety.
+- **Product:** Community-owned rideshare — riders, drivers, admin approval, Virtual PG Card, Stripe, WebSocket live rides, SOS/guardian safety, scheduled + coworker group rides.
 
 Full playbook: [`docs/DAILY_AUDIT_PROMPT.md`](../../docs/DAILY_AUDIT_PROMPT.md)  
+Invoke prompt: [`docs/DAILY_AUDIT_AGENT_INVOKE.md`](../../docs/DAILY_AUDIT_AGENT_INVOKE.md)  
 Git workflow: [`docs/GIT_WORKFLOW.md`](../../docs/GIT_WORKFLOW.md)
 
 ---
@@ -21,29 +24,40 @@ Git workflow: [`docs/GIT_WORKFLOW.md`](../../docs/GIT_WORKFLOW.md)
 
 | Action | Branch |
 |--------|--------|
-| **Audit / review / scan** (what users experience) | **`main`** (live + production URL) |
-| **Create fix branches from** | **`main`** |
-| **Open PRs against** | **`main`** — as **drafts**; never merge them yourself |
-| **Go live** | The founder reviews and merges the PR |
+| **Daily audit / test / fix** | **`develop`** |
+| **Create fix branches from** | **`develop`** |
+| **Open PRs against** | **`develop`** — as **drafts**; never merge them yourself |
+| **Go live** | Founder promotes **`develop` → `main`** after testing; you do not promote unless explicitly asked |
+| **Parity** | Each run: `git rev-list --left-right --count origin/develop...origin/main` — report skew |
+
+After a successful promote, **`develop` and `main` should be the same application** (only docs or release commits may differ briefly).
 
 ---
 
 ## Your job (every engagement)
 
-Find what can go wrong for **riders**, **drivers**, and **admins** before users hit it. Investigate and report. Do not change production data without approval. Open a **draft PR** only for clear bug fixes.
+Find what can go wrong for **riders**, **drivers**, and **admins** before users hit it. Investigate and report. Do not change production data without approval. Open a **draft PR to `develop`** only for clear bug fixes.
 
 ### Step 0 — Sync for audit
 
 ```bash
-git fetch origin main
-git checkout main && git pull origin main
+git fetch origin develop main
+git checkout develop && git pull origin develop
 ```
 
-Read and audit the **live** codebase on `main`. Production deploy tracks `main`.
+Audit the **integration** codebase on `develop`. Run automated gates from this tree.
+
+### Step 0b — Parity
+
+```bash
+git rev-list --left-right --count origin/develop...origin/main
+```
+
+Report in summary: **develop ↔ main parity** and **promote readiness**.
 
 ### Step 1 — Automated gates
 
-From repo root (on `main`):
+From repo root (on `develop`):
 
 ```bash
 npm run audit:daily
@@ -57,15 +71,17 @@ Read `docs/DAILY_AUDIT_PROMPT.md` and work Phases 2–9 relevant to the task (sk
 
 ### Step 3 — Daily focus areas
 
-- **RIDERS:** signup → verify → admin approve → book → pay → complete → receipt
-- **DRIVERS:** doc upload → admin approve → go online → accept → complete → get paid
+- **RIDERS:** signup → verify → admin approve → book → pay → complete → receipt; **scheduled + coworker group rides**
+- **DRIVERS:** doc upload → admin approve → go online → accept → complete → get paid; **group scheduled claim**
+- **MAPS / PICKUP / DROPOFF:** geocode, live map, arriving → in_progress → complete
+- **NOTIFICATIONS:** WebSocket, scheduled urgency, push/email
 - **SAFETY:** SOS, emergency incidents, guardian links (`PUBLIC_APP_URL`)
 - **PAYMENTS:** `/health/ready` stripe, webhooks, stuck `payment_status`
-- **INFRA:** `peoplegoverned.com` DNS, Railway deploy health
+- **INFRA:** `peoplegoverned.com` DNS, Railway deploy health, **develop/main skew**
 
 ### Step 4 — Report format
 
-Use the template in `docs/DAILY_AUDIT_PROMPT.md` § Required report format.
+Use the template in `docs/DAILY_AUDIT_PROMPT.md` § Required report format (includes parity + promote readiness).
 
 Tag findings: `[RIDER]` `[DRIVER]` `[ADMIN]` `[PAYMENT]` `[SAFETY]` `[INFRA]`  
 Severity: **P0** (today) · **P1** (user-blocking) · **P2** (degraded)
@@ -73,12 +89,12 @@ Severity: **P0** (today) · **P1** (user-blocking) · **P2** (degraded)
 ### Step 5 — If you fix code
 
 ```bash
-git checkout main && git pull origin main
+git fetch origin develop && git checkout develop && git pull
 git checkout -b cursor/<descriptive-name>-a737
 # implement → npm run check → npm test → commit → push
 ```
 
-Open a **draft PR: base = `main`**, head = your branch. **Do not merge it yourself.**
+Open a **draft PR: base = `develop`**, head = your branch. **Do not merge it yourself.**
 
 ---
 
