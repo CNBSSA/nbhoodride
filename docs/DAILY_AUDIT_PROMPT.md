@@ -58,19 +58,84 @@ Flag any failure. Note warnings on: `0.5-stripe`, `0.2-public-url`, `0.7-domain`
 | **Receipt** | Missing after complete | `/api/rides/:id/receipt` |
 | **Promo/referral** | Welcome credit not applied | signup credits, `promoRidesRemaining` |
 
-### Phase 3b — Scheduled & coworker group rides (daily)
+### Phase 3b — Scheduled & coworker rides (daily, mandatory)
+
+Extends the manual journey in [PHASE_0_PRODUCTION.md](./PHASE_0_PRODUCTION.md) §0.6 (**A–C** = on-demand ride) with **E–F** every daily audit.  
+**Minimum on `develop`:** trace APIs, UI entry points, and WebSocket types below. **When test accounts exist:** run the numbered steps and record PASS/FAIL in the report.
 
 | Area | What can go wrong | Where to look |
 |------|-------------------|---------------|
 | **Solo schedule** | No `scheduledAt`; not on upcoming list | `ScheduleRideModal`, `GET /api/rides/scheduled` |
-| **Driver board** | Open scheduled not visible / can't claim | `GET /api/driver/scheduled-rides`, claim route |
-| **Urgency** | No driver near departure | WS `scheduled_ride_*`, reminder jobs |
-| **Coworker group (Mode 4)** | No shift-end time; code join fails | `create-shared-schedule`, `join-schedule`, `SharedScheduleSheet` |
-| **Group slots** | 4th joiner accepted; discount not applied | `maxSlots: 3`, `applyGroupDiscount` |
+| **Driver board** | Open scheduled not visible / can't claim | `GET /api/driver/scheduled-rides`, `POST /api/driver/rides/:rideId/claim` |
+| **Urgency** | No driver near departure | WS `new_scheduled_ride`, `scheduled_ride_claimed`, `scheduled_ride_taken`; `confirm-scheduled` |
+| **Coworker group (Mode 4)** | No shift-end time; code join fails | `POST /api/rides/create-shared-schedule`, `POST /api/rides/join-schedule`, `SharedScheduleSheet` |
+| **Group slots** | 4th joiner accepted; discount not applied | `maxSlots: 3`, `applyGroupDiscount`, `claimScheduleSlot` |
 | **Group driver** | Claim only one seat; joiners orphaned | `assignDriverToSharedScheduleGroup`, group `status` |
-| **Share invite** | Code not copy/shareable | UI step 4, clipboard / `navigator.share` |
+| **Share invite** | Code not copy/shareable | Step 4 UI, clipboard / `navigator.share` |
 
 See [SHIFT_WORKER_LAUNCH_PLAN.md](./SHIFT_WORKER_LAUNCH_PLAN.md).
+
+#### E — Scheduled solo ride
+
+**Rider**
+
+1. Home → schedule (not “ride now”) → pick **future** date/time → pickup + destination in service area.
+2. Confirm → ride appears under **Upcoming** with correct `scheduledAt`.
+3. After a driver claims → rider sees driver name; near departure → **confirm** flow works (`confirm-scheduled`).
+
+**Driver**
+
+1. Go online → open **scheduled** board → solo row visible (one row per ride, not duplicated).
+2. **Claim** open scheduled ride → rider gets WS `scheduled_ride_claimed`.
+3. Other drivers see `scheduled_ride_taken` for that ride id.
+4. At departure window → confirm/start → normal `accepted` → `in_progress` → `completed` lifecycle.
+
+**Code / API checks (every audit)**
+
+| Check | Evidence |
+|-------|----------|
+| Create path sets `scheduledAt` | `ScheduleRideModal` → ride create / schedule route |
+| Rider list | `GET /api/rides/scheduled` includes ride + driver when claimed |
+| Driver list | `GET /api/driver/scheduled-rides` — open + claimed upcoming |
+| Claim | `POST /api/driver/rides/:rideId/claim` — solo uses `claimScheduledRide` |
+| Confirm | `POST /api/driver/rides/:rideId/confirm-scheduled` |
+| Broadcast | `new_scheduled_ride` on book; claim/taken WS payloads in `routes.ts` |
+
+**Fail if:** future rides missing `scheduledAt`; claimed scheduled stuck without driver assignment; confirm-scheduled 500s; duplicate rows for the same group on driver board.
+
+#### F — Coworker group schedule (Mode 4, `PG-XXXXXX`)
+
+**Organizer (rider)**
+
+1. **Ride home with coworkers** (or `SharedScheduleSheet`) → set **shift-end** date/time (required).
+2. Pickup (job site) + destination (home) → create group → receive **`PG-XXXXXX`** code.
+3. Copy or share code (clipboard / `navigator.share` if available).
+4. Upcoming shows group ride at shared departure time.
+
+**Coworker (joiner)**
+
+1. **Join with code** (`JoinScheduleModal` / join CTA) → enter `PG-XXXXXX`.
+2. Own pickup + destination → join succeeds; **inherits group `scheduledAt`**.
+3. Upcoming lists joiner ride; when ≥2 riders → **30% discount** reflected on fare.
+4. **4th joiner** must be rejected (max 3 people total including organizer).
+
+**Driver**
+
+1. Scheduled board shows **one row per coworker group** (not one row per seat).
+2. **Claim** any seat in group → `assignDriverToSharedScheduleGroup` assigns **same driver to all group rides**; group locks (no new joiners).
+3. All riders receive `scheduled_ride_claimed`; complete each leg or group flow as implemented.
+
+**Code / API checks (every audit)**
+
+| Check | Evidence |
+|-------|----------|
+| Create requires time | `create-shared-schedule` rejects missing `scheduledAt` |
+| Join | `join-schedule` + `claimScheduleSlot` race handling |
+| Open groups (optional) | `GET /api/rides/open-groups`, `POST .../open-groups/:id/join` |
+| Group claim | `shared_schedule` branch on `POST /api/driver/rides/:rideId/claim` |
+| UI | `RiderDashboard` coworker CTA, `UpcomingRideGroupCard`, driver `shared_schedule` chip |
+
+**Fail if:** join without inherited `scheduledAt`; partial driver assignment across group; discount wrong at 2+ riders; group still accepting joiners after driver claim.
 
 **Read-only DB patterns (if access):**
 
@@ -78,6 +143,8 @@ See [SHIFT_WORKER_LAUNCH_PLAN.md](./SHIFT_WORKER_LAUNCH_PLAN.md).
 - Rides `accepted` / `in_progress` older than 4h
 - `payment_status = 'authorized'` on completed rides
 - `pending` rides older than 30min
+- `ride_groups` where `group_type = 'shared_schedule'` and `filled_slots > max_slots`
+- Joiner rides in a group with `scheduled_at` null while parent group has `scheduled_at` set
 
 ---
 
@@ -174,6 +241,11 @@ See [STRIPE_SETUP.md](./STRIPE_SETUP.md).
 ## Automated gates
 - audit:daily / check / test / smoke: …
 - /health/ready: …
+
+## Phase 3b — Scheduled & coworker (E / F)
+- **E — Solo schedule:** PASS / FAIL / CODE-ONLY (note what was traced or manually tested)
+- **F — Coworker group (`PG-XXXXXX`):** PASS / FAIL / CODE-ONLY
+- Blockers or regressions: …
 
 ## P0 — Fix today
 - …

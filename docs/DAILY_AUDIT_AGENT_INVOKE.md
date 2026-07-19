@@ -44,6 +44,7 @@ If any step fails, start the report at RED and explain.
 
 STEP 2 — READ THE PLAYBOOK
 Read docs/DAILY_AUDIT_PROMPT.md and work through Phases 2–9 (skip DB queries if no read-only access — note that in the report).
+**Mandatory daily:** Phase 3b sections **E** (solo schedule) and **F** (coworker group `PG-XXXXXX`) — code trace minimum; manual steps when test accounts exist.
 
 STEP 3 — FOCUS AREAS (daily)
 RIDERS: signup → verify → admin approve → book → pay → complete → receipt. Scheduled + coworker (PG-XXXXXX) rides?

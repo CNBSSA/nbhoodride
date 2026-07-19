@@ -67,7 +67,7 @@ If any step fails, treat severity as **RED** and explain in your report.
 
 ### Step 2 — Playbook
 
-Read `docs/DAILY_AUDIT_PROMPT.md` and work Phases 2–9 relevant to the task (skip DB queries if no read-only access — note that).
+Read `docs/DAILY_AUDIT_PROMPT.md` and work Phases 2–9 relevant to the task (skip DB queries if no read-only access — note that). **Every daily run must include Phase 3b § E–F** (scheduled solo + coworker group).
 
 ### Step 3 — Daily focus areas
 
