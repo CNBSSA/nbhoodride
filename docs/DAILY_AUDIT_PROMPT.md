@@ -297,6 +297,7 @@ See [STRIPE_SETUP.md](./STRIPE_SETUP.md).
 | Shift / coworker rides | [SHIFT_WORKER_LAUNCH_PLAN.md](./SHIFT_WORKER_LAUNCH_PLAN.md) |
 | UX assessment | [USER_FRIENDLINESS_ASSESSMENT.md](./USER_FRIENDLINESS_ASSESSMENT.md) |
 | Invoke prompt | [DAILY_AUDIT_AGENT_INVOKE.md](./DAILY_AUDIT_AGENT_INVOKE.md) |
+| Audit report archive | [audits/README.md](./audits/README.md) |
 | Phase 0 / production | [PHASE_0_PRODUCTION.md](./PHASE_0_PRODUCTION.md) |
 | Stripe | [STRIPE_SETUP.md](./STRIPE_SETUP.md) |
 | Product | [MASTER_PLAN.md](./MASTER_PLAN.md) |
