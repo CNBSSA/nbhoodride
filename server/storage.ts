@@ -554,6 +554,7 @@ export interface IStorage {
   assignDriverToSharedScheduleGroup(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null>;
   claimScheduleSlot(groupId: string): Promise<RideGroup | null>;
   releaseScheduleSlot(groupId: string): Promise<void>;
+  getOpenSharedGroups(): Promise<RideGroup[]>;
   // DB-backed object storage (driver docs fallback when GCS is unset)
   createStoredObject(data: InsertStoredObject): Promise<StoredObject>;
   getStoredObject(id: string): Promise<StoredObject | undefined>;
@@ -4121,6 +4122,30 @@ export class DatabaseStorage implements IStorage {
       )
       .returning();
     return group ?? null;
+  }
+
+  /**
+   * Published coworker groups a nearby worker could still join: open
+   * visibility, still accepting, seats left, departure ahead (and within a
+   * week — stale groups aren't worth listing).
+   */
+  async getOpenSharedGroups(): Promise<RideGroup[]> {
+    const now = new Date();
+    const weekOut = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    return await db
+      .select()
+      .from(rideGroups)
+      .where(
+        and(
+          eq(rideGroups.groupType, "shared_schedule"),
+          eq(rideGroups.visibility, "open"),
+          eq(rideGroups.status, "open"),
+          sql`${rideGroups.filledSlots} < ${rideGroups.maxSlots}`,
+          gt(rideGroups.scheduledAt, now),
+          lt(rideGroups.scheduledAt, weekOut),
+        ),
+      )
+      .orderBy(asc(rideGroups.scheduledAt));
   }
 
   /** Compensating action for claimScheduleSlot when ride creation fails after the claim succeeds. */

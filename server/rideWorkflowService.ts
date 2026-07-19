@@ -750,6 +750,37 @@ export const RIDER_REVIEW_NO_SHOWS = 2;
 export const DRIVER_DEPRIORITIZED_STRIKES = 3; // penalty box in driver matching
 export const DRIVER_REVIEW_STRIKES = 5;        // admin review alert
 
+/**
+ * Open coworker groups: a codeless joiner's pickup must sit within this many
+ * miles of the group's route corridor (organizer pickup → shared
+ * destination). Keeps a stranger's pickup from dragging the whole car
+ * fifteen minutes off-route.
+ */
+export const OPEN_GROUP_CORRIDOR_MILES = 2.5;
+
+/**
+ * Distance in miles from a point to the segment a→b, using an
+ * equirectangular projection around the point — plenty accurate at the
+ * county scale this guards.
+ */
+export function distanceToCorridorMiles(
+  point: { lat: number; lng: number },
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): number {
+  const cosLat = Math.cos((point.lat * Math.PI) / 180);
+  const toXY = (p: { lat: number; lng: number }) => ({ x: p.lng * cosLat, y: p.lat });
+  const P = toXY(point), A = toXY(a), B = toXY(b);
+  const dx = B.x - A.x, dy = B.y - A.y;
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq === 0 ? 0 : ((P.x - A.x) * dx + (P.y - A.y) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const proj = { x: A.x + t * dx, y: A.y + t * dy };
+  // Convert the planar offset back to lat/lng and measure properly.
+  const nearest = { lat: proj.y, lng: cosLat === 0 ? point.lng : proj.x / cosLat };
+  return haversineMiles(point.lat, point.lng, nearest.lat, nearest.lng);
+}
+
 export type ReliabilityStanding = "good" | "reduced" | "under_review";
 
 export function riderStanding(stats: { lateCancellations: number; noShows: number }): ReliabilityStanding {

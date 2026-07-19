@@ -66,6 +66,25 @@ export const LOCAL_LANDMARKS: Landmark[] = [
 const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
 
 /**
+ * Nearest curated landmark within maxMiles of a point, or null. Used as the
+ * reverse-geocode fallback so the app can still say "Near The Mall at
+ * Prince George's" when the geocoding provider is down.
+ */
+export function nearestLandmarkLabel(lat: number, lng: number, maxMiles: number): string | null {
+  const R = 3958.8;
+  let best: { label: string; d: number } | null = null;
+  for (const lm of LOCAL_LANDMARKS) {
+    const dLat = ((lm.lat - lat) * Math.PI) / 180;
+    const dLng = ((lm.lng - lng) * Math.PI) / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos((lat * Math.PI) / 180) * Math.cos((lm.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+    const d = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    if (d <= maxMiles && (!best || d < best.d)) best = { label: lm.label, d };
+  }
+  return best?.label ?? null;
+}
+
+/**
  * Match a query against the landmark aliases. A landmark matches when the
  * normalized query contains an alias or an alias contains the query (so
  * "pg ma" already surfaces PG Mall while typing). Results keep list order.
