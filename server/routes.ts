@@ -89,6 +89,7 @@ import type { RideMessage, Ride, User, RideGroup } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import { resolveAppUrl } from "./appUrl";
 import { matchLocalLandmarks, nearestLandmarkLabel } from "./localLandmarks";
+import { isAllowedPickup, PICKUP_OUTSIDE_MD_MESSAGE } from "@shared/serviceArea";
 import { processCircuitReminders } from "./circuitReminders";
 import { bookingWindow } from "@shared/circuitSchedule";
 import {
@@ -6103,6 +6104,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!pickupLocation || !destinationLocation || !estimatedFare) {
         return res.status(400).json({ message: "Missing required fields" });
       }
+      // Regulatory service area: the pickup and every intermediate stop are
+      // trip origins — all must be in Maryland.
+      const originPoints = [pickupLocation, ...(Array.isArray(pickupStops) ? pickupStops : [])];
+      for (const pt of originPoints) {
+        if (!pt || !isAllowedPickup(pt.lat, pt.lng)) {
+          return res.status(400).json({ message: PICKUP_OUTSIDE_MD_MESSAGE });
+        }
+      }
 
       // Create a ride group first
       const group = await storage.createRideGroup({
@@ -6152,6 +6161,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const departAt = new Date(scheduledAt);
       if (Number.isNaN(departAt.getTime()) || departAt.getTime() <= Date.now()) {
         return res.status(400).json({ message: "Departure time must be in the future." });
+      }
+      // Regulatory service area: every trip ORIGIN must be in Maryland.
+      if (!isAllowedPickup(pickupLocation.lat, pickupLocation.lng)) {
+        return res.status(400).json({ message: PICKUP_OUTSIDE_MD_MESSAGE });
       }
 
       const scheduleCode = await generateScheduleCode();
@@ -6267,6 +6280,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   ): Promise<{ ok: true; ride: Ride } | { ok: false; status: number; message: string }> {
     if (group.status !== "open") return { ok: false, status: 410, message: "This schedule is no longer accepting riders" };
     if ((group.filledSlots ?? 0) >= (group.maxSlots ?? 3)) return { ok: false, status: 409, message: "This schedule is full" };
+    // Regulatory service area: every trip ORIGIN must be in Maryland.
+    if (!isAllowedPickup(pickupLocation.lat, pickupLocation.lng)) {
+      return { ok: false, status: 400, message: PICKUP_OUTSIDE_MD_MESSAGE };
+    }
 
     const claimedGroup = await storage.claimScheduleSlot(group.id);
     if (!claimedGroup) return { ok: false, status: 409, message: "This schedule is full" };
@@ -6374,6 +6391,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const dest = group.sharedDestination as { lat: number; lng: number; address: string } | null;
       if (!dest) return res.status(400).json({ message: "This group can't accept open joins." });
+
+      // Regulatory service area first — a DC/VA joiner should hear the
+      // policy reason, not a corridor-distance message.
+      if (!isAllowedPickup(pickupLocation.lat, pickupLocation.lng)) {
+        return res.status(400).json({ message: PICKUP_OUTSIDE_MD_MESSAGE });
+      }
 
       // Corridor check: pickup must be near the organizer-pickup → destination
       // line. The organizer's pickup is read server-side only; it is never
