@@ -36,6 +36,7 @@ import { storage } from "./storage";
 import { getDriverTrustContext, filterDriversByTrustPreferences } from "./agents/trust";
 import { rankDriversByTrustAndEta } from "@shared/trustScore";
 import { normalizeVehicleType, vehicleTypeMatches } from "@shared/vehicleTypes";
+import { isAllowedPickup, isAllowedDestination, PICKUP_OUTSIDE_MD_MESSAGE, DESTINATION_OUTSIDE_AREA_MESSAGE } from "@shared/serviceArea";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -161,24 +162,16 @@ export async function validateRideRequest(
     return { valid: false, error: "Invalid coordinates provided" };
   }
 
-  // Maryland bounding box check
-  const inMd = (lat: number, lng: number) =>
-    lat >= MD_BOUNDS.latMin &&
-    lat <= MD_BOUNDS.latMax &&
-    lng >= MD_BOUNDS.lngMin &&
-    lng <= MD_BOUNDS.lngMax;
-
-  if (!inMd(pickup.lat, pickup.lng)) {
-    return {
-      valid: false,
-      error: "Pickup location is outside the Maryland service area",
-    };
+  // Service-area policy (regulatory): pickups must originate in MARYLAND —
+  // the old bounding box quietly accepted DC and Virginia pickups, which
+  // PG Ride is not authorized to originate. Destinations may be anywhere in
+  // the MD/DC/northern-VA area. Both checks are offline geometry
+  // (shared/serviceArea.ts) — never dependent on a geocoding provider.
+  if (!isAllowedPickup(pickup.lat, pickup.lng)) {
+    return { valid: false, error: PICKUP_OUTSIDE_MD_MESSAGE };
   }
-  if (!inMd(destination.lat, destination.lng)) {
-    return {
-      valid: false,
-      error: "Destination is outside the Maryland service area",
-    };
+  if (!isAllowedDestination(destination.lat, destination.lng)) {
+    return { valid: false, error: DESTINATION_OUTSIDE_AREA_MESSAGE };
   }
 
   // Distance limit

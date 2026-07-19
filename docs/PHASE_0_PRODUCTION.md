@@ -151,6 +151,8 @@ Run once after super admin exists. Use two browsers or incognito windows.
 
 **Pass criteria:** No 500 errors; ride reaches `completed`; receipt visible.
 
+**Scheduled & coworker (daily agent):** See [DAILY_AUDIT_PROMPT.md](./DAILY_AUDIT_PROMPT.md) Phase **3b — E / F** (solo schedule + `PG-XXXXXX` group rides).
+
 Document result:
 
 ```text

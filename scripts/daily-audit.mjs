@@ -39,7 +39,27 @@ async function fetchJson(path) {
 
 console.log(`PG Ride daily audit — ${new Date().toISOString().slice(0, 10)}`);
 console.log(`BASE_URL=${baseUrl}`);
-console.log("Audit code on: main (live). Fix PRs target: main (trunk-based) — see docs/GIT_WORKFLOW.md");
+console.log("Audit branch: develop (integration). Production: main after promote — see docs/GIT_WORKFLOW.md");
+
+spawnSync("git", ["fetch", "origin", "develop", "main"], { cwd: root, stdio: "ignore" });
+const parity = spawnSync(
+  "git",
+  ["rev-list", "--left-right", "--count", "origin/develop...origin/main"],
+  { cwd: root, encoding: "utf8" },
+);
+if (parity.status === 0 && parity.stdout?.trim()) {
+  const [developOnly, mainOnly] = parity.stdout.trim().split(/\s+/).map(Number);
+  console.log(
+    `develop↔main: ${developOnly} commits on develop not in main, ${mainOnly} on main not in develop`,
+  );
+  if (developOnly > 0 || mainOnly > 0) {
+    warnings.push(
+      `branch skew: develop and main differ (${developOnly} develop-only, ${mainOnly} main-only)`,
+    );
+  }
+} else {
+  warnings.push("could not compute develop/main parity (git fetch origin develop main)");
+}
 
 run("npm run check", "npm", ["run", "check"]);
 run("npm test", "npm", ["test"]);

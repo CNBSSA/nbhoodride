@@ -61,6 +61,24 @@ export const LOCAL_LANDMARKS: Landmark[] = [
   { label: "BWI Airport (Baltimore/Washington International)", aliases: ["bwi", "bwi airport", "baltimore airport"], lat: 39.1774, lng: -76.6684 },
   { label: "Reagan National Airport (DCA), Arlington, VA", aliases: ["dca", "reagan airport", "reagan national", "national airport"], lat: 38.8512, lng: -77.0402 },
   { label: "Union Station, Washington, DC", aliases: ["union station"], lat: 38.8973, lng: -77.0063 },
+
+  // ── Washington DC destinations (drop-off only — pickups are MD-only,
+  //    enforced at booking, so listing these never enables a DC origin) ──
+  { label: "The White House, Washington, DC", aliases: ["white house", "whitehouse", "1600 pennsylvania"], lat: 38.8977, lng: -77.0365 },
+  { label: "U.S. Capitol, Washington, DC", aliases: ["us capitol", "capitol building", "capitol hill"], lat: 38.8899, lng: -77.0091 },
+  { label: "National Mall / Smithsonian, Washington, DC", aliases: ["national mall", "smithsonian"], lat: 38.8893, lng: -77.0261 },
+  { label: "Nationals Park, Washington, DC", aliases: ["nationals park", "nats park"], lat: 38.8730, lng: -77.0074 },
+  { label: "Capital One Arena, Washington, DC", aliases: ["capital one arena", "verizon center"], lat: 38.8981, lng: -77.0209 },
+  { label: "MedStar Washington Hospital Center, DC", aliases: ["washington hospital center", "medstar washington"], lat: 38.9296, lng: -77.0146 },
+  { label: "Howard University, Washington, DC", aliases: ["howard university", "howard u"], lat: 38.9227, lng: -77.0194 },
+  { label: "Georgetown, Washington, DC", aliases: ["georgetown"], lat: 38.9096, lng: -77.0654 },
+
+  // ── Northern Virginia destinations (drop-off only) ────────────────────
+  { label: "The Pentagon, Arlington, VA", aliases: ["pentagon"], lat: 38.8719, lng: -77.0563 },
+  { label: "Pentagon City, Arlington, VA", aliases: ["pentagon city", "fashion centre"], lat: 38.8629, lng: -77.0596 },
+  { label: "Crystal City / Amazon HQ2, Arlington, VA", aliases: ["crystal city", "amazon hq2", "national landing"], lat: 38.8567, lng: -77.0506 },
+  { label: "Old Town Alexandria, VA", aliases: ["old town alexandria", "alexandria old town"], lat: 38.8048, lng: -77.0430 },
+  { label: "Tysons Corner Center, Tysons, VA", aliases: ["tysons", "tysons corner"], lat: 38.9187, lng: -77.2311 },
 ];
 
 const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
