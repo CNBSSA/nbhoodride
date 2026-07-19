@@ -85,7 +85,7 @@ import {
 } from "@shared/rideChat";
 import { pushRideMessageToUser, setRideMessageConnections } from "./rideMessageHub";
 import { mapRouteResponse, type RouteResult } from "@shared/routeGeometry";
-import type { RideMessage, Ride, User } from "@shared/schema";
+import type { RideMessage, Ride, User, RideGroup } from "@shared/schema";
 import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from "./sharedRideService";
 import { resolveAppUrl } from "./appUrl";
 import { matchLocalLandmarks } from "./localLandmarks";
@@ -119,6 +119,8 @@ import {
   DRIVER_REVIEW_STRIKES,
   riderStanding,
   driverStanding,
+  OPEN_GROUP_CORRIDOR_MILES,
+  distanceToCorridorMiles,
   optimizePickupOrder,
   getSharedDiscountPct,
   buildRideReceipt,
@@ -4081,6 +4083,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/rides/open-groups — published coworker rides a nearby worker
+  // can join. Privacy-minimal by design: the shared (workplace) destination,
+  // departure time, seats left, and the organizer's first name + rating.
+  // Never pickup points, never the invite code.
+  app.get('/api/rides/open-groups', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const groups = await storage.getOpenSharedGroups();
+      const listings = await Promise.all(
+        groups
+          .filter((g) => g.organizerId !== userId)
+          .slice(0, 20)
+          .map(async (g) => {
+            const organizer = await storage.getUser(g.organizerId);
+            const dest = g.sharedDestination as { lat: number; lng: number; address: string } | null;
+            return {
+              groupId: g.id,
+              destination: dest ? { address: dest.address, lat: dest.lat, lng: dest.lng } : null,
+              scheduledAt: g.scheduledAt,
+              seatsLeft: (g.maxSlots ?? 3) - (g.filledSlots ?? 1),
+              riders: g.filledSlots ?? 1,
+              discountActive: !!g.discountActive,
+              organizer: organizer
+                ? { firstName: organizer.firstName, lastInitial: organizer.lastName?.[0] ?? "", rating: organizer.rating }
+                : null,
+            };
+          }),
+      );
+      res.json({ groups: listings.filter((l) => l.destination) });
+    } catch (error) {
+      console.error("Error listing open groups:", error);
+      res.status(500).json({ message: "Failed to list open rides" });
+    }
+  });
+
+
   app.get('/api/rides/:rideId', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -6055,7 +6093,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/rides/create-shared-schedule', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const { pickupLocation, destinationLocation, driverId, estimatedFare, pickupInstructions, scheduledAt } = req.body;
+      const { pickupLocation, destinationLocation, driverId, estimatedFare, pickupInstructions, scheduledAt, visibility } = req.body;
 
       if (!pickupLocation || !destinationLocation || !estimatedFare) {
         return res.status(400).json({ message: "Missing required fields" });
@@ -6072,16 +6110,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const scheduleCode = await generateScheduleCode();
 
-      // Create the group
+      // Create the group. sharedDestination is stored so an OPEN group can be
+      // listed (and joined toward) without exposing the organizer's ride;
+      // visibility defaults to invite-code-only unless the organizer opted in.
       const group = await storage.createRideGroup({
         scheduleCode,
         organizerId: userId,
         groupType: "shared_schedule",
+        sharedDestination: destinationLocation,
         maxSlots: 3,
         filledSlots: 1,
         status: "open",
         scheduledAt: departAt,
-      });
+        visibility: visibility === "open" ? "open" : "code",
+      } as any);
 
       // Create organizer's ride linked to the group
       const ride = await storage.createRide({
@@ -6165,6 +6207,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Core of joining a shared_schedule group as a rider: atomic seat claim
+  // BEFORE the ride row (two racers for the last seat can't both win, and a
+  // loser never leaves an orphaned ride), joiner-route fare with the 30%
+  // group price, discount activation at 2 riders, close at capacity. Shared
+  // by the invite-code path and the open (published) path.
+  async function joinSharedGroupAsRider(
+    group: RideGroup,
+    userId: string,
+    pickupLocation: { lat: number; lng: number; address: string },
+    destinationLocation: { lat: number; lng: number; address: string },
+    paymentMethod?: string,
+  ): Promise<{ ok: true; ride: Ride } | { ok: false; status: number; message: string }> {
+    if (group.status !== "open") return { ok: false, status: 410, message: "This schedule is no longer accepting riders" };
+    if ((group.filledSlots ?? 0) >= (group.maxSlots ?? 3)) return { ok: false, status: 409, message: "This schedule is full" };
+
+    const claimedGroup = await storage.claimScheduleSlot(group.id);
+    if (!claimedGroup) return { ok: false, status: 409, message: "This schedule is full" };
+
+    // Estimate fare for the joiner's route
+    const { lat: pLat, lng: pLng } = pickupLocation;
+    const { lat: dLat, lng: dLng } = destinationLocation;
+    const R = 3958.8;
+    const dLatR = ((dLat - pLat) * Math.PI) / 180;
+    const dLngR = ((dLng - pLng) * Math.PI) / 180;
+    const a = Math.sin(dLatR / 2) ** 2 + Math.cos((pLat * Math.PI) / 180) * Math.cos((dLat * Math.PI) / 180) * Math.sin(dLngR / 2) ** 2;
+    const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3;
+    const duration = Math.round((dist / 25) * 60);
+    const fullFare = Math.max(5, 2.5 + dist * 1.5 + duration * 0.3);
+    const discountedFare = fullFare * 0.7;
+
+    // Create the joiner's ride. The seat is already claimed above; if this
+    // fails, release it rather than leaving a phantom seat nobody occupies.
+    let ride: Ride;
+    try {
+      ride = await storage.createRide({
+        riderId: userId,
+        driverId: group.driverId || null,
+        pickupLocation,
+        destinationLocation,
+        estimatedFare: discountedFare.toFixed(2),
+        originalFare: fullFare.toFixed(2),
+        groupDiscountAmount: (fullFare * 0.3).toFixed(2),
+        paymentMethod: (paymentMethod as any) || "card",
+        rideType: "shared_schedule",
+        groupId: group.id,
+        scheduledAt: group.scheduledAt ?? undefined,
+      });
+    } catch (createErr) {
+      await storage.releaseScheduleSlot(group.id).catch((releaseErr) =>
+        console.error(`Failed to release claimed slot on group ${group.id} after ride creation failure:`, releaseErr),
+      );
+      throw createErr;
+    }
+
+    const newFilledSlots = claimedGroup.filledSlots ?? 1;
+
+    // Apply 30% discount to ALL rides in the group (including organizer) if first joiner
+    if (newFilledSlots === 2 && !group.discountActive) {
+      await storage.applyGroupDiscount(group.id, 30);
+    }
+
+    // Close group if full
+    if (newFilledSlots >= (claimedGroup.maxSlots ?? 3)) {
+      await storage.updateRideGroup(group.id, { status: "active" });
+    }
+
+    return { ok: true, ride };
+  }
+
   // POST /api/rides/join-schedule — Mode 4: joiner enters code and books their own ride
   app.post('/api/rides/join-schedule', isAuthenticated, async (req: any, res) => {
     try {
@@ -6177,71 +6288,87 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const group = await storage.getRideGroupByCode(scheduleCode.toUpperCase());
       if (!group) return res.status(404).json({ message: "Schedule code not found" });
-      if (group.status !== "open") return res.status(410).json({ message: "This schedule is no longer accepting riders" });
-      if ((group.filledSlots ?? 0) >= (group.maxSlots ?? 3)) return res.status(409).json({ message: "This schedule is full" });
 
-      // Atomic slot claim BEFORE creating the joiner's ride: the old code read
-      // filledSlots then wrote filledSlots+1 as two separate steps, so two
-      // riders racing for the last seat could both pass the check above and
-      // both get seated past maxSlots. This conditional UPDATE only succeeds
-      // while filled_slots < max_slots, so a losing racer gets null back —
-      // and we do it before createRide so a losing racer never gets an
-      // orphaned ride row for a seat they didn't actually win.
-      const claimedGroup = await storage.claimScheduleSlot(group.id);
-      if (!claimedGroup) return res.status(409).json({ message: "This schedule is full" });
+      const result = await joinSharedGroupAsRider(group, userId, pickupLocation, destinationLocation, paymentMethod);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
 
-      // Estimate fare for the joiner's route
-      const { lat: pLat, lng: pLng } = pickupLocation;
-      const { lat: dLat, lng: dLng } = destinationLocation;
-      const R = 3958.8;
-      const dLatR = ((dLat - pLat) * Math.PI) / 180;
-      const dLngR = ((dLng - pLng) * Math.PI) / 180;
-      const a = Math.sin(dLatR / 2) ** 2 + Math.cos((pLat * Math.PI) / 180) * Math.cos((dLat * Math.PI) / 180) * Math.sin(dLngR / 2) ** 2;
-      const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3;
-      const duration = Math.round((dist / 25) * 60);
-      const fullFare = Math.max(5, 2.5 + dist * 1.5 + duration * 0.3);
-      const discountedFare = fullFare * 0.7;
-
-      // Create the joiner's ride. The seat is already claimed above; if this
-      // fails, release it rather than leaving a phantom seat nobody occupies.
-      let ride;
-      try {
-        ride = await storage.createRide({
-          riderId: userId,
-          driverId: group.driverId || null,
-          pickupLocation,
-          destinationLocation,
-          estimatedFare: discountedFare.toFixed(2),
-          originalFare: fullFare.toFixed(2),
-          groupDiscountAmount: (fullFare * 0.3).toFixed(2),
-          paymentMethod: paymentMethod || "card",
-          rideType: "shared_schedule",
-          groupId: group.id,
-          scheduledAt: group.scheduledAt ?? undefined,
-        });
-      } catch (createErr) {
-        await storage.releaseScheduleSlot(group.id).catch((releaseErr) =>
-          console.error(`Failed to release claimed slot on group ${group.id} after ride creation failure:`, releaseErr),
-        );
-        throw createErr;
-      }
-
-      const newFilledSlots = claimedGroup.filledSlots ?? 1;
-
-      // Apply 30% discount to ALL rides in the group (including organizer) if first joiner
-      if (newFilledSlots === 2 && !group.discountActive) {
-        await storage.applyGroupDiscount(group.id, 30);
-      }
-
-      // Close group if full
-      if (newFilledSlots >= (claimedGroup.maxSlots ?? 3)) {
-        await storage.updateRideGroup(group.id, { status: "active" });
-      }
-
-      res.json({ ...ride, scheduleCode, discountApplied: true });
+      res.json({ ...result.ride, scheduleCode, discountApplied: true });
     } catch (error) {
       console.error("Error joining schedule:", error);
       res.status(500).json({ message: "Failed to join schedule" });
+    }
+  });
+
+  // POST /api/rides/open-groups/:groupId/join — codeless join of a PUBLISHED
+  // group. Guardrails: only open-visibility groups; not your own; not twice;
+  // and your pickup must sit within the group's route corridor so one
+  // stranger can't drag the whole car off-route.
+  app.post('/api/rides/open-groups/:groupId/join', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { pickupLocation } = req.body;
+      if (!pickupLocation || typeof pickupLocation.lat !== "number" || typeof pickupLocation.lng !== "number") {
+        return res.status(400).json({ message: "Your pickup location is required" });
+      }
+
+      const group = await storage.getRideGroupById(req.params.groupId);
+      if (!group || group.groupType !== "shared_schedule") {
+        return res.status(404).json({ message: "Ride group not found" });
+      }
+      if ((group as any).visibility !== "open") {
+        return res.status(403).json({ message: "This group is invite-only — ask the organizer for their code." });
+      }
+      if (group.organizerId === userId) {
+        return res.status(400).json({ message: "This is your own group." });
+      }
+      const existingRides = await storage.getRidesInGroup(group.id);
+      if (existingRides.some((r) => r.riderId === userId && r.status !== "cancelled")) {
+        return res.status(409).json({ message: "You already have a seat in this group." });
+      }
+
+      const dest = group.sharedDestination as { lat: number; lng: number; address: string } | null;
+      if (!dest) return res.status(400).json({ message: "This group can't accept open joins." });
+
+      // Corridor check: pickup must be near the organizer-pickup → destination
+      // line. The organizer's pickup is read server-side only; it is never
+      // exposed in the listing.
+      const organizerRide = existingRides.find((r) => r.riderId === group.organizerId && r.status !== "cancelled");
+      const organizerPickup = organizerRide?.pickupLocation as { lat: number; lng: number } | undefined;
+      if (organizerPickup) {
+        const detourMiles = distanceToCorridorMiles(pickupLocation, organizerPickup, dest);
+        if (detourMiles > OPEN_GROUP_CORRIDOR_MILES) {
+          return res.status(400).json({
+            message: `Your pickup is ${detourMiles.toFixed(1)} mi off this ride's route — too far for the group. Try a group closer to you, or schedule your own ride.`,
+          });
+        }
+      }
+
+      const result = await joinSharedGroupAsRider(group, userId, pickupLocation, dest);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+
+      await logRideAudit({
+        rideId: result.ride.id,
+        event: "open_group_joined",
+        actorId: userId,
+        details: { groupId: group.id, organizerId: group.organizerId },
+      });
+
+      // Tell the organizer (and any joined riders) someone new is aboard —
+      // and that the discount is now locked in.
+      for (const r of existingRides) {
+        if (r.status === "cancelled") continue;
+        deliverUserNotification(r.riderId, {
+          type: "open-group-joined",
+          title: "A Coworker Joined Your Ride! 🎉",
+          body: "Another worker heading your way took a seat — everyone's fare is now 30% off.",
+          tag: `group-${group.id}`, url: "/", data: { groupId: group.id },
+        }).catch(console.error);
+      }
+
+      res.json({ ...result.ride, discountApplied: true });
+    } catch (error) {
+      console.error("Error joining open group:", error);
+      res.status(500).json({ message: "Failed to join this ride" });
     }
   });
 

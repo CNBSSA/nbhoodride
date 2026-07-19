@@ -3,10 +3,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Switch } from "@/components/ui/switch";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { parseBookingErrorMessage } from "@shared/userFacingCopy";
 import { useToast } from "@/hooks/use-toast";
-import { X, Copy, CheckCircle, Users, Loader2, DollarSign, Shield, Star, Share2, Calendar as CalendarIcon, Clock } from "lucide-react";
+import { X, Copy, CheckCircle, Users, Loader2, DollarSign, Shield, Star, Share2, Calendar as CalendarIcon, Clock, MapPin } from "lucide-react";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { Calendar } from "@/components/ui/calendar";
@@ -56,9 +58,47 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
   const [scheduledPeriod, setScheduledPeriod] = useState<"AM" | "PM">("PM");
   // Coordinates resolved when the rider picks a destination from autocomplete.
   const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
+  // Publish the group so other workers heading the same way can take a seat.
+  // Default ON — a fuller car means everyone saves and drivers claim faster.
+  const [openToOthers, setOpenToOthers] = useState(true);
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  // Rides other workers are organizing right now — join one instead of
+  // starting your own. Privacy-minimal listing (no pickup points).
+  interface OpenGroup {
+    groupId: string;
+    destination: { address: string; lat: number; lng: number } | null;
+    scheduledAt: string | null;
+    seatsLeft: number;
+    riders: number;
+    discountActive: boolean;
+    organizer: { firstName: string | null; lastInitial: string; rating: string | null } | null;
+  }
+  const { data: openGroupsData } = useQuery<{ groups: OpenGroup[] }>({
+    queryKey: ["/api/rides/open-groups"],
+    enabled: isOpen && step === 1,
+  });
+  const openGroups = openGroupsData?.groups ?? [];
+
+  const joinOpenGroupMutation = useMutation({
+    mutationFn: async (groupId: string) => {
+      const res = await apiRequest("POST", `/api/rides/open-groups/${groupId}/join`, {
+        pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: userLocation.address },
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/rides/scheduled"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rides/open-groups"] });
+      toast({ title: "You're In! 🎉", description: "Seat taken — everyone's fare is now 30% off. Your ride shows under Upcoming." });
+      onClose();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Couldn't Join", description: parseBookingErrorMessage(err.message), variant: "destructive" });
+    },
+  });
 
   useEffect(() => {
     if (!isOpen) {
@@ -74,6 +114,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
       setScheduledHour("11");
       setScheduledMinute("30");
       setScheduledPeriod("PM");
+      setOpenToOthers(true);
     }
   }, [isOpen, userLocation]);
 
@@ -141,6 +182,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
       paymentMethod: "card",
       rideType: "shared_schedule",
       scheduledAt,
+      visibility: openToOthers ? "open" : "code",
     });
   };
 
@@ -200,6 +242,53 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
           {/* Step 1 — Route */}
           {step === 1 && (
             <div className="space-y-3">
+              {/* Rides other workers are organizing — join one instead of
+                  starting your own. Listing shows the shared destination,
+                  time, seats, and organizer name only — never pickups. */}
+              {openGroups.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-bold text-purple-700 uppercase tracking-wide flex items-center gap-1">
+                    <Users className="w-3.5 h-3.5" /> Rides being organized near you
+                  </p>
+                  {openGroups.slice(0, 3).map((g) => (
+                    <div key={g.groupId} className="border border-purple-200 bg-purple-50/60 rounded-xl p-3" data-testid={`open-group-${g.groupId}`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold truncate flex items-center gap-1">
+                            <MapPin className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                            {g.destination?.address}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {g.scheduledAt ? format(new Date(g.scheduledAt), "EEE MMM d 'at' h:mm a") : ""}
+                            {" · "}{g.riders} rider{g.riders === 1 ? "" : "s"} · {g.seatsLeft} seat{g.seatsLeft === 1 ? "" : "s"} left
+                          </p>
+                          {g.organizer && (
+                            <p className="text-[11px] text-gray-400">
+                              Organized by {g.organizer.firstName} {g.organizer.lastInitial}.
+                              {" "}<Star className="w-3 h-3 inline text-yellow-500 fill-yellow-500" /> {parseFloat(g.organizer.rating || "5").toFixed(1)}
+                            </p>
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          className="bg-purple-600 hover:bg-purple-700 shrink-0"
+                          disabled={joinOpenGroupMutation.isPending}
+                          onClick={() => joinOpenGroupMutation.mutate(g.groupId)}
+                          data-testid={`button-join-open-${g.groupId}`}
+                        >
+                          {joinOpenGroupMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Join · 30% off"}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2 py-1">
+                    <div className="flex-1 h-px bg-gray-200" />
+                    <span className="text-[11px] text-gray-400 font-medium">or organize your own</span>
+                    <div className="flex-1 h-px bg-gray-200" />
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="text-xs font-medium text-gray-600 mb-1 block">Your Pickup</label>
                 <Input value={pickupAddress} onChange={(e) => setPickupAddress(e.target.value)} placeholder="Pickup address" data-testid="input-shared-pickup" />
@@ -263,6 +352,20 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
                     </p>
                   )}
                 </div>
+              </div>
+
+              {/* Open-to-others toggle: fills empty seats with workers heading
+                  the same way. Only coarse info is ever published. */}
+              <div className="flex items-center justify-between border rounded-xl p-3">
+                <div className="pr-3">
+                  <p className="text-sm font-semibold">Open to other workers nearby</p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    {openToOthers
+                      ? "Workers heading your way can take an empty seat — a fuller car means everyone saves. Only your destination, time, and first name are shown."
+                      : "Invite-code only — just the people you share your code with can join."}
+                  </p>
+                </div>
+                <Switch checked={openToOthers} onCheckedChange={setOpenToOthers} data-testid="switch-open-to-others" />
               </div>
 
               <Card className="bg-purple-50 border-purple-200">
@@ -365,6 +468,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
 
               <Card className="bg-blue-50 border-blue-200">
                 <CardContent className="p-3 space-y-1 text-xs text-blue-700">
+                  {openToOthers && <p>✓ Your ride is also listed in-app — nearby workers heading your way can grab a seat</p>}
                   <p>✓ Code is open until your driver accepts</p>
                   <p>✓ Up to 2 friends can join with their own pickup + destination</p>
                   <p>✓ Everyone gets 30% off the moment 1 friend joins</p>
