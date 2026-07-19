@@ -3068,6 +3068,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return near ? `Near ${near}` : `${latN.toFixed(4)}, ${lngN.toFixed(4)}`;
     };
     try {
+      // Prefer Mapbox when configured — same provider hierarchy as search
+      // and routing. (Previously reverse was Nominatim-only, so adding
+      // MAPBOX_TOKEN fixed search but left pickup addresses on the throttled
+      // free provider.) Falls through to Nominatim, then the offline label.
+      const mapboxToken = process.env.MAPBOX_TOKEN;
+      if (mapboxToken) {
+        try {
+          const mb = await fetchGeoWithTimeout(
+            `https://api.mapbox.com/geocoding/v5/mapbox.places/${lngN},${latN}.json`
+            + `?access_token=${mapboxToken}&types=address,poi&limit=1`
+          );
+          if (mb.ok) {
+            const mbData = await mb.json() as any;
+            const place = mbData?.features?.[0]?.place_name;
+            if (place) {
+              // Trim ", United States" — every address here is domestic.
+              const address = String(place).replace(/, United States$/, "");
+              return res.json({ address, lat: latN, lng: lngN });
+            }
+          }
+        } catch (mbErr) {
+          console.warn("Mapbox reverse failed, falling back to Nominatim:", mbErr);
+        }
+      }
+
       const response = await fetchGeoWithTimeout(
         `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=16&addressdetails=1`,
         { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } }
