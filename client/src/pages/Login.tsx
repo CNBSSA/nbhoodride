@@ -15,6 +15,9 @@ export default function Login() {
   const [resending, setResending] = useState(false);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  // Set by the global 401 handler when a session dies mid-use (see queryClient).
+  const sessionExpired = typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('expired') === '1';
 
   const handleResendVerification = async () => {
     if (!verificationRequired) return;
@@ -111,6 +114,13 @@ export default function Login() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {sessionExpired && !verificationRequired && (
+            <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm dark:border-blue-900 dark:bg-blue-950" data-testid="banner-session-expired">
+              <p className="text-blue-900 dark:text-blue-200">
+                Your session expired. Please log in again to continue.
+              </p>
+            </div>
+          )}
           {verificationRequired && (
             <div className="mb-4 rounded-md border border-orange-200 bg-orange-50 p-3 text-sm dark:border-orange-900 dark:bg-orange-950" data-testid="banner-verify-email">
               <p className="text-orange-900 dark:text-orange-200">
