@@ -33,6 +33,7 @@ import { deliverUserNotification } from "./notificationService";
 import { retrieveKnowledgeContext, syncKnowledgeIndex } from "./ragService";
 import { anonymizeChatExcerpt, buildFaqExcerptBlock } from "@shared/faqExcerpts";
 import { mapNominatimResults, mapMapboxResults } from "@shared/geocodeSuggest";
+import { registerPublicPages } from "./publicPages";
 import {
   parseMobilityUtterance,
   recordMobilityIntent,
@@ -247,6 +248,10 @@ async function notifyRideMessageRecipient(
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Public, no-JavaScript pages (business description for crawlers / reviewers).
+  // Mounted first so they win over the SPA catch-all added later in serveStatic.
+  registerPublicPages(app);
+
   // Rate limiting
   // Mounted on EVERY /api/* route, so this is the budget that dashboard
   // polling (pending-rides, active-rides, scheduled-rides, etc., every

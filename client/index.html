@@ -40,6 +40,29 @@
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <!-- Crawler / no-JavaScript fallback. The app is a client-rendered SPA;
+           this block ensures automated reviewers and search engines can still
+           read a description of the business without executing JavaScript. -->
+      <main style="max-width:640px;margin:40px auto;padding:0 20px;font-family:system-ui,sans-serif;line-height:1.6;">
+        <h1>PG Ride — community-owned rideshare</h1>
+        <p>
+          PG Ride is a community rideshare marketplace. Riders book on-demand or
+          scheduled local trips and are matched with background-checked
+          neighborhood drivers. Pickups originate in Maryland; drop-offs are
+          available in Maryland, Washington DC, and northern Virginia. Fares are
+          transparent with no surge pricing, and card payments are processed
+          through Stripe.
+        </p>
+        <p>
+          This app requires JavaScript. For a full description of our business,
+          visit <a href="/about">/about</a>. See our
+          <a href="/terms">Terms of Service</a> and
+          <a href="/privacy">Privacy Policy</a>.
+        </p>
+        <p><a href="/about">Learn more about PG Ride &rarr;</a></p>
+      </main>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
