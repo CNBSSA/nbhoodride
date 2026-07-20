@@ -181,6 +181,26 @@ function fetchGeoWithTimeout(url: string, init: RequestInit = {}): Promise<Respo
   return fetch(url, { ...init, signal: AbortSignal.timeout(GEO_FETCH_TIMEOUT_MS) });
 }
 
+// OpenStreetMap/Nominatim address+POI search, biased to the PG County / DMV
+// viewbox. Used both as the sole provider when no MAPBOX_TOKEN is set and as a
+// fallback when Mapbox's legacy geocoder returns no POI match (schools, etc.).
+// Fails soft to [] so a provider outage never blocks the booking flow.
+async function nominatimSuggest(
+  q: string,
+  limit: number,
+): Promise<Array<{ label: string; lat: number; lng: number }>> {
+  const url = `https://nominatim.openstreetmap.org/search?format=json`
+    + `&q=${encodeURIComponent(q)}&limit=${limit}&countrycodes=us&addressdetails=1`
+    + `&viewbox=-77.6,39.4,-76.0,38.4&bounded=0`;
+  try {
+    const r = await fetchGeoWithTimeout(url, { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } });
+    if (r.ok) return mapNominatimResults(await r.json());
+  } catch (err) {
+    console.warn("Nominatim suggest unreachable:", err);
+  }
+  return [];
+}
+
 function isValidRideTransition(from: string, to: string): boolean {
   return VALID_RIDE_TRANSITIONS[from]?.includes(to) ?? false;
 }
@@ -2969,13 +2989,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           + `&proximity=-76.85,38.83&types=address,poi,place,neighborhood`;
         const r = await fetchGeoWithTimeout(url);
         if (r.ok) suggestions = mapMapboxResults(await r.json());
+        // Mapbox's legacy places geocoder has thin POI coverage — schools,
+        // churches, small businesses often return nothing. When it whiffs,
+        // fall back to OpenStreetMap/Nominatim, whose POI data is far richer,
+        // so a query like "Ernest Everett Just Middle School" still resolves
+        // instead of dead-ending on "no matching address".
+        if (suggestions.length === 0) {
+          suggestions = await nominatimSuggest(q, limit);
+        }
       } else {
-        // Nominatim fallback — server-side with required UA + viewbox bias.
-        const url = `https://nominatim.openstreetmap.org/search?format=json`
-          + `&q=${encodeURIComponent(q)}&limit=${limit}&countrycodes=us&addressdetails=1`
-          + `&viewbox=-77.6,39.4,-76.0,38.4&bounded=0`;
-        const r = await fetchGeoWithTimeout(url, { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } });
-        if (r.ok) suggestions = mapNominatimResults(await r.json());
+        // No Mapbox token — Nominatim is the primary provider.
+        suggestions = await nominatimSuggest(q, limit);
       }
 
       // Only cache real results — caching a provider-outage [] would keep
