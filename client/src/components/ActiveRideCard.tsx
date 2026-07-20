@@ -380,42 +380,49 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
               </div>
             </div>
 
-            {/* Real-time Stats */}
+            {/* Real-time Stats.
+                The stats poll runs every 10s while driving, so a single dropped
+                request (a tunnel, a dead-zone) must NOT wipe the numbers. React
+                Query keeps the last successful `rideStats` even when a later
+                refetch errors — so prefer it whenever present, show "..." only
+                on the very first load, and a calm "—" (not an alarming red
+                "Error") if nothing has loaded yet. A genuine auth failure is
+                handled globally by redirecting to re-login, not shown here. */}
             <div className="grid grid-cols-3 gap-2">
               <div className="bg-muted p-3 rounded-lg text-center">
                 <p className="text-xs text-muted-foreground mb-1">Distance</p>
-                {isLoadingStats ? (
-                  <p className="text-lg font-bold">...</p>
-                ) : isErrorStats ? (
-                  <p className="text-lg font-bold text-destructive">Error</p>
-                ) : (
+                {rideStats ? (
                   <p className="text-lg font-bold" data-testid={`text-distance-${ride.id}`}>
-                    {rideStats?.distance.toFixed(2) || '0.00'} mi
+                    {rideStats.distance.toFixed(2)} mi
                   </p>
+                ) : isLoadingStats ? (
+                  <p className="text-lg font-bold">...</p>
+                ) : (
+                  <p className="text-lg font-bold text-muted-foreground" data-testid={`text-distance-${ride.id}`}>—</p>
                 )}
               </div>
               <div className="bg-muted p-3 rounded-lg text-center">
                 <p className="text-xs text-muted-foreground mb-1">Duration</p>
-                {isLoadingStats ? (
-                  <p className="text-lg font-bold">...</p>
-                ) : isErrorStats ? (
-                  <p className="text-lg font-bold text-destructive">Error</p>
-                ) : (
+                {rideStats ? (
                   <p className="text-lg font-bold" data-testid={`text-duration-${ride.id}`}>
-                    {rideStats?.duration || 0} min
+                    {rideStats.duration} min
                   </p>
+                ) : isLoadingStats ? (
+                  <p className="text-lg font-bold">...</p>
+                ) : (
+                  <p className="text-lg font-bold text-muted-foreground" data-testid={`text-duration-${ride.id}`}>—</p>
                 )}
               </div>
               <div className="bg-muted p-3 rounded-lg text-center">
                 <p className="text-xs text-muted-foreground mb-1">Current Fare</p>
-                {isLoadingStats ? (
-                  <p className="text-lg font-bold">...</p>
-                ) : isErrorStats ? (
-                  <p className="text-lg font-bold text-destructive">Error</p>
-                ) : (
+                {rideStats ? (
                   <p className="text-lg font-bold text-green-600" data-testid={`text-current-fare-${ride.id}`}>
-                    ${rideStats?.estimatedFare.toFixed(2) || '5.00'}
+                    ${rideStats.estimatedFare.toFixed(2)}
                   </p>
+                ) : isLoadingStats ? (
+                  <p className="text-lg font-bold">...</p>
+                ) : (
+                  <p className="text-lg font-bold text-muted-foreground" data-testid={`text-current-fare-${ride.id}`}>—</p>
                 )}
               </div>
             </div>
