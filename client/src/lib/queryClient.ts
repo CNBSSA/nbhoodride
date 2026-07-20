@@ -1,4 +1,5 @@
-import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { QueryClient, QueryCache, MutationCache, QueryFunction } from "@tanstack/react-query";
+import { isUnauthorizedError } from "./authUtils";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -69,7 +70,35 @@ export const getQueryFn: <T>(options: {
     return await res.json();
   };
 
+// When any query or mutation fails with a 401, the session has died on the
+// server (expired cookie, logged out elsewhere) while the SPA may still be
+// showing cached data (staleTime: Infinity). Rather than leave the user staring
+// at a cryptic "Unauthorized" toast on a page that looks logged in, send them to
+// re-authenticate. A hard navigation also discards the stale in-memory cache.
+//
+// Guards:
+// - Only on the browser, and never when already on an auth page (prevents loops;
+//   the login page's own useAuth 401 is handled with on401:"returnNull" and never
+//   reaches here anyway).
+// - `?expired=1` lets the login page explain why they landed there.
+let redirectingForAuth = false;
+function handleAuthError(error: unknown) {
+  if (typeof window === "undefined") return;
+  if (!(error instanceof Error) || !isUnauthorizedError(error)) return;
+  const path = window.location.pathname;
+  if (path.startsWith("/login") || path.startsWith("/signup") ||
+      path.startsWith("/forgot-password") || path.startsWith("/reset-password") ||
+      path.startsWith("/verify-email")) {
+    return;
+  }
+  if (redirectingForAuth) return;
+  redirectingForAuth = true;
+  window.location.href = "/login?expired=1";
+}
+
 export const queryClient = new QueryClient({
+  queryCache: new QueryCache({ onError: handleAuthError }),
+  mutationCache: new MutationCache({ onError: handleAuthError }),
   defaultOptions: {
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
