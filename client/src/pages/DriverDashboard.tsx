@@ -19,7 +19,7 @@ import VehicleEditDialog from "@/components/VehicleEditDialog";
 import { NotificationBell } from "@/components/NotificationBell";
 import { Link } from "wouter";
 import { format } from "date-fns";
-import { BarChart3, Car, ChevronRight, CalendarClock, CheckCircle2, Clock, MapPin, Banknote, Bus, Users } from "lucide-react";
+import { BarChart3, Car, ChevronRight, ChevronDown, CalendarClock, CheckCircle2, Clock, MapPin, Banknote, Bus, Users, Wallet, Power, Sparkles } from "lucide-react";
 import PayoutModal from "@/components/PayoutModal";
 import { LostFoundDriverCard } from "@/components/LostFoundDriverCard";
 import { DriverStatusBanner } from "@/components/DriverStatusBanner";
@@ -30,6 +30,7 @@ import { parseRideMessageWsEvent } from "@shared/rideChat";
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
   const [showPayoutModal, setShowPayoutModal] = useState(false);
+  const [showEarnings, setShowEarnings] = useState(false);
   const [showVehicleEdit, setShowVehicleEdit] = useState(false);
   const [showCountySheet, setShowCountySheet] = useState(false);
   const [incomingRideMessages, setIncomingRideMessages] = useState<Record<string, RideMessagePayload>>({});
@@ -526,43 +527,55 @@ export default function DriverDashboard() {
       />
 
       <main className="space-y-4 p-4">
-        {/* Status Toggle */}
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">Driver Status</h2>
-                <p className="text-sm text-muted-foreground">Toggle to start accepting rides</p>
+        {/* Go-Online hero — action first. The driver's whole job on open is to
+            go online and catch requests; money reports live behind a tap below. */}
+        <Card className={`border-0 text-white shadow-lg ${isOnline ? 'bg-gradient-to-br from-green-600 to-emerald-700' : 'bg-gradient-to-br from-primary to-purple-900'}`}>
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-12 w-12 rounded-full bg-white/15 flex items-center justify-center shrink-0">
+                  <Power className="h-6 w-6" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-xl font-bold leading-tight">{isOnline ? "You're online" : "You're offline"}</h2>
+                  <p className="text-sm text-white/80 truncate">
+                    {isOnline ? "Waiting for ride requests…" : "Go online to start earning"}
+                  </p>
+                </div>
               </div>
-              <div className="flex items-center space-x-3">
+              <div className="rounded-full bg-white/15 p-1 shrink-0">
                 <Switch
                   checked={isOnline}
                   onCheckedChange={handleToggleStatus}
                   disabled={toggleStatusMutation.isPending || !driverApproved}
                   data-testid="switch-driver-status"
                 />
-                <span className={`font-semibold ${isOnline ? 'text-secondary' : 'text-destructive'}`}>
-                  {isOnline ? 'Online' : 'Offline'}
-                </span>
               </div>
             </div>
             {locationError && (
-              <p className="text-sm text-destructive mt-2" data-testid="driver-location-error">
+              <p className="text-sm text-white/90 mt-3 bg-white/10 rounded-md p-2" data-testid="driver-location-error">
                 Location unavailable: {locationError}. Enable location services to receive nearby requests.
               </p>
             )}
             {/* Today's active counties */}
             {isOnline && todayCounties.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-gray-100 flex items-start gap-2">
-                <MapPin className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
+              <div className="mt-4 pt-3 border-t border-white/20 flex items-start gap-2">
+                <MapPin className="w-4 h-4 text-white/80 mt-0.5 shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-gray-600 mb-1">
+                  <p className="text-xs font-medium text-white/90 mb-0.5">
                     Accepting rides in {todayCounties.length === 25 ? "all Maryland counties" : `${todayCounties.length} ${todayCounties.length === 1 ? "county" : "counties"}`}
                   </p>
-                  <p className="text-xs text-gray-400 truncate">
+                  <p className="text-xs text-white/60 truncate">
                     {todayCounties.slice(0, 5).join(", ")}{todayCounties.length > 5 ? ` +${todayCounties.length - 5} more` : ""}
                   </p>
                 </div>
+              </div>
+            )}
+            {/* When idle & offline, reinforce our identity instead of a wall of numbers. */}
+            {!isOnline && (
+              <div className="mt-4 pt-3 border-t border-white/20 flex items-center gap-2 text-white/85">
+                <Sparkles className="w-4 h-4 shrink-0" />
+                <p className="text-xs">Every trip builds your ownership stake — you drive <span className="font-semibold">and</span> own a piece.</p>
               </div>
             )}
           </CardContent>
@@ -774,6 +787,33 @@ export default function DriverDashboard() {
           </div>
         )}
 
+        {/* Earnings & Wallet — the financial "report" is tucked behind a tap.
+            A driver opens this when they want the numbers; it doesn't greet
+            them with a wall of dollar figures every time they open the app. */}
+        <Card>
+          <button
+            type="button"
+            onClick={() => setShowEarnings((v) => !v)}
+            className="w-full p-4 flex items-center justify-between"
+            data-testid="button-toggle-earnings"
+          >
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-green-100 dark:bg-green-900 flex items-center justify-center">
+                <Wallet className="h-5 w-5 text-green-600 dark:text-green-400" />
+              </div>
+              <div className="text-left">
+                <p className="font-semibold">Earnings &amp; Wallet</p>
+                <p className="text-xs text-muted-foreground">
+                  {showEarnings ? "Tap to hide" : "Tap to view earnings, wallet & payouts"}
+                </p>
+              </div>
+            </div>
+            <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform ${showEarnings ? 'rotate-180' : ''}`} />
+          </button>
+        </Card>
+
+        {showEarnings && (
+        <div className="space-y-4">
         {/* Earnings Dashboard */}
         <div className="grid grid-cols-2 gap-4">
           <Card>
@@ -870,6 +910,8 @@ export default function DriverDashboard() {
             )}
           </CardContent>
         </Card>
+        </div>
+        )}
 
         {/* Rate Card */}
         <Card>
