@@ -2678,29 +2678,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const { actualFare, tipAmount } = completeRideSchema.parse(req.body);
 
-      const ride = await storage.completeRide(rideId, userId, actualFare);
+      let ride: Ride;
+      try {
+        ride = await storage.completeRide(rideId, userId, actualFare);
+      } catch (err) {
+        // Idempotency: a prior attempt may have marked the ride completed but
+        // then failed the HTTP response on a post-completion step (settlement,
+        // etc). On retry, completeRide throws "Ride cannot be completed. Current
+        // status: completed". Treat an already-completed ride owned by this
+        // driver as success so the driver is never trapped on a finished trip.
+        const existing = await storage.getRide(rideId);
+        if (existing && existing.status === "completed" && existing.driverId === userId) {
+          return res.json(existing);
+        }
+        throw err;
+      }
 
       if (ride.riderId && ride.driverId) {
         recordRideTrustEdge(storage, ride.riderId, ride.driverId).catch(console.error);
         allocateGreenBonusForRide(storage, ride.driverId, rideId).catch(console.error);
       }
 
+      // The ride is now marked completed in the database. EVERYTHING below is
+      // best-effort: a driver must always be able to close a finished trip, so
+      // no post-completion step (audit, payment settlement, hours, receipts) may
+      // fail the request. Otherwise a settlement error (e.g. Stripe not wired
+      // up, or an uncapturable card) leaves the ride completed server-side while
+      // the driver sees "Failed to Complete Ride" and gets stuck — retrying then
+      // hits "Ride cannot be completed. Current status: completed" forever.
+
       // ── Audit: ride completed ──
-      await logRideAudit({
-        rideId,
-        event: "ride_completed",
-        actorId: userId,
-        details: {
-          riderId: ride.riderId,
-          actualFare: ride.actualFare,
-          tipAmount,
-          driverTraveledDistance: ride.driverTraveledDistance,
-          driverTraveledTime: ride.driverTraveledTime,
-        },
-      });
-      
+      try {
+        await logRideAudit({
+          rideId,
+          event: "ride_completed",
+          actorId: userId,
+          details: {
+            riderId: ride.riderId,
+            actualFare: ride.actualFare,
+            tipAmount,
+            driverTraveledDistance: ride.driverTraveledDistance,
+            driverTraveledTime: ride.driverTraveledTime,
+          },
+        });
+      } catch (auditErr) {
+        console.error(`[complete] audit log failed for ride ${rideId}:`, auditErr);
+      }
+
       // If ride uses card payment, settle against the auth taken at accept time.
-      await settleCardPaymentForCompletedRide(ride, actualFare, tipAmount);
+      // Settlement is decoupled from completion: if it fails (Stripe down/not
+      // configured, uncapturable auth), the trip still closes and the failure is
+      // logged loudly for manual reconciliation — the driver is never blocked.
+      try {
+        await settleCardPaymentForCompletedRide(ride, actualFare, tipAmount);
+      } catch (settleErr) {
+        console.error(`[complete] PAYMENT SETTLEMENT FAILED for ride ${rideId} — ride completed, needs manual reconciliation:`, settleErr);
+      }
       
       // Track driver hours for ownership qualification
       if (ride.startedAt && ride.driverId) {
