@@ -175,7 +175,7 @@ function DashboardOverview() {
     { label: "Total Drivers", value: stats?.totalDrivers || 0, icon: Car, color: "text-green-600" },
     { label: "Online Drivers", value: stats?.onlineDrivers || 0, icon: Activity, color: "text-emerald-600" },
     { label: "Active Rides", value: stats?.activeRides || 0, icon: MapPin, color: "text-orange-600" },
-    { label: "Rides Today", value: stats?.completedRidesToday || 0, icon: CheckCircle, color: "text-purple-600" },
+    { label: "Rides Today", value: stats?.completedRidesToday || 0, icon: CheckCircle, color: "text-blue-600" },
     { label: "Revenue Today", value: `$${(stats?.revenueToday || 0).toFixed(2)}`, icon: DollarSign, color: "text-green-700" },
     { label: "Revenue This Month", value: `$${(stats?.revenueThisMonth || 0).toFixed(2)}`, icon: TrendingUp, color: "text-blue-700" },
     { label: "Pending Disputes", value: stats?.pendingDisputes || 0, icon: AlertTriangle, color: "text-red-600" },
@@ -474,11 +474,11 @@ function UsersPanel() {
       <h3 className="text-lg font-semibold mb-3 flex items-center gap-2"><CheckCircle className="w-5 h-5 text-green-600" /> Active Users ({approvedUsers.length})</h3>
       <div className="space-y-3">
         {approvedUsers.map((u: any) => (
-          <Card key={u.id} className={`border-l-4 ${u.isSuspended ? 'border-l-red-400' : u.isSuperAdmin ? 'border-l-purple-400' : u.isAdmin ? 'border-l-indigo-400' : u.isDriver ? 'border-l-blue-400' : 'border-l-green-400'}`} data-testid={`user-card-${u.id}`}>
+          <Card key={u.id} className={`border-l-4 ${u.isSuspended ? 'border-l-red-400' : u.isSuperAdmin ? 'border-l-blue-400' : u.isAdmin ? 'border-l-indigo-400' : u.isDriver ? 'border-l-blue-400' : 'border-l-green-400'}`} data-testid={`user-card-${u.id}`}>
             <CardContent className="pt-4 flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-3 flex-1 min-w-[200px]">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${u.isSuspended ? 'bg-red-100 dark:bg-red-900/30' : u.isSuperAdmin ? 'bg-purple-100 dark:bg-purple-900/30' : u.isAdmin ? 'bg-indigo-100 dark:bg-indigo-900/30' : u.isDriver ? 'bg-blue-100 dark:bg-blue-900/30' : 'bg-green-100 dark:bg-green-900/30'}`}>
-                  <span className={`font-bold text-sm ${u.isSuspended ? 'text-red-600' : u.isSuperAdmin ? 'text-purple-600' : u.isAdmin ? 'text-indigo-600' : u.isDriver ? 'text-blue-600' : 'text-green-600'}`}>{u.firstName?.[0]}{u.lastName?.[0]}</span>
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${u.isSuspended ? 'bg-red-100 dark:bg-red-900/30' : u.isSuperAdmin ? 'bg-blue-100 dark:bg-blue-900/30' : u.isAdmin ? 'bg-indigo-100 dark:bg-indigo-900/30' : u.isDriver ? 'bg-blue-100 dark:bg-blue-900/30' : 'bg-green-100 dark:bg-green-900/30'}`}>
+                  <span className={`font-bold text-sm ${u.isSuspended ? 'text-red-600' : u.isSuperAdmin ? 'text-blue-600' : u.isAdmin ? 'text-indigo-600' : u.isDriver ? 'text-blue-600' : 'text-green-600'}`}>{u.firstName?.[0]}{u.lastName?.[0]}</span>
                 </div>
                 <div>
                   <p className="font-semibold" data-testid={`user-name-${u.id}`}>{u.firstName} {u.lastName}</p>
@@ -486,7 +486,7 @@ function UsersPanel() {
                   {u.phone && <p className="text-xs text-muted-foreground">{u.phone}</p>}
                   <div className="flex gap-1 mt-1 flex-wrap">
                     {u.isSuperAdmin && (
-                      <Badge className="bg-purple-600 text-white text-xs" data-testid={`role-superadmin-${u.id}`}>
+                      <Badge className="bg-blue-600 text-white text-xs" data-testid={`role-superadmin-${u.id}`}>
                         <Shield className="w-3 h-3 mr-1" /> Super Admin
                       </Badge>
                     )}
@@ -629,7 +629,7 @@ function DriversPanel() {
           <Badge variant="outline" className="text-sm">{drivers.length} total</Badge>
           <Badge className="bg-orange-500 text-white text-sm">{pendingDrivers.length} pending</Badge>
           {backgroundCheckDrivers.length > 0 && (
-            <Badge className="bg-purple-600 text-white text-sm">{backgroundCheckDrivers.length} background check</Badge>
+            <Badge className="bg-blue-600 text-white text-sm">{backgroundCheckDrivers.length} background check</Badge>
           )}
           <Badge className="bg-green-500 text-white text-sm">{approvedDrivers.length} approved</Badge>
         </div>
@@ -737,7 +737,7 @@ function DriversPanel() {
       {filteredBackgroundCheck.length > 0 && (
         <>
           <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <Shield className="w-5 h-5 text-purple-600" /> Background check in progress ({filteredBackgroundCheck.length})
+            <Shield className="w-5 h-5 text-blue-600" /> Background check in progress ({filteredBackgroundCheck.length})
           </h3>
           <p className="text-sm text-muted-foreground mb-3">
             These drivers are waiting on Checkr or manual follow-up. They no longer appear under Pending — watch this section until approved or rejected.
@@ -747,12 +747,12 @@ function DriversPanel() {
           </p>
           <div className="space-y-3 mb-6">
             {filteredBackgroundCheck.map((d: any) => (
-              <Card key={d.id} className="border-l-4 border-l-purple-500" data-testid={`driver-bgcheck-${d.id}`}>
+              <Card key={d.id} className="border-l-4 border-l-blue-500" data-testid={`driver-bgcheck-${d.id}`}>
                 <CardContent className="pt-4 flex items-center justify-between flex-wrap gap-2">
                   <div>
                     <p className="font-semibold">{d.user?.firstName} {d.user?.lastName}</p>
                     <p className="text-sm text-muted-foreground">{d.user?.email}</p>
-                    <Badge className="bg-purple-600 text-white mt-1">Background check</Badge>
+                    <Badge className="bg-blue-600 text-white mt-1">Background check</Badge>
                   </div>
                   <Button size="sm" className="bg-green-600" onClick={() => updateDriver.mutate({ userId: d.userId, updates: { approvalStatus: "approved", isVerifiedNeighbor: true } })}>
                     Mark approved
@@ -1711,7 +1711,7 @@ function AnalyticsPanel() {
                   {aiFeedback?.helpful || 0} <ThumbsUp className="w-3 h-3 inline" /> / {aiFeedback?.notHelpful || 0} <ThumbsDown className="w-3 h-3 inline" />
                 </p>
               </div>
-              <Brain className="w-8 h-8 text-purple-600" />
+              <Brain className="w-8 h-8 text-blue-600" />
             </div>
           </CardContent>
         </Card>

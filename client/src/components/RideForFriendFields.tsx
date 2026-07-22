@@ -22,9 +22,9 @@ export function RideForFriendFields({
   onPassengerPhoneChange,
 }: RideForFriendFieldsProps) {
   return (
-    <div className="rounded-xl border border-purple-100 bg-purple-50/40 p-3 space-y-3" data-testid="ride-for-friend-fields">
+    <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3 space-y-3" data-testid="ride-for-friend-fields">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-sm font-medium text-purple-900">
+        <div className="flex items-center gap-2 text-sm font-medium text-blue-900">
           <Users className="w-4 h-4" />
           Ride for someone else
         </div>

@@ -167,7 +167,7 @@ export default function IncomingRideRequest({ ride, onAccept, onDecline }: Incom
               </span>
             )}
             {ride.rideType === "shared_schedule" && (
-              <span className="flex items-center gap-1 text-[10px] font-bold bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full" data-testid={`badge-shared-schedule-${ride.id}`}>
+              <span className="flex items-center gap-1 text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full" data-testid={`badge-shared-schedule-${ride.id}`}>
                 <Users className="w-3 h-3" />
                 Shared Schedule
               </span>
@@ -186,7 +186,7 @@ export default function IncomingRideRequest({ ride, onAccept, onDecline }: Incom
                 {ride.rider.firstName} {ride.rider.lastName?.[0]}.
               </h3>
               {ride.bookedForFriend && ride.passengerName && (
-                <p className="text-xs text-purple-700 font-medium flex items-center gap-1 mt-0.5">
+                <p className="text-xs text-blue-700 font-medium flex items-center gap-1 mt-0.5">
                   <Users className="w-3 h-3" />
                   {formatPassengerLabel(true, ride.passengerName, ride.rider.firstName)}
                 </p>

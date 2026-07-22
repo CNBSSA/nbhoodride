@@ -170,10 +170,10 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
                   data-testid="input-schedule-code"
                 />
               </div>
-              <Card className="bg-purple-50 border-purple-200">
+              <Card className="bg-blue-50 border-blue-200">
                 <CardContent className="p-3 flex items-start gap-2">
-                  <Users className="w-4 h-4 text-purple-600 flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-purple-700">Your friend booked a ride and shared a code. Enter it here and you'll each pay your own discounted fare — 30% off when you join!</p>
+                  <Users className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-blue-700">Your friend booked a ride and shared a code. Enter it here and you'll each pay your own discounted fare — 30% off when you join!</p>
                 </CardContent>
               </Card>
             </div>
@@ -217,7 +217,7 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
             <div className="space-y-4">
               <p className="text-sm font-semibold">Confirm Your Ride</p>
 
-              <Card className="bg-gradient-to-r from-green-50 to-purple-50 border-green-200">
+              <Card className="bg-gradient-to-r from-green-50 to-blue-50 border-green-200">
                 <CardContent className="p-4 text-center">
                   <p className="text-xs text-gray-500 mb-1">Your discounted fare</p>
                   <div className="flex items-center justify-center gap-2">
