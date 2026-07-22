@@ -95,7 +95,7 @@ export function RideReceiptModal({
               </div>
 
               {receipt.bookedForFriend && receipt.passengerName && (
-                <p className="text-xs bg-purple-50 text-purple-800 rounded-lg px-3 py-2">
+                <p className="text-xs bg-blue-50 text-blue-800 rounded-lg px-3 py-2">
                   Passenger: {receipt.passengerName}
                 </p>
               )}

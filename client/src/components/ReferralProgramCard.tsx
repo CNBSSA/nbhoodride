@@ -93,7 +93,7 @@ export function ReferralProgramCard() {
   return (
     <div className="space-y-4" data-testid="referral-program-card">
       <div className="flex items-start gap-2">
-        <Gift className="w-5 h-5 text-purple-600 mt-0.5" />
+        <Gift className="w-5 h-5 text-blue-600 mt-0.5" />
         <div>
           <p className="font-medium">Neighbor referrals</p>
           <p className="text-sm text-muted-foreground">

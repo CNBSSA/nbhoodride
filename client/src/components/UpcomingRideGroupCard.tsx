@@ -67,7 +67,7 @@ export function UpcomingRideGroupCard({ group, onConfirm, isConfirming }: Upcomi
         </div>
 
         {isGroup && (
-          <div className="flex items-center gap-1 text-xs font-semibold text-purple-700">
+          <div className="flex items-center gap-1 text-xs font-semibold text-blue-700">
             <Users className="w-3.5 h-3.5" />
             Coworker group · {rides.length} riders · pick up in this order
           </div>
@@ -78,7 +78,7 @@ export function UpcomingRideGroupCard({ group, onConfirm, isConfirming }: Upcomi
             <div key={ride.id} className="flex items-start gap-2 text-sm">
               {isGroup && (
                 <span
-                  className="w-5 h-5 rounded-full bg-purple-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0 mt-0.5"
+                  className="w-5 h-5 rounded-full bg-blue-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0 mt-0.5"
                   data-testid={`pickup-order-${ride.id}`}
                 >
                   {i + 1}
