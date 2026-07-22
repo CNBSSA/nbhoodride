@@ -16,7 +16,7 @@ interface RideMapViewProps {
    * geolocation itself (so it works even when a parent doesn't thread it in).
    */
   driver?: LatLng | null;
-  /** "pickup" tints the route blue; "destination" tints it purple. */
+  /** "pickup" tints the route PG blue; "destination" tints it green. */
   leg?: "pickup" | "destination";
   height?: string;
 }
@@ -55,7 +55,7 @@ export function RideMapView({
   }, [driver]);
 
   const driverLoc = driver ?? selfLoc;
-  const routeColor = leg === "pickup" ? "#2563eb" : "#7c3aed";
+  const routeColor = leg === "pickup" ? "#339AF0" : "#16a34a";
 
   const { route, loading } = useRoute(driverLoc, target, { enabled: !!driverLoc });
 

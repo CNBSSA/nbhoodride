@@ -54,7 +54,7 @@ export function DriverOnboardingChecklist() {
         ))}
       </ul>
       {approval === "background_check_pending" && (
-        <p className="text-xs text-purple-700 dark:text-purple-300">Background check in progress — we will email you.</p>
+        <p className="text-xs text-blue-700 dark:text-blue-300">Background check in progress — we will email you.</p>
       )}
     </div>
   );

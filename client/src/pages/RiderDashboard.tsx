@@ -737,7 +737,7 @@ export default function RiderDashboard() {
                 {activeRide.status === 'pending' && <><Loader2 className="w-4 h-4 text-orange-500 animate-spin" /><span className="text-sm font-semibold text-orange-600">Finding your driver...</span></>}
                 {activeRide.status === 'accepted' && <><Car className="w-4 h-4 text-blue-600" /><span className="text-sm font-semibold text-blue-600">Driver is on the way!</span></>}
                 {activeRide.status === 'driver_arriving' && <><Navigation className="w-4 h-4 text-green-600" /><span className="text-sm font-semibold text-green-600">Driver arriving!</span></>}
-                {activeRide.status === 'in_progress' && <><Route className="w-4 h-4 text-purple-600" /><span className="text-sm font-semibold text-purple-600">Ride in progress</span></>}
+                {activeRide.status === 'in_progress' && <><Route className="w-4 h-4 text-blue-600" /><span className="text-sm font-semibold text-blue-600">Ride in progress</span></>}
               </div>
               <div className="flex items-center gap-2">
                 {getDriverETA(activeRide) !== null && (
@@ -753,7 +753,7 @@ export default function RiderDashboard() {
               <span className="truncate">{activeRide.destinationLocation?.address || 'En route...'}</span>
             </div>
             {sharedGroup && (
-              <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-purple-700 bg-purple-50 dark:bg-purple-950/30 rounded-lg px-2 py-1.5">
+              <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 dark:bg-blue-950/30 rounded-lg px-2 py-1.5">
                 <Users className="w-3.5 h-3.5 flex-shrink-0" />
                 <span>Shared ride · {sharedGroup.totalRiders} riders</span>
                 {sharedGroup.discountAmount && (
@@ -972,7 +972,7 @@ export default function RiderDashboard() {
             <div className="flex gap-2 overflow-x-auto pb-0.5 -mx-4 px-4 scrollbar-none">
               <button
                 onClick={() => setIsSharedScheduleOpen(true)}
-                className="flex-shrink-0 flex items-center gap-1.5 bg-purple-50 text-purple-700 rounded-full pl-3 pr-3.5 py-2 text-xs font-semibold active:bg-purple-100 transition-colors whitespace-nowrap"
+                className="flex-shrink-0 flex items-center gap-1.5 bg-blue-50 text-blue-700 rounded-full pl-3 pr-3.5 py-2 text-xs font-semibold active:bg-blue-100 transition-colors whitespace-nowrap"
                 data-testid="button-shift-coworker-ride"
               >
                 <Users className="w-4 h-4" />

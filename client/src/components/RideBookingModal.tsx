@@ -392,12 +392,12 @@ export default function RideBookingModal({
           )}
 
           {/* Share My Ride toggle */}
-          <div className="flex items-center justify-between p-3 rounded-xl border-2 border-dashed border-purple-200 bg-purple-50 dark:bg-purple-950/20 dark:border-purple-800">
+          <div className="flex items-center justify-between p-3 rounded-xl border-2 border-dashed border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800">
             <div className="flex items-center gap-2">
-              <Users className="w-4 h-4 text-purple-600" />
+              <Users className="w-4 h-4 text-blue-600" />
               <div>
-                <p className="text-sm font-semibold text-purple-800 dark:text-purple-200">Share My Ride</p>
-                <p className="text-[10px] text-purple-600 dark:text-purple-400">Save 30% if matched with a co-rider</p>
+                <p className="text-sm font-semibold text-blue-800 dark:text-blue-200">Share My Ride</p>
+                <p className="text-[10px] text-blue-600 dark:text-blue-400">Save 30% if matched with a co-rider</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -494,7 +494,7 @@ export default function RideBookingModal({
             ref={confirmBtnRef}
             onClick={handleBookRide}
             disabled={bookRideMutation.isPending || !selectedDriver || !destinationAddress || calculateFareMutation.isPending}
-            className={`w-full h-14 text-base font-semibold rounded-xl shadow-lg ${wantsSharedRide ? 'bg-purple-600 hover:bg-purple-700' : ''}`}
+            className={`w-full h-14 text-base font-semibold rounded-xl shadow-lg ${wantsSharedRide ? 'bg-blue-600 hover:bg-blue-700' : ''}`}
             size="lg"
             data-testid="button-confirm-booking"
           >

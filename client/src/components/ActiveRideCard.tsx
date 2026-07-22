@@ -356,7 +356,7 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
       case 'in_progress':
         return (
           <div className="space-y-4">
-            <Badge variant="secondary" className="text-purple-600 bg-purple-50 dark:text-purple-400 dark:bg-purple-950">
+            <Badge variant="secondary" className="text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-950">
               <Clock className="w-3 h-3 mr-1" />
               In Progress
             </Badge>
@@ -437,7 +437,7 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
               <Button 
                 variant="outline"
                 onClick={() => openNavigation(ride.destinationLocation.lat, ride.destinationLocation.lng, ride.destinationLocation.address)}
-                className="w-full border-purple-200 text-purple-700 hover:bg-purple-50"
+                className="w-full border-blue-200 text-blue-700 hover:bg-blue-50"
                 data-testid={`button-navigate-destination-${ride.id}`}
               >
                 <ExternalLink className="w-4 h-4 mr-2" />
@@ -485,7 +485,7 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
                 Rating: {parseFloat(ride.rider.rating || "5.0").toFixed(1)} ⭐
               </p>
               {ride.bookedForFriend && ride.passengerName && (
-                <p className="text-xs text-purple-700 font-medium mt-1">
+                <p className="text-xs text-blue-700 font-medium mt-1">
                   {formatPassengerLabel(true, ride.passengerName, ride.rider.firstName)}
                 </p>
               )}

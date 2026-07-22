@@ -529,7 +529,7 @@ export default function DriverDashboard() {
       <main className="space-y-4 p-4">
         {/* Go-Online hero — action first. The driver's whole job on open is to
             go online and catch requests; money reports live behind a tap below. */}
-        <Card className={`border-0 text-white shadow-lg ${isOnline ? 'bg-gradient-to-br from-green-600 to-emerald-700' : 'bg-gradient-to-br from-primary to-purple-900'}`}>
+        <Card className={`border-0 text-white shadow-lg ${isOnline ? 'bg-gradient-to-br from-green-600 to-emerald-700' : 'bg-gradient-to-br from-primary to-blue-900'}`}>
           <CardContent className="p-5">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">

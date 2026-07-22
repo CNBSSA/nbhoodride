@@ -233,7 +233,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
         {step < 4 && (
           <div className="flex gap-1 px-4 pb-3 flex-shrink-0">
             {["Route", "Driver", "Confirm", "Code"].map((label, i) => (
-              <div key={label} className={`flex-1 h-1 rounded-full ${step > i ? "bg-purple-600" : step === i + 1 ? "bg-purple-400" : "bg-gray-200"}`} />
+              <div key={label} className={`flex-1 h-1 rounded-full ${step > i ? "bg-blue-600" : step === i + 1 ? "bg-blue-400" : "bg-gray-200"}`} />
             ))}
           </div>
         )}
@@ -247,15 +247,15 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
                   time, seats, and organizer name only — never pickups. */}
               {openGroups.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-xs font-bold text-purple-700 uppercase tracking-wide flex items-center gap-1">
+                  <p className="text-xs font-bold text-blue-700 uppercase tracking-wide flex items-center gap-1">
                     <Users className="w-3.5 h-3.5" /> Rides being organized near you
                   </p>
                   {openGroups.slice(0, 3).map((g) => (
-                    <div key={g.groupId} className="border border-purple-200 bg-purple-50/60 rounded-xl p-3" data-testid={`open-group-${g.groupId}`}>
+                    <div key={g.groupId} className="border border-blue-200 bg-blue-50/60 rounded-xl p-3" data-testid={`open-group-${g.groupId}`}>
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <p className="text-sm font-semibold truncate flex items-center gap-1">
-                            <MapPin className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                            <MapPin className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                             {g.destination?.address}
                           </p>
                           <p className="text-xs text-gray-500 mt-0.5">
@@ -271,7 +271,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
                         </div>
                         <Button
                           size="sm"
-                          className="bg-purple-600 hover:bg-purple-700 shrink-0"
+                          className="bg-blue-600 hover:bg-blue-700 shrink-0"
                           disabled={joinOpenGroupMutation.isPending}
                           onClick={() => joinOpenGroupMutation.mutate(g.groupId)}
                           data-testid={`button-join-open-${g.groupId}`}
@@ -368,12 +368,12 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
                 <Switch checked={openToOthers} onCheckedChange={setOpenToOthers} data-testid="switch-open-to-others" />
               </div>
 
-              <Card className="bg-purple-50 border-purple-200">
+              <Card className="bg-blue-50 border-blue-200">
                 <CardContent className="p-3 flex items-start gap-2">
-                  <Users className="w-4 h-4 text-purple-600 flex-shrink-0 mt-0.5" />
+                  <Users className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
                   <div>
-                    <p className="text-xs font-semibold text-purple-800">How this works</p>
-                    <p className="text-[11px] text-purple-700 mt-0.5">Built for warehouse & shift teams (Amazon, Target, FedEx, etc.). You get a PG-XXXXXX code — text it to your group. Each coworker books their own ride home; everyone saves 30% when at least two join.</p>
+                    <p className="text-xs font-semibold text-blue-800">How this works</p>
+                    <p className="text-[11px] text-blue-700 mt-0.5">Built for warehouse & shift teams (Amazon, Target, FedEx, etc.). You get a PG-XXXXXX code — text it to your group. Each coworker books their own ride home; everyone saves 30% when at least two join.</p>
                   </div>
                 </CardContent>
               </Card>
@@ -384,15 +384,15 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
           {step === 2 && (
             <div className="space-y-4">
               {fareEstimate && (
-                <Card className="bg-gradient-to-r from-purple-50 to-blue-50 border-purple-200">
+                <Card className="bg-gradient-to-r from-blue-50 to-blue-50 border-blue-200">
                   <CardContent className="p-3">
                     <div className="flex justify-between items-center">
                       <div>
                         <p className="text-xs text-gray-500">Your fare (full price)</p>
-                        <p className="text-2xl font-bold text-purple-700">${fareEstimate.toFixed(2)}</p>
+                        <p className="text-2xl font-bold text-blue-700">${fareEstimate.toFixed(2)}</p>
                         <p className="text-xs text-green-600 font-medium">Drops to ${(fareEstimate * 0.7).toFixed(2)} when 1 friend joins</p>
                       </div>
-                      <DollarSign className="w-8 h-8 text-purple-300" />
+                      <DollarSign className="w-8 h-8 text-blue-300" />
                     </div>
                     <p className="text-[10px] text-gray-400 mt-1 flex items-center gap-1">
                       <Shield className="w-3 h-3" /> No surge pricing
@@ -406,9 +406,9 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
                 <p className="text-xs text-gray-400 mb-2">Skip to open the ride to all available drivers</p>
                 <div className="space-y-2">
                   {drivers.map((driver) => (
-                    <label key={driver.id} className={`flex items-center p-3 rounded-xl cursor-pointer transition-all border-2 ${selectedDriver === driver.id ? "border-purple-400 bg-purple-50" : "border-transparent bg-white shadow-sm"}`} data-testid={`shared-driver-${driver.id}`}>
+                    <label key={driver.id} className={`flex items-center p-3 rounded-xl cursor-pointer transition-all border-2 ${selectedDriver === driver.id ? "border-blue-400 bg-blue-50" : "border-transparent bg-white shadow-sm"}`} data-testid={`shared-driver-${driver.id}`}>
                       <input type="radio" name="shared-driver" value={driver.id} checked={selectedDriver === driver.id} onChange={(e) => setSelectedDriver(e.target.value)} className="sr-only" />
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm mr-3 flex-shrink-0 ${selectedDriver === driver.id ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-600"}`}>
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm mr-3 flex-shrink-0 ${selectedDriver === driver.id ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"}`}>
                         {driver.name.split(" ").map((n) => n[0]).join("")}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -417,7 +417,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
                           <Star className="w-3 h-3 inline text-yellow-500 fill-yellow-500" /> {driver.rating.toFixed(1)} · {driver.estimatedTime}
                         </p>
                       </div>
-                      {selectedDriver === driver.id && <CheckCircle className="w-4 h-4 text-purple-600" />}
+                      {selectedDriver === driver.id && <CheckCircle className="w-4 h-4 text-blue-600" />}
                     </label>
                   ))}
                 </div>
@@ -433,7 +433,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
                 <div className="flex gap-2"><span className="font-medium w-24 flex-shrink-0">Pickup:</span><span className="truncate">{pickupAddress}</span></div>
                 <div className="flex gap-2"><span className="font-medium w-24 flex-shrink-0">Destination:</span><span className="truncate">{destinationAddress}</span></div>
                 <div className="flex gap-2"><span className="font-medium w-24 flex-shrink-0">Leave at:</span><span>{scheduledDate ? `${format(scheduledDate, "MMM d")} ${scheduledHour}:${scheduledMinute} ${scheduledPeriod}` : "—"}</span></div>
-                <div className="flex gap-2"><span className="font-medium w-24 flex-shrink-0">Your fare:</span><span className="font-bold text-purple-700">${fareEstimate?.toFixed(2)}</span></div>
+                <div className="flex gap-2"><span className="font-medium w-24 flex-shrink-0">Your fare:</span><span className="font-bold text-blue-700">${fareEstimate?.toFixed(2)}</span></div>
               </div>
 
               <Card className="bg-green-50 border-green-200">
@@ -454,15 +454,15 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
                 <p className="text-sm text-gray-500">Share this code with up to 2 friends</p>
               </div>
 
-              <div className="bg-purple-50 border-2 border-purple-300 rounded-2xl p-6 text-center">
-                <p className="text-xs font-medium text-purple-500 mb-1 uppercase tracking-widest">Your Schedule Code</p>
-                <p className="text-4xl font-black tracking-widest text-purple-800 font-mono">{generatedCode}</p>
+              <div className="bg-blue-50 border-2 border-blue-300 rounded-2xl p-6 text-center">
+                <p className="text-xs font-medium text-blue-500 mb-1 uppercase tracking-widest">Your Schedule Code</p>
+                <p className="text-4xl font-black tracking-widest text-blue-800 font-mono">{generatedCode}</p>
               </div>
 
-              <Button onClick={copyCode} variant="outline" className="w-full border-purple-300 text-purple-700 hover:bg-purple-50" data-testid="button-copy-schedule-code">
+              <Button onClick={copyCode} variant="outline" className="w-full border-blue-300 text-blue-700 hover:bg-blue-50" data-testid="button-copy-schedule-code">
                 {codeCopied ? <><CheckCircle className="w-4 h-4 mr-2 text-green-500" /> Copied!</> : <><Copy className="w-4 h-4 mr-2" /> Copy Code</>}
               </Button>
-              <Button onClick={shareCode} className="w-full bg-purple-600 hover:bg-purple-700" data-testid="button-share-schedule-invite">
+              <Button onClick={shareCode} className="w-full bg-blue-600 hover:bg-blue-700" data-testid="button-share-schedule-invite">
                 <Share2 className="w-4 h-4 mr-2" /> Share invite with coworkers
               </Button>
 
@@ -482,20 +482,20 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
         {/* Footer actions */}
         <div className="p-4 border-t flex-shrink-0 space-y-2" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom, 1rem))" }}>
           {step === 1 && (
-            <Button onClick={handleGeocodeAndNext} disabled={!destCoords} className="w-full h-12 bg-purple-600 hover:bg-purple-700" data-testid="button-shared-next-1">
+            <Button onClick={handleGeocodeAndNext} disabled={!destCoords} className="w-full h-12 bg-blue-600 hover:bg-blue-700" data-testid="button-shared-next-1">
               {"Next — Pick Driver"}
             </Button>
           )}
           {step === 2 && (
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setStep(1)} className="flex-1 h-12">Back</Button>
-              <Button onClick={() => setStep(3)} className="flex-1 h-12 bg-purple-600 hover:bg-purple-700" data-testid="button-shared-next-2">Review & Confirm</Button>
+              <Button onClick={() => setStep(3)} className="flex-1 h-12 bg-blue-600 hover:bg-blue-700" data-testid="button-shared-next-2">Review & Confirm</Button>
             </div>
           )}
           {step === 3 && (
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setStep(2)} className="flex-1 h-12">Back</Button>
-              <Button onClick={handleConfirm} disabled={bookMutation.isPending} className="flex-1 h-12 bg-purple-600 hover:bg-purple-700" data-testid="button-shared-confirm">
+              <Button onClick={handleConfirm} disabled={bookMutation.isPending} className="flex-1 h-12 bg-blue-600 hover:bg-blue-700" data-testid="button-shared-confirm">
                 {bookMutation.isPending ? <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Booking...</> : "Book & Get Code"}
               </Button>
             </div>

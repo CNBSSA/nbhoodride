@@ -186,7 +186,7 @@ export const RideHelpers = {
       case "driver_arriving":
         return "text-blue-600";
       case "in_progress":
-        return "text-purple-600";
+        return "text-blue-700";
       case "completed":
         return "text-green-600";
       case "cancelled":
