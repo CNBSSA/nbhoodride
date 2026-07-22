@@ -752,6 +752,40 @@ export default function RiderDashboard() {
               <div className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0" />
               <span className="truncate">{activeRide.destinationLocation?.address || 'En route...'}</span>
             </div>
+            {/* Car identification — so the rider boards the RIGHT vehicle.
+                Shown once a driver is assigned; uses driver/vehicle data the
+                active-ride endpoint already returns (no server change). */}
+            {['accepted', 'driver_arriving', 'in_progress'].includes(activeRide.status)
+              && activeRide.driver
+              && (activeRide.driver.vehicle || activeRide.driver.licensePlate) && (
+              <div className="mt-2 rounded-xl border border-blue-200 bg-blue-50/60 p-3" data-testid="rider-car-identify">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <Car className="w-4 h-4 text-blue-600" />
+                  <span className="text-xs font-bold text-blue-800 uppercase tracking-wide">Look for your car</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    {activeRide.driver.vehicle && (
+                      <p className="text-sm font-semibold text-gray-900 leading-snug" data-testid="text-driver-vehicle">
+                        {activeRide.driver.vehicle}
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-600 truncate">
+                      {activeRide.driver.firstName || 'Your driver'}
+                      {activeRide.driver.rating ? ` · ${parseFloat(activeRide.driver.rating).toFixed(1)}★` : ''}
+                    </p>
+                  </div>
+                  {activeRide.driver.licensePlate && (
+                    <div className="shrink-0 rounded-md border-2 border-gray-800 bg-white px-2.5 py-1 text-center">
+                      <p className="text-[9px] font-medium text-gray-500 leading-none mb-0.5">PLATE</p>
+                      <p className="text-base font-extrabold tracking-widest text-gray-900 leading-none" data-testid="text-driver-plate">
+                        {activeRide.driver.licensePlate}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             {sharedGroup && (
               <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 dark:bg-blue-950/30 rounded-lg px-2 py-1.5">
                 <Users className="w-3.5 h-3.5 flex-shrink-0" />
