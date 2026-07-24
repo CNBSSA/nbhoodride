@@ -1022,6 +1022,11 @@ export const recurringRideSchedules = pgTable("recurring_ride_schedules", {
   recurrence: varchar("recurrence").notNull().default("weekly"),
   dayOfWeek: integer("day_of_week").notNull(),
   preferredHour: integer("preferred_hour").notNull().default(9),
+  preferredMinute: integer("preferred_minute").notNull().default(0),
+  /** solo_schedule | coworker_group | circuit */
+  rideKind: varchar("ride_kind").notNull().default("solo_schedule"),
+  circuitId: varchar("circuit_id").references(() => circuits.id),
+  options: jsonb("options").$type<Record<string, unknown>>().default({}),
   lastPromptAt: timestamp("last_prompt_at"),
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
