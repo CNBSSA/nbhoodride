@@ -7694,11 +7694,23 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
           message: "label, dayOfWeek, and destination (or circuitId for shuttles) required",
         });
       }
+      // Circuit (shuttle) subscriptions carry no destination of their own, but
+      // recurring_ride_schedules.destination is NOT NULL. Backfill pickup and
+      // destination from the circuit itself — the rebook path reads them off the
+      // circuit anyway, so this just satisfies the column without a migration.
+      let resolvedPickup = pickup;
+      let resolvedDestination = destination;
+      if ((rideKind ?? "solo_schedule") === "circuit" && circuitId) {
+        const circuit = await storage.getCircuit(circuitId);
+        if (!circuit) return res.status(404).json({ message: "Shuttle route not found" });
+        resolvedPickup = resolvedPickup ?? circuit.pickup;
+        resolvedDestination = resolvedDestination ?? circuit.destination;
+      }
       const schedule = await storage.upsertRecurringRideSchedule({
         userId,
         label,
-        pickup,
-        destination,
+        pickup: resolvedPickup,
+        destination: resolvedDestination,
         dayOfWeek,
         preferredHour,
         preferredMinute,
