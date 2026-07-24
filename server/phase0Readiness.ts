@@ -54,7 +54,15 @@ function customDomainConfigured(appUrl: string): boolean {
   if (!appUrl) return false;
   try {
     const host = new URL(appUrl).hostname.toLowerCase();
-    return host === "pgride.com" || host === "www.pgride.com" || host === "pgride.app" || host === "www.pgride.app";
+    const canonical = new Set([
+      "pgride.com",
+      "www.pgride.com",
+      "pgride.app",
+      "www.pgride.app",
+      "peoplegoverned.com",
+      "www.peoplegoverned.com",
+    ]);
+    return canonical.has(host);
   } catch {
     return false;
   }
@@ -198,7 +206,7 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
 
   checks.push({
     id: "0.7-domain",
-    label: "Custom domain (pgride.com / pgride.app)",
+    label: "Custom domain (peoplegoverned.com / pgride.com / pgride.app)",
     status: customDomainConfigured(appUrl) ? "pass" : "warn",
     owner: "track_b",
     detail: customDomainConfigured(appUrl)

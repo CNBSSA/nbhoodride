@@ -78,4 +78,18 @@ describe("getPhase0Readiness", () => {
     expect(report.checks.find((c) => c.id === "0.2-public-url")?.status).toBe("pass");
     expect(report.checks.find((c) => c.id === "0.7-domain")?.status).toBe("pass");
   });
+
+  it("passes custom domain checks when PUBLIC_APP_URL uses peoplegoverned.com", async () => {
+    process.env.SESSION_SECRET = "secret";
+    process.env.PUBLIC_APP_URL = "https://www.peoplegoverned.com";
+    process.env.SUPER_ADMIN_EMAIL = "admin@example.com";
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ "?column?": 1 }], rowCount: 1 } as never)
+      .mockResolvedValueOnce({ rows: [{ is_super_admin: true, is_admin: true }], rowCount: 1 } as never);
+
+    const report = await getPhase0Readiness();
+    expect(report.ready).toBe(true);
+    expect(report.checks.find((c) => c.id === "0.2-public-url")?.status).toBe("pass");
+    expect(report.checks.find((c) => c.id === "0.7-domain")?.status).toBe("pass");
+  });
 });
