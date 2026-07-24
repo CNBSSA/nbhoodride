@@ -4,7 +4,8 @@ import { Badge } from "@/components/ui/badge";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { X, Bus, MapPin, Users, CheckCircle, Clock } from "lucide-react";
+import { saveRecurringSchedule } from "@/lib/saveRecurringSchedule";
+import { Repeat } from "lucide-react";
 import { describeCircuitSchedule } from "@shared/circuitSchedule";
 
 interface TimetableRun {
@@ -57,6 +58,32 @@ export default function CircuitsTimetableSheet({ isOpen, onClose }: CircuitsTime
   });
   const runs = data?.runs ?? [];
 
+  const subscribe = useMutation({
+    mutationFn: async (run: TimetableRun) => {
+      return saveRecurringSchedule({
+        label: run.name,
+        rideKind: "circuit",
+        departureAt: new Date(run.runAt),
+        circuitId: run.id,
+        destination: run.destination,
+        pickup: run.pickup,
+      });
+    },
+    onSuccess: (_data, run) => {
+      toast({
+        title: "Weekly shuttle saved",
+        description: `We'll remind you to book ${run.name} each week.`,
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Couldn't save subscription",
+        description: String(err?.message ?? err).replace(/^\d+:\s*/, ""),
+        variant: "destructive",
+      });
+    },
+  });
+
   const book = useMutation({
     mutationFn: async (run: TimetableRun) => {
       const res = await apiRequest("POST", `/api/circuits/${run.id}/book`);
@@ -90,7 +117,7 @@ export default function CircuitsTimetableSheet({ isOpen, onClose }: CircuitsTime
           <div>
             <h2 className="text-lg font-bold flex items-center gap-2">
               <Bus className="w-5 h-5 text-primary" />
-              This Week's Circuits
+              This Week's Shuttles
             </h2>
             <p className="text-xs text-gray-500">Guaranteed seats · fixed fare · no surge</p>
           </div>
@@ -161,15 +188,28 @@ export default function CircuitsTimetableSheet({ isOpen, onClose }: CircuitsTime
                         <Clock className="w-3.5 h-3.5" /> Booking closed
                       </span>
                     ) : (
-                      <Button
-                        size="sm"
-                        className="h-8 text-xs"
-                        disabled={disabled}
-                        onClick={() => book.mutate(run)}
-                        data-testid={`button-book-${run.id}`}
-                      >
-                        {book.isPending ? "Booking..." : full ? "Full" : "Book seat"}
-                      </Button>
+                      <div className="flex gap-1.5 shrink-0">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 text-xs px-2"
+                          disabled={subscribe.isPending}
+                          onClick={() => subscribe.mutate(run)}
+                          data-testid={`button-subscribe-${run.id}`}
+                          title="Weekly reminder"
+                        >
+                          <Repeat className="w-3 h-3" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-8 text-xs"
+                          disabled={disabled}
+                          onClick={() => book.mutate(run)}
+                          data-testid={`button-book-${run.id}`}
+                        >
+                          {book.isPending ? "Booking..." : full ? "Full" : "Book seat"}
+                        </Button>
+                      </div>
                     )}
                   </div>
                 </div>

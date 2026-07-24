@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Bell } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -21,6 +22,7 @@ interface NotificationBellProps {
 
 export function NotificationBell({ className, buttonClassName, iconClassName }: NotificationBellProps) {
   const [open, setOpen] = useState(false);
+  const [, setLocation] = useLocation();
 
   const { data: unread = { count: 0 } } = useQuery<{ count: number }>({
     queryKey: ["/api/notifications/unread-count"],
@@ -112,6 +114,11 @@ export function NotificationBell({ className, buttonClassName, iconClassName }: 
                 )}
                 onClick={() => {
                   if (!n.readAt) markRead.mutate(n.id);
+                  const scheduleId = n.data?.scheduleId as string | undefined;
+                  if (n.type === "recurring_rebook" && scheduleId) {
+                    setOpen(false);
+                    setLocation(`/rider?rebookScheduleId=${scheduleId}`);
+                  }
                 }}
                 data-testid={`notification-item-${n.id}`}
               >

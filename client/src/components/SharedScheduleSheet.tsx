@@ -13,7 +13,8 @@ import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { format } from "date-fns";
+import { RecurringWeeklyToggle } from "@/components/RecurringWeeklyToggle";
+import { saveRecurringSchedule } from "@/lib/saveRecurringSchedule";
 
 interface Driver {
   id: string;
@@ -61,6 +62,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
   // Publish the group so other workers heading the same way can take a seat.
   // Default ON — a fuller car means everyone saves and drivers claim faster.
   const [openToOthers, setOpenToOthers] = useState(true);
+  const [repeatWeekly, setRepeatWeekly] = useState(false);
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -115,6 +117,7 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
       setScheduledMinute("30");
       setScheduledPeriod("PM");
       setOpenToOthers(true);
+      setRepeatWeekly(false);
     }
   }, [isOpen, userLocation]);
 
@@ -123,11 +126,34 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
       const res = await apiRequest("POST", "/api/rides/create-shared-schedule", data);
       return res.json();
     },
-    onSuccess: (data: any) => {
+    onSuccess: async (data: any) => {
       setGeneratedCode(data.scheduleCode);
       setStep(4);
       queryClient.invalidateQueries({ queryKey: ["/api/rides"] });
       queryClient.invalidateQueries({ queryKey: ["/api/rides/scheduled"] });
+      if (repeatWeekly && destCoords && scheduledDate) {
+        const scheduledAt = buildScheduledAt();
+        if (scheduledAt) {
+          try {
+            await saveRecurringSchedule({
+              label: "Coworker ride",
+              rideKind: "coworker_group",
+              departureAt: new Date(scheduledAt),
+              pickup: { lat: userLocation.lat, lng: userLocation.lng, address: pickupAddress },
+              destination: { lat: destCoords.lat, lng: destCoords.lng, address: destinationAddress },
+              options: {
+                estimatedFare: fareEstimate?.toFixed(2) ?? "0",
+                pickupInstructions,
+                driverId: selectedDriver || null,
+                visibility: openToOthers ? "open" : "code",
+                openToOthers,
+              },
+            });
+          } catch {
+            /* ride created; recurring save is best-effort */
+          }
+        }
+      }
     },
     onError: () => {
       toast({ title: "Booking Failed", description: "Please try again.", variant: "destructive" });
@@ -442,6 +468,11 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
                   <p className="text-[11px] text-green-700 mt-1">Your ride is booked at full price. Once 1 friend joins using your code, your fare automatically drops 30%. Payment is deducted when the driver accepts.</p>
                 </CardContent>
               </Card>
+              <RecurringWeeklyToggle
+                checked={repeatWeekly}
+                onCheckedChange={setRepeatWeekly}
+                description="Same shift end every week — we'll remind you to start a new coworker group."
+              />
             </div>
           )}
 

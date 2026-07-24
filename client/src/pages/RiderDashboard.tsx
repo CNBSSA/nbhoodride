@@ -17,6 +17,7 @@ import SOSModal from "@/components/SOSModal";
 import LostFoundModal from "@/components/LostFoundModal";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { NotificationBell } from "@/components/NotificationBell";
+import { RecurringRebookBanner } from "@/components/RecurringRebookBanner";
 import { RideChat } from "@/components/RideChat";
 import type { RideMessagePayload } from "@shared/rideChat";
 import { parseRideMessageWsEvent } from "@shared/rideChat";
@@ -123,6 +124,13 @@ export default function RiderDashboard() {
   const [quickRatingSubmitted, setQuickRatingSubmitted] = useState(false);
   // Tracks urgency state per scheduled ride: 'at_risk' | 'no_driver' | 'driver_dropped'
   const [rideUrgency, setRideUrgency] = useState<Record<string, 'at_risk' | 'no_driver' | 'driver_dropped'>>({});
+  const [rebookScheduleId, setRebookScheduleId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("rebookScheduleId");
+    if (id) setRebookScheduleId(id);
+  }, []);
 
   const destinationInputRef = useRef<HTMLInputElement>(null);
   const lastProcessedMessageRef = useRef<string | null>(null);
@@ -726,6 +734,18 @@ export default function RiderDashboard() {
           )}
         </div>
       </div>
+
+      {rebookScheduleId && panel === "idle" && !activeRide && (
+        <RecurringRebookBanner
+          scheduleId={rebookScheduleId}
+          onDone={() => {
+            setRebookScheduleId(null);
+            const url = new URL(window.location.href);
+            url.searchParams.delete("rebookScheduleId");
+            window.history.replaceState({}, "", url.pathname + url.search);
+          }}
+        />
+      )}
 
       {/* Active ride overlay */}
       {activeRide && (

@@ -868,6 +868,11 @@ CREATE TABLE IF NOT EXISTS recurring_ride_schedules (
 );
 CREATE INDEX IF NOT EXISTS idx_recurring_schedules_user ON recurring_ride_schedules (user_id);
 
+ALTER TABLE recurring_ride_schedules ADD COLUMN IF NOT EXISTS preferred_minute INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE recurring_ride_schedules ADD COLUMN IF NOT EXISTS ride_kind VARCHAR NOT NULL DEFAULT 'solo_schedule';
+ALTER TABLE recurring_ride_schedules ADD COLUMN IF NOT EXISTS circuit_id VARCHAR;
+ALTER TABLE recurring_ride_schedules ADD COLUMN IF NOT EXISTS options JSONB DEFAULT '{}'::jsonb;
+
 -- ── Phase E: Autonomous operations ───────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS agent_action_proposals (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

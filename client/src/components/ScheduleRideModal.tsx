@@ -16,7 +16,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Calendar as CalendarIcon, Clock, Search, X, Users } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { format, addDays } from "date-fns";
-import { useAnalytics } from "@/hooks/useAnalytics";
+import { RecurringWeeklyToggle } from "@/components/RecurringWeeklyToggle";
+import { saveRecurringSchedule } from "@/lib/saveRecurringSchedule";
 
 interface Driver {
   id: string;
@@ -69,7 +70,7 @@ export default function ScheduleRideModal({
   const [phoneSearch, setPhoneSearch] = useState("");
   const [searchedDrivers, setSearchedDrivers] = useState<Driver[]>([]);
   const [wantsSharedRide, setWantsSharedRide] = useState(false);
-  
+  const [repeatWeekly, setRepeatWeekly] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { trackRideSearch, trackRideBooked } = useAnalytics();
@@ -128,8 +129,33 @@ export default function ScheduleRideModal({
       const response = await apiRequest('POST', '/api/rides', rideData);
       return response.json();
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       trackRideBooked();
+      if (bookingType === "schedule" && repeatWeekly && scheduledDate && destCoords) {
+        const hour24 = scheduledPeriod === "PM" && scheduledHour !== "12" 
+          ? parseInt(scheduledHour) + 12 
+          : scheduledPeriod === "AM" && scheduledHour === "12"
+          ? 0
+          : parseInt(scheduledHour);
+        const scheduleDateTime = new Date(scheduledDate);
+        scheduleDateTime.setHours(hour24, parseInt(scheduledMinute), 0, 0);
+        try {
+          await saveRecurringSchedule({
+            label: "Scheduled ride",
+            rideKind: "solo_schedule",
+            departureAt: scheduleDateTime,
+            pickup: { lat: userLocation.lat, lng: userLocation.lng, address: pickupAddress },
+            destination: { lat: destCoords.lat, lng: destCoords.lng, address: destinationAddress },
+            options: {
+              estimatedFare: fareEstimate?.total ?? 0,
+              pickupInstructions,
+              driverId: selectedDriver || null,
+            },
+          });
+        } catch {
+          /* non-fatal — ride already booked */
+        }
+      }
       if (bookingType === "schedule") {
         toast({
           title: "Ride Scheduled!",
@@ -356,6 +382,11 @@ export default function ScheduleRideModal({
                       Pickup scheduled for: <strong>{format(scheduledDate, "MMM dd, yyyy")} at {scheduledHour}:{scheduledMinute} {scheduledPeriod}</strong>
                     </p>
                   )}
+                  <RecurringWeeklyToggle
+                    checked={repeatWeekly}
+                    onCheckedChange={setRepeatWeekly}
+                    description="Same weekday and time every week — we'll nudge you to book."
+                  />
                 </div>
               </CardContent>
             </Card>
