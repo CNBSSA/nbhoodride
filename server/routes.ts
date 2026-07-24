@@ -57,6 +57,7 @@ import { evaluateUndersupply, allocateDriverBonus } from "./agents/pricingFairne
 import { getOwnershipProjections } from "./agents/ownershipAgent";
 import { checkRouteDeviationForRide } from "./agents/safetyAnomaly";
 import { processRecurringRideRebooks } from "./agents/recurringRides";
+import { executeRecurringRebook } from "./recurringRebook";
 import { purgeExpiredMobilityIntents } from "./agents/mobilityIntentRetention";
 import { tryAutoResolveDispute } from "./agents/support";
 import { runComplianceScan } from "./agents/compliance";
@@ -7676,9 +7677,22 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
   app.post('/api/rider/recurring-schedules', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const { label, pickup, destination, dayOfWeek, preferredHour, templateId } = req.body;
-      if (!label || !destination || dayOfWeek == null) {
-        return res.status(400).json({ message: "label, destination, and dayOfWeek required" });
+      const {
+        label,
+        pickup,
+        destination,
+        dayOfWeek,
+        preferredHour,
+        preferredMinute,
+        templateId,
+        rideKind,
+        circuitId,
+        options,
+      } = req.body;
+      if (!label || (rideKind === "circuit" ? !circuitId : !destination) || dayOfWeek == null) {
+        return res.status(400).json({
+          message: "label, dayOfWeek, and destination (or circuitId for shuttles) required",
+        });
       }
       const schedule = await storage.upsertRecurringRideSchedule({
         userId,
@@ -7687,11 +7701,40 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
         destination,
         dayOfWeek,
         preferredHour,
+        preferredMinute,
         templateId,
+        rideKind: rideKind ?? "solo_schedule",
+        circuitId: circuitId ?? null,
+        options: options ?? {},
       });
       res.json(schedule);
     } catch (error) {
       res.status(500).json({ message: "Failed to save recurring schedule" });
+    }
+  });
+
+  app.post('/api/rider/recurring-schedules/:id/rebook', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const schedule = await storage.getRecurringRideScheduleById(req.params.id);
+      if (!schedule) return res.status(404).json({ message: "Recurring schedule not found" });
+      const result = await executeRecurringRebook(storage, userId, schedule);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      res.json(result);
+    } catch (error: any) {
+      console.error("recurring rebook error:", error);
+      res.status(500).json({ message: error?.message ?? "Failed to rebook recurring ride" });
+    }
+  });
+
+  app.post('/api/rider/recurring-schedules/:id/deactivate', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const ok = await storage.deactivateRecurringRideSchedule(userId, req.params.id);
+      if (!ok) return res.status(404).json({ message: "Recurring schedule not found" });
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to pause recurring schedule" });
     }
   });
 

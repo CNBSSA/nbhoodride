@@ -487,6 +487,8 @@ export interface IStorage {
   }): Promise<BonusAllocation>;
   getBonusAllocations(driverId?: string): Promise<BonusAllocation[]>;
   getRecurringRideSchedules(userId: string): Promise<RecurringRideSchedule[]>;
+  getRecurringRideScheduleById(id: string): Promise<RecurringRideSchedule | undefined>;
+  deactivateRecurringRideSchedule(userId: string, id: string): Promise<boolean>;
   upsertRecurringRideSchedule(data: {
     userId: string;
     templateId?: string;
@@ -495,6 +497,10 @@ export interface IStorage {
     destination: { lat: number; lng: number; address: string };
     dayOfWeek: number;
     preferredHour?: number;
+    preferredMinute?: number;
+    rideKind?: string;
+    circuitId?: string | null;
+    options?: Record<string, unknown>;
   }): Promise<RecurringRideSchedule>;
   getDueRecurringSchedules(): Promise<RecurringRideSchedule[]>;
   markRecurringSchedulePrompted(id: string): Promise<void>;
@@ -4390,6 +4396,20 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(recurringRideSchedules.userId, userId), eq(recurringRideSchedules.isActive, true)));
   }
 
+  async getRecurringRideScheduleById(id: string): Promise<RecurringRideSchedule | undefined> {
+    const [row] = await db.select().from(recurringRideSchedules).where(eq(recurringRideSchedules.id, id));
+    return row;
+  }
+
+  async deactivateRecurringRideSchedule(userId: string, id: string): Promise<boolean> {
+    const result = await db
+      .update(recurringRideSchedules)
+      .set({ isActive: false })
+      .where(and(eq(recurringRideSchedules.id, id), eq(recurringRideSchedules.userId, userId)))
+      .returning({ id: recurringRideSchedules.id });
+    return result.length > 0;
+  }
+
   async upsertRecurringRideSchedule(data: {
     userId: string;
     templateId?: string;
@@ -4398,6 +4418,10 @@ export class DatabaseStorage implements IStorage {
     destination: { lat: number; lng: number; address: string };
     dayOfWeek: number;
     preferredHour?: number;
+    preferredMinute?: number;
+    rideKind?: string;
+    circuitId?: string | null;
+    options?: Record<string, unknown>;
   }): Promise<RecurringRideSchedule> {
     const existing = await db
       .select()
@@ -4417,6 +4441,10 @@ export class DatabaseStorage implements IStorage {
           destination: data.destination,
           dayOfWeek: data.dayOfWeek,
           preferredHour: data.preferredHour ?? 9,
+          preferredMinute: data.preferredMinute ?? 0,
+          rideKind: data.rideKind ?? "solo_schedule",
+          circuitId: data.circuitId ?? null,
+          options: data.options ?? {},
           isActive: true,
         })
         .where(eq(recurringRideSchedules.id, existing[0].id))

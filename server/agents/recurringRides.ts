@@ -15,7 +15,7 @@ export async function processRecurringRideRebooks(storage: IStorage): Promise<nu
         label: schedule.label,
         destination: schedule.destination,
       },
-      url: "/rider",
+      url: `/rider?rebookScheduleId=${schedule.id}`,
     });
     await storage.markRecurringSchedulePrompted(schedule.id);
     sent++;
