@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { saveRecurringSchedule } from "@/lib/saveRecurringSchedule";
-import { Repeat } from "lucide-react";
+import { Repeat, Bus, Clock, X, MapPin, Users, CheckCircle } from "lucide-react";
 import { describeCircuitSchedule } from "@shared/circuitSchedule";
 
 interface TimetableRun {

@@ -18,6 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { format, addDays } from "date-fns";
 import { RecurringWeeklyToggle } from "@/components/RecurringWeeklyToggle";
 import { saveRecurringSchedule } from "@/lib/saveRecurringSchedule";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 interface Driver {
   id: string;
