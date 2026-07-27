@@ -19,6 +19,7 @@ import { ReferralProgramCard } from "@/components/ReferralProgramCard";
 import { CalmRideToggle } from "@/components/CalmRideToggle";
 import { LanguageSelector } from "@/components/LanguageSelector";
 import { DriverOnboardingChecklist } from "@/components/DriverOnboardingChecklist";
+import { SupportContactLinks } from "@/components/SupportContactLinks";
 import { MD_COUNTIES } from "../../../shared/schema";
 import type { Locale } from "@shared/i18n";
 import { useLocation, Link } from "wouter";
@@ -508,20 +509,10 @@ export default function Profile() {
             </div>
             <i className="fas fa-chevron-right text-muted-foreground" />
           </Button>
-          <p className="text-xs text-muted-foreground text-center -mt-1 px-2">
-            {SUPPORT.channelsNote}{" "}
-            <a className="underline" href={`mailto:${SUPPORT.email}`}>
-              {SUPPORT.email}
-            </a>
-            {" · "}
-            <a className="underline" href={SUPPORT.phoneSms}>
-              Text {SUPPORT.phoneDisplay}
-            </a>
-            {" · "}
-            <a className="underline" href={`tel:${SUPPORT.phoneTel}`}>
-              Call
-            </a>
-          </p>
+          <div className="-mt-1 px-2 space-y-1.5">
+            <p className="text-xs text-muted-foreground text-center">{SUPPORT.channelsNote}</p>
+            <SupportContactLinks />
+          </div>
 
           {/* Autonomy dial (Phase B) */}
           <Card>
@@ -601,7 +592,33 @@ export default function Profile() {
               </div>
               <Switch
                 checked={isSubscribed}
-                onCheckedChange={(checked) => checked ? subscribe() : unsubscribe()}
+                onCheckedChange={async (checked) => {
+                  if (checked) {
+                    const result = await subscribe();
+                    if (!result.ok) {
+                      const messages: Record<typeof result.reason, string> = {
+                        unsupported: "Your browser doesn't support push notifications.",
+                        not_configured: "Push notifications aren't set up for this app yet. Check back soon!",
+                        permission_denied: "Notifications blocked. Enable them in your browser or device settings to get ride alerts.",
+                        error: "Couldn't enable notifications. Please try again.",
+                      };
+                      toast({
+                        title: "Notifications not enabled",
+                        description: messages[result.reason],
+                        variant: "destructive",
+                      });
+                    }
+                  } else {
+                    const ok = await unsubscribe();
+                    if (!ok) {
+                      toast({
+                        title: "Couldn't turn off notifications",
+                        description: "Please try again.",
+                        variant: "destructive",
+                      });
+                    }
+                  }
+                }}
                 disabled={pushLoading}
                 data-testid="toggle-push-notifications"
               />
