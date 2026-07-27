@@ -26,6 +26,7 @@ import { TransitAlertsCard } from "@/components/TransitAlertsCard";
 import { RideForFriendFields } from "@/components/RideForFriendFields";
 import { VehicleTypePicker } from "@/components/VehicleTypePicker";
 import { CommunityRoutesCard } from "@/components/CommunityRoutesCard";
+import { QuickRebookCard } from "@/components/QuickRebookCard";
 import { ExplainableMatchCard } from "@/components/ExplainableMatchCard";
 import type { VehicleType } from "@shared/vehicleTypes";
 import { VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
@@ -1020,6 +1021,8 @@ export default function RiderDashboard() {
               <Search className="w-5 h-5 text-gray-500 flex-shrink-0" />
               <span className="text-gray-800 text-lg font-semibold">Where to?</span>
             </button>
+
+            <QuickRebookCard onSelectDestination={handleCommunityRouteSelect} disabled={!!activeRide} />
 
             {/* Ride modes — one scrollable row replaces the old promo banner,
                 the duplicate join-code link, and half the "more ways" list. */}

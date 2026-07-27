@@ -93,6 +93,7 @@ import { resolveAppUrl } from "./appUrl";
 import { matchLocalLandmarks, nearestLandmarkLabel } from "./localLandmarks";
 import { isAllowedPickup, PICKUP_OUTSIDE_MD_MESSAGE } from "@shared/serviceArea";
 import { isEmailVerificationMandatory } from "@shared/emailVerificationPolicy";
+import { findFrequentDestination } from "@shared/frequentTrip";
 import { toSafeUser } from "./safeUser";
 import type { SavedCardSummary } from "@shared/paymentMethodDisplay";
 import { processCircuitReminders } from "./circuitReminders";
@@ -4234,6 +4235,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // "Quick Rebook" — a returning rider's most frequent recent destination,
+  // so Home can offer one-tap booking instead of retyping the same address.
+  // Must stay registered before /api/rides/:rideId below, or Express would
+  // match "frequent-trip" as a rideId and 404.
+  app.get('/api/rides/frequent-trip', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const recentRides = await storage.getRecentCompletedRidesForRider(userId, 20);
+      const trip = findFrequentDestination(
+        recentRides.map((r) => ({ destinationLocation: r.destinationLocation, completedAt: r.completedAt })),
+      );
+      res.json(trip);
+    } catch (error) {
+      console.error("Error finding frequent trip:", error);
+      res.status(500).json({ message: "Failed to fetch frequent trip" });
+    }
+  });
 
   app.get('/api/rides/:rideId', isAuthenticated, async (req: any, res) => {
     try {
