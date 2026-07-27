@@ -6,5 +6,6 @@ describe("BRAND", () => {
     expect(BRAND.pgMeans).toBe("People-Governed");
     expect(BRAND.appName).toBe("PG Ride");
     expect(BRAND.companyDomain).toBe("peoplegoverned.com");
+    expect(BRAND.supportEmail).toBe("thrynovainsights@gmail.com");
   });
 });

@@ -5,13 +5,18 @@ import { Elements, CardElement, useStripe, useElements } from '@stripe/react-str
 import { Link } from 'wouter';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { CreditCard, CheckCircle, AlertCircle, ArrowLeft } from 'lucide-react';
+import { CreditCard, CheckCircle, AlertCircle, ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import { useStripeConfig } from '@/hooks/useStripeConfig';
+import {
+  formatCardBrandLabel,
+  formatCardExpiry,
+  formatMaskedCardLine,
+  type SavedCardSummary,
+} from '@shared/paymentMethodDisplay';
 
 /** Header with a back link to Profile — this route is reached from Profile's
  *  "Payment Methods" button but lives outside the tab-shell (Home.tsx), so
@@ -35,6 +40,102 @@ const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : 
 
 interface PaymentMethodsResponse {
   hasPaymentMethod: boolean;
+  methods: SavedCardSummary[];
+  defaultPaymentMethodId: string | null;
+}
+
+function SavedCardCarousel({
+  methods,
+  selectedIndex,
+  onSelectIndex,
+}: {
+  methods: SavedCardSummary[];
+  selectedIndex: number;
+  onSelectIndex: (index: number) => void;
+}) {
+  const card = methods[selectedIndex];
+  if (!card) return null;
+
+  const goPrev = () => onSelectIndex((selectedIndex - 1 + methods.length) % methods.length);
+  const goNext = () => onSelectIndex((selectedIndex + 1) % methods.length);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={goPrev}
+          disabled={methods.length <= 1}
+          aria-label="Previous card"
+          data-testid="button-prev-card"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <p className="text-xs text-muted-foreground tabular-nums">
+          Card {selectedIndex + 1} of {methods.length}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={goNext}
+          disabled={methods.length <= 1}
+          aria-label="Next card"
+          data-testid="button-next-card"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+      </div>
+
+      <div
+        className="rounded-lg border bg-muted/30 p-4"
+        data-testid="saved-card-panel"
+        aria-live="polite"
+      >
+        <div className="flex items-start gap-3">
+          <CreditCard className="w-8 h-8 text-muted-foreground shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-medium" data-testid="text-card-brand">
+                {formatCardBrandLabel(card.brand)}
+              </p>
+              {card.isDefault && (
+                <Badge variant="secondary" data-testid="badge-default-card">
+                  Default
+                </Badge>
+              )}
+            </div>
+            <p className="font-mono text-lg tracking-wider mt-1" data-testid="text-card-masked">
+              {formatMaskedCardLine(card.last4)}
+            </p>
+            <p className="text-sm text-muted-foreground mt-1" data-testid="text-card-expiry">
+              Expires {formatCardExpiry(card.expMonth, card.expYear)}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {methods.length > 1 && (
+        <div className="flex justify-center gap-1.5" role="tablist" aria-label="Saved cards">
+          {methods.map((m, i) => (
+            <button
+              key={m.id}
+              type="button"
+              role="tab"
+              aria-selected={i === selectedIndex}
+              aria-label={`Show card ending in ${m.last4}`}
+              className={`h-2 w-2 rounded-full transition-colors ${
+                i === selectedIndex ? "bg-primary" : "bg-muted-foreground/40"
+              }`}
+              onClick={() => onSelectIndex(i)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function CardSetupForm() {
@@ -93,6 +194,7 @@ function CardSetupForm() {
         });
       } else if (paymentMethod) {
         await setupCardMutation.mutateAsync(paymentMethod.id);
+        cardElement.clear();
       }
     } catch (err: any) {
       toast({
@@ -128,6 +230,9 @@ function CardSetupForm() {
               }}
             />
           </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Full card numbers are never stored or shown after you save — only the last four digits.
+          </p>
         </div>
 
         <Button 
@@ -144,11 +249,38 @@ function CardSetupForm() {
 }
 
 export function CardSetupPage() {
+  const { toast } = useToast();
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
   const { data: paymentMethods, isLoading } = useQuery<PaymentMethodsResponse>({
     queryKey: ['/api/payment/methods'],
   });
   const { data: stripeConfig } = useStripeConfig();
   const stripeReady = stripeConfig?.cardOnFileEnabled ?? !!stripePublishableKey;
+
+  const methods = paymentMethods?.methods ?? [];
+  const safeIndex = methods.length > 0 ? Math.min(selectedIndex, methods.length - 1) : 0;
+  const selectedCard = methods[safeIndex];
+
+  const setDefaultMutation = useMutation({
+    mutationFn: async (paymentMethodId: string) => {
+      const response = await apiRequest('POST', '/api/payment/methods/default', { paymentMethodId });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to update card');
+      return data;
+    },
+    onSuccess: () => {
+      toast({ title: 'Default card updated' });
+      queryClient.invalidateQueries({ queryKey: ['/api/payment/methods'] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: 'Could not update default card',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
+  });
 
   if (isLoading) {
     return (
@@ -176,27 +308,54 @@ export function CardSetupPage() {
       </div>
 
       <div className="space-y-6">
-        {paymentMethods?.hasPaymentMethod && (
+        {methods.length > 0 && (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <CheckCircle className="w-5 h-5 text-green-600" />
-                Card on File
+                Saved cards
+              </CardTitle>
+              <CardDescription>
+                Swipe between cards — only the last four digits are shown
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <SavedCardCarousel
+                methods={methods}
+                selectedIndex={safeIndex}
+                onSelectIndex={setSelectedIndex}
+              />
+              {selectedCard && !selectedCard.isDefault && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="w-full"
+                  disabled={setDefaultMutation.isPending}
+                  data-testid="button-set-default-card"
+                  onClick={() => setDefaultMutation.mutate(selectedCard.id)}
+                >
+                  Use this card for rides
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {paymentMethods?.hasPaymentMethod && methods.length === 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CheckCircle className="w-5 h-5 text-green-600" />
+                Card on file
               </CardTitle>
               <CardDescription>
                 You have a payment method saved
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center gap-3">
-                <CreditCard className="w-8 h-8 text-muted-foreground" />
-                <div>
-                  <p className="font-medium" data-testid="text-card-status">Payment method saved</p>
-                  <p className="text-sm text-muted-foreground">
-                    Your card will be charged after each completed ride
-                  </p>
-                </div>
-              </div>
+              <p className="text-sm text-muted-foreground" data-testid="text-card-status">
+                Your card is on file. Add a new card below to refresh card details in this list.
+              </p>
             </CardContent>
           </Card>
         )}
@@ -204,7 +363,7 @@ export function CardSetupPage() {
         <Card>
           <CardHeader>
             <CardTitle>
-              {paymentMethods?.hasPaymentMethod ? 'Update Payment Method' : 'Add Payment Method'}
+              {paymentMethods?.hasPaymentMethod ? 'Add another card' : 'Add Payment Method'}
             </CardTitle>
             <CardDescription>
               Add a credit or debit card to pay for rides
