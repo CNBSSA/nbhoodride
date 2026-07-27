@@ -406,6 +406,7 @@ export interface IStorage {
   createMobilityIntent(data: { userId: string; intentType: string; utterance?: string; payload?: Record<string, unknown> }): Promise<MobilityIntent>;
   purgeMobilityIntentsOlderThan(cutoff: Date): Promise<number>;
   getLastCompletedRideForUser(userId: string): Promise<Ride | undefined>;
+  getRecentCompletedRidesForRider(userId: string, limit?: number): Promise<Ride[]>;
   upsertRideSurfaceCache(rideId: string, spec: Record<string, unknown>): Promise<void>;
   getRideSurfaceCache(rideId: string): Promise<Record<string, unknown> | undefined>;
   getRideTemplateByLabel(userId: string, label: string): Promise<RideTemplate | undefined>;
@@ -3511,6 +3512,15 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(rides.completedAt))
       .limit(1);
     return ride;
+  }
+
+  async getRecentCompletedRidesForRider(userId: string, limit = 20): Promise<Ride[]> {
+    return await db
+      .select()
+      .from(rides)
+      .where(and(eq(rides.riderId, userId), eq(rides.status, "completed")))
+      .orderBy(desc(rides.completedAt))
+      .limit(limit);
   }
 
   async upsertRideSurfaceCache(rideId: string, spec: Record<string, unknown>): Promise<void> {
