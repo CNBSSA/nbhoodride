@@ -57,6 +57,22 @@ export class StripeService {
     });
   }
 
+  async listCardPaymentMethods(customerId: string): Promise<Stripe.PaymentMethod[]> {
+    const result = await requireStripe().paymentMethods.list({
+      customer: customerId,
+      type: "card",
+    });
+    return result.data;
+  }
+
+  async retrieveCustomerDefaultPaymentMethodId(customerId: string): Promise<string | null> {
+    const customer = await requireStripe().customers.retrieve(customerId);
+    if (customer.deleted) return null;
+    const def = customer.invoice_settings?.default_payment_method;
+    if (!def) return null;
+    return typeof def === "string" ? def : def.id;
+  }
+
   async createPaymentIntent(params: CreatePaymentIntentParams): Promise<Stripe.PaymentIntent> {
     const { amount, customerId, paymentMethodId, metadata } = params;
     const paymentIntent = await requireStripe().paymentIntents.create({

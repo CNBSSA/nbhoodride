@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { SUPPORT_CONTACTS } from "@shared/supportContacts";
 import { AlertCircle } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -25,7 +26,7 @@ export function DriverStatusBanner({ approvalStatus, isVerifiedNeighbor }: Drive
     action = "View Profile";
   } else if (approvalStatus === "rejected") {
     title = "Driver application not cleared";
-    body = "Contact support@peoplegoverned.com if you believe this is a mistake.";
+    body = `Contact ${SUPPORT_CONTACTS.email} or text ${SUPPORT_CONTACTS.phoneDisplay} if you believe this is a mistake.`;
     action = "Contact support";
   } else if (approvalStatus === "pending" || !approvalStatus) {
     title = "Documents under review";
@@ -47,7 +48,7 @@ export function DriverStatusBanner({ approvalStatus, isVerifiedNeighbor }: Drive
           className="mt-2 h-8 text-xs"
           onClick={() => {
             if (approvalStatus === "rejected") {
-              window.location.href = `mailto:support@peoplegoverned.com`;
+              window.location.href = `mailto:${SUPPORT_CONTACTS.email}`;
             } else {
               setLocation("/");
               window.dispatchEvent(new CustomEvent("pgride:open-profile"));

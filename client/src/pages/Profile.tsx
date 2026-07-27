@@ -23,7 +23,6 @@ import { MD_COUNTIES } from "../../../shared/schema";
 import type { Locale } from "@shared/i18n";
 import { useLocation, Link } from "wouter";
 import { PG_CARD, SUPPORT } from "@shared/userFacingCopy";
-import { BRAND } from "@shared/branding";
 
 export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
@@ -509,10 +508,18 @@ export default function Profile() {
             </div>
             <i className="fas fa-chevron-right text-muted-foreground" />
           </Button>
-          <p className="text-xs text-muted-foreground text-center -mt-1">
-            Email{" "}
-            <a className="underline" href={`mailto:${BRAND.supportEmail}`}>
-              {BRAND.supportEmail}
+          <p className="text-xs text-muted-foreground text-center -mt-1 px-2">
+            {SUPPORT.channelsNote}{" "}
+            <a className="underline" href={`mailto:${SUPPORT.email}`}>
+              {SUPPORT.email}
+            </a>
+            {" · "}
+            <a className="underline" href={SUPPORT.phoneSms}>
+              Text {SUPPORT.phoneDisplay}
+            </a>
+            {" · "}
+            <a className="underline" href={`tel:${SUPPORT.phoneTel}`}>
+              Call
             </a>
           </p>
 
@@ -642,7 +649,7 @@ export default function Profile() {
                   Terms of Service
                 </Link>
                 <span>•</span>
-                <a href={`mailto:${BRAND.supportEmail}`} className="underline">
+                <a href={`mailto:${SUPPORT.email}`} className="underline">
                   Support
                 </a>
               </div>

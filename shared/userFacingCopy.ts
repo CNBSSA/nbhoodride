@@ -1,5 +1,6 @@
 /** Canonical user-facing wallet + payment copy (USER_FRIENDLINESS_ASSESSMENT). */
 import { BRAND } from "./branding";
+import { SUPPORT_CONTACTS } from "./supportContacts";
 
 export const PG_CARD = {
   name: "PG Card",
@@ -61,6 +62,10 @@ export const CALM_MODE_DESCRIPTIONS: Record<string, string> = {
 };
 
 export const SUPPORT = {
-  email: "support@peoplegoverned.com",
+  email: SUPPORT_CONTACTS.email,
+  phoneDisplay: SUPPORT_CONTACTS.phoneDisplay,
+  phoneTel: SUPPORT_CONTACTS.phoneTel,
+  phoneSms: SUPPORT_CONTACTS.phoneSms,
+  channelsNote: SUPPORT_CONTACTS.channelsNote,
   faqHint: "Ask the PG Ride assistant in the Book tab for quick answers.",
 } as const;

@@ -1,3 +1,5 @@
+import { SUPPORT_CONTACTS } from "./supportContacts";
+
 /** Shared product + company branding (PG = People-Governed). */
 export const BRAND = {
   appName: "PG Ride",
@@ -8,5 +10,8 @@ export const BRAND = {
     "Community-owned rideshare. Verified neighbors, transparent fares, no surge pricing.",
   pgMeans: "People-Governed",
   foundedNote: "Founded in Prince George's County, Maryland — built for communities everywhere.",
-  supportEmail: "support@peoplegoverned.com",
+  supportEmail: SUPPORT_CONTACTS.email,
+  supportPhoneDisplay: SUPPORT_CONTACTS.phoneDisplay,
+  supportPhoneTel: SUPPORT_CONTACTS.phoneTel,
+  supportPhoneSms: SUPPORT_CONTACTS.phoneSms,
 } as const;

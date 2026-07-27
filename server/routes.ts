@@ -92,6 +92,9 @@ import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from 
 import { resolveAppUrl } from "./appUrl";
 import { matchLocalLandmarks, nearestLandmarkLabel } from "./localLandmarks";
 import { isAllowedPickup, PICKUP_OUTSIDE_MD_MESSAGE } from "@shared/serviceArea";
+import { isEmailVerificationMandatory } from "@shared/emailVerificationPolicy";
+import { toSafeUser } from "./safeUser";
+import type { SavedCardSummary } from "@shared/paymentMethodDisplay";
 import { processCircuitReminders } from "./circuitReminders";
 import { bookingWindow } from "@shared/circuitSchedule";
 import {
@@ -783,7 +786,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({
         message: emailVerificationSent
-          ? "Account created! Check your email to verify your address, then wait for administrator approval before you can log in."
+          ? isEmailVerificationMandatory()
+            ? "Account created! Check your email to verify your address, then wait for administrator approval before you can log in."
+            : "Account created! We sent a verification email (optional for now). Wait for administrator approval before you can log in."
           : "Account created! Your account needs administrator approval before you can log in.",
         pendingApproval: true,
         emailVerificationSent,
@@ -970,6 +975,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // (registrationCompletedAt set). Pre-existing accounts created before
       // verification was wired in are exempt. Admins/super admins bypass.
       const requiresEmailVerification =
+        isEmailVerificationMandatory() &&
         !!user.registrationCompletedAt &&
         !user.emailVerifiedAt &&
         !user.isAdmin &&
@@ -1169,7 +1175,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // still false — the Profile page needs the application status either way.
       const driverProfile = await storage.getDriverProfile(userId) ?? null;
 
-      res.json({ ...user, driverProfile });
+      res.json({ ...toSafeUser(user), driverProfile });
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
@@ -4388,10 +4394,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await stripeService.setDefaultPaymentMethod(customerId, paymentMethodId);
       await storage.updateUserStripeInfo(userId, customerId, paymentMethodId);
 
-      res.json({ success: true, customerId, paymentMethodId });
+      res.json({ success: true });
     } catch (error: any) {
       console.error("Error setting up card:", error);
       res.status(500).json({ message: "Failed to set up payment method. Please try again." });
+    }
+  });
+
+  app.post('/api/payment/methods/default', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const { paymentMethodId } = req.body;
+      if (!paymentMethodId || typeof paymentMethodId !== "string") {
+        return res.status(400).json({ message: "Payment method ID required" });
+      }
+      if (!user.stripeCustomerId) {
+        return res.status(400).json({ message: "No saved payment methods" });
+      }
+      if (!stripeService.isEnabled) {
+        return res.status(503).json({ message: "Card payments are not configured" });
+      }
+
+      const methods = await stripeService.listCardPaymentMethods(user.stripeCustomerId);
+      if (!methods.some((pm) => pm.id === paymentMethodId)) {
+        return res.status(400).json({ message: "Payment method not found on your account" });
+      }
+
+      await stripeService.setDefaultPaymentMethod(user.stripeCustomerId, paymentMethodId);
+      await storage.updateUserStripeInfo(userId, user.stripeCustomerId, paymentMethodId);
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error setting default payment method:", error);
+      res.status(500).json({ message: "Failed to update default payment method" });
     }
   });
 
@@ -4404,10 +4443,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
+      if (!user.stripeCustomerId || !stripeService.isEnabled) {
+        return res.json({
+          hasPaymentMethod: !!user.stripePaymentMethodId,
+          methods: [] as SavedCardSummary[],
+          defaultPaymentMethodId: null,
+        });
+      }
+
+      const stripeMethods = await stripeService.listCardPaymentMethods(user.stripeCustomerId);
+      const defaultFromStripe = await stripeService.retrieveCustomerDefaultPaymentMethodId(
+        user.stripeCustomerId,
+      );
+      const defaultPaymentMethodId =
+        defaultFromStripe ?? user.stripePaymentMethodId ?? stripeMethods[0]?.id ?? null;
+
+      const methods: SavedCardSummary[] = stripeMethods.map((pm) => {
+        const card = pm.card;
+        const last4 = card?.last4 ?? "••••";
+        return {
+          id: pm.id,
+          brand: card?.brand ?? "card",
+          last4,
+          expMonth: card?.exp_month ?? 0,
+          expYear: card?.exp_year ?? 0,
+          isDefault: pm.id === defaultPaymentMethodId,
+        };
+      });
+
       res.json({
-        hasPaymentMethod: !!user.stripePaymentMethodId,
-        stripeCustomerId: user.stripeCustomerId,
-        stripePaymentMethodId: user.stripePaymentMethodId
+        hasPaymentMethod: methods.length > 0 || !!user.stripePaymentMethodId,
+        methods,
+        defaultPaymentMethodId,
       });
     } catch (error: any) {
       console.error("Error fetching payment methods:", error);
