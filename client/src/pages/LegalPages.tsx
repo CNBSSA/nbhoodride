@@ -2,6 +2,8 @@ import { useLocation } from "wouter";
 import { ArrowLeft, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { BRAND } from "@shared/branding";
+import { SUPPORT_CONTACTS } from "@shared/supportContacts";
+import { SupportContactLinks } from "@/components/SupportContactLinks";
 
 function BackButton() {
   const [, navigate] = useLocation();
@@ -94,7 +96,10 @@ export function TermsOfService() {
 
           <section>
             <h2 className="font-semibold text-base mb-2">13. Contact</h2>
-            <p>For support, questions and enquiries, contact Thrynova Insights LLC at <a href="mailto:thrynovainsights@gmail.com" className="text-primary underline">thrynovainsights@gmail.com</a> or call <a href="tel:+15712458187" className="text-primary underline">+1 571-245-8187</a>. SMS and email are preferred.</p>
+            <p>For support, questions and enquiries, contact Thrynova Insights LLC any of these ways:</p>
+            <div className="mt-2">
+              <SupportContactLinks className="!justify-start" />
+            </div>
           </section>
 
         </div>
@@ -176,7 +181,7 @@ export function PrivacyPolicy() {
 
           <section>
             <h2 className="font-semibold text-base mb-2">8. Your Rights</h2>
-            <p className="text-muted-foreground">Under Maryland and applicable U.S. law, you have the right to: access your personal data, correct inaccurate data, request deletion of your data, opt out of non-essential communications, and receive a copy of your data in a portable format. To exercise these rights, contact us at <a href="mailto:thrynovainsights@gmail.com" className="text-primary underline">thrynovainsights@gmail.com</a>.</p>
+            <p className="text-muted-foreground">Under Maryland and applicable U.S. law, you have the right to: access your personal data, correct inaccurate data, request deletion of your data, opt out of non-essential communications, and receive a copy of your data in a portable format. To exercise these rights, contact us at <a href={`mailto:${SUPPORT_CONTACTS.email}`} className="text-primary underline">{SUPPORT_CONTACTS.email}</a>.</p>
           </section>
 
           <section>
@@ -186,7 +191,10 @@ export function PrivacyPolicy() {
 
           <section>
             <h2 className="font-semibold text-base mb-2">10. Contact</h2>
-            <p className="text-muted-foreground">Questions about your privacy? Email us at <a href="mailto:thrynovainsights@gmail.com" className="text-primary underline">thrynovainsights@gmail.com</a>.</p>
+            <p className="text-muted-foreground">Questions about your privacy? Reach us any of these ways:</p>
+            <div className="mt-2">
+              <SupportContactLinks className="!justify-start" />
+            </div>
           </section>
 
         </div>

@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { Send, Plus, Trash2, MessageSquare, Bot, User, Loader2, ArrowLeft, ThumbsUp, ThumbsDown, HelpCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { SupportContactLinks } from "@/components/SupportContactLinks";
 import type { Conversation, ChatMessage, FaqEntry } from "@shared/schema";
 
 export default function AIAssistant() {
@@ -15,6 +16,7 @@ export default function AIAssistant() {
   const [message, setMessage] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [assistantError, setAssistantError] = useState(false);
   const [feedbackGiven, setFeedbackGiven] = useState<Record<string, string>>({});
   const [showFaq, setShowFaq] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -85,6 +87,7 @@ export default function AIAssistant() {
     setMessage("");
     setIsStreaming(true);
     setStreamingContent("");
+    setAssistantError(false);
     trackAiChat({ action: "send_message" });
 
     queryClient.setQueryData<ChatMessage[]>(
@@ -122,24 +125,36 @@ export default function AIAssistant() {
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
+          let event: { content?: string; done?: boolean; error?: string } | null = null;
           try {
-            const event = JSON.parse(line.slice(6));
-            if (event.content) {
-              accumulated += event.content;
-              setStreamingContent(accumulated);
-            }
-            if (event.done) {
-              setStreamingContent("");
-              setIsStreaming(false);
-              queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations", conversationId, "messages"] });
-            }
-          } catch {}
+            event = JSON.parse(line.slice(6));
+          } catch {
+            continue;
+          }
+          if (event?.error) {
+            throw new Error(event.error);
+          }
+          if (event?.content) {
+            accumulated += event.content;
+            setStreamingContent(accumulated);
+          }
+          if (event?.done) {
+            setStreamingContent("");
+            setIsStreaming(false);
+            queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations", conversationId, "messages"] });
+          }
         }
       }
     } catch (error) {
       console.error("Error sending message:", error);
       setIsStreaming(false);
       setStreamingContent("");
+      setAssistantError(true);
+      toast({
+        title: "Assistant is unavailable right now",
+        description: "You can reach our team directly instead — see the contact options below.",
+        variant: "destructive",
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/ai/conversations", conversationId, "messages"] });
     }
   }, [queryClient, trackAiChat]);
@@ -437,6 +452,18 @@ export default function AIAssistant() {
                 </div>
                 <div className="rounded-2xl px-3 py-2 bg-muted">
                   <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                </div>
+              </div>
+            )}
+
+            {assistantError && (
+              <div className="flex gap-2 justify-start" data-testid="message-assistant-error">
+                <div className="w-7 h-7 rounded-full bg-destructive/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Bot className="w-4 h-4 text-destructive" />
+                </div>
+                <div className="max-w-[85%] rounded-2xl px-3 py-2 text-sm bg-muted space-y-2">
+                  <p>Sorry, I can't respond right now. A real person can help instead:</p>
+                  <SupportContactLinks />
                 </div>
               </div>
             )}

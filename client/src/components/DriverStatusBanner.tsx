@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { SUPPORT_CONTACTS } from "@shared/supportContacts";
+import { SupportContactLinks } from "@/components/SupportContactLinks";
 import { AlertCircle } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -20,14 +20,15 @@ export function DriverStatusBanner({ approvalStatus, isVerifiedNeighbor }: Drive
   let body = "Upload your documents in Profile. An administrator will review them before you can go online.";
   let action = "Go to Profile";
 
+  const isRejected = approvalStatus === "rejected";
+
   if (approvalStatus === "background_check_pending") {
     title = "Background check in progress";
     body = "We are reviewing your background check. You cannot go online until this finishes.";
     action = "View Profile";
-  } else if (approvalStatus === "rejected") {
+  } else if (isRejected) {
     title = "Driver application not cleared";
-    body = `Contact ${SUPPORT_CONTACTS.email} or text ${SUPPORT_CONTACTS.phoneDisplay} if you believe this is a mistake.`;
-    action = "Contact support";
+    body = "If you believe this is a mistake, reach us any of these ways:";
   } else if (approvalStatus === "pending" || !approvalStatus) {
     title = "Documents under review";
     body = "We typically review within 24 hours. Going online will stay disabled until you are approved.";
@@ -42,21 +43,23 @@ export function DriverStatusBanner({ approvalStatus, isVerifiedNeighbor }: Drive
       <div className="flex-1 min-w-0">
         <p className="font-semibold text-sm">{title}</p>
         <p className="text-xs text-muted-foreground mt-0.5">{body}</p>
-        <Button
-          size="sm"
-          variant="outline"
-          className="mt-2 h-8 text-xs"
-          onClick={() => {
-            if (approvalStatus === "rejected") {
-              window.location.href = `mailto:${SUPPORT_CONTACTS.email}`;
-            } else {
+        {isRejected ? (
+          <div className="mt-2">
+            <SupportContactLinks className="!justify-start" />
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-2 h-8 text-xs"
+            onClick={() => {
               setLocation("/");
               window.dispatchEvent(new CustomEvent("pgride:open-profile"));
-            }
-          }}
-        >
-          {action}
-        </Button>
+            }}
+          >
+            {action}
+          </Button>
+        )}
       </div>
     </div>
   );

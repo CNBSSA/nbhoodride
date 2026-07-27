@@ -19,6 +19,7 @@
 
 import type { Express, Request, Response } from "express";
 import { BRAND } from "@shared/branding";
+import { SUPPORT_CONTACTS } from "@shared/supportContacts";
 
 const LEGAL_ENTITY = "Thrynova Insights LLC";
 
@@ -155,7 +156,9 @@ function renderAboutPage(): string {
     <div class="wrap">
       <p>
         ${esc(BRAND.foundedNote)}<br />
-        Operated by ${esc(LEGAL_ENTITY)}. Questions? <a href="mailto:${esc(BRAND.supportEmail)}">${esc(BRAND.supportEmail)}</a>.
+        Operated by ${esc(LEGAL_ENTITY)}. Questions? Email <a href="mailto:${esc(SUPPORT_CONTACTS.email)}">${esc(SUPPORT_CONTACTS.email)}</a>,
+        text <a href="${esc(SUPPORT_CONTACTS.phoneSms)}">${esc(SUPPORT_CONTACTS.phoneDisplay)}</a>,
+        or call <a href="tel:${esc(SUPPORT_CONTACTS.phoneTel)}">${esc(SUPPORT_CONTACTS.phoneDisplay)}</a>.
       </p>
       <p>
         <a href="/terms">Terms of Service</a> ·
