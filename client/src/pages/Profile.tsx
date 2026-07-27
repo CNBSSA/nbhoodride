@@ -601,7 +601,33 @@ export default function Profile() {
               </div>
               <Switch
                 checked={isSubscribed}
-                onCheckedChange={(checked) => checked ? subscribe() : unsubscribe()}
+                onCheckedChange={async (checked) => {
+                  if (checked) {
+                    const result = await subscribe();
+                    if (!result.ok) {
+                      const messages: Record<typeof result.reason, string> = {
+                        unsupported: "Your browser doesn't support push notifications.",
+                        not_configured: "Push notifications aren't set up for this app yet. Check back soon!",
+                        permission_denied: "Notifications blocked. Enable them in your browser or device settings to get ride alerts.",
+                        error: "Couldn't enable notifications. Please try again.",
+                      };
+                      toast({
+                        title: "Notifications not enabled",
+                        description: messages[result.reason],
+                        variant: "destructive",
+                      });
+                    }
+                  } else {
+                    const ok = await unsubscribe();
+                    if (!ok) {
+                      toast({
+                        title: "Couldn't turn off notifications",
+                        description: "Please try again.",
+                        variant: "destructive",
+                      });
+                    }
+                  }
+                }}
                 disabled={pushLoading}
                 data-testid="toggle-push-notifications"
               />
