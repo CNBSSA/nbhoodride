@@ -12,6 +12,10 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 
 export type PushPermission = "default" | "granted" | "denied" | "unsupported";
 
+export type SubscribeResult =
+  | { ok: true }
+  | { ok: false; reason: "unsupported" | "not_configured" | "permission_denied" | "error" };
+
 export function usePushNotifications() {
   const [permission, setPermission] = useState<PushPermission>("default");
   const [isSubscribed, setIsSubscribed] = useState(false);
@@ -43,8 +47,12 @@ export function usePushNotifications() {
     }
   }
 
-  const subscribe = useCallback(async (): Promise<boolean> => {
-    if (!isSupported || !VAPID_PUBLIC_KEY) return false;
+  const subscribe = useCallback(async (): Promise<SubscribeResult> => {
+    if (!isSupported) return { ok: false, reason: "unsupported" };
+    if (!VAPID_PUBLIC_KEY) {
+      console.error("Push subscribe error: VITE_VAPID_PUBLIC_KEY is not configured");
+      return { ok: false, reason: "not_configured" };
+    }
     setIsLoading(true);
     try {
       // Register service worker if not already
@@ -57,7 +65,7 @@ export function usePushNotifications() {
       // Request permission
       const perm = await Notification.requestPermission();
       setPermission(perm as PushPermission);
-      if (perm !== "granted") return false;
+      if (perm !== "granted") return { ok: false, reason: "permission_denied" };
 
       // Subscribe to push
       const sub = await reg.pushManager.subscribe({
@@ -73,29 +81,31 @@ export function usePushNotifications() {
       });
 
       setIsSubscribed(true);
-      return true;
+      return { ok: true };
     } catch (err) {
       console.error("Push subscribe error:", err);
-      return false;
+      return { ok: false, reason: "error" };
     } finally {
       setIsLoading(false);
     }
   }, [isSupported]);
 
-  const unsubscribe = useCallback(async (): Promise<void> => {
-    if (!isSupported) return;
+  const unsubscribe = useCallback(async (): Promise<boolean> => {
+    if (!isSupported) return false;
     setIsLoading(true);
     try {
       const reg = await navigator.serviceWorker.getRegistration("/sw.js");
-      if (!reg) return;
+      if (!reg) return false;
       const sub = await reg.pushManager.getSubscription();
       if (sub) {
         await apiRequest("POST", "/api/push/unsubscribe", { endpoint: sub.endpoint });
         await sub.unsubscribe();
         setIsSubscribed(false);
       }
+      return true;
     } catch (err) {
       console.error("Push unsubscribe error:", err);
+      return false;
     } finally {
       setIsLoading(false);
     }
