@@ -94,7 +94,7 @@ export function TermsOfService() {
 
           <section>
             <h2 className="font-semibold text-base mb-2">13. Contact</h2>
-            <p>For support, questions and enquiries, contact Thrynova Insights LLC at <a href="mailto:thrynovainsights@gmail.com" className="text-primary underline">thrynovainsights@gmail.com</a> or call <a href="tel:+15612458187" className="text-primary underline">+1 (561) 245-8187</a>. SMS and email are preferred.</p>
+            <p>For support, questions and enquiries, contact Thrynova Insights LLC at <a href="mailto:thrynovainsights@gmail.com" className="text-primary underline">thrynovainsights@gmail.com</a> or call <a href="tel:+15712458187" className="text-primary underline">+1 571-245-8187</a>. SMS and email are preferred.</p>
           </section>
 
         </div>
