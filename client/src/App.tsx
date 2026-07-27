@@ -25,6 +25,7 @@ import { TermsOfService, PrivacyPolicy } from "@/pages/LegalPages";
 import NotFound from "@/pages/not-found";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
 import PwaInstallPrompt from "@/components/PwaInstallPrompt";
+import { AssistantFab } from "@/components/AssistantFab";
 import ErrorBoundary from "@/components/ErrorBoundary";
 
 function AuthRedirect({ component: Component }: { component: React.ComponentType }) {
@@ -84,6 +85,7 @@ function App() {
             <Router />
             <PushNotificationPrompt />
             <PwaInstallPrompt />
+            <AssistantFab />
           </TooltipProvider>
         </LocaleProvider>
       </QueryClientProvider>

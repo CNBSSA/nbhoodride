@@ -25,7 +25,14 @@ export default function Home() {
   const [currentMode, setCurrentMode] = useState<"rider" | "driver">(
     () => (localStorage.getItem("pgride:lastMode") === "driver" ? "driver" : "rider")
   );
-  const [activeTab, setActiveTab] = useState("home");
+  // A FAB on other routes (e.g. /ratings, /card-setup) that aren't nested
+  // inside this tab-shell stashes "assistant" here before navigating home,
+  // so the assistant opens immediately instead of landing on the home tab.
+  const [activeTab, setActiveTab] = useState(() => {
+    const pending = sessionStorage.getItem("pgride:pendingTab");
+    if (pending) sessionStorage.removeItem("pgride:pendingTab");
+    return pending || "home";
+  });
   const [, setLocation] = useLocation();
 
   // Auto-switch to rider mode if user is not a driver and tries to access driver mode
@@ -38,6 +45,15 @@ export default function Home() {
   useEffect(() => {
     localStorage.setItem("pgride:lastMode", currentMode);
   }, [currentMode]);
+
+  // Lets the global AssistantFab (mounted outside this tab-shell) know
+  // whether the assistant is already open, so it can hide itself instead
+  // of floating a redundant "open assistant" button over the chat.
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("pgride:tab-changed", { detail: { tab: activeTab } })
+    );
+  }, [activeTab]);
 
   useEffect(() => {
     const openProfile = () => setActiveTab("profile");
