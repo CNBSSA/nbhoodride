@@ -92,6 +92,13 @@ function estimateArrival(miles: number): string {
 
 type BookingPanel = "idle" | "search" | "drivers" | "confirm";
 
+// Picking a specific driver is optional — a rider can request "any nearby
+// driver" instead and the server auto-matches (and re-matches on decline/
+// timeout) the best available one. This sentinel just marks that choice in
+// client state; it's converted to an omitted driverId before either the
+// fare-calc or booking request reaches the server.
+const ANY_DRIVER_ID = "__any_driver__";
+
 export default function RiderDashboard() {
   // ── Booking flow state ──
   const [panel, setPanel] = useState<BookingPanel>("idle");
@@ -265,7 +272,9 @@ export default function RiderDashboard() {
   const handlePickDestination = useCallback((s: AddressSuggestion) => {
     setDestinationAddress(s.label);
     setDestCoords({ lat: s.lat, lng: s.lng });
-    setSelectedDriverId("");
+    // Default to "any nearby driver" so booking never requires picking a
+    // specific one — a rider can still browse and choose a favorite instead.
+    setSelectedDriverId(ANY_DRIVER_ID);
     setFareEstimate(null);
     const dLat = (s.lat - userLocation.lat) * Math.PI / 180;
     const dLng = (s.lng - userLocation.lng) * Math.PI / 180;
@@ -292,7 +301,7 @@ export default function RiderDashboard() {
     apiRequest('POST', '/api/rides/calculate-fare', {
       distance: estimatedDistance,
       duration: estimatedDuration,
-      driverId: selectedDriverId,
+      driverId: selectedDriverId === ANY_DRIVER_ID ? undefined : selectedDriverId,
     }).then(r => r.json()).then(data => {
       setFareEstimate(data);
     }).catch(() => {
@@ -470,7 +479,7 @@ export default function RiderDashboard() {
       pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: userLocation.address },
       destinationLocation: { lat: destCoords.lat, lng: destCoords.lng, address: destinationAddress },
       pickupInstructions,
-      driverId: selectedDriverId,
+      driverId: selectedDriverId === ANY_DRIVER_ID ? undefined : selectedDriverId,
       estimatedFare: fareEstimate?.total || 0,
       paymentMethod: 'card',
       bookedForFriend: rideForFriend,
@@ -495,13 +504,14 @@ export default function RiderDashboard() {
     const dur = Math.round((dist / 25) * 60);
     setEstimatedDistance(dist);
     setEstimatedDuration(dur);
+    setSelectedDriverId(ANY_DRIVER_ID);
     trackRideSearch();
     setPanel("drivers");
   }, [trackRideSearch, userLocation.lat, userLocation.lng]);
 
   const handleVehicleTypeChange = useCallback((type: VehicleType) => {
     setRequestedVehicleType(type);
-    setSelectedDriverId("");
+    setSelectedDriverId(ANY_DRIVER_ID);
     setFareEstimate(null);
     queryClient.invalidateQueries({ queryKey: ['/api/rides/nearby-drivers'] });
   }, []);
@@ -1254,6 +1264,31 @@ export default function RiderDashboard() {
                     <p className="text-sm font-semibold text-gray-800">Choose your driver</p>
                     <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{drivers.length} nearby</span>
                   </div>
+
+                  {/* Picking a specific driver is optional — this is the
+                      default. The request still goes out and any nearby
+                      driver can take it; the server auto-matches (and
+                      re-matches on decline/timeout) the best available one. */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDriverId(ANY_DRIVER_ID)}
+                    className={`w-full text-left rounded-2xl border p-3 mb-2 transition-colors flex items-center gap-3 ${
+                      selectedDriverId === ANY_DRIVER_ID ? "border-blue-500 bg-blue-50" : "border-gray-100 bg-white hover:bg-gray-50"
+                    }`}
+                    data-testid="button-any-driver"
+                  >
+                    <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                      <Car className="w-4 h-4 text-blue-600" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-gray-900">Any nearby driver</p>
+                      <p className="text-xs text-gray-500">Fastest match — request goes out right away</p>
+                    </div>
+                    {selectedDriverId === ANY_DRIVER_ID && (
+                      <CheckCircle className="w-5 h-5 text-blue-600 flex-shrink-0" />
+                    )}
+                  </button>
+
                   {driversLoading ? (
                     <div className="text-center py-8">
                       <Loader2 className="w-6 h-6 animate-spin text-blue-500 mx-auto mb-2" />
