@@ -116,6 +116,19 @@ export default function RiderDashboard() {
   const [requestedVehicleType, setRequestedVehicleType] = useState<VehicleType>("standard");
   const [calculatingFare, setCalculatingFare] = useState(false);
 
+  // Tell the global AssistantFab (mounted at the app root) whether a booking
+  // flow is in progress so it hides during search/drivers/confirm instead of
+  // floating over the destination input or the Confirm Ride button. The
+  // unmount dispatch resets it when the rider leaves this tab mid-flow.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("pgride:rider-panel", { detail: { panel } }));
+  }, [panel]);
+  useEffect(() => {
+    return () => {
+      window.dispatchEvent(new CustomEvent("pgride:rider-panel", { detail: { panel: "idle" } }));
+    };
+  }, []);
+
   // ── UI state ──
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [isMultiStopOpen, setIsMultiStopOpen] = useState(false);
