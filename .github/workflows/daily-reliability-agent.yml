@@ -1,0 +1,106 @@
+# PG Ride — durable daily Reliability Agent (Path B).
+#
+# This is the session-independent replacement for the platform "Routine" that
+# ran the investigative reliability audit. Because it lives in GitHub Actions
+# it cannot silently stop with a Claude session or a toggled Routine — the same
+# reason the Daily Audit Gate has never missed a day.
+#
+# It gathers deterministic evidence + live production probes, asks the Claude
+# API for a report in the standard audit format, and posts it to a single
+# rolling GitHub Issue (labeled `daily-reliability`) as a daily comment, so the
+# founder is emailed each morning.
+#
+# Setup required once: add an `ANTHROPIC_API_KEY` secret in the repo
+# (Settings → Secrets and variables → Actions). Until it's added the workflow
+# still runs and posts the deterministic evidence, just without AI analysis —
+# it will not fail red merely because the key is missing.
+
+name: Daily Reliability Agent
+
+on:
+  schedule:
+    # 10:13 UTC daily = ~6:13am ET (EDT) / 5:13am ET (EST). Off-minute on
+    # purpose so it doesn't stampede the API with every other :00 cron.
+    - cron: "13 10 * * *"
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Production base URL to probe"
+        required: false
+        default: "https://nbhoodride-production.up.railway.app"
+
+concurrency:
+  group: daily-reliability-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  reliability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout (full history for develop↔main parity)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run reliability agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RELIABILITY_MODEL: ${{ vars.RELIABILITY_MODEL || 'claude-sonnet-5' }}
+          BASE_URL: ${{ github.event.inputs.base_url || 'https://nbhoodride-production.up.railway.app' }}
+        run: node scripts/reliability-agent.mjs
+
+      - name: Post report to the daily-reliability issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const label = "daily-reliability";
+            const title = "🛰️ PG Ride — Daily Reliability Reports";
+
+            let body = "Report file missing — the agent step did not produce output.";
+            try {
+              body = fs.readFileSync("reliability-report.md", "utf8");
+            } catch {}
+
+            // GitHub comments cap at 65536 chars; keep well under.
+            if (body.length > 60000) body = body.slice(0, 60000) + "\n\n… (truncated)";
+
+            // Ensure the label exists (best-effort).
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: label });
+            } catch {
+              try { await github.rest.issues.createLabel({ owner, repo, name: label, color: "1565C0", description: "Durable daily reliability agent reports" }); } catch {}
+            }
+
+            // One rolling issue; comment the report each day (create if missing).
+            const existing = await github.rest.issues.listForRepo({ owner, repo, state: "open", labels: label, per_page: 1 });
+            if (existing.data.length === 0) {
+              await github.rest.issues.create({
+                owner, repo,
+                title,
+                labels: [label],
+                assignees: [owner],
+                body: "This issue collects the durable daily reliability reports as comments. Newest at the bottom.\n\n---\n\n" + body,
+              });
+              console.log("Created rolling reliability issue.");
+            } else {
+              const num = existing.data[0].number;
+              await github.rest.issues.createComment({ owner, repo, issue_number: num, body });
+              console.log("Commented daily reliability report on issue #" + num);
+            }
