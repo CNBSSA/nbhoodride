@@ -123,6 +123,7 @@ import {
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
 import { db } from "./db";
+import { isUniqueViolation } from "./pgErrors";
 import { eq, and, desc, asc, sql, or, isNull, isNotNull, gt, like, inArray, count, sum, gte, lte, lt } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
@@ -2408,8 +2409,10 @@ export class DatabaseStorage implements IStorage {
       });
       return true;
     } catch (err: any) {
-      // Postgres unique_violation = 23505
-      if (err?.code === "23505" || /unique/i.test(String(err?.message ?? ""))) {
+      // Duplicate id = already claimed → not the first time we've seen it.
+      // isUniqueViolation() reads both the error and its .cause so ORM error
+      // wrapping (drizzle >=0.44) can't silently break this dedup again.
+      if (isUniqueViolation(err)) {
         return false;
       }
       throw err;

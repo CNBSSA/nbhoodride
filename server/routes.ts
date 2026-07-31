@@ -95,6 +95,7 @@ import { isAllowedPickup, PICKUP_OUTSIDE_MD_MESSAGE } from "@shared/serviceArea"
 import { isEmailVerificationMandatory } from "@shared/emailVerificationPolicy";
 import { findFrequentDestination } from "@shared/frequentTrip";
 import { toSafeUser } from "./safeUser";
+import { isUniqueViolation } from "./pgErrors";
 import type { SavedCardSummary } from "@shared/paymentMethodDisplay";
 import { processCircuitReminders } from "./circuitReminders";
 import { bookingWindow } from "@shared/circuitSchedule";
@@ -1344,9 +1345,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Defensive: if a profile already exists for this user (e.g. concurrent
         // double-click, or the idempotency check raced), fall back to the
         // existing row instead of surfacing the unique-constraint error as 500.
-        const code = insertErr?.code ?? insertErr?.cause?.code;
-        const msg = String(insertErr?.message ?? "");
-        if (code === "23505" || /unique|duplicate key/i.test(msg)) {
+        if (isUniqueViolation(insertErr)) {
           const fallback = await storage.getDriverProfile(userId);
           if (fallback) {
             return res.json(fallback);
@@ -4560,6 +4559,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const topupAmount = parseFloat(intent.metadata?.topupAmount || "0");
       if (topupAmount <= 0) return res.status(400).json({ message: "Invalid top-up amount" });
+
+      // Idempotency: a retried/double-submitted confirm (double-click, timeout
+      // then retry) must not credit the wallet twice for one Stripe charge.
+      // Claim the PaymentIntent id via the same dedup table the Stripe webhook
+      // uses; if it's already been claimed, return the current balance without
+      // crediting again.
+      const claimed = await storage.claimWebhookEvent("virtual_card_topup_confirm", paymentIntentId);
+      if (!claimed) {
+        const balance = await storage.getVirtualCardBalance(userId);
+        return res.json({ success: true, newBalance: balance.toFixed(2), alreadyProcessed: true });
+      }
 
       const updatedUser = await storage.addVirtualCardBalance(userId, topupAmount);
       res.json({ success: true, newBalance: updatedUser.virtualCardBalance });

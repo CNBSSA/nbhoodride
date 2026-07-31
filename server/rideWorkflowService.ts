@@ -152,6 +152,15 @@ export async function validateRideRequest(
   pickup: Location,
   destination: Location
 ): Promise<ValidationResult> {
+  // Suspension is checked at login, but an already-logged-in rider keeps a
+  // valid session after an admin suspends them mid-session — re-check here,
+  // the single funnel for ride creation, so a suspended rider can't keep
+  // booking until they happen to log out.
+  const rider = await storage.getUser(riderId);
+  if (rider?.isSuspended) {
+    return { valid: false, error: "Your account has been suspended. Please contact support." };
+  }
+
   // Coordinate sanity
   if (
     !Number.isFinite(pickup.lat) ||
