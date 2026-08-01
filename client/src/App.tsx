@@ -25,6 +25,8 @@ import { TermsOfService, PrivacyPolicy } from "@/pages/LegalPages";
 import NotFound from "@/pages/not-found";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
 import PwaInstallPrompt from "@/components/PwaInstallPrompt";
+import { PwaInstallGate } from "@/components/PwaInstallGate";
+import { captureInstallGateFromUrl } from "@/lib/pwaInstall";
 import { AssistantFab } from "@/components/AssistantFab";
 import ErrorBoundary from "@/components/ErrorBoundary";
 
@@ -76,12 +78,15 @@ function Router() {
 }
 
 function App() {
+  captureInstallGateFromUrl();
+
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <LocaleProvider>
           <TooltipProvider>
             <Toaster />
+            <PwaInstallGate />
             <Router />
             <PushNotificationPrompt />
             <PwaInstallPrompt />

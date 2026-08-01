@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Download, Share, SquarePlus, X } from "lucide-react";
+import { isInstallGateRequired } from "@/lib/pwaInstall";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -57,7 +58,7 @@ export default function PwaInstallPrompt() {
     handleDismiss();
   };
 
-  if (dismissed || isStandalone()) return null;
+  if (dismissed || isStandalone() || isInstallGateRequired()) return null;
 
   const ios = isIosDevice();
   const showAndroid = !!deferredPrompt;
