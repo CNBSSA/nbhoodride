@@ -8,6 +8,9 @@ When someone scans your PG Ride QR code, they should land on a URL that **requir
 https://peoplegoverned.com/?qr=1
 ```
 
+**Printable asset:** run `node scripts/generate-install-qr.mjs` (requires `npm install qrcode` once) → `docs/qr/pg-ride-install-qr.png`.  
+Or use any QR generator with the URL above.
+
 Alternatives (same behavior):
 
 - `?from=qr`
