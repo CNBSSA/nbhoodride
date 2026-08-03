@@ -446,3 +446,64 @@ export async function sendCircuitReminderEmail(
     `),
   );
 }
+
+// SOS / emergency alert to on-call admins. This is the non-WebSocket fallback
+// for the durable SOS admin surface: it must reach staff even when no admin
+// dashboard tab is open (e.g. a 2am incident). Best-effort per recipient —
+// a single send failure never blocks the others or the incident record.
+export async function sendEmergencyAdminAlertEmail(
+  recipients: { email: string; firstName: string | null }[],
+  incident: {
+    incidentType: string;
+    riderName: string | null;
+    riderPhone: string | null;
+    description: string | null;
+    location: { lat: number; lng: number } | null;
+    shareToken: string | null;
+    createdAt: Date | string | null;
+  },
+): Promise<{ sent: number; failed: number }> {
+  if (recipients.length === 0) return { sent: 0, failed: 0 };
+
+  const mapsLink = incident.location
+    ? `https://maps.google.com/?q=${incident.location.lat},${incident.location.lng}`
+    : null;
+  const shareUrl = incident.shareToken ? `${APP_URL}/emergency/${incident.shareToken}` : null;
+  const adminUrl = `${APP_URL}/admin`;
+  const when = incident.createdAt ? new Date(incident.createdAt).toUTCString() : "just now";
+
+  const content = `
+    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:20px 24px;margin:0 0 20px;">
+      <p style="margin:0 0 12px;color:#b91c1c;font-size:20px;font-weight:700;">🚨 SOS / Emergency Alert</p>
+      <div style="font-size:14px;color:#374151;line-height:1.9;">
+        <div><strong>Type:</strong> ${incident.incidentType}</div>
+        <div><strong>Rider:</strong> ${incident.riderName ?? "Unknown"}${incident.riderPhone ? ` — ${incident.riderPhone}` : ""}</div>
+        ${incident.description ? `<div><strong>Details:</strong> ${incident.description}</div>` : ""}
+        <div><strong>Time:</strong> ${when}</div>
+        ${mapsLink ? `<div><strong>Location:</strong> <a href="${mapsLink}">${mapsLink}</a></div>` : `<div><strong>Location:</strong> Not available</div>`}
+      </div>
+    </div>
+    <p>A rider has triggered an emergency alert. Open the admin dashboard to acknowledge and coordinate a response.</p>
+    <p style="text-align:center;">
+      <a class="btn" style="background:#dc2626;" href="${adminUrl}">Open Admin Dashboard</a>
+      ${shareUrl ? `&nbsp;<a class="btn" style="background:#374151;" href="${shareUrl}">Live Location</a>` : ""}
+    </p>
+    <p style="color:#6b7280;font-size:13px;">If you can't reach the rider, escalate to 911.</p>
+  `;
+
+  const subject = `🚨 PG Ride SOS: ${incident.incidentType}${incident.riderName ? ` — ${incident.riderName}` : ""}`;
+  const html = baseTemplate(content);
+
+  let sent = 0;
+  let failed = 0;
+  for (const r of recipients) {
+    try {
+      await sendEmail(r.email, subject, html);
+      sent++;
+    } catch (err) {
+      failed++;
+      console.error(`[EMAIL] Failed to send SOS admin alert to ${r.email}:`, err);
+    }
+  }
+  return { sent, failed };
+}

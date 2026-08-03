@@ -331,6 +331,13 @@ CREATE TABLE IF NOT EXISTS emergency_incidents (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Admin triage columns for the durable SOS admin surface. Additive so existing
+-- rows are untouched; NULL acknowledged_at/resolved_at means "still open".
+ALTER TABLE emergency_incidents ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMP;
+ALTER TABLE emergency_incidents ADD COLUMN IF NOT EXISTS acknowledged_by VARCHAR REFERENCES users(id);
+ALTER TABLE emergency_incidents ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP;
+ALTER TABLE emergency_incidents ADD COLUMN IF NOT EXISTS resolved_by VARCHAR REFERENCES users(id);
+
 -- ── Driver weekly hours ──────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS driver_weekly_hours (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -409,6 +409,13 @@ export const emergencyIncidents = pgTable("emergency_incidents", {
   shareToken: varchar("share_token").unique(),
   emergencyContactAlerted: boolean("emergency_contact_alerted").default(false),
   lastLocationUpdate: timestamp("last_location_update"),
+  // Admin triage: who acknowledged/resolved the incident and when. Lets the
+  // super-admin ops surface show an auditable queue instead of relying on a
+  // WebSocket push reaching a currently-open dashboard tab.
+  acknowledgedAt: timestamp("acknowledged_at"),
+  acknowledgedBy: varchar("acknowledged_by").references(() => users.id),
+  resolvedAt: timestamp("resolved_at"),
+  resolvedBy: varchar("resolved_by").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1393,6 +1400,14 @@ export type Ride = typeof rides.$inferSelect;
 export type Dispute = typeof disputes.$inferSelect;
 export type LostFoundReport = typeof lostFoundReports.$inferSelect;
 export type EmergencyIncident = typeof emergencyIncidents.$inferSelect;
+// Admin SOS queue row: the incident plus the rider's identity/contact so the
+// super-admin can act (call the rider, dispatch) without a second lookup.
+export type EmergencyIncidentForAdmin = EmergencyIncident & {
+  riderName: string | null;
+  riderPhone: string | null;
+  riderEmergencyContact: string | null;
+  acknowledgedByName: string | null;
+};
 export type DriverWeeklyHours = typeof driverWeeklyHours.$inferSelect;
 export type DriverOwnership = typeof driverOwnership.$inferSelect;
 export type ShareCertificate = typeof shareCertificates.$inferSelect;
