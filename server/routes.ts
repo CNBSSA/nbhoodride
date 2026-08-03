@@ -27,6 +27,7 @@ import {
   sendRideReceiptEmail,
   sendSignupPendingEmail,
   sendSignupRejectedEmail,
+  sendEmergencyAdminAlertEmail,
   EmailNotConfiguredError,
 } from "./emailService";
 import { deliverUserNotification } from "./notificationService";
@@ -4858,9 +4859,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
           } catch {}
         }
       }
-      
-      res.json({ 
-        success: true, 
+
+      // Durable fallback: the WebSocket push above only reaches admin tabs that
+      // happen to be open right now. Email every admin so an SOS still lands
+      // when no dashboard is open (e.g. 2am). Best-effort — never blocks the
+      // response or the incident record.
+      (async () => {
+        try {
+          const recipients = await storage.getAdminEmailRecipients();
+          const result = await sendEmergencyAdminAlertEmail(recipients, {
+            incidentType,
+            riderName: [user?.firstName, user?.lastName].filter(Boolean).join(" ") || null,
+            riderPhone: user?.phone ?? null,
+            description: incidentData.description,
+            location: location ?? null,
+            shareToken,
+            createdAt: incident.createdAt ?? null,
+          });
+          console.log(`[SOS] Admin alert email: ${result.sent} sent, ${result.failed} failed (${recipients.length} admins)`);
+        } catch (emailErr) {
+          console.error("[SOS] Failed to dispatch admin alert emails:", emailErr);
+        }
+      })();
+
+      res.json({
+        success: true,
         incident,
         shareUrl: `/emergency/${shareToken}`
       });
@@ -5370,6 +5393,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     next();
   };
+
+  // ── Durable SOS admin surface ────────────────────────────────────────────
+  // The auditable queue behind the real-time WebSocket push. Admins can pull
+  // the full incident list (including any that arrived while no dashboard was
+  // open) and acknowledge / resolve them.
+  app.get('/api/admin/emergency-incidents', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+      const incidents = await storage.getEmergencyIncidentsForAdmin(limit);
+      res.json({ incidents });
+    } catch (error) {
+      console.error("Error listing emergency incidents:", error);
+      res.status(500).json({ message: "Failed to list emergency incidents" });
+    }
+  });
+
+  app.post('/api/admin/emergency-incidents/:id/acknowledge', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const incident = await storage.acknowledgeEmergencyIncident(id, req.adminUser.id);
+      if (!incident) {
+        // Either the id doesn't exist or another admin already acknowledged it.
+        const found = await storage.getEmergencyIncidentById(id);
+        if (!found) return res.status(404).json({ message: "Incident not found" });
+        return res.status(409).json({ message: "Incident already acknowledged", incident: found });
+      }
+      await storage.logAdminAction(req.adminUser.id, 'acknowledge_emergency', 'emergency_incident', id, {});
+      res.json({ success: true, incident });
+    } catch (error) {
+      console.error("Error acknowledging emergency incident:", error);
+      res.status(500).json({ message: "Failed to acknowledge incident" });
+    }
+  });
+
+  app.post('/api/admin/emergency-incidents/:id/resolve', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const incident = await storage.resolveEmergencyIncident(id, req.adminUser.id);
+      if (!incident) {
+        const found = await storage.getEmergencyIncidentById(id);
+        if (!found) return res.status(404).json({ message: "Incident not found" });
+        return res.status(409).json({ message: "Incident already resolved", incident: found });
+      }
+      await storage.logAdminAction(req.adminUser.id, 'resolve_emergency', 'emergency_incident', id, {});
+      res.json({ success: true, incident });
+    } catch (error) {
+      console.error("Error resolving emergency incident:", error);
+      res.status(500).json({ message: "Failed to resolve incident" });
+    }
+  });
 
   // Create admin account (super admin only)
   app.post('/api/admin/create-admin', isSuperAdminAuth, async (req: any, res) => {
