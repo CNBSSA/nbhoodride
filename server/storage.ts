@@ -293,6 +293,7 @@ export interface IStorage {
   getDriverPayoutRequests(driverId: string): Promise<PayoutRequest[]>;
   getAllPayoutRequests(): Promise<(PayoutRequest & { driverName: string; driverEmail: string })[]>;
   updatePayoutRequest(id: string, updates: { status: string; adminNote?: string; processedBy?: string }): Promise<PayoutRequest>;
+  rejectPayoutRequestIfPending(id: string, processedBy: string, adminNote?: string): Promise<PayoutRequest | undefined>;
 
   // Dispute operations
   createDispute(dispute: InsertDispute): Promise<Dispute>;
@@ -1324,6 +1325,32 @@ export class DatabaseStorage implements IStorage {
         updatedAt: new Date(),
       })
       .where(eq(payoutRequests.id, id))
+      .returning();
+    return record;
+  }
+
+  /**
+   * Atomically reject a payout request ONLY if it is still `pending`, in a
+   * single conditional UPDATE. Returns the row if this call won the
+   * transition, or undefined if it was already processed by a concurrent
+   * request. The caller credits the driver's balance only on a win, so a
+   * double-reject (admin double-click / two admins) can never refund twice.
+   */
+  async rejectPayoutRequestIfPending(
+    id: string,
+    processedBy: string,
+    adminNote?: string
+  ): Promise<PayoutRequest | undefined> {
+    const [record] = await db
+      .update(payoutRequests)
+      .set({
+        status: "rejected",
+        ...(adminNote !== undefined && { adminNote }),
+        processedBy,
+        processedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(payoutRequests.id, id), eq(payoutRequests.status, "pending")))
       .returning();
     return record;
   }
