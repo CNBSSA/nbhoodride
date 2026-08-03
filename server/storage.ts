@@ -1585,13 +1585,19 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Atomic first-acknowledger-wins: only the admin whose UPDATE flips a still-
-  // unacknowledged row gets the record back; a racing second click sees
-  // acknowledged_at already set and gets undefined.
+  // unacknowledged, still-open row gets the record back. A racing second click
+  // sees acknowledged_at already set and gets undefined; acknowledging an
+  // already-resolved incident is likewise rejected (status guard) so we never
+  // stamp ack metadata onto a closed incident.
   async acknowledgeEmergencyIncident(incidentId: string, adminId: string): Promise<EmergencyIncident | undefined> {
     const [incident] = await db
       .update(emergencyIncidents)
       .set({ acknowledgedAt: new Date(), acknowledgedBy: adminId, updatedAt: new Date() })
-      .where(and(eq(emergencyIncidents.id, incidentId), isNull(emergencyIncidents.acknowledgedAt)))
+      .where(and(
+        eq(emergencyIncidents.id, incidentId),
+        isNull(emergencyIncidents.acknowledgedAt),
+        sql`${emergencyIncidents.status} <> 'resolved'`,
+      ))
       .returning();
     return incident;
   }

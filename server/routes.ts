@@ -5414,10 +5414,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const incident = await storage.acknowledgeEmergencyIncident(id, req.adminUser.id);
       if (!incident) {
-        // Either the id doesn't exist or another admin already acknowledged it.
+        // The ack UPDATE affected no row: the id doesn't exist, another admin
+        // already acknowledged it, or it's already resolved. Distinguish so the
+        // admin sees an accurate message.
         const found = await storage.getEmergencyIncidentById(id);
         if (!found) return res.status(404).json({ message: "Incident not found" });
-        return res.status(409).json({ message: "Incident already acknowledged", incident: found });
+        const reason = found.status === "resolved"
+          ? "Incident already resolved"
+          : "Incident already acknowledged";
+        return res.status(409).json({ message: reason, incident: found });
       }
       await storage.logAdminAction(req.adminUser.id, 'acknowledge_emergency', 'emergency_incident', id, {});
       res.json({ success: true, incident });
