@@ -26,6 +26,11 @@ import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
 
+// Shared across the SOS panel, the sidebar badge, and the ack/resolve
+// mutations so they read and invalidate the exact same cache entry. The high
+// limit ensures no unresolved incident is hidden by the server's default cap.
+const SOS_INCIDENTS_KEY = "/api/admin/emergency-incidents?limit=500";
+
 type AdminTab = "dashboard" | "sos" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
 function useAdminNavPendingCounts() {
@@ -42,7 +47,7 @@ function useAdminNavPendingCounts() {
   // when no dashboard tab was open at the moment it fired (the WebSocket push
   // only reaches already-open tabs).
   const { data: sos } = useQuery<{ incidents: any[] }>({
-    queryKey: ["/api/admin/emergency-incidents"],
+    queryKey: [SOS_INCIDENTS_KEY],
     refetchInterval: 20000,
   });
   const openSos = (sos?.incidents ?? []).filter((i) => i.status !== "resolved").length;
@@ -1084,7 +1089,7 @@ function PayoutsPanel() {
 function SosPanel() {
   const { toast } = useToast();
   const { data, isLoading } = useQuery<{ incidents: any[] }>({
-    queryKey: ["/api/admin/emergency-incidents"],
+    queryKey: [SOS_INCIDENTS_KEY],
     // Live queue: pull every 15s so incidents that arrive while this tab is
     // open surface without a manual refresh, complementing the WebSocket push.
     refetchInterval: 15000,
@@ -1096,11 +1101,11 @@ function SosPanel() {
       const res = await apiRequest("POST", `/api/admin/emergency-incidents/${id}/acknowledge`);
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/emergency-incidents"] });
-      toast({ title: "Incident acknowledged" });
-    },
+    onSuccess: () => toast({ title: "Incident acknowledged" }),
     onError: (err: Error) => toast({ title: "Acknowledge failed", description: err.message, variant: "destructive" }),
+    // Always re-sync — a 409 (another admin already acted) means our view is
+    // stale and must refresh too, not just on success.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: [SOS_INCIDENTS_KEY] }),
   });
 
   const resolve = useMutation({
@@ -1108,11 +1113,9 @@ function SosPanel() {
       const res = await apiRequest("POST", `/api/admin/emergency-incidents/${id}/resolve`);
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/emergency-incidents"] });
-      toast({ title: "Incident resolved" });
-    },
+    onSuccess: () => toast({ title: "Incident resolved" }),
     onError: (err: Error) => toast({ title: "Resolve failed", description: err.message, variant: "destructive" }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: [SOS_INCIDENTS_KEY] }),
   });
 
   if (isLoading) return <div data-testid="loading-sos">Loading emergency incidents…</div>;
@@ -1201,7 +1204,7 @@ function SosPanel() {
                       <Button
                         size="sm"
                         onClick={() => acknowledge.mutate(inc.id)}
-                        disabled={acknowledge.isPending}
+                        disabled={acknowledge.isPending && acknowledge.variables === inc.id}
                         data-testid={`sos-ack-${inc.id}`}
                       >
                         Acknowledge
@@ -1212,7 +1215,7 @@ function SosPanel() {
                         size="sm"
                         variant="destructive"
                         onClick={() => resolve.mutate(inc.id)}
-                        disabled={resolve.isPending}
+                        disabled={resolve.isPending && resolve.variables === inc.id}
                         data-testid={`sos-resolve-${inc.id}`}
                       >
                         Resolve

@@ -5415,8 +5415,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const incident = await storage.acknowledgeEmergencyIncident(id, req.adminUser.id);
       if (!incident) {
         // Either the id doesn't exist or another admin already acknowledged it.
-        const existing = await storage.getEmergencyIncidentsForAdmin(500);
-        const found = existing.find((i) => i.id === id);
+        const found = await storage.getEmergencyIncidentById(id);
         if (!found) return res.status(404).json({ message: "Incident not found" });
         return res.status(409).json({ message: "Incident already acknowledged", incident: found });
       }
@@ -5433,8 +5432,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const incident = await storage.resolveEmergencyIncident(id, req.adminUser.id);
       if (!incident) {
-        const existing = await storage.getEmergencyIncidentsForAdmin(500);
-        const found = existing.find((i) => i.id === id);
+        const found = await storage.getEmergencyIncidentById(id);
         if (!found) return res.status(404).json({ message: "Incident not found" });
         return res.status(409).json({ message: "Incident already resolved", incident: found });
       }

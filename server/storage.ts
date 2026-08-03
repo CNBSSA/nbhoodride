@@ -331,6 +331,7 @@ export interface IStorage {
   updateEmergencyIncident(incidentId: string, updates: Partial<InsertEmergencyIncident>): Promise<EmergencyIncident>;
   updateEmergencyIncidentLocation(incidentId: string, location: { lat: number; lng: number }): Promise<EmergencyIncident>;
   getEmergencyIncidentsForAdmin(limit?: number): Promise<EmergencyIncidentForAdmin[]>;
+  getEmergencyIncidentById(incidentId: string): Promise<EmergencyIncident | undefined>;
   acknowledgeEmergencyIncident(incidentId: string, adminId: string): Promise<EmergencyIncident | undefined>;
   resolveEmergencyIncident(incidentId: string, adminId: string): Promise<EmergencyIncident | undefined>;
   updateUserEmergencyContact(userId: string, phone: string): Promise<User>;
@@ -1572,6 +1573,15 @@ export class DatabaseStorage implements IStorage {
       riderEmergencyContact: r.riderEmergencyContact ?? null,
       acknowledgedByName: fullName(r.ackFirstName, r.ackLastName),
     }));
+  }
+
+  async getEmergencyIncidentById(incidentId: string): Promise<EmergencyIncident | undefined> {
+    const [incident] = await db
+      .select()
+      .from(emergencyIncidents)
+      .where(eq(emergencyIncidents.id, incidentId))
+      .limit(1);
+    return incident;
   }
 
   // Atomic first-acknowledger-wins: only the admin whose UPDATE flips a still-
