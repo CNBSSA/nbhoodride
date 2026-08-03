@@ -6719,13 +6719,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!['processing', 'paid', 'rejected'].includes(status)) {
         return res.status(400).json({ message: "status must be processing, paid, or rejected" });
       }
-      // If rejecting, refund the balance
+      // Rejecting refunds the held amount back to the driver's balance. The
+      // refund must happen EXACTLY once: do the pending→rejected transition
+      // atomically and credit only if THIS call won it, so a double-reject
+      // (admin double-click / two admins) can't refund twice. If it wasn't
+      // pending, fall through to a plain status update without crediting
+      // (preserves the prior behavior of letting an admin mark an
+      // already-processing request rejected, just with no double refund).
       if (status === 'rejected') {
-        const existing = (await storage.getDriverPayoutRequests('')); // lazy approach — get all then filter
-        const allRequests = await storage.getAllPayoutRequests();
-        const request = allRequests.find(r => r.id === id);
-        if (request && request.status === 'pending') {
-          await storage.addVirtualCardBalance(request.driverId, parseFloat(request.amount));
+        const rejected = await storage.rejectPayoutRequestIfPending(id, adminId, adminNote);
+        if (rejected) {
+          await storage.addVirtualCardBalance(rejected.driverId, parseFloat(rejected.amount));
+          await storage.logAdminAction(adminId, 'payout_rejected', 'payout_request', id, { adminNote });
+          return res.json(rejected);
         }
       }
       const updated = await storage.updatePayoutRequest(id, { status, adminNote, processedBy: adminId });

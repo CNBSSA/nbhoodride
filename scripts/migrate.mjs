@@ -222,10 +222,6 @@ ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by_role VARCHAR;
 -- fire exactly once per ride per stage across restarts.
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS reminder_stamps JSONB DEFAULT '{}';
 
--- Open coworker groups: 'code' = invite-only (legacy default), 'open' = also
--- published in-app for nearby workers to take an empty seat.
-ALTER TABLE ride_groups ADD COLUMN IF NOT EXISTS visibility VARCHAR DEFAULT 'code';
-
 -- Driver-mode invariant: is_driver means "approved driver", full stop.
 -- Historically, tapping "Get Started" on the driver form flipped is_driver
 -- immediately, handing unvetted riders the driver dashboard and mode
@@ -272,6 +268,13 @@ CREATE TABLE IF NOT EXISTS ride_groups (
   departure_notified_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Open coworker groups: 'code' = invite-only (legacy default), 'open' = also
+-- published in-app for nearby workers to take an empty seat. Must come AFTER
+-- the CREATE above — on a fresh DB the table doesn't exist yet, and running
+-- this ALTER before the CREATE aborted the whole migration (production only
+-- survived because ride_groups already existed from earlier deploys).
+ALTER TABLE ride_groups ADD COLUMN IF NOT EXISTS visibility VARCHAR DEFAULT 'code';
 
 -- ── Push subscriptions ───────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS push_subscriptions (
