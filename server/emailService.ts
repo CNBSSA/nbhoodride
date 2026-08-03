@@ -24,6 +24,18 @@ if (!resend) {
   }
 }
 
+// Defang user-controlled strings before embedding them in email HTML. Rider
+// name/phone, incident type and free-text description all originate from
+// untrusted input, so they must never reach an admin inbox as raw markup.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export class EmailNotConfiguredError extends Error {
   constructor() {
     super("Email service is not configured. RESEND_API_KEY is missing.");
@@ -445,4 +457,77 @@ export async function sendCircuitReminderEmail(
       <p>Please be at the pickup point about 5 minutes early. Guaranteed seat, fixed fare, no surge.</p>
     `),
   );
+}
+
+// SOS / emergency alert to on-call admins. This is the non-WebSocket fallback
+// for the durable SOS admin surface: it must reach staff even when no admin
+// dashboard tab is open (e.g. a 2am incident). Best-effort per recipient —
+// a single send failure never blocks the others or the incident record.
+export async function sendEmergencyAdminAlertEmail(
+  recipients: { email: string; firstName: string | null }[],
+  incident: {
+    incidentType: string;
+    riderName: string | null;
+    riderPhone: string | null;
+    description: string | null;
+    location: { lat: number; lng: number } | null;
+    shareToken: string | null;
+    createdAt: Date | string | null;
+  },
+): Promise<{ sent: number; failed: number }> {
+  if (recipients.length === 0) return { sent: 0, failed: 0 };
+
+  // Coordinates come from untrusted request JSON — coerce to finite numbers so
+  // they can only ever be plain digits in the maps URL, never injected markup.
+  const lat = Number(incident.location?.lat);
+  const lng = Number(incident.location?.lng);
+  const hasLoc = Number.isFinite(lat) && Number.isFinite(lng);
+  const mapsLink = hasLoc ? `https://maps.google.com/?q=${lat},${lng}` : null;
+  // shareToken is a server-generated nanoid, but encode defensively anyway.
+  const shareUrl = incident.shareToken ? `${APP_URL}/emergency/${encodeURIComponent(incident.shareToken)}` : null;
+  const adminUrl = `${APP_URL}/admin`;
+  const when = incident.createdAt ? new Date(incident.createdAt).toUTCString() : "just now";
+
+  const type = escapeHtml(incident.incidentType);
+  const rider = escapeHtml(incident.riderName ?? "Unknown");
+  const phone = incident.riderPhone ? escapeHtml(incident.riderPhone) : null;
+  const details = incident.description ? escapeHtml(incident.description) : null;
+
+  const content = `
+    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:20px 24px;margin:0 0 20px;">
+      <p style="margin:0 0 12px;color:#b91c1c;font-size:20px;font-weight:700;">🚨 SOS / Emergency Alert</p>
+      <div style="font-size:14px;color:#374151;line-height:1.9;">
+        <div><strong>Type:</strong> ${type}</div>
+        <div><strong>Rider:</strong> ${rider}${phone ? ` — ${phone}` : ""}</div>
+        ${details ? `<div><strong>Details:</strong> ${details}</div>` : ""}
+        <div><strong>Time:</strong> ${when}</div>
+        ${mapsLink ? `<div><strong>Location:</strong> <a href="${mapsLink}">${mapsLink}</a></div>` : `<div><strong>Location:</strong> Not available</div>`}
+      </div>
+    </div>
+    <p>A rider has triggered an emergency alert. Open the admin dashboard to acknowledge and coordinate a response.</p>
+    <p style="text-align:center;">
+      <a class="btn" style="background:#dc2626;" href="${adminUrl}">Open Admin Dashboard</a>
+      ${shareUrl ? `&nbsp;<a class="btn" style="background:#374151;" href="${shareUrl}">Live Location</a>` : ""}
+    </p>
+    <p style="color:#6b7280;font-size:13px;">If you can't reach the rider, escalate to 911.</p>
+  `;
+
+  // Subject is plain text (no HTML), but collapse newlines to avoid header
+  // oddities and keep it single-line.
+  const subjectRider = incident.riderName ? ` — ${incident.riderName}` : "";
+  const subject = `🚨 PG Ride SOS: ${incident.incidentType}${subjectRider}`.replace(/[\r\n]+/g, " ");
+  const html = baseTemplate(content);
+
+  let sent = 0;
+  let failed = 0;
+  for (const r of recipients) {
+    try {
+      await sendEmail(r.email, subject, html);
+      sent++;
+    } catch (err) {
+      failed++;
+      console.error(`[EMAIL] Failed to send SOS admin alert to ${r.email}:`, err);
+    }
+  }
+  return { sent, failed };
 }

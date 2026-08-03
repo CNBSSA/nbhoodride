@@ -73,6 +73,7 @@ import {
   type Dispute,
   type LostFoundReport,
   type EmergencyIncident,
+  type EmergencyIncidentForAdmin,
   type DriverWeeklyHours,
   type DriverOwnership,
   type ShareCertificate,
@@ -329,6 +330,10 @@ export interface IStorage {
   getEmergencyIncidentByToken(token: string): Promise<EmergencyIncident | null>;
   updateEmergencyIncident(incidentId: string, updates: Partial<InsertEmergencyIncident>): Promise<EmergencyIncident>;
   updateEmergencyIncidentLocation(incidentId: string, location: { lat: number; lng: number }): Promise<EmergencyIncident>;
+  getEmergencyIncidentsForAdmin(limit?: number): Promise<EmergencyIncidentForAdmin[]>;
+  getEmergencyIncidentById(incidentId: string): Promise<EmergencyIncident | undefined>;
+  acknowledgeEmergencyIncident(incidentId: string, adminId: string): Promise<EmergencyIncident | undefined>;
+  resolveEmergencyIncident(incidentId: string, adminId: string): Promise<EmergencyIncident | undefined>;
   updateUserEmergencyContact(userId: string, phone: string): Promise<User>;
   
   // Earnings operations
@@ -559,6 +564,7 @@ export interface IStorage {
   getCircuitRunGroup(circuitId: string, scheduledAt: Date): Promise<RideGroup | undefined>;
   getUpcomingCircuitRunGroups(): Promise<RideGroup[]>;
   getAdminUserIds(): Promise<string[]>;
+  getAdminEmailRecipients(): Promise<{ email: string; firstName: string | null }[]>;
   assignDriverToCircuitRun(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null>;
   assignDriverToSharedScheduleGroup(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null>;
   claimScheduleSlot(groupId: string): Promise<RideGroup | null>;
@@ -1523,6 +1529,86 @@ export class DatabaseStorage implements IStorage {
         updatedAt: new Date() 
       })
       .where(eq(emergencyIncidents.id, incidentId))
+      .returning();
+    return incident;
+  }
+
+  // Durable SOS admin surface: full incident queue enriched with the rider's
+  // identity + contact and the acknowledging admin's name. Ordered so anything
+  // still needing attention floats to the top — unresolved first, then within
+  // that unacknowledged first, then newest first.
+  async getEmergencyIncidentsForAdmin(limit = 100): Promise<EmergencyIncidentForAdmin[]> {
+    const ackAdmin = alias(users, "ack_admin");
+    const rows = await db
+      .select({
+        incident: emergencyIncidents,
+        riderFirstName: users.firstName,
+        riderLastName: users.lastName,
+        riderPhone: users.phone,
+        riderEmergencyContact: users.emergencyContact,
+        ackFirstName: ackAdmin.firstName,
+        ackLastName: ackAdmin.lastName,
+      })
+      .from(emergencyIncidents)
+      .leftJoin(users, eq(emergencyIncidents.userId, users.id))
+      .leftJoin(ackAdmin, eq(emergencyIncidents.acknowledgedBy, ackAdmin.id))
+      .orderBy(
+        // resolved incidents sink below open ones
+        asc(sql`(${emergencyIncidents.status} = 'resolved')`),
+        // among open ones, unacknowledged first
+        asc(sql`(${emergencyIncidents.acknowledgedAt} IS NOT NULL)`),
+        desc(emergencyIncidents.createdAt),
+      )
+      .limit(limit);
+
+    const fullName = (first: string | null, last: string | null): string | null => {
+      const name = [first, last].filter(Boolean).join(" ").trim();
+      return name.length > 0 ? name : null;
+    };
+
+    return rows.map((r) => ({
+      ...r.incident,
+      riderName: fullName(r.riderFirstName, r.riderLastName),
+      riderPhone: r.riderPhone ?? null,
+      riderEmergencyContact: r.riderEmergencyContact ?? null,
+      acknowledgedByName: fullName(r.ackFirstName, r.ackLastName),
+    }));
+  }
+
+  async getEmergencyIncidentById(incidentId: string): Promise<EmergencyIncident | undefined> {
+    const [incident] = await db
+      .select()
+      .from(emergencyIncidents)
+      .where(eq(emergencyIncidents.id, incidentId))
+      .limit(1);
+    return incident;
+  }
+
+  // Atomic first-acknowledger-wins: only the admin whose UPDATE flips a still-
+  // unacknowledged, still-open row gets the record back. A racing second click
+  // sees acknowledged_at already set and gets undefined; acknowledging an
+  // already-resolved incident is likewise rejected (status guard) so we never
+  // stamp ack metadata onto a closed incident.
+  async acknowledgeEmergencyIncident(incidentId: string, adminId: string): Promise<EmergencyIncident | undefined> {
+    const [incident] = await db
+      .update(emergencyIncidents)
+      .set({ acknowledgedAt: new Date(), acknowledgedBy: adminId, updatedAt: new Date() })
+      .where(and(
+        eq(emergencyIncidents.id, incidentId),
+        isNull(emergencyIncidents.acknowledgedAt),
+        sql`${emergencyIncidents.status} <> 'resolved'`,
+      ))
+      .returning();
+    return incident;
+  }
+
+  // Atomic resolve: flips status to 'resolved' only from a non-resolved state,
+  // stamping who/when. A racing second resolve gets undefined.
+  async resolveEmergencyIncident(incidentId: string, adminId: string): Promise<EmergencyIncident | undefined> {
+    const [incident] = await db
+      .update(emergencyIncidents)
+      .set({ status: "resolved", resolvedAt: new Date(), resolvedBy: adminId, updatedAt: new Date() })
+      .where(and(eq(emergencyIncidents.id, incidentId), sql`${emergencyIncidents.status} <> 'resolved'`))
       .returning();
     return incident;
   }
@@ -4102,6 +4188,23 @@ export class DatabaseStorage implements IStorage {
       .from(users)
       .where(or(eq(users.isAdmin, true), eq(users.isSuperAdmin, true)));
     return rows.map((r) => r.id);
+  }
+
+  // Admins with a usable email, for out-of-band alerts (e.g. SOS) that must
+  // reach on-call staff even when no admin dashboard tab is open.
+  async getAdminEmailRecipients(): Promise<{ email: string; firstName: string | null }[]> {
+    const rows = await db
+      .select({ email: users.email, firstName: users.firstName })
+      .from(users)
+      .where(
+        and(
+          or(eq(users.isAdmin, true), eq(users.isSuperAdmin, true)),
+          isNotNull(users.email),
+        ),
+      );
+    return rows
+      .filter((r): r is { email: string; firstName: string | null } => !!r.email)
+      .map((r) => ({ email: r.email, firstName: r.firstName }));
   }
 
   async assignDriverToCircuitRun(groupId: string, driverId: string): Promise<{ group: RideGroup; rides: Ride[] } | null> {

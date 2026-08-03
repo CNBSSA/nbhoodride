@@ -18,7 +18,7 @@ import {
   CheckCircle, XCircle, Eye, Ban, UserCheck, Clock,
   ChevronLeft, BarChart3, Brain, AlertCircle, BookOpen,
   RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2, Banknote, FlaskConical, Train, Package,
-  Route, Plus, Pencil
+  Route, Plus, Pencil, Siren, Phone, MapPinned
 } from "lucide-react";
 import { format } from "date-fns";
 import { useLocation } from "wouter";
@@ -26,7 +26,12 @@ import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
 
-type AdminTab = "dashboard" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
+// Shared across the SOS panel, the sidebar badge, and the ack/resolve
+// mutations so they read and invalidate the exact same cache entry. The high
+// limit ensures no unresolved incident is hidden by the server's default cap.
+const SOS_INCIDENTS_KEY = "/api/admin/emergency-incidents?limit=500";
+
+type AdminTab = "dashboard" | "sos" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
 function useAdminNavPendingCounts() {
   const { data: pendingUsers = [] } = useQuery<any[]>({
@@ -38,7 +43,15 @@ function useAdminNavPendingCounts() {
   const pendingDrivers = drivers.filter(
     (d) => !d.approvalStatus || d.approvalStatus === "pending",
   ).length;
-  return { users: pendingUsers.length, drivers: pendingDrivers };
+  // Poll SOS every 20s so a new emergency shows in the sidebar badge even
+  // when no dashboard tab was open at the moment it fired (the WebSocket push
+  // only reaches already-open tabs).
+  const { data: sos } = useQuery<{ incidents: any[] }>({
+    queryKey: [SOS_INCIDENTS_KEY],
+    refetchInterval: 20000,
+  });
+  const openSos = (sos?.incidents ?? []).filter((i) => i.status !== "resolved").length;
+  return { users: pendingUsers.length, drivers: pendingDrivers, sos: openSos };
 }
 
 export default function AdminDashboard() {
@@ -64,6 +77,7 @@ export default function AdminDashboard() {
 
   const tabs: { id: AdminTab; label: string; icon: any }[] = [
     { id: "dashboard", label: "Overview", icon: LayoutDashboard },
+    { id: "sos", label: "SOS / Emergency", icon: Siren },
     { id: "users", label: "Users", icon: Users },
     { id: "drivers", label: "Drivers", icon: Car },
     { id: "rides", label: "Rides", icon: MapPin },
@@ -102,6 +116,11 @@ export default function AdminDashboard() {
               >
                 <tab.icon className="w-4 h-4" />
                 <span className="flex-1 text-left">{tab.label}</span>
+                {tab.id === "sos" && pendingNav.sos > 0 && (
+                  <Badge className="bg-red-600 text-white text-[10px] px-1.5 animate-pulse" data-testid="nav-badge-sos">
+                    {pendingNav.sos}
+                  </Badge>
+                )}
                 {tab.id === "users" && pendingNav.users > 0 && (
                   <Badge className="bg-orange-500 text-white text-[10px] px-1.5" data-testid="nav-badge-users">
                     {pendingNav.users}
@@ -132,6 +151,7 @@ export default function AdminDashboard() {
                 data-testid={`nav-mobile-${tab.id}`}
               >
                 {tab.label}
+                {tab.id === "sos" && pendingNav.sos > 0 && ` (${pendingNav.sos})`}
                 {tab.id === "users" && pendingNav.users > 0 && ` (${pendingNav.users})`}
                 {tab.id === "drivers" && pendingNav.drivers > 0 && ` (${pendingNav.drivers})`}
               </button>
@@ -141,6 +161,7 @@ export default function AdminDashboard() {
 
         <main className="flex-1 p-6 md:p-8 mt-12 md:mt-0 max-w-6xl">
           {activeTab === "dashboard" && <DashboardOverview />}
+          {activeTab === "sos" && <SosPanel />}
           {activeTab === "users" && <UsersPanel />}
           {activeTab === "drivers" && <DriversPanel />}
           {activeTab === "rides" && <RidesPanel />}
@@ -1061,6 +1082,155 @@ function PayoutsPanel() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function SosPanel() {
+  const { toast } = useToast();
+  const { data, isLoading } = useQuery<{ incidents: any[] }>({
+    queryKey: [SOS_INCIDENTS_KEY],
+    // Live queue: pull every 15s so incidents that arrive while this tab is
+    // open surface without a manual refresh, complementing the WebSocket push.
+    refetchInterval: 15000,
+  });
+  const incidents = data?.incidents ?? [];
+
+  const acknowledge = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/admin/emergency-incidents/${id}/acknowledge`);
+      return res.json();
+    },
+    onSuccess: () => toast({ title: "Incident acknowledged" }),
+    onError: (err: Error) => toast({ title: "Acknowledge failed", description: err.message, variant: "destructive" }),
+    // Always re-sync — a 409 (another admin already acted) means our view is
+    // stale and must refresh too, not just on success.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: [SOS_INCIDENTS_KEY] }),
+  });
+
+  const resolve = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/admin/emergency-incidents/${id}/resolve`);
+      return res.json();
+    },
+    onSuccess: () => toast({ title: "Incident resolved" }),
+    onError: (err: Error) => toast({ title: "Resolve failed", description: err.message, variant: "destructive" }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: [SOS_INCIDENTS_KEY] }),
+  });
+
+  if (isLoading) return <div data-testid="loading-sos">Loading emergency incidents…</div>;
+
+  const openCount = incidents.filter((i) => i.status !== "resolved").length;
+  const unackCount = incidents.filter((i) => i.status !== "resolved" && !i.acknowledgedAt).length;
+
+  return (
+    <div data-testid="panel-sos">
+      <div className="flex items-center gap-2 mb-2">
+        <Siren className="w-6 h-6 text-red-600" />
+        <h2 className="text-2xl font-bold">SOS / Emergency</h2>
+      </div>
+      <p className="text-muted-foreground text-sm mb-6">
+        {openCount} open · {unackCount} unacknowledged · {incidents.length} total. Auto-refreshes every 15s.
+      </p>
+
+      {unackCount > 0 && (
+        <div className="mb-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 flex items-center gap-2" data-testid="sos-unack-banner">
+          <AlertTriangle className="w-4 h-4" />
+          {unackCount} unacknowledged emergency {unackCount === 1 ? "incident needs" : "incidents need"} attention. If you can't reach the rider, escalate to 911.
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {incidents.map((inc) => {
+          const resolved = inc.status === "resolved";
+          const acknowledged = !!inc.acknowledgedAt;
+          const urgent = !resolved && !acknowledged;
+          const loc = inc.location as { lat: number; lng: number } | null;
+          return (
+            <Card
+              key={inc.id}
+              className={urgent ? "border-red-500 border-2 bg-red-50" : resolved ? "opacity-70" : "border-orange-300"}
+              data-testid={`sos-incident-${inc.id}`}
+            >
+              <CardContent className="pt-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex-1 min-w-[220px]">
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                      <Badge className={resolved ? "bg-gray-500" : "bg-red-600"}>{resolved ? "Resolved" : "ACTIVE"}</Badge>
+                      <Badge variant="outline">{inc.incidentType}</Badge>
+                      {!resolved && (acknowledged
+                        ? <Badge variant="outline" className="text-green-700 border-green-400">Acknowledged</Badge>
+                        : <Badge className="bg-orange-500">Needs acknowledgement</Badge>)}
+                    </div>
+                    <p className="font-medium">
+                      {inc.riderName || "Unknown rider"}
+                      {inc.riderPhone && <span className="text-muted-foreground font-normal"> · {inc.riderPhone}</span>}
+                    </p>
+                    {inc.description && <p className="text-sm mt-1">{inc.description}</p>}
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {inc.createdAt ? new Date(inc.createdAt).toLocaleString() : "—"}
+                      {inc.emergencyContactAlerted && " · emergency contact alerted"}
+                    </p>
+                    {acknowledged && (
+                      <p className="text-xs text-green-700 mt-1">
+                        Acknowledged{inc.acknowledgedByName ? ` by ${inc.acknowledgedByName}` : ""}
+                        {inc.acknowledgedAt ? ` at ${new Date(inc.acknowledgedAt).toLocaleString()}` : ""}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2 items-stretch min-w-[160px]">
+                    {inc.riderPhone && (
+                      <a href={`tel:${inc.riderPhone}`} data-testid={`sos-call-${inc.id}`}>
+                        <Button size="sm" variant="outline" className="w-full">
+                          <Phone className="w-4 h-4 mr-1" /> Call rider
+                        </Button>
+                      </a>
+                    )}
+                    {loc && (
+                      <a href={`https://maps.google.com/?q=${loc.lat},${loc.lng}`} target="_blank" rel="noreferrer" data-testid={`sos-map-${inc.id}`}>
+                        <Button size="sm" variant="outline" className="w-full">
+                          <MapPinned className="w-4 h-4 mr-1" /> Location
+                        </Button>
+                      </a>
+                    )}
+                    {inc.shareToken && (
+                      <a href={`/emergency/${inc.shareToken}`} target="_blank" rel="noreferrer" data-testid={`sos-live-${inc.id}`}>
+                        <Button size="sm" variant="outline" className="w-full">
+                          <MapPin className="w-4 h-4 mr-1" /> Live track
+                        </Button>
+                      </a>
+                    )}
+                    {!resolved && !acknowledged && (
+                      <Button
+                        size="sm"
+                        onClick={() => acknowledge.mutate(inc.id)}
+                        disabled={acknowledge.isPending && acknowledge.variables === inc.id}
+                        data-testid={`sos-ack-${inc.id}`}
+                      >
+                        Acknowledge
+                      </Button>
+                    )}
+                    {!resolved && (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => resolve.mutate(inc.id)}
+                        disabled={resolve.isPending && resolve.variables === inc.id}
+                        data-testid={`sos-resolve-${inc.id}`}
+                      >
+                        Resolve
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+        {incidents.length === 0 && (
+          <p className="text-muted-foreground text-center py-8" data-testid="sos-empty">No emergency incidents. All clear.</p>
+        )}
+      </div>
     </div>
   );
 }
