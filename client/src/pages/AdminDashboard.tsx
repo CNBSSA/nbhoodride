@@ -30,8 +30,9 @@ import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
 // mutations so they read and invalidate the exact same cache entry. The high
 // limit ensures no unresolved incident is hidden by the server's default cap.
 const SOS_INCIDENTS_KEY = "/api/admin/emergency-incidents?limit=500";
+const AWAITING_SETTLEMENT_KEY = "/api/admin/rides/awaiting-settlement";
 
-type AdminTab = "dashboard" | "sos" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
+type AdminTab = "dashboard" | "sos" | "reconciliation" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
 function useAdminNavPendingCounts() {
   const { data: pendingUsers = [] } = useQuery<any[]>({
@@ -51,7 +52,14 @@ function useAdminNavPendingCounts() {
     refetchInterval: 20000,
   });
   const openSos = (sos?.incidents ?? []).filter((i) => i.status !== "resolved").length;
-  return { users: pendingUsers.length, drivers: pendingDrivers, sos: openSos };
+  // Poll the settlement-failure queue so a driver who did the work but wasn't
+  // paid surfaces in the sidebar even if no admin is watching that tab.
+  const { data: settlement } = useQuery<{ rides: any[] }>({
+    queryKey: [AWAITING_SETTLEMENT_KEY],
+    refetchInterval: 30000,
+  });
+  const stuckSettlements = (settlement?.rides ?? []).length;
+  return { users: pendingUsers.length, drivers: pendingDrivers, sos: openSos, reconciliation: stuckSettlements };
 }
 
 export default function AdminDashboard() {
@@ -78,6 +86,7 @@ export default function AdminDashboard() {
   const tabs: { id: AdminTab; label: string; icon: any }[] = [
     { id: "dashboard", label: "Overview", icon: LayoutDashboard },
     { id: "sos", label: "SOS / Emergency", icon: Siren },
+    { id: "reconciliation", label: "Reconciliation", icon: Banknote },
     { id: "users", label: "Users", icon: Users },
     { id: "drivers", label: "Drivers", icon: Car },
     { id: "rides", label: "Rides", icon: MapPin },
@@ -121,6 +130,11 @@ export default function AdminDashboard() {
                     {pendingNav.sos}
                   </Badge>
                 )}
+                {tab.id === "reconciliation" && pendingNav.reconciliation > 0 && (
+                  <Badge className="bg-red-600 text-white text-[10px] px-1.5" data-testid="nav-badge-reconciliation">
+                    {pendingNav.reconciliation}
+                  </Badge>
+                )}
                 {tab.id === "users" && pendingNav.users > 0 && (
                   <Badge className="bg-orange-500 text-white text-[10px] px-1.5" data-testid="nav-badge-users">
                     {pendingNav.users}
@@ -152,6 +166,7 @@ export default function AdminDashboard() {
               >
                 {tab.label}
                 {tab.id === "sos" && pendingNav.sos > 0 && ` (${pendingNav.sos})`}
+                {tab.id === "reconciliation" && pendingNav.reconciliation > 0 && ` (${pendingNav.reconciliation})`}
                 {tab.id === "users" && pendingNav.users > 0 && ` (${pendingNav.users})`}
                 {tab.id === "drivers" && pendingNav.drivers > 0 && ` (${pendingNav.drivers})`}
               </button>
@@ -162,6 +177,7 @@ export default function AdminDashboard() {
         <main className="flex-1 p-6 md:p-8 mt-12 md:mt-0 max-w-6xl">
           {activeTab === "dashboard" && <DashboardOverview />}
           {activeTab === "sos" && <SosPanel />}
+          {activeTab === "reconciliation" && <ReconciliationPanel />}
           {activeTab === "users" && <UsersPanel />}
           {activeTab === "drivers" && <DriversPanel />}
           {activeTab === "rides" && <RidesPanel />}
@@ -1082,6 +1098,85 @@ function PayoutsPanel() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function ReconciliationPanel() {
+  const { data, isLoading } = useQuery<{ rides: any[] }>({
+    queryKey: [AWAITING_SETTLEMENT_KEY],
+    // Poll so newly-stuck settlements surface without a manual refresh.
+    refetchInterval: 30000,
+  });
+  const rides = data?.rides ?? [];
+
+  const fullName = (f?: string | null, l?: string | null) => [f, l].filter(Boolean).join(" ") || "Unknown";
+  const owed = (r: any) => {
+    const fare = parseFloat(r.actualFare ?? r.estimatedFare ?? "0");
+    const tip = parseFloat(r.tipAmount ?? "0");
+    return (fare + tip).toFixed(2);
+  };
+
+  if (isLoading) return <div data-testid="loading-reconciliation">Loading reconciliation queue…</div>;
+
+  return (
+    <div data-testid="panel-reconciliation">
+      <div className="flex items-center gap-2 mb-2">
+        <Banknote className="w-6 h-6 text-red-600" />
+        <h2 className="text-2xl font-bold">Payment Reconciliation</h2>
+      </div>
+      <p className="text-muted-foreground text-sm mb-4">
+        {rides.length} ride{rides.length === 1 ? "" : "s"} whose card settlement failed after completion. The trip
+        closed but the charge/driver credit did not go through — the driver may be unpaid. Auto-refreshes every 30s.
+      </p>
+
+      {rides.length > 0 && (
+        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" data-testid="reconciliation-guidance">
+          These need manual reconciliation: verify in Stripe whether the rider was charged, then credit the driver as
+          appropriate. (A safe one-click retry is coming in a follow-up — settlement must first be made idempotent so a
+          retry can't double-pay the driver.)
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {rides.map((r) => (
+          <Card key={r.id} className="border-red-300 border" data-testid={`settlement-failed-${r.id}`}>
+            <CardContent className="pt-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex-1 min-w-[220px]">
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <Badge className="bg-red-600">Settlement failed</Badge>
+                    <Badge variant="outline">{r.paymentMethod ?? "card"}</Badge>
+                    <span className="font-semibold text-lg">${owed(r)}</span>
+                    <span className="text-xs text-muted-foreground">owed to driver</span>
+                  </div>
+                  <p className="text-sm">
+                    <span className="font-medium">Driver:</span> {fullName(r.driverFirstName, r.driverLastName)}
+                    {r.driverPhone && <span className="text-muted-foreground"> · {r.driverPhone}</span>}
+                  </p>
+                  <p className="text-sm">
+                    <span className="font-medium">Rider:</span> {fullName(r.riderFirstName, r.riderLastName)}
+                    {r.riderPhone && <span className="text-muted-foreground"> · {r.riderPhone}</span>}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Completed {r.completedAt ? new Date(r.completedAt).toLocaleString() : "—"} · ride {String(r.id).slice(0, 8)}…
+                  </p>
+                  {r.stripePaymentIntentId && !String(r.stripePaymentIntentId).startsWith("virtual-") && (
+                    <p className="text-xs text-muted-foreground mt-1 break-all">
+                      Stripe PI: <span className="font-mono">{r.stripePaymentIntentId}</span>
+                    </p>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+        {rides.length === 0 && (
+          <p className="text-muted-foreground text-center py-8" data-testid="reconciliation-empty">
+            No failed settlements. All completed rides are settled.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

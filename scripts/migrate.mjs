@@ -19,7 +19,7 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE payment_status AS ENUM ('pending_payment','authorized','paid_card','paid_cash','cancelled_with_fee','cancelled','disputed');
+  CREATE TYPE payment_status AS ENUM ('pending_payment','authorized','paid_card','paid_cash','cancelled_with_fee','cancelled','disputed','settlement_failed');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -1210,6 +1210,13 @@ async function migrate() {
       await client.query(`ALTER TYPE ride_status ADD VALUE IF NOT EXISTS 'no_show'`);
     } catch (err) {
       if (err.code !== '42704') throw err; // 42704 = type doesn't exist yet (fresh DB — CREATE TYPE below includes it)
+    }
+    // Same reason: add the settlement_failed payment status for the admin
+    // reconciliation queue as its own statement before the batch below.
+    try {
+      await client.query(`ALTER TYPE payment_status ADD VALUE IF NOT EXISTS 'settlement_failed'`);
+    } catch (err) {
+      if (err.code !== '42704') throw err; // 42704 = type doesn't exist yet (fresh DB — CREATE TYPE includes it)
     }
     await client.query(SQL);
     console.log('Migration complete — all tables ready.');
