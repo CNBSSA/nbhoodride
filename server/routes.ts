@@ -2741,6 +2741,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await settleCardPaymentForCompletedRide(ride, actualFare, tipAmount);
       } catch (settleErr) {
         console.error(`[complete] PAYMENT SETTLEMENT FAILED for ride ${rideId} — ride completed, needs manual reconciliation:`, settleErr);
+        // Durable marker so this stuck payment is visible fleet-wide in the
+        // admin reconciliation queue, not just in the server logs. Best-effort:
+        // marking must never fail the completion response either.
+        try {
+          await storage.updateRide(rideId, { paymentStatus: "settlement_failed" });
+        } catch (markErr) {
+          console.error(`[complete] could not mark ride ${rideId} settlement_failed:`, markErr);
+        }
       }
       
       // Track driver hours for ownership qualification
@@ -5459,6 +5467,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error resolving emergency incident:", error);
       res.status(500).json({ message: "Failed to resolve incident" });
+    }
+  });
+
+  // ── Payment reconciliation queue ─────────────────────────────────────────
+  // Fleet-wide list of rides whose card settlement failed after completion
+  // (paymentStatus 'settlement_failed') — a driver may have done the work and
+  // not been paid. Previously these were invisible outside the server logs.
+  app.get('/api/admin/rides/awaiting-settlement', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const rides = await storage.getRidesAwaitingSettlement();
+      res.json({ rides });
+    } catch (error) {
+      console.error("Error listing rides awaiting settlement:", error);
+      res.status(500).json({ message: "Failed to list rides awaiting settlement" });
     }
   });
 
