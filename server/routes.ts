@@ -6536,6 +6536,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const fullFare = Math.max(5, 2.5 + dist * 1.5 + duration * 0.3);
     const discountedFare = fullFare * 0.7;
 
+    // Only pre-apply the 30% discount here if the group discount is ALREADY
+    // active (this joiner is the 3rd+ member). If this join is the one that
+    // activates the discount (the 2nd member), the ride must be created at
+    // full fare — applyGroupDiscount() below discounts it exactly once,
+    // alongside the organizer's ride. Pre-discounting here too would stack
+    // with that pass and land this rider at ~51% off instead of 30%.
+    const initialFare = group.discountActive ? discountedFare : fullFare;
+    const initialDiscountAmount = group.discountActive ? fullFare * 0.3 : 0;
+
     // Create the joiner's ride. The seat is already claimed above; if this
     // fails, release it rather than leaving a phantom seat nobody occupies.
     let ride: Ride;
@@ -6545,9 +6554,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         driverId: group.driverId || null,
         pickupLocation,
         destinationLocation,
-        estimatedFare: discountedFare.toFixed(2),
+        estimatedFare: initialFare.toFixed(2),
         originalFare: fullFare.toFixed(2),
-        groupDiscountAmount: (fullFare * 0.3).toFixed(2),
+        groupDiscountAmount: initialDiscountAmount.toFixed(2),
         paymentMethod: (paymentMethod as any) || "card",
         rideType: "shared_schedule",
         groupId: group.id,
