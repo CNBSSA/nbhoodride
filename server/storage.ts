@@ -260,6 +260,7 @@ export interface IStorage {
   // Payment operations
   confirmCashPayment(rideId: string, confirmerId: string, tipAmount?: number): Promise<Ride>;
   getRidesAwaitingPayment(userId: string): Promise<any[]>;
+  getRidesAwaitingSettlement(): Promise<any[]>;
   updateUserStripeInfo(userId: string, stripeCustomerId?: string, stripePaymentMethodId?: string): Promise<User>;
   setRidePaymentAuthorization(rideId: string, paymentIntentId: string, virtualAmount?: number, stripeAmount?: number): Promise<Ride>;
   captureRidePayment(rideId: string, capturedAmount?: number, tipAmount?: number): Promise<Ride>;
@@ -2187,6 +2188,39 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(rides.completedAt));
+  }
+
+  // Fleet-wide reconciliation queue: rides whose card settlement threw after
+  // the trip was marked completed (paymentStatus 'settlement_failed'). Unlike
+  // getRidesAwaitingPayment (scoped to one driver), this surfaces stuck
+  // payments across all drivers so an admin can catch a driver who did the
+  // work but was never paid. Oldest first — longest-stuck needs attention most.
+  async getRidesAwaitingSettlement(): Promise<any[]> {
+    const driverUser = alias(users, "settlement_driver");
+    return await db
+      .select({
+        id: rides.id,
+        riderId: rides.riderId,
+        driverId: rides.driverId,
+        estimatedFare: rides.estimatedFare,
+        actualFare: rides.actualFare,
+        tipAmount: rides.tipAmount,
+        paymentMethod: rides.paymentMethod,
+        paymentStatus: rides.paymentStatus,
+        stripePaymentIntentId: rides.stripePaymentIntentId,
+        completedAt: rides.completedAt,
+        riderFirstName: users.firstName,
+        riderLastName: users.lastName,
+        riderPhone: users.phone,
+        driverFirstName: driverUser.firstName,
+        driverLastName: driverUser.lastName,
+        driverPhone: driverUser.phone,
+      })
+      .from(rides)
+      .leftJoin(users, eq(rides.riderId, users.id))
+      .leftJoin(driverUser, eq(rides.driverId, driverUser.id))
+      .where(eq(rides.paymentStatus, "settlement_failed"))
+      .orderBy(asc(rides.completedAt));
   }
 
   async updateUserStripeInfo(userId: string, stripeCustomerId?: string, stripePaymentMethodId?: string): Promise<User> {

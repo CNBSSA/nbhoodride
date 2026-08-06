@@ -181,7 +181,8 @@ export const paymentStatusEnum = pgEnum("payment_status", [
   "paid_cash",
   "cancelled_with_fee",
   "cancelled",
-  "disputed"
+  "disputed",
+  "settlement_failed"
 ]);
 
 // Payment method enum
