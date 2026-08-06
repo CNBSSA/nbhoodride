@@ -2404,30 +2404,39 @@ export class DatabaseStorage implements IStorage {
       throw new Error("Amount must be a positive number");
     }
 
-    const [updatedUser] = await db
-      .update(users)
-      .set({
-        virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) + ${amount})`,
-        updatedAt: new Date()
-      })
-      .where(eq(users.id, userId))
-      .returning();
+    // Atomic: the balance update and its ledger entry must commit together.
+    // Previously these were two separate statements — if the ledger insert
+    // threw after the balance update committed, the balance was credited with
+    // no ledger row, and any caller that releases an idempotency claim on
+    // failure (e.g. top-up confirm) could then re-run this and double-credit.
+    // Wrapping both in one transaction makes it all-or-nothing, so a failure
+    // credits nothing and a retry is safe.
+    return await db.transaction(async (tx) => {
+      const [updatedUser] = await tx
+        .update(users)
+        .set({
+          virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) + ${amount})`,
+          updatedAt: new Date()
+        })
+        .where(eq(users.id, userId))
+        .returning();
 
-    if (!updatedUser) {
-      throw new Error("User not found");
-    }
+      if (!updatedUser) {
+        throw new Error("User not found");
+      }
 
-    // Log immutable ledger entry
-    await this.logWalletTransaction({
-      userId,
-      amount,
-      balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0"),
-      reason,
-      rideId,
-      performedBy,
+      // Immutable ledger entry, in the same transaction as the balance change.
+      await tx.insert(walletTransactions).values({
+        userId,
+        amount: amount.toFixed(2),
+        balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0").toFixed(2),
+        reason,
+        rideId: rideId ?? null,
+        performedBy: performedBy ?? null,
+      });
+
+      return updatedUser;
     });
-
-    return updatedUser;
   }
 
   async splitDeductForRide(
