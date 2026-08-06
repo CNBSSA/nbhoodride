@@ -283,7 +283,11 @@ export interface IStorage {
   // newly recorded; false if it was already present. Callers should only
   // proceed with side effects when the return is true.
   claimWebhookEvent(provider: string, eventId: string, eventType?: string): Promise<boolean>;
-  
+  // Release a previously-claimed event so a retry can re-claim and re-run the
+  // side effect. Use ONLY when the side effect after a successful claim failed
+  // (e.g. the wallet credit threw) — otherwise the claim must stand.
+  releaseWebhookEvent(provider: string, eventId: string): Promise<void>;
+
   // Push subscription operations
   savePushSubscription(userId: string, sub: { endpoint: string; p256dh: string; auth: string }): Promise<PushSubscription>;
   getPushSubscriptionsByUser(userId: string): Promise<PushSubscription[]>;
@@ -2530,6 +2534,12 @@ export class DatabaseStorage implements IStorage {
       }
       throw err;
     }
+  }
+
+  async releaseWebhookEvent(provider: string, eventId: string): Promise<void> {
+    await db
+      .delete(processedWebhookEvents)
+      .where(and(eq(processedWebhookEvents.provider, provider), eq(processedWebhookEvents.eventId, eventId)));
   }
 
   async consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void> {

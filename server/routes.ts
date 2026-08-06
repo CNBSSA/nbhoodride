@@ -4572,7 +4572,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ success: true, newBalance: balance.toFixed(2), alreadyProcessed: true });
       }
 
-      const updatedUser = await storage.addVirtualCardBalance(userId, topupAmount);
+      // The claim is committed before the credit, so if the credit throws the
+      // claim would otherwise persist forever — every retry (client OR the
+      // webhook fallback) would then short-circuit on the "already claimed"
+      // branch above and return a stale, uncredited balance. Release the claim
+      // on failure so exactly one path still succeeds in crediting the charge.
+      let updatedUser;
+      try {
+        updatedUser = await storage.addVirtualCardBalance(userId, topupAmount);
+      } catch (creditErr) {
+        await storage.releaseWebhookEvent("virtual_card_topup_confirm", paymentIntentId).catch((relErr) =>
+          console.error(`Failed to release top-up claim ${paymentIntentId} after credit failure:`, relErr),
+        );
+        throw creditErr;
+      }
       res.json({ success: true, newBalance: updatedUser.virtualCardBalance });
     } catch (error: any) {
       console.error("Error confirming top-up:", error);
@@ -8651,6 +8664,28 @@ Generate the FAQ list.`;
             const ride = await storage.getRide(rideId);
             if (ride && ride.paymentStatus !== 'paid_card') {
               await storage.updateRide(rideId, { paymentStatus: 'paid_card' });
+            }
+          } else if (pi.metadata?.type === 'virtual_card_topup') {
+            // Server-side fallback for wallet top-ups: if the client never
+            // reaches POST /topup/confirm (app killed, network dropped after
+            // Stripe succeeded), credit the wallet here so the charge isn't
+            // lost. Shares the dedup key (pi.id under "virtual_card_topup_confirm")
+            // with the confirm endpoint, so whichever path runs first credits
+            // exactly once and the other no-ops.
+            const topupUserId = pi.metadata?.userId as string | undefined;
+            const topupAmount = parseFloat(pi.metadata?.topupAmount || '0');
+            if (topupUserId && topupAmount > 0) {
+              const claimed = await storage.claimWebhookEvent('virtual_card_topup_confirm', pi.id);
+              if (claimed) {
+                try {
+                  await storage.addVirtualCardBalance(topupUserId, topupAmount);
+                  console.log(`[STRIPE] top-up credited via webhook fallback: user=${topupUserId} amount=${topupAmount} pi=${pi.id}`);
+                } catch (creditErr) {
+                  // Release so a later client /confirm or webhook retry can credit.
+                  await storage.releaseWebhookEvent('virtual_card_topup_confirm', pi.id).catch(() => {});
+                  throw creditErr;
+                }
+              }
             }
           }
           break;
