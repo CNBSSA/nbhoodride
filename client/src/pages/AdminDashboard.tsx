@@ -1103,6 +1103,10 @@ function PayoutsPanel() {
 }
 
 function ReconciliationPanel() {
+  const { toast } = useToast();
+  // Track in-flight retries per ride id — a single shared mutation.isPending
+  // can't distinguish rows, so concurrent retries would mis-render each other.
+  const [retrying, setRetrying] = useState<Set<string>>(new Set());
   const { data, isLoading } = useQuery<{ rides: any[] }>({
     queryKey: [AWAITING_SETTLEMENT_KEY],
     // Poll so newly-stuck settlements surface without a manual refresh.
@@ -1110,9 +1114,43 @@ function ReconciliationPanel() {
   });
   const rides = data?.rides ?? [];
 
+  const retry = useMutation({
+    mutationFn: async (rideId: string) => {
+      const res = await apiRequest("POST", `/api/admin/rides/${rideId}/retry-settlement`);
+      return res.json();
+    },
+    onMutate: (rideId: string) => setRetrying((prev) => new Set(prev).add(rideId)),
+    onSuccess: (result) => {
+      // Honor the route's own success flag rather than assuming every 2xx
+      // settled — result.success is true only when the ride reached paid_card.
+      if (result?.success) {
+        toast({ title: "Settlement completed", description: "Driver credited and ride marked paid." });
+      } else {
+        toast({ title: "Not fully settled", description: "The retry ran but the ride isn't marked paid — check the details.", variant: "destructive" });
+      }
+    },
+    onError: (err: Error & { status?: number }) => {
+      // A 422 is a deliberate refusal (overage settlement → manual only), not a
+      // failure — show it as info, and the query refresh below will flip the row
+      // to its "Manual only" state.
+      if (err.status === 422) {
+        toast({ title: "Manual reconciliation required", description: err.message });
+      } else {
+        toast({ title: "Retry failed", description: err.message, variant: "destructive" });
+      }
+    },
+    // Refresh the queue either way — a success drops the ride, a failure keeps it.
+    onSettled: (_d, _e, rideId) => {
+      setRetrying((prev) => { const next = new Set(prev); next.delete(rideId); return next; });
+      queryClient.invalidateQueries({ queryKey: [AWAITING_SETTLEMENT_KEY] });
+    },
+  });
+
   const fullName = (f?: string | null, l?: string | null) => [f, l].filter(Boolean).join(" ") || "Unknown";
   const owed = (r: any) => {
-    const fare = parseFloat(r.actualFare ?? r.estimatedFare ?? "0");
+    // Match the server's settlement math (actualFare only, no estimatedFare
+    // fallback) so the displayed amount can't disagree with what's settled.
+    const fare = parseFloat(r.actualFare ?? "0");
     const tip = parseFloat(r.tipAmount ?? "0");
     return (fare + tip).toFixed(2);
   };
@@ -1132,9 +1170,9 @@ function ReconciliationPanel() {
 
       {rides.length > 0 && (
         <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" data-testid="reconciliation-guidance">
-          These need manual reconciliation: verify in Stripe whether the rider was charged, then credit the driver as
-          appropriate. (A safe one-click retry is coming in a follow-up — settlement must first be made idempotent so a
-          retry can't double-pay the driver.)
+          Use <span className="font-medium">Retry settlement</span> to re-run the charge and driver credit. It's
+          idempotent — safe to run more than once; it won't double-pay the driver or double-charge the rider. If a retry
+          keeps failing, investigate the Stripe PI directly.
         </div>
       )}
 
@@ -1165,6 +1203,23 @@ function ReconciliationPanel() {
                     <p className="text-xs text-muted-foreground mt-1 break-all">
                       Stripe PI: <span className="font-mono">{r.stripePaymentIntentId}</span>
                     </p>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2 items-stretch min-w-[150px]">
+                  {r.requiresManualReconciliation ? (
+                    <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2" data-testid={`manual-only-${r.id}`}>
+                      <span className="font-medium">Manual only.</span> This charge exceeds what was authorized, so it
+                      can't be safely auto-retried — reconcile in Stripe.
+                    </div>
+                  ) : (
+                    <Button
+                      size="sm"
+                      onClick={() => retry.mutate(r.id)}
+                      disabled={retrying.has(r.id)}
+                      data-testid={`retry-settlement-${r.id}`}
+                    >
+                      {retrying.has(r.id) ? "Retrying…" : "Retry settlement"}
+                    </Button>
                   )}
                 </div>
               </div>

@@ -275,11 +275,16 @@ export interface IStorage {
   // Virtual card operations
   deductVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
   addVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
+  creditDriverEarningsOnce(rideId: string, driverId: string, amount: number): Promise<boolean>;
   splitDeductForRide(userId: string, totalAmount: number, rideId: string): Promise<{ virtualDeducted: number; stripeAmount: number }>;
   getVirtualCardBalance(userId: string): Promise<number>;
   consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
   logWalletTransaction(data: { userId: string; amount: number; balanceAfter: number; reason: string; rideId?: string; disputeId?: string; performedBy?: string }): Promise<WalletTransaction>;
   getWalletTransactions(userId: string, limit?: number): Promise<WalletTransaction[]>;
+  // Idempotency probe for settlement retries: has a ledger entry with this
+  // (rideId, reason) already been written? Lets a retry skip a money move that
+  // already happened (driver earnings, rider refund, overage deduct).
+  hasWalletTransaction(rideId: string, reason: string): Promise<boolean>;
   // AH-065 webhook idempotency. Returns true if the (provider, eventId) was
   // newly recorded; false if it was already present. Callers should only
   // proceed with side effects when the return is true.
@@ -288,6 +293,7 @@ export interface IStorage {
   // side effect. Use ONLY when the side effect after a successful claim failed
   // (e.g. the wallet credit threw) — otherwise the claim must stand.
   releaseWebhookEvent(provider: string, eventId: string): Promise<void>;
+  releaseStaleWebhookEvent(provider: string, eventId: string, olderThanSeconds: number): Promise<void>;
 
   // Push subscription operations
   savePushSubscription(userId: string, sub: { endpoint: string; p256dh: string; auth: string }): Promise<PushSubscription>;
@@ -364,7 +370,7 @@ export interface IStorage {
   acceptRide(rideId: string, driverId: string): Promise<Ride>;
   declineRide(rideId: string, driverId: string): Promise<void>;
   startRide(rideId: string, driverId: string): Promise<Ride>;
-  completeRide(rideId: string, driverId: string, actualFare?: number): Promise<Ride>;
+  completeRide(rideId: string, driverId: string, actualFare?: number, tipAmount?: number): Promise<Ride>;
   getActiveRidesForDriver(driverId: string): Promise<any[]>;
   
   // GPS tracking operations
@@ -1829,7 +1835,7 @@ export class DatabaseStorage implements IStorage {
     return updatedRide;
   }
 
-  async completeRide(rideId: string, driverId: string, actualFare?: number): Promise<Ride> {
+  async completeRide(rideId: string, driverId: string, actualFare?: number, tipAmount?: number): Promise<Ride> {
     // Verify the ride belongs to this driver and is in progress
     const ride = await this.getRide(rideId);
     if (!ride) {
@@ -1898,6 +1904,14 @@ export class DatabaseStorage implements IStorage {
     } else if (!ride.actualFare) {
       // If no GPS data and no fare provided, use estimated fare
       updateData.actualFare = ride.estimatedFare;
+    }
+
+    // Persist the tip as part of the completion write (atomic with status =
+    // completed). captureRidePayment is the usual tip writer but only runs on
+    // settlement success; persisting it here means a settlement failure can't
+    // strand the tip, so a later admin retry settles the full fare + tip.
+    if (tipAmount !== undefined) {
+      updateData.tipAmount = tipAmount.toString();
     }
 
     // Update ride status to completed
@@ -2197,7 +2211,7 @@ export class DatabaseStorage implements IStorage {
   // work but was never paid. Oldest first — longest-stuck needs attention most.
   async getRidesAwaitingSettlement(): Promise<any[]> {
     const driverUser = alias(users, "settlement_driver");
-    return await db
+    const rows = await db
       .select({
         id: rides.id,
         riderId: rides.riderId,
@@ -2205,6 +2219,8 @@ export class DatabaseStorage implements IStorage {
         estimatedFare: rides.estimatedFare,
         actualFare: rides.actualFare,
         tipAmount: rides.tipAmount,
+        virtualAmountAuthorized: rides.virtualAmountAuthorized,
+        stripeAuthorizedAmount: rides.stripeAuthorizedAmount,
         paymentMethod: rides.paymentMethod,
         paymentStatus: rides.paymentStatus,
         stripePaymentIntentId: rides.stripePaymentIntentId,
@@ -2221,6 +2237,31 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(driverUser, eq(rides.driverId, driverUser.id))
       .where(eq(rides.paymentStatus, "settlement_failed"))
       .orderBy(asc(rides.completedAt));
+
+    // Flag rows the auto-retry will refuse: an overage settlement (final owed
+    // exceeds everything authorized) can't be safely re-run, so the UI should
+    // route these to manual reconciliation rather than offer a Retry that fails.
+    // This MUST use the same formula as the settlement refusal
+    // (settleCardPaymentForCompletedRide) — actualFare + tip (a completed ride
+    // always has actualFare persisted), rounded to cents, strict >.
+    // Exception: if the driver was already credited on the first attempt (a
+    // ride_earnings ledger row exists), the retry SHORT-CIRCUITS and just
+    // finalizes — safe regardless of overage — so those must stay retryable.
+    const rideIds = rows.map((r) => r.id);
+    const earningsRows = rideIds.length
+      ? await db
+          .select({ rideId: walletTransactions.rideId })
+          .from(walletTransactions)
+          .where(and(eq(walletTransactions.reason, "ride_earnings"), inArray(walletTransactions.rideId, rideIds)))
+      : [];
+    const earningsCredited = new Set(earningsRows.map((e) => e.rideId));
+
+    return rows.map((r) => {
+      const finalAmount = Number((parseFloat(r.actualFare ?? "0") + parseFloat(r.tipAmount ?? "0")).toFixed(2));
+      const totalAuthorized = Number((parseFloat(r.virtualAmountAuthorized ?? "0") + parseFloat(r.stripeAuthorizedAmount ?? "0")).toFixed(2));
+      const requiresManualReconciliation = finalAmount > totalAuthorized && !earningsCredited.has(r.id);
+      return { ...r, requiresManualReconciliation };
+    });
   }
 
   async updateUserStripeInfo(userId: string, stripeCustomerId?: string, stripePaymentMethodId?: string): Promise<User> {
@@ -2438,30 +2479,79 @@ export class DatabaseStorage implements IStorage {
       throw new Error("Amount must be a positive number");
     }
 
-    const [updatedUser] = await db
-      .update(users)
-      .set({
-        virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) + ${amount})`,
-        updatedAt: new Date()
-      })
-      .where(eq(users.id, userId))
-      .returning();
+    // Atomic: the balance update and its ledger entry must commit together.
+    // Previously these were two separate statements — if the ledger insert
+    // threw after the balance update committed, the balance was credited with
+    // no ledger row, and any caller that releases an idempotency claim on
+    // failure (e.g. top-up confirm) could then re-run this and double-credit.
+    // Wrapping both in one transaction makes it all-or-nothing, so a failure
+    // credits nothing and a retry is safe.
+    return await db.transaction(async (tx) => {
+      const [updatedUser] = await tx
+        .update(users)
+        .set({
+          virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) + ${amount})`,
+          updatedAt: new Date()
+        })
+        .where(eq(users.id, userId))
+        .returning();
 
-    if (!updatedUser) {
-      throw new Error("User not found");
-    }
+      if (!updatedUser) {
+        throw new Error("User not found");
+      }
 
-    // Log immutable ledger entry
-    await this.logWalletTransaction({
-      userId,
-      amount,
-      balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0"),
-      reason,
-      rideId,
-      performedBy,
+      // Immutable ledger entry, in the same transaction as the balance change.
+      await tx.insert(walletTransactions).values({
+        userId,
+        amount: amount.toFixed(2),
+        balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0").toFixed(2),
+        reason,
+        rideId: rideId ?? null,
+        performedBy: performedBy ?? null,
+      });
+
+      return updatedUser;
     });
+  }
 
-    return updatedUser;
+  // Credit a driver their ride earnings AT MOST ONCE per ride, atomically and
+  // concurrency-safe. Used by settlement retries: a transaction-scoped Postgres
+  // advisory lock keyed on the ride serializes concurrent callers, and inside
+  // the lock we re-check the ledger before crediting — so even two retries that
+  // race (or a retry that outlives the coarse claim lock) can't double-pay the
+  // driver. Returns true if it credited, false if a prior 'ride_earnings' entry
+  // already existed. The advisory lock auto-releases at transaction end (incl.
+  // crash), so there is no orphaned-lock window.
+  async creditDriverEarningsOnce(rideId: string, driverId: string, amount: number): Promise<boolean> {
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error("Amount must be a positive number");
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'ride_earnings:' + rideId}))`);
+      const existing = await tx
+        .select({ id: walletTransactions.id })
+        .from(walletTransactions)
+        .where(and(eq(walletTransactions.rideId, rideId), eq(walletTransactions.reason, "ride_earnings")))
+        .limit(1);
+      if (existing.length > 0) return false;
+
+      const [updatedUser] = await tx
+        .update(users)
+        .set({
+          virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) + ${amount})`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, driverId))
+        .returning();
+      if (!updatedUser) throw new Error("Driver not found");
+
+      await tx.insert(walletTransactions).values({
+        userId: driverId,
+        amount: amount.toFixed(2),
+        balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0").toFixed(2),
+        reason: "ride_earnings",
+        rideId,
+      });
+      return true;
+    });
   }
 
   async splitDeductForRide(
@@ -2547,6 +2637,15 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
+  async hasWalletTransaction(rideId: string, reason: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: walletTransactions.id })
+      .from(walletTransactions)
+      .where(and(eq(walletTransactions.rideId, rideId), eq(walletTransactions.reason, reason)))
+      .limit(1);
+    return !!row;
+  }
+
   // AH-065: try to claim a webhook event. The unique constraint on
   // (provider, event_id) means a duplicate INSERT throws — we catch it and
   // return false so the caller can skip processing. If the INSERT succeeds,
@@ -2574,6 +2673,20 @@ export class DatabaseStorage implements IStorage {
     await db
       .delete(processedWebhookEvents)
       .where(and(eq(processedWebhookEvents.provider, provider), eq(processedWebhookEvents.eventId, eventId)));
+  }
+
+  // Clear a claim only if it's older than the cutoff. Used for transient locks
+  // (e.g. the settlement-retry mutex) so a claim orphaned by a crash/redeploy
+  // between claim and release self-heals instead of blocking the ride forever.
+  // Bounded by age, so it never clears a claim a concurrent request just took.
+  async releaseStaleWebhookEvent(provider: string, eventId: string, olderThanSeconds: number): Promise<void> {
+    await db
+      .delete(processedWebhookEvents)
+      .where(and(
+        eq(processedWebhookEvents.provider, provider),
+        eq(processedWebhookEvents.eventId, eventId),
+        lt(processedWebhookEvents.processedAt, sql`now() - make_interval(secs => ${olderThanSeconds})`),
+      ));
   }
 
   async consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void> {
