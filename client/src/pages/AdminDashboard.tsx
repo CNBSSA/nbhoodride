@@ -1104,6 +1104,9 @@ function PayoutsPanel() {
 
 function ReconciliationPanel() {
   const { toast } = useToast();
+  // Track in-flight retries per ride id — a single shared mutation.isPending
+  // can't distinguish rows, so concurrent retries would mis-render each other.
+  const [retrying, setRetrying] = useState<Set<string>>(new Set());
   const { data, isLoading } = useQuery<{ rides: any[] }>({
     queryKey: [AWAITING_SETTLEMENT_KEY],
     // Poll so newly-stuck settlements surface without a manual refresh.
@@ -1116,6 +1119,7 @@ function ReconciliationPanel() {
       const res = await apiRequest("POST", `/api/admin/rides/${rideId}/retry-settlement`);
       return res.json();
     },
+    onMutate: (rideId: string) => setRetrying((prev) => new Set(prev).add(rideId)),
     onSuccess: (result) => {
       toast(result?.success
         ? { title: "Settlement completed", description: "Driver credited and ride marked paid." }
@@ -1123,7 +1127,10 @@ function ReconciliationPanel() {
     },
     onError: (err: Error) => toast({ title: "Retry failed", description: err.message, variant: "destructive" }),
     // Refresh the queue either way — a success drops the ride, a failure keeps it.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: [AWAITING_SETTLEMENT_KEY] }),
+    onSettled: (_d, _e, rideId) => {
+      setRetrying((prev) => { const next = new Set(prev); next.delete(rideId); return next; });
+      queryClient.invalidateQueries({ queryKey: [AWAITING_SETTLEMENT_KEY] });
+    },
   });
 
   const fullName = (f?: string | null, l?: string | null) => [f, l].filter(Boolean).join(" ") || "Unknown";
@@ -1187,10 +1194,10 @@ function ReconciliationPanel() {
                   <Button
                     size="sm"
                     onClick={() => retry.mutate(r.id)}
-                    disabled={retry.isPending && retry.variables === r.id}
+                    disabled={retrying.has(r.id)}
                     data-testid={`retry-settlement-${r.id}`}
                   >
-                    {retry.isPending && retry.variables === r.id ? "Retrying…" : "Retry settlement"}
+                    {retrying.has(r.id) ? "Retrying…" : "Retry settlement"}
                   </Button>
                 </div>
               </div>
