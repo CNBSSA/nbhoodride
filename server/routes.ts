@@ -2517,6 +2517,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // if it's already in the ledger every rider-side step before it also
     // completed — nothing remains but the flip. Short-circuit safely.
     if (isRetry && ride.driverId && await storage.hasWalletTransaction(rideId, "ride_earnings")) {
+      // Belt-and-suspenders: if a real Stripe auth is still an open hold (its
+      // capture-or-cancel was swallowed on the original attempt), release it so
+      // a driver-already-paid ride doesn't leave the rider's card authorized
+      // until Stripe expires it. Best-effort — never blocks the finalize.
+      if (hasRealStripeAuth) {
+        try {
+          const pi = await stripeService.getPaymentIntent(ride.stripePaymentIntentId!);
+          if (pi.status === 'requires_capture') {
+            await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!);
+          }
+        } catch (holdErr) {
+          console.error(`Settlement retry for ride ${rideId}: could not release lingering Stripe hold:`, holdErr);
+        }
+      }
       await storage.captureRidePayment(rideId, actualFare, tipAmount);
       console.log(`Settlement retry for ride ${rideId}: driver already credited — finalized status only.`);
       return;
@@ -5571,7 +5585,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // settlement are read-then-write, so two admins clicking Retry at once could
     // both see "not yet credited" and double-pay the driver. A claim on this
     // ride id lets only one retry run at a time; it's released in finally so a
-    // later sequential retry can still proceed.
+    // later sequential retry can still proceed. First clear any claim orphaned
+    // by a crash/redeploy mid-retry (older than 2 min) so the ride can't get
+    // permanently stuck behind a stale lock.
+    await storage.releaseStaleWebhookEvent("settlement_retry", id, 120).catch(() => {});
     const claimed = await storage.claimWebhookEvent("settlement_retry", id);
     if (!claimed) {
       return res.status(409).json({ message: "A settlement retry for this ride is already in progress." });

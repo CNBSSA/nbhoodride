@@ -1125,7 +1125,16 @@ function ReconciliationPanel() {
         ? { title: "Settlement completed", description: "Driver credited and ride marked paid." }
         : { title: "Settlement retried", description: "Ride updated but not fully settled — check details.", variant: "destructive" });
     },
-    onError: (err: Error) => toast({ title: "Retry failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error & { status?: number }) => {
+      // A 422 is a deliberate refusal (overage settlement → manual only), not a
+      // failure — show it as info, and the query refresh below will flip the row
+      // to its "Manual only" state.
+      if (err.status === 422) {
+        toast({ title: "Manual reconciliation required", description: err.message });
+      } else {
+        toast({ title: "Retry failed", description: err.message, variant: "destructive" });
+      }
+    },
     // Refresh the queue either way — a success drops the ride, a failure keeps it.
     onSettled: (_d, _e, rideId) => {
       setRetrying((prev) => { const next = new Set(prev); next.delete(rideId); return next; });

@@ -292,6 +292,7 @@ export interface IStorage {
   // side effect. Use ONLY when the side effect after a successful claim failed
   // (e.g. the wallet credit threw) — otherwise the claim must stand.
   releaseWebhookEvent(provider: string, eventId: string): Promise<void>;
+  releaseStaleWebhookEvent(provider: string, eventId: string, olderThanSeconds: number): Promise<void>;
 
   // Push subscription operations
   savePushSubscription(userId: string, sub: { endpoint: string; p256dh: string; auth: string }): Promise<PushSubscription>;
@@ -2231,10 +2232,14 @@ export class DatabaseStorage implements IStorage {
     // Flag rows the auto-retry will refuse: an overage settlement (final owed
     // exceeds everything authorized) can't be safely re-run, so the UI should
     // route these to manual reconciliation rather than offer a Retry that fails.
+    // This MUST use the same formula as the settlement refusal
+    // (settleCardPaymentForCompletedRide) — actualFare only (a completed ride
+    // always has it), rounded to cents, strict > — so the button and the server
+    // never disagree on which rides are manual-only.
     return rows.map((r) => {
-      const finalAmount = parseFloat(r.actualFare ?? r.estimatedFare ?? "0") + parseFloat(r.tipAmount ?? "0");
-      const totalAuthorized = parseFloat(r.virtualAmountAuthorized ?? "0") + parseFloat(r.stripeAuthorizedAmount ?? "0");
-      return { ...r, requiresManualReconciliation: finalAmount > totalAuthorized + 0.001 };
+      const finalAmount = Number((parseFloat(r.actualFare ?? "0") + parseFloat(r.tipAmount ?? "0")).toFixed(2));
+      const totalAuthorized = Number((parseFloat(r.virtualAmountAuthorized ?? "0") + parseFloat(r.stripeAuthorizedAmount ?? "0")).toFixed(2));
+      return { ...r, requiresManualReconciliation: finalAmount > totalAuthorized };
     });
   }
 
@@ -2598,6 +2603,20 @@ export class DatabaseStorage implements IStorage {
     await db
       .delete(processedWebhookEvents)
       .where(and(eq(processedWebhookEvents.provider, provider), eq(processedWebhookEvents.eventId, eventId)));
+  }
+
+  // Clear a claim only if it's older than the cutoff. Used for transient locks
+  // (e.g. the settlement-retry mutex) so a claim orphaned by a crash/redeploy
+  // between claim and release self-heals instead of blocking the ride forever.
+  // Bounded by age, so it never clears a claim a concurrent request just took.
+  async releaseStaleWebhookEvent(provider: string, eventId: string, olderThanSeconds: number): Promise<void> {
+    await db
+      .delete(processedWebhookEvents)
+      .where(and(
+        eq(processedWebhookEvents.provider, provider),
+        eq(processedWebhookEvents.eventId, eventId),
+        lt(processedWebhookEvents.processedAt, sql`now() - make_interval(secs => ${olderThanSeconds})`),
+      ));
   }
 
   async consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void> {
