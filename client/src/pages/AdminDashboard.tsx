@@ -1120,11 +1120,14 @@ function ReconciliationPanel() {
       return res.json();
     },
     onMutate: (rideId: string) => setRetrying((prev) => new Set(prev).add(rideId)),
-    onSuccess: () => {
-      // A 2xx from the retry route always means the ride reached paid_card
-      // (settlement either finalized or short-circuited); anything else throws
-      // and is handled in onError.
-      toast({ title: "Settlement completed", description: "Driver credited and ride marked paid." });
+    onSuccess: (result) => {
+      // Honor the route's own success flag rather than assuming every 2xx
+      // settled — result.success is true only when the ride reached paid_card.
+      if (result?.success) {
+        toast({ title: "Settlement completed", description: "Driver credited and ride marked paid." });
+      } else {
+        toast({ title: "Not fully settled", description: "The retry ran but the ride isn't marked paid — check the details.", variant: "destructive" });
+      }
     },
     onError: (err: Error & { status?: number }) => {
       // A 422 is a deliberate refusal (overage settlement → manual only), not a

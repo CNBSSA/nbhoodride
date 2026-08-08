@@ -1,6 +1,7 @@
 import { sql, relations } from 'drizzle-orm';
 import {
   index,
+  uniqueIndex,
   jsonb,
   pgTable,
   timestamp,
@@ -573,7 +574,12 @@ export const processedWebhookEvents = pgTable("processed_webhook_events", {
   eventType: varchar("event_type"),
   processedAt: timestamp("processed_at").defaultNow().notNull(),
 }, (table) => [
-  index("idx_processed_webhook_provider_event").on(table.provider, table.eventId),
+  // UNIQUE, not a plain index: claimWebhookEvent relies on a duplicate INSERT
+  // throwing a unique violation (webhook idempotency + the settlement-retry
+  // mutex). The live DB enforces this via CONSTRAINT processed_webhook_events_
+  // unique in scripts/migrate.mjs — this mirrors it in schema-as-code so the two
+  // never drift.
+  uniqueIndex("idx_processed_webhook_provider_event").on(table.provider, table.eventId),
 ]);
 
 // ============================================================

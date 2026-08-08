@@ -2544,7 +2544,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // simple "already deducted?" guard ambiguous. Refuse and leave it queued
     // for manual reconciliation. (First-time settlement handles overage below.)
     if (isRetry && finalAmount > totalAuthorized) {
-      throw new Error("This settlement needs to collect an additional charge from the rider and can't be auto-retried safely — please reconcile it manually.");
+      const e: any = new Error("This settlement needs to collect an additional charge from the rider and can't be auto-retried safely — please reconcile it manually.");
+      e.code = "OVERAGE_MANUAL_RECONCILE"; // route maps this to 422, not a text match
+      throw e;
     }
 
     try {
@@ -5605,9 +5607,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error(`Settlement retry failed for ride ${id}:`, error);
       // The ride remains 'settlement_failed' (settlement threw before the status
       // flip), so it stays in the queue. Overage settlements are a deliberate,
-      // expected refusal (manual reconciliation) — surface those as 422 so the
-      // client can tell them apart from a transient 502 failure.
-      const manual = /reconcile it manually/i.test(error?.message || "");
+      // expected refusal (manual reconciliation) — identified by an explicit
+      // error code (not fragile text matching) — surfaced as 422 so the client
+      // can tell them apart from a transient 502 failure.
+      const manual = error?.code === "OVERAGE_MANUAL_RECONCILE";
       res.status(manual ? 422 : 502).json({
         requiresManualReconciliation: manual,
         message: error?.message || "Settlement retry failed; ride still needs reconciliation.",
