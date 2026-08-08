@@ -2757,7 +2757,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let ride: Ride;
       try {
-        ride = await storage.completeRide(rideId, userId, actualFare);
+        ride = await storage.completeRide(rideId, userId, actualFare, tipAmount);
       } catch (err) {
         // Idempotency: a prior attempt may have marked the ride completed but
         // then failed the HTTP response on a post-completion step (settlement,
@@ -2771,19 +2771,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         throw err;
       }
 
-      // Persist the tip on the ride NOW, before settlement. captureRidePayment
-      // (the usual writer of rides.tipAmount) only runs on settlement success,
-      // so without this a settlement failure would leave tipAmount unset and a
-      // later admin retry — which reads the tip back off the ride — would settle
-      // the fare without the tip, under-paying the driver and under-charging the
-      // rider (and possibly changing which settlement branch runs).
-      if (tipAmount != null) {
-        try {
-          ride = await storage.updateRide(rideId, { tipAmount: tipAmount.toString() });
-        } catch (tipErr) {
-          console.error(`[complete] could not persist tip for ride ${rideId} before settlement:`, tipErr);
-        }
-      }
+      // Tip is persisted atomically inside completeRide above (part of the
+      // status=completed write), so it survives a settlement failure and a
+      // later admin retry settles the full fare + tip.
 
       if (ride.riderId && ride.driverId) {
         recordRideTrustEdge(storage, ride.riderId, ride.driverId).catch(console.error);
@@ -5586,9 +5576,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // both see "not yet credited" and double-pay the driver. A claim on this
     // ride id lets only one retry run at a time; it's released in finally so a
     // later sequential retry can still proceed. First clear any claim orphaned
-    // by a crash/redeploy mid-retry (older than 2 min) so the ride can't get
-    // permanently stuck behind a stale lock.
-    await storage.releaseStaleWebhookEvent("settlement_retry", id, 120).catch(() => {});
+    // by a crash/redeploy mid-retry so the ride can't get permanently stuck
+    // behind a stale lock. The window (10 min) is far longer than any real
+    // settlement (a few Stripe calls + DB writes, seconds), so it only ever
+    // clears a genuinely orphaned claim — never one held by a still-running
+    // retry, which would otherwise let a second retry double-pay the driver.
+    await storage.releaseStaleWebhookEvent("settlement_retry", id, 600).catch(() => {});
     const claimed = await storage.claimWebhookEvent("settlement_retry", id);
     if (!claimed) {
       return res.status(409).json({ message: "A settlement retry for this ride is already in progress." });

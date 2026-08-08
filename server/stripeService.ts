@@ -130,9 +130,12 @@ export class StripeService {
       off_session: true,
       metadata: { rideId, riderId, type: 'ride_settlement' },
     }, {
-      // Idempotency: one settlement shortfall charge per ride, ever. A settlement
-      // retry that re-reaches this call reuses the key, so Stripe returns the
-      // original charge instead of charging the rider a second time.
+      // Short-window idempotency: if this call is repeated within Stripe's key
+      // retention (~24h), Stripe returns the original charge instead of charging
+      // the rider again. This is defense-in-depth only — the real guarantee that
+      // an overage is charged at most once is that settlement retries REFUSE the
+      // overage path (see settleCardPaymentForCompletedRide), so this runs on the
+      // first-time completion only. Do not rely on the key alone across days.
       idempotencyKey: `ride_settlement_shortfall_${rideId}`,
     });
   }

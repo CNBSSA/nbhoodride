@@ -369,7 +369,7 @@ export interface IStorage {
   acceptRide(rideId: string, driverId: string): Promise<Ride>;
   declineRide(rideId: string, driverId: string): Promise<void>;
   startRide(rideId: string, driverId: string): Promise<Ride>;
-  completeRide(rideId: string, driverId: string, actualFare?: number): Promise<Ride>;
+  completeRide(rideId: string, driverId: string, actualFare?: number, tipAmount?: number): Promise<Ride>;
   getActiveRidesForDriver(driverId: string): Promise<any[]>;
   
   // GPS tracking operations
@@ -1834,7 +1834,7 @@ export class DatabaseStorage implements IStorage {
     return updatedRide;
   }
 
-  async completeRide(rideId: string, driverId: string, actualFare?: number): Promise<Ride> {
+  async completeRide(rideId: string, driverId: string, actualFare?: number, tipAmount?: number): Promise<Ride> {
     // Verify the ride belongs to this driver and is in progress
     const ride = await this.getRide(rideId);
     if (!ride) {
@@ -1903,6 +1903,14 @@ export class DatabaseStorage implements IStorage {
     } else if (!ride.actualFare) {
       // If no GPS data and no fare provided, use estimated fare
       updateData.actualFare = ride.estimatedFare;
+    }
+
+    // Persist the tip as part of the completion write (atomic with status =
+    // completed). captureRidePayment is the usual tip writer but only runs on
+    // settlement success; persisting it here means a settlement failure can't
+    // strand the tip, so a later admin retry settles the full fare + tip.
+    if (tipAmount !== undefined) {
+      updateData.tipAmount = tipAmount.toString();
     }
 
     // Update ride status to completed
@@ -2234,12 +2242,24 @@ export class DatabaseStorage implements IStorage {
     // route these to manual reconciliation rather than offer a Retry that fails.
     // This MUST use the same formula as the settlement refusal
     // (settleCardPaymentForCompletedRide) — actualFare only (a completed ride
-    // always has it), rounded to cents, strict > — so the button and the server
-    // never disagree on which rides are manual-only.
+    // always has it), rounded to cents, strict >.
+    // Exception: if the driver was already credited on the first attempt (a
+    // ride_earnings ledger row exists), the retry SHORT-CIRCUITS and just
+    // finalizes — safe regardless of overage — so those must stay retryable.
+    const rideIds = rows.map((r) => r.id);
+    const earningsRows = rideIds.length
+      ? await db
+          .select({ rideId: walletTransactions.rideId })
+          .from(walletTransactions)
+          .where(and(eq(walletTransactions.reason, "ride_earnings"), inArray(walletTransactions.rideId, rideIds)))
+      : [];
+    const earningsCredited = new Set(earningsRows.map((e) => e.rideId));
+
     return rows.map((r) => {
       const finalAmount = Number((parseFloat(r.actualFare ?? "0") + parseFloat(r.tipAmount ?? "0")).toFixed(2));
       const totalAuthorized = Number((parseFloat(r.virtualAmountAuthorized ?? "0") + parseFloat(r.stripeAuthorizedAmount ?? "0")).toFixed(2));
-      return { ...r, requiresManualReconciliation: finalAmount > totalAuthorized };
+      const requiresManualReconciliation = finalAmount > totalAuthorized && !earningsCredited.has(r.id);
+      return { ...r, requiresManualReconciliation };
     });
   }
 
