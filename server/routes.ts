@@ -2642,10 +2642,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Driver still gets credited to their virtual balance — admins fulfil
-      // payouts via the existing manual payout-request flow. Guarded so a retry
-      // can never pay the driver twice.
+      // payouts via the existing manual payout-request flow. creditDriverEarnings-
+      // Once is atomic + advisory-locked on the ride, so it pays the driver at
+      // most once even under concurrent retries — the guarantee no longer depends
+      // on the coarse retry claim lock.
       if (ride.driverId && finalAmount > 0) {
-        await storage.addVirtualCardBalance(ride.driverId, finalAmount, "ride_earnings", rideId);
+        await storage.creditDriverEarningsOnce(rideId, ride.driverId, finalAmount);
       }
 
       await storage.captureRidePayment(rideId, actualFare, tipAmount);

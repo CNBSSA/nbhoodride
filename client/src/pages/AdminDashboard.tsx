@@ -1120,10 +1120,11 @@ function ReconciliationPanel() {
       return res.json();
     },
     onMutate: (rideId: string) => setRetrying((prev) => new Set(prev).add(rideId)),
-    onSuccess: (result) => {
-      toast(result?.success
-        ? { title: "Settlement completed", description: "Driver credited and ride marked paid." }
-        : { title: "Settlement retried", description: "Ride updated but not fully settled — check details.", variant: "destructive" });
+    onSuccess: () => {
+      // A 2xx from the retry route always means the ride reached paid_card
+      // (settlement either finalized or short-circuited); anything else throws
+      // and is handled in onError.
+      toast({ title: "Settlement completed", description: "Driver credited and ride marked paid." });
     },
     onError: (err: Error & { status?: number }) => {
       // A 422 is a deliberate refusal (overage settlement → manual only), not a
@@ -1144,7 +1145,9 @@ function ReconciliationPanel() {
 
   const fullName = (f?: string | null, l?: string | null) => [f, l].filter(Boolean).join(" ") || "Unknown";
   const owed = (r: any) => {
-    const fare = parseFloat(r.actualFare ?? r.estimatedFare ?? "0");
+    // Match the server's settlement math (actualFare only, no estimatedFare
+    // fallback) so the displayed amount can't disagree with what's settled.
+    const fare = parseFloat(r.actualFare ?? "0");
     const tip = parseFloat(r.tipAmount ?? "0");
     return (fare + tip).toFixed(2);
   };

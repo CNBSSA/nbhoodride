@@ -275,6 +275,7 @@ export interface IStorage {
   // Virtual card operations
   deductVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
   addVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
+  creditDriverEarningsOnce(rideId: string, driverId: string, amount: number): Promise<boolean>;
   splitDeductForRide(userId: string, totalAmount: number, rideId: string): Promise<{ virtualDeducted: number; stripeAmount: number }>;
   getVirtualCardBalance(userId: string): Promise<number>;
   consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
@@ -2241,8 +2242,8 @@ export class DatabaseStorage implements IStorage {
     // exceeds everything authorized) can't be safely re-run, so the UI should
     // route these to manual reconciliation rather than offer a Retry that fails.
     // This MUST use the same formula as the settlement refusal
-    // (settleCardPaymentForCompletedRide) — actualFare only (a completed ride
-    // always has it), rounded to cents, strict >.
+    // (settleCardPaymentForCompletedRide) — actualFare + tip (a completed ride
+    // always has actualFare persisted), rounded to cents, strict >.
     // Exception: if the driver was already credited on the first attempt (a
     // ride_earnings ledger row exists), the retry SHORT-CIRCUITS and just
     // finalizes — safe regardless of overage — so those must stay retryable.
@@ -2510,6 +2511,46 @@ export class DatabaseStorage implements IStorage {
       });
 
       return updatedUser;
+    });
+  }
+
+  // Credit a driver their ride earnings AT MOST ONCE per ride, atomically and
+  // concurrency-safe. Used by settlement retries: a transaction-scoped Postgres
+  // advisory lock keyed on the ride serializes concurrent callers, and inside
+  // the lock we re-check the ledger before crediting — so even two retries that
+  // race (or a retry that outlives the coarse claim lock) can't double-pay the
+  // driver. Returns true if it credited, false if a prior 'ride_earnings' entry
+  // already existed. The advisory lock auto-releases at transaction end (incl.
+  // crash), so there is no orphaned-lock window.
+  async creditDriverEarningsOnce(rideId: string, driverId: string, amount: number): Promise<boolean> {
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error("Amount must be a positive number");
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'ride_earnings:' + rideId}))`);
+      const existing = await tx
+        .select({ id: walletTransactions.id })
+        .from(walletTransactions)
+        .where(and(eq(walletTransactions.rideId, rideId), eq(walletTransactions.reason, "ride_earnings")))
+        .limit(1);
+      if (existing.length > 0) return false;
+
+      const [updatedUser] = await tx
+        .update(users)
+        .set({
+          virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) + ${amount})`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, driverId))
+        .returning();
+      if (!updatedUser) throw new Error("Driver not found");
+
+      await tx.insert(walletTransactions).values({
+        userId: driverId,
+        amount: amount.toFixed(2),
+        balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0").toFixed(2),
+        reason: "ride_earnings",
+        rideId,
+      });
+      return true;
     });
   }
 
