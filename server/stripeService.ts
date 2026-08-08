@@ -129,6 +129,11 @@ export class StripeService {
       confirm: true,
       off_session: true,
       metadata: { rideId, riderId, type: 'ride_settlement' },
+    }, {
+      // Idempotency: one settlement shortfall charge per ride, ever. A settlement
+      // retry that re-reaches this call reuses the key, so Stripe returns the
+      // original charge instead of charging the rider a second time.
+      idempotencyKey: `ride_settlement_shortfall_${rideId}`,
     });
   }
 

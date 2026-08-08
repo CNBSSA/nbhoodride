@@ -280,6 +280,10 @@ export interface IStorage {
   consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
   logWalletTransaction(data: { userId: string; amount: number; balanceAfter: number; reason: string; rideId?: string; disputeId?: string; performedBy?: string }): Promise<WalletTransaction>;
   getWalletTransactions(userId: string, limit?: number): Promise<WalletTransaction[]>;
+  // Idempotency probe for settlement retries: has a ledger entry with this
+  // (rideId, reason) already been written? Lets a retry skip a money move that
+  // already happened (driver earnings, rider refund, overage deduct).
+  hasWalletTransaction(rideId: string, reason: string): Promise<boolean>;
   // AH-065 webhook idempotency. Returns true if the (provider, eventId) was
   // newly recorded; false if it was already present. Callers should only
   // proceed with side effects when the return is true.
@@ -2545,6 +2549,15 @@ export class DatabaseStorage implements IStorage {
       .where(eq(walletTransactions.userId, userId))
       .orderBy(desc(walletTransactions.createdAt))
       .limit(limit);
+  }
+
+  async hasWalletTransaction(rideId: string, reason: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: walletTransactions.id })
+      .from(walletTransactions)
+      .where(and(eq(walletTransactions.rideId, rideId), eq(walletTransactions.reason, reason)))
+      .limit(1);
+    return !!row;
   }
 
   // AH-065: try to claim a webhook event. The unique constraint on

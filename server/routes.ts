@@ -2487,6 +2487,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   ): Promise<void> {
     if (ride.paymentMethod !== 'card' || !ride.stripePaymentIntentId) return;
     const rideId = ride.id;
+    // A retry re-runs settlement against a ride already marked settlement_failed.
+    // ONLY on a retry do we apply idempotency guards; a first-time completion
+    // takes the original path (every guard below stays false), so its behaviour
+    // is unchanged. This keeps the hot path untouched while making the admin
+    // retry safe — no double driver-pay, no double rider-charge, no re-capture.
+    const isRetry = ride.paymentStatus === 'settlement_failed';
     try {
       const finalFare = actualFare ?? parseFloat(ride.actualFare || "0");
       const tip = tipAmount || 0;
@@ -2501,16 +2507,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         !!ride.stripePaymentIntentId &&
         !ride.stripePaymentIntentId.startsWith("virtual-");
 
+      // Driver earnings is the last money move before the final status flip, so
+      // if it's already in the ledger every rider-side step before it also
+      // completed — nothing remains but the flip. Short-circuit safely.
+      if (isRetry && ride.driverId && await storage.hasWalletTransaction(rideId, "ride_earnings")) {
+        await storage.captureRidePayment(rideId, actualFare, tipAmount);
+        console.log(`Settlement retry for ride ${rideId}: driver already credited — finalized status only.`);
+        return;
+      }
+
+      // Per-operation idempotency guards. On a first-time settlement isRetry is
+      // false so all of these stay false and the code path is identical to before.
+      const refundDone = isRetry && await storage.hasWalletTransaction(rideId, "ride_refund");
+      const overageDeductDone = isRetry && await storage.hasWalletTransaction(rideId, "ride_charge");
+      const earningsDone = isRetry && await storage.hasWalletTransaction(rideId, "ride_earnings");
+      let captureDone = false;
+      if (isRetry && hasRealStripeAuth) {
+        try {
+          const pi = await stripeService.getPaymentIntent(ride.stripePaymentIntentId!);
+          captureDone = pi.status === 'succeeded';
+        } catch (piErr) {
+          // If we can't verify, leave captureDone false. A re-capture of an
+          // already-captured PI then throws and the retry fails safely (ride
+          // stays settlement_failed) rather than risking a wrong charge.
+          console.error(`Could not check Stripe PI status for ${ride.stripePaymentIntentId} on retry:`, piErr);
+        }
+      }
+
       const rider = await storage.getUser(ride.riderId);
 
       // Branch 1: final ≤ virtual already deducted
       //   → refund the unused virtual; cancel any Stripe auth (no charge).
       if (finalAmount <= virtualAuthorized) {
         const refund = Number((virtualAuthorized - finalAmount).toFixed(2));
-        if (refund > 0) {
+        if (refund > 0 && !refundDone) {
           await storage.addVirtualCardBalance(ride.riderId, refund, "ride_refund", rideId);
         }
-        if (hasRealStripeAuth) {
+        if (hasRealStripeAuth && !captureDone) {
           try {
             await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!);
           } catch (cancelErr) {
@@ -2522,9 +2555,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       //   → partial-capture only what we still need from the existing Stripe auth.
       else if (finalAmount <= totalAuthorized) {
         const stripeNeeded = Number((finalAmount - virtualAuthorized).toFixed(2));
-        if (hasRealStripeAuth && stripeNeeded > 0) {
+        if (hasRealStripeAuth && stripeNeeded > 0 && !captureDone) {
           await stripeService.capturePaymentIntent(ride.stripePaymentIntentId!, stripeNeeded);
-        } else if (hasRealStripeAuth && stripeNeeded === 0) {
+        } else if (hasRealStripeAuth && stripeNeeded === 0 && !captureDone) {
           // virtual covered everything despite an authorization — release the hold.
           try {
             await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!);
@@ -2536,11 +2569,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Branch 3: final > virtual + Stripe authorization
       //   → capture full Stripe auth, then charge the extra (virtual first, then a new Stripe PI).
       else {
-        if (hasRealStripeAuth && stripeAuthorized > 0) {
+        if (hasRealStripeAuth && stripeAuthorized > 0 && !captureDone) {
           await stripeService.capturePaymentIntent(ride.stripePaymentIntentId!, stripeAuthorized);
         }
         const overage = Number((finalAmount - totalAuthorized).toFixed(2));
-        if (overage > 0) {
+        if (overage > 0 && !overageDeductDone) {
           const split = await storage.splitDeductForRide(ride.riderId, overage, rideId);
           if (split.stripeAmount > 0) {
             if (!stripeService.isEnabled) {
@@ -2554,6 +2587,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               throw new Error("Insufficient virtual balance and no card on file to collect overage.");
             }
             try {
+              // chargeRideShortfall carries a per-ride Stripe idempotency key,
+              // so even if a retry re-reaches it the rider is charged only once.
               await stripeService.chargeRideShortfall({
                 amount: split.stripeAmount,
                 customerId: rider.stripeCustomerId,
@@ -2574,8 +2609,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Driver still gets credited to their virtual balance — admins fulfil
-      // payouts via the existing manual payout-request flow.
-      if (ride.driverId && finalAmount > 0) {
+      // payouts via the existing manual payout-request flow. Guarded so a retry
+      // can never pay the driver twice.
+      if (ride.driverId && finalAmount > 0 && !earningsDone) {
         await storage.addVirtualCardBalance(ride.driverId, finalAmount, "ride_earnings", rideId);
       }
 
@@ -5481,6 +5517,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error listing rides awaiting settlement:", error);
       res.status(500).json({ message: "Failed to list rides awaiting settlement" });
+    }
+  });
+
+  // Safe retry of a failed card settlement. settleCardPaymentForCompletedRide
+  // is idempotent when the ride is already 'settlement_failed' (ledger-guarded
+  // driver credit / refund / overage-deduct, PI-status-guarded capture, and a
+  // per-ride Stripe idempotency key on the shortfall charge), so re-running it
+  // cannot double-pay the driver or double-charge the rider. On success the ride
+  // flips to paid_card and drops out of the queue; on failure it stays put for
+  // another attempt.
+  app.post('/api/admin/rides/:id/retry-settlement', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const ride = await storage.getRide(id);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+      if (ride.paymentStatus !== 'settlement_failed') {
+        return res.status(409).json({ message: `Ride is not awaiting settlement (status: ${ride.paymentStatus})`, ride });
+      }
+      await settleCardPaymentForCompletedRide(
+        ride,
+        ride.actualFare != null ? parseFloat(ride.actualFare) : undefined,
+        ride.tipAmount != null ? parseFloat(ride.tipAmount) : undefined,
+      );
+      const updated = await storage.getRide(id);
+      const settled = updated?.paymentStatus === 'paid_card';
+      await storage.logAdminAction(req.adminUser.id, 'retry_settlement', 'ride', id, { settled });
+      res.json({ success: settled, ride: updated });
+    } catch (error: any) {
+      console.error(`Settlement retry failed for ride ${req.params.id}:`, error);
+      // The ride remains 'settlement_failed' (settlement threw before the status
+      // flip), so it stays in the queue for another attempt or manual handling.
+      res.status(502).json({ message: error?.message || "Settlement retry failed; ride still needs reconciliation." });
     }
   });
 

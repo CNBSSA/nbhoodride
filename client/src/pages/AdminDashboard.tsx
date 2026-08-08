@@ -1103,12 +1103,28 @@ function PayoutsPanel() {
 }
 
 function ReconciliationPanel() {
+  const { toast } = useToast();
   const { data, isLoading } = useQuery<{ rides: any[] }>({
     queryKey: [AWAITING_SETTLEMENT_KEY],
     // Poll so newly-stuck settlements surface without a manual refresh.
     refetchInterval: 30000,
   });
   const rides = data?.rides ?? [];
+
+  const retry = useMutation({
+    mutationFn: async (rideId: string) => {
+      const res = await apiRequest("POST", `/api/admin/rides/${rideId}/retry-settlement`);
+      return res.json();
+    },
+    onSuccess: (result) => {
+      toast(result?.success
+        ? { title: "Settlement completed", description: "Driver credited and ride marked paid." }
+        : { title: "Settlement retried", description: "Ride updated but not fully settled — check details.", variant: "destructive" });
+    },
+    onError: (err: Error) => toast({ title: "Retry failed", description: err.message, variant: "destructive" }),
+    // Refresh the queue either way — a success drops the ride, a failure keeps it.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: [AWAITING_SETTLEMENT_KEY] }),
+  });
 
   const fullName = (f?: string | null, l?: string | null) => [f, l].filter(Boolean).join(" ") || "Unknown";
   const owed = (r: any) => {
@@ -1132,9 +1148,9 @@ function ReconciliationPanel() {
 
       {rides.length > 0 && (
         <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" data-testid="reconciliation-guidance">
-          These need manual reconciliation: verify in Stripe whether the rider was charged, then credit the driver as
-          appropriate. (A safe one-click retry is coming in a follow-up — settlement must first be made idempotent so a
-          retry can't double-pay the driver.)
+          Use <span className="font-medium">Retry settlement</span> to re-run the charge and driver credit. It's
+          idempotent — safe to run more than once; it won't double-pay the driver or double-charge the rider. If a retry
+          keeps failing, investigate the Stripe PI directly.
         </div>
       )}
 
@@ -1166,6 +1182,16 @@ function ReconciliationPanel() {
                       Stripe PI: <span className="font-mono">{r.stripePaymentIntentId}</span>
                     </p>
                   )}
+                </div>
+                <div className="flex flex-col gap-2 items-stretch min-w-[150px]">
+                  <Button
+                    size="sm"
+                    onClick={() => retry.mutate(r.id)}
+                    disabled={retry.isPending && retry.variables === r.id}
+                    data-testid={`retry-settlement-${r.id}`}
+                  >
+                    {retry.isPending && retry.variables === r.id ? "Retrying…" : "Retry settlement"}
+                  </Button>
                 </div>
               </div>
             </CardContent>
