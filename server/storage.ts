@@ -2201,7 +2201,7 @@ export class DatabaseStorage implements IStorage {
   // work but was never paid. Oldest first — longest-stuck needs attention most.
   async getRidesAwaitingSettlement(): Promise<any[]> {
     const driverUser = alias(users, "settlement_driver");
-    return await db
+    const rows = await db
       .select({
         id: rides.id,
         riderId: rides.riderId,
@@ -2209,6 +2209,8 @@ export class DatabaseStorage implements IStorage {
         estimatedFare: rides.estimatedFare,
         actualFare: rides.actualFare,
         tipAmount: rides.tipAmount,
+        virtualAmountAuthorized: rides.virtualAmountAuthorized,
+        stripeAuthorizedAmount: rides.stripeAuthorizedAmount,
         paymentMethod: rides.paymentMethod,
         paymentStatus: rides.paymentStatus,
         stripePaymentIntentId: rides.stripePaymentIntentId,
@@ -2225,6 +2227,15 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(driverUser, eq(rides.driverId, driverUser.id))
       .where(eq(rides.paymentStatus, "settlement_failed"))
       .orderBy(asc(rides.completedAt));
+
+    // Flag rows the auto-retry will refuse: an overage settlement (final owed
+    // exceeds everything authorized) can't be safely re-run, so the UI should
+    // route these to manual reconciliation rather than offer a Retry that fails.
+    return rows.map((r) => {
+      const finalAmount = parseFloat(r.actualFare ?? r.estimatedFare ?? "0") + parseFloat(r.tipAmount ?? "0");
+      const totalAuthorized = parseFloat(r.virtualAmountAuthorized ?? "0") + parseFloat(r.stripeAuthorizedAmount ?? "0");
+      return { ...r, requiresManualReconciliation: finalAmount > totalAuthorized + 0.001 };
+    });
   }
 
   async updateUserStripeInfo(userId: string, stripeCustomerId?: string, stripePaymentMethodId?: string): Promise<User> {

@@ -2757,6 +2757,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         throw err;
       }
 
+      // Persist the tip on the ride NOW, before settlement. captureRidePayment
+      // (the usual writer of rides.tipAmount) only runs on settlement success,
+      // so without this a settlement failure would leave tipAmount unset and a
+      // later admin retry — which reads the tip back off the ride — would settle
+      // the fare without the tip, under-paying the driver and under-charging the
+      // rider (and possibly changing which settlement branch runs).
+      if (tipAmount != null) {
+        try {
+          ride = await storage.updateRide(rideId, { tipAmount: tipAmount.toString() });
+        } catch (tipErr) {
+          console.error(`[complete] could not persist tip for ride ${rideId} before settlement:`, tipErr);
+        }
+      }
+
       if (ride.riderId && ride.driverId) {
         recordRideTrustEdge(storage, ride.riderId, ride.driverId).catch(console.error);
         allocateGreenBonusForRide(storage, ride.driverId, rideId).catch(console.error);
@@ -5547,13 +5561,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // flips to paid_card and drops out of the queue; on failure it stays put for
   // another attempt.
   app.post('/api/admin/rides/:id/retry-settlement', isAdminOrSessionAuth, async (req: any, res) => {
+    const { id } = req.params;
+    const ride = await storage.getRide(id);
+    if (!ride) return res.status(404).json({ message: "Ride not found" });
+    if (ride.paymentStatus !== 'settlement_failed') {
+      return res.status(409).json({ message: `Ride is not awaiting settlement (status: ${ride.paymentStatus})`, ride });
+    }
+    // Serialize concurrent retries of the same ride: the ledger guards inside
+    // settlement are read-then-write, so two admins clicking Retry at once could
+    // both see "not yet credited" and double-pay the driver. A claim on this
+    // ride id lets only one retry run at a time; it's released in finally so a
+    // later sequential retry can still proceed.
+    const claimed = await storage.claimWebhookEvent("settlement_retry", id);
+    if (!claimed) {
+      return res.status(409).json({ message: "A settlement retry for this ride is already in progress." });
+    }
     try {
-      const { id } = req.params;
-      const ride = await storage.getRide(id);
-      if (!ride) return res.status(404).json({ message: "Ride not found" });
-      if (ride.paymentStatus !== 'settlement_failed') {
-        return res.status(409).json({ message: `Ride is not awaiting settlement (status: ${ride.paymentStatus})`, ride });
-      }
       await settleCardPaymentForCompletedRide(
         ride,
         ride.actualFare != null ? parseFloat(ride.actualFare) : undefined,
@@ -5561,13 +5584,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       const updated = await storage.getRide(id);
       const settled = updated?.paymentStatus === 'paid_card';
-      await storage.logAdminAction(req.adminUser.id, 'retry_settlement', 'ride', id, { settled });
+      // Audit logging must not turn a successful settlement into a reported
+      // failure — best-effort only.
+      storage.logAdminAction(req.adminUser.id, 'retry_settlement', 'ride', id, { settled })
+        .catch((logErr) => console.error(`[retry-settlement] audit log failed for ride ${id}:`, logErr));
       res.json({ success: settled, ride: updated });
     } catch (error: any) {
-      console.error(`Settlement retry failed for ride ${req.params.id}:`, error);
+      console.error(`Settlement retry failed for ride ${id}:`, error);
       // The ride remains 'settlement_failed' (settlement threw before the status
-      // flip), so it stays in the queue for another attempt or manual handling.
-      res.status(502).json({ message: error?.message || "Settlement retry failed; ride still needs reconciliation." });
+      // flip), so it stays in the queue. Overage settlements are a deliberate,
+      // expected refusal (manual reconciliation) — surface those as 422 so the
+      // client can tell them apart from a transient 502 failure.
+      const manual = /reconcile it manually/i.test(error?.message || "");
+      res.status(manual ? 422 : 502).json({
+        requiresManualReconciliation: manual,
+        message: error?.message || "Settlement retry failed; ride still needs reconciliation.",
+      });
+    } finally {
+      await storage.releaseWebhookEvent("settlement_retry", id).catch((relErr) =>
+        console.error(`[retry-settlement] could not release retry claim for ride ${id}:`, relErr),
+      );
     }
   });
 

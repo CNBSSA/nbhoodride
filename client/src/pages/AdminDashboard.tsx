@@ -1191,14 +1191,21 @@ function ReconciliationPanel() {
                   )}
                 </div>
                 <div className="flex flex-col gap-2 items-stretch min-w-[150px]">
-                  <Button
-                    size="sm"
-                    onClick={() => retry.mutate(r.id)}
-                    disabled={retrying.has(r.id)}
-                    data-testid={`retry-settlement-${r.id}`}
-                  >
-                    {retrying.has(r.id) ? "Retrying…" : "Retry settlement"}
-                  </Button>
+                  {r.requiresManualReconciliation ? (
+                    <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2" data-testid={`manual-only-${r.id}`}>
+                      <span className="font-medium">Manual only.</span> This charge exceeds what was authorized, so it
+                      can't be safely auto-retried — reconcile in Stripe.
+                    </div>
+                  ) : (
+                    <Button
+                      size="sm"
+                      onClick={() => retry.mutate(r.id)}
+                      disabled={retrying.has(r.id)}
+                      data-testid={`retry-settlement-${r.id}`}
+                    >
+                      {retrying.has(r.id) ? "Retrying…" : "Retry settlement"}
+                    </Button>
+                  )}
                 </div>
               </div>
             </CardContent>
