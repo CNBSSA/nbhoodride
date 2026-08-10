@@ -20,6 +20,7 @@
 import type { Express, Request, Response } from "express";
 import { BRAND } from "@shared/branding";
 import { SUPPORT_CONTACTS } from "@shared/supportContacts";
+import { featureFlags } from "./featureFlags";
 
 const LEGAL_ENTITY = "Thrynova Insights LLC";
 
@@ -28,16 +29,39 @@ const esc = (s: string) =>
 
 function renderAboutPage(): string {
   const year = 2026; // Date.* is unavailable in some sandboxes; a static year is fine for a footer.
+  // Lean mode: describe a plain per-ride card-charge rideshare — no stored-value
+  // wallet ("prepaid balance"), no marketplace/driver-payout language, no
+  // community-ownership framing. This is the page Stripe's crawler reads.
+  const wallet = featureFlags.walletEnabled;
+  const marketplace = featureFlags.driverMarketplaceEnabled;
+  const titleDesc = wallet ? "Community-owned rideshare in Maryland" : "Rideshare in Prince George's County, Maryland";
+  const metaDesc = wallet
+    ? `${esc(BRAND.appName)} is a community rideshare marketplace. Riders book local trips and are matched with background-checked neighborhood drivers. Pickups in Maryland; drop-offs in Maryland, Washington DC, and northern Virginia. Transparent fares, no surge pricing.`
+    : `${esc(BRAND.appName)} is a rideshare service in Prince George's County, Maryland. Riders book local trips with background-checked drivers and pay by card. Pickups in Maryland; drop-offs in Maryland, Washington DC, and northern Virginia. Transparent fares, no surge pricing.`;
+  const ogTitle = wallet ? `${esc(BRAND.appName)} — Community-owned rideshare` : `${esc(BRAND.appName)} — Rideshare in Maryland`;
+  const h1 = wallet ? `${esc(BRAND.appName)}: community-owned rideshare` : `${esc(BRAND.appName)}: rideshare in Prince George's County, Maryland`;
+  const rideAndPay = wallet
+    ? "Pay by prepaid in-app balance or card. Drivers are paid out after the trip."
+    : "Pay securely by card. Your card is authorized when a driver accepts and charged when the ride completes.";
+  const paymentsBody = wallet
+    ? `${esc(BRAND.appName)} operates as a marketplace facilitator. Riders pay per-ride fares and can top up a prepaid in-app balance. Card payments and driver payouts are processed securely through Stripe. Card authorizations use manual-capture holds that are captured when a ride completes or released if it is cancelled — the standard model for rideshare.`
+    : `${esc(BRAND.appName)} charges riders a per-ride fare to their payment card, processed securely through Stripe. When a driver accepts, the fare is authorized as a manual-capture hold; it is captured when the ride completes and released if the ride is cancelled — the standard model for rideshare. There is no stored balance or prepaid wallet.`;
+  const headerTagline = wallet
+    ? `${esc(BRAND.shortDescription)} Your ride from neighbors, by neighbors.`
+    : "On-demand rides in Prince George's County, Maryland. Background-checked local drivers, transparent fares up front, no surge pricing.";
+  const whatWeDo = wallet
+    ? `${esc(BRAND.appName)} is a community rideshare (transportation-network) marketplace. Riders request an on-demand or scheduled local trip through our app and are matched with a vetted community driver. We sell local passenger transportation — there are no physical goods or digital downloads.`
+    : `${esc(BRAND.appName)} is a rideshare (transportation-network) service. Riders request an on-demand or scheduled local trip through our app and are matched with a background-checked driver. We sell local passenger transportation — there are no physical goods or digital downloads.`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>${esc(BRAND.appName)} — Community-owned rideshare in Maryland</title>
-<meta name="description" content="${esc(BRAND.appName)} is a community rideshare marketplace. Riders book local trips and are matched with background-checked neighborhood drivers. Pickups in Maryland; drop-offs in Maryland, Washington DC, and northern Virginia. Transparent fares, no surge pricing." />
+<title>${esc(BRAND.appName)} — ${titleDesc}</title>
+<meta name="description" content="${metaDesc}" />
 <meta name="robots" content="index,follow" />
 <link rel="canonical" href="https://${esc(BRAND.companyDomain)}/about" />
-<meta property="og:title" content="${esc(BRAND.appName)} — Community-owned rideshare" />
+<meta property="og:title" content="${ogTitle}" />
 <meta property="og:description" content="Verified neighborhood drivers, transparent fares, no surge pricing. Pickups in Maryland; drop-offs across the DMV." />
 <meta property="og:type" content="website" />
 <style>
@@ -86,8 +110,8 @@ function renderAboutPage(): string {
   <header class="hero">
     <div class="wrap">
       <p class="brand">${esc(BRAND.companyName)} · ${esc(BRAND.pgMeans)}</p>
-      <h1>${esc(BRAND.appName)}: community-owned rideshare</h1>
-      <p class="tagline">${esc(BRAND.shortDescription)} Your ride from neighbors, by neighbors.</p>
+      <h1>${h1}</h1>
+      <p class="tagline">${headerTagline}</p>
     </div>
   </header>
 
@@ -95,11 +119,7 @@ function renderAboutPage(): string {
     <section>
       <h2>What we do</h2>
       <p>
-        ${esc(BRAND.appName)} is a community rideshare (transportation-network)
-        marketplace. Riders request an on-demand or scheduled local trip through
-        our app and are matched with a vetted community driver. We sell local
-        passenger transportation — there are no physical goods or digital
-        downloads.
+        ${whatWeDo}
       </p>
     </section>
 
@@ -108,7 +128,7 @@ function renderAboutPage(): string {
       <div class="cards">
         <div class="card"><h3>1. Book a ride</h3><p>Enter your pickup and destination. See a transparent fare up front — no surge pricing.</p></div>
         <div class="card"><h3>2. Match with a driver</h3><p>A background-checked neighborhood driver accepts and picks you up.</p></div>
-        <div class="card"><h3>3. Ride &amp; pay</h3><p>Pay by prepaid in-app balance or card. Drivers are paid out after the trip.</p></div>
+        <div class="card"><h3>3. Ride &amp; pay</h3><p>${rideAndPay}</p></div>
       </div>
     </section>
 
@@ -134,13 +154,7 @@ function renderAboutPage(): string {
 
     <section>
       <h2>How payments work</h2>
-      <p>
-        ${esc(BRAND.appName)} operates as a marketplace facilitator. Riders pay
-        per-ride fares and can top up a prepaid in-app balance. Card payments and
-        driver payouts are processed securely through Stripe. Card authorizations
-        use manual-capture holds that are captured when a ride completes or
-        released if it is cancelled — the standard model for rideshare.
-      </p>
+      <p>${paymentsBody}</p>
     </section>
 
     <section>
