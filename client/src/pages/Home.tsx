@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import { useLocation } from "wouter";
 import BottomNavigation from "@/components/BottomNavigation";
 import ModeSelector from "@/components/ModeSelector";
@@ -18,6 +19,7 @@ const WELCOME_KEY = "pgride:welcomeSeen";
 
 export default function Home() {
   const { user } = useAuth();
+  const { driverMarketplaceEnabled, equityProgramEnabled } = useFeatureFlags();
   const [showWelcome, setShowWelcome] = useState(false);
   // Persisted so a reload (browser refresh, PWA relaunch) keeps an online
   // driver on their dashboard instead of silently dropping them back to
@@ -89,7 +91,15 @@ export default function Home() {
   };
 
   const handleModeChange = (mode: "rider" | "driver") => {
+    // Lean mode hides PUBLIC driver onboarding (no new third-party drivers) but
+    // still lets existing drivers — including the owner fulfilling rides into the
+    // platform's own Stripe account — switch into Drive mode. A non-driver in lean
+    // mode has no way to become one, so driver mode simply stays rider.
     if (mode === "driver" && !user?.isDriver) {
+      if (!driverMarketplaceEnabled) {
+        setCurrentMode("rider");
+        return;
+      }
       // Redirect to profile to become a driver
       setActiveTab("profile");
       return;
@@ -111,7 +121,7 @@ export default function Home() {
       case "payments":
         return <PaymentsPage />;
       case "ownership":
-        return <DriverOwnership />;
+        return equityProgramEnabled ? <DriverOwnership /> : <RiderDashboard />;
       case "profile":
         return <Profile />;
       default:
@@ -146,7 +156,7 @@ export default function Home() {
         </div>
       )}
       
-      {currentMode === "driver" && user?.isDriver && activeTab === "home" && (
+      {equityProgramEnabled && currentMode === "driver" && user?.isDriver && activeTab === "home" && (
         <div className="flex-shrink-0 px-4 pb-2">
           <button
             onClick={() => setActiveTab("ownership")}

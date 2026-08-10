@@ -5,6 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getCsrfToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
+import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import { useToast } from "@/hooks/use-toast";
 import DocumentUploadModal from "@/components/DocumentUploadModal";
 import ProfileEditDialog from "@/components/ProfileEditDialog";
@@ -34,6 +35,7 @@ export default function Profile() {
   const [showCountySelector, setShowCountySelector] = useState(false);
   const [localCounties, setLocalCounties] = useState<string[]>([]);
   const { user, isLoading } = useAuth();
+  const { walletEnabled, driverMarketplaceEnabled } = useFeatureFlags();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -260,7 +262,8 @@ export default function Profile() {
           </CardContent>
         </Card>
 
-        {/* Virtual PG Card Balance */}
+        {/* Virtual PG Card Balance — hidden in lean (card-only) mode. */}
+        {walletEnabled && (
         <Card className="border-green-200 dark:border-green-900 bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-950 dark:to-emerald-950">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
@@ -299,20 +302,24 @@ export default function Profile() {
             </div>
           </CardContent>
         </Card>
+        )}
 
-        <TopUpModal
-          isOpen={isTopUpOpen}
-          onClose={() => setIsTopUpOpen(false)}
-          currentBalance={user?.virtualCardBalance || "0"}
-        />
+        {walletEnabled && (
+          <TopUpModal
+            isOpen={isTopUpOpen}
+            onClose={() => setIsTopUpOpen(false)}
+            currentBalance={user?.virtualCardBalance || "0"}
+          />
+        )}
 
         {/* Driver Section — three states:
             1. No application  → "Become a Driver" (starts an application)
             2. Applied, not yet approved → application status + document checklist.
                Driver mode (the Drive switch + dashboard) stays LOCKED here —
                only admin approval makes someone a driver.
-            3. Approved (isDriver) → active driver account */}
-        {user?.isDriver ? (
+            3. Approved (isDriver) → active driver account
+            Hidden entirely in lean mode (no driver marketplace). */}
+        {driverMarketplaceEnabled && (user?.isDriver ? (
           <Card className="border-secondary/20 bg-secondary/5">
             <CardContent className="p-4 space-y-3">
               <div className="flex items-center space-x-3">
@@ -369,7 +376,7 @@ export default function Profile() {
               </div>
             </CardContent>
           </Card>
-        )}
+        ))}
 
         {/* Quick Actions */}
         <div className="space-y-3">

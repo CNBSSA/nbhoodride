@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
+import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import { useGeolocation } from "@/hooks/useGeolocation";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useLocation } from "wouter";
@@ -159,6 +160,7 @@ export default function RiderDashboard() {
 
   // ── Hooks ──
   const { user } = useAuth();
+  const { walletEnabled } = useFeatureFlags();
   const { location, error: locationError, requestLocation } = useGeolocation();
   const { lastMessage } = useWebSocket();
   const { toast } = useToast();
@@ -479,15 +481,21 @@ export default function RiderDashboard() {
       (fareEstimate?.promoDiscount ?? 0) > 0
         ? Number(fareEstimate?.totalAfterPromo ?? 0)
         : Number(fareEstimate?.total ?? 0);
-    const balance = parseFloat(user?.virtualCardBalance || "0");
-    const promos = user?.promoRidesRemaining ?? 0;
-    if (fareDue > 0 && balance < fareDue && promos <= 0) {
-      toast({
-        title: PG_CARD.lowBalanceTitle,
-        description: PG_CARD.lowBalanceBody,
-        variant: "destructive",
-      });
-      return;
+    // Wallet mode only: block booking if the prepaid balance can't cover the
+    // fare. In lean (card-only) mode there is no balance — the card is charged
+    // at accept/complete, and the server rejects the booking if no card is on
+    // file — so this pre-check is skipped.
+    if (walletEnabled) {
+      const balance = parseFloat(user?.virtualCardBalance || "0");
+      const promos = user?.promoRidesRemaining ?? 0;
+      if (fareDue > 0 && balance < fareDue && promos <= 0) {
+        toast({
+          title: PG_CARD.lowBalanceTitle,
+          description: PG_CARD.lowBalanceBody,
+          variant: "destructive",
+        });
+        return;
+      }
     }
     bookRideMutation.mutate({
       pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: userLocation.address },
@@ -1393,7 +1401,7 @@ export default function RiderDashboard() {
               >
                 {fareEstimate && selectedDriverId && (
                   <div className="flex items-center justify-between text-xs text-gray-500 mb-2 px-1">
-                    <span>{PG_CARD.payLine}</span>
+                    <span>{walletEnabled ? PG_CARD.payLine : "Charged to your card"}</span>
                     <span className="font-bold text-sm text-gray-800">
                       ${(fareEstimate.promoDiscount ?? 0) > 0 ? fareEstimate.totalAfterPromo?.toFixed(2) : fareEstimate.total?.toFixed(2)}
                     </span>
