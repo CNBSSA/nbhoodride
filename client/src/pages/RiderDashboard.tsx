@@ -1401,7 +1401,7 @@ export default function RiderDashboard() {
               >
                 {fareEstimate && selectedDriverId && (
                   <div className="flex items-center justify-between text-xs text-gray-500 mb-2 px-1">
-                    <span>{PG_CARD.payLine}</span>
+                    <span>{walletEnabled ? PG_CARD.payLine : "Charged to your card"}</span>
                     <span className="font-bold text-sm text-gray-800">
                       ${(fareEstimate.promoDiscount ?? 0) > 0 ? fareEstimate.totalAfterPromo?.toFixed(2) : fareEstimate.total?.toFixed(2)}
                     </span>

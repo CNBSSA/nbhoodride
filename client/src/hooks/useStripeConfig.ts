@@ -19,15 +19,19 @@ export function useStripeConfig() {
 }
 
 /**
- * Feature-flag helper with safe defaults. Until config loads (or if it fails),
- * flags default to ENABLED so nothing that currently works suddenly vanishes;
- * lean mode only takes effect once the server explicitly reports a flag false.
+ * Feature-flag helper — fails CLOSED. The restricted surfaces (stored-value
+ * wallet, driver marketplace, equity program) render only once the server has
+ * positively confirmed the flag is enabled. Until /api/payment/config loads — or
+ * if it fails — they stay hidden, so a lean deployment never flashes them to a
+ * payment-processor reviewer. This is purely presentational: the server's own
+ * env flags remain the source of truth for the payment logic, so hiding a
+ * surface for a few hundred ms on a full deployment never affects money.
  */
 export function useFeatureFlags() {
   const { data } = useStripeConfig();
   return {
-    walletEnabled: data?.walletEnabled ?? true,
-    driverMarketplaceEnabled: data?.driverMarketplaceEnabled ?? true,
-    equityProgramEnabled: data?.equityProgramEnabled ?? true,
+    walletEnabled: data?.walletEnabled ?? false,
+    driverMarketplaceEnabled: data?.driverMarketplaceEnabled ?? false,
+    equityProgramEnabled: data?.equityProgramEnabled ?? false,
   };
 }
