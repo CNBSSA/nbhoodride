@@ -751,6 +751,22 @@ export const driverRateCardsRelations = relations(driverRateCards, ({ one }) => 
   }),
 }));
 
+// Central, admin-set fare rate that applies to EVERY ride app-wide. PG Ride
+// runs Uber-style (the platform sets one competitive price) rather than letting
+// each driver set their own, so fare math reads from this single row instead of
+// per-driver rate cards. Kept as a one-row table keyed by a fixed id.
+export const platformRateCard = pgTable("platform_rate_card", {
+  id: varchar("id").primaryKey().default("platform"),
+  minimumFare: decimal("minimum_fare", { precision: 8, scale: 2 }).default("7.65"),
+  baseFare: decimal("base_fare", { precision: 8, scale: 2 }).default("4.00"),
+  perMinuteRate: decimal("per_minute_rate", { precision: 8, scale: 4 }).default("0.2900"),
+  perMileRate: decimal("per_mile_rate", { precision: 8, scale: 4 }).default("0.9000"),
+  surgeAdjustment: decimal("surge_adjustment", { precision: 8, scale: 2 }).default("0.00"),
+  updatedBy: varchar("updated_by").references(() => users.id),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+export type PlatformRateCard = typeof platformRateCard.$inferSelect;
+
 // ============================================================
 // ANALYTICS & SELF-LEARNING TABLES
 // ============================================================
