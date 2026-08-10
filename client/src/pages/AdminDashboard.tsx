@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -32,7 +32,7 @@ import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
 const SOS_INCIDENTS_KEY = "/api/admin/emergency-incidents?limit=500";
 const AWAITING_SETTLEMENT_KEY = "/api/admin/rides/awaiting-settlement";
 
-type AdminTab = "dashboard" | "sos" | "reconciliation" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
+type AdminTab = "dashboard" | "sos" | "reconciliation" | "pricing" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
 function useAdminNavPendingCounts() {
   const { data: pendingUsers = [] } = useQuery<any[]>({
@@ -87,6 +87,7 @@ export default function AdminDashboard() {
     { id: "dashboard", label: "Overview", icon: LayoutDashboard },
     { id: "sos", label: "SOS / Emergency", icon: Siren },
     { id: "reconciliation", label: "Reconciliation", icon: Banknote },
+    { id: "pricing", label: "Pricing", icon: DollarSign },
     { id: "users", label: "Users", icon: Users },
     { id: "drivers", label: "Drivers", icon: Car },
     { id: "rides", label: "Rides", icon: MapPin },
@@ -178,6 +179,7 @@ export default function AdminDashboard() {
           {activeTab === "dashboard" && <DashboardOverview />}
           {activeTab === "sos" && <SosPanel />}
           {activeTab === "reconciliation" && <ReconciliationPanel />}
+          {activeTab === "pricing" && <PricingPanel />}
           {activeTab === "users" && <UsersPanel />}
           {activeTab === "drivers" && <DriversPanel />}
           {activeTab === "rides" && <RidesPanel />}
@@ -1098,6 +1100,103 @@ function PayoutsPanel() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function PricingPanel() {
+  const { toast } = useToast();
+  const { data, isLoading } = useQuery<{ card: any; rates: any }>({ queryKey: ["/api/admin/rate-card"] });
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [seeded, setSeeded] = useState(false);
+  const rates = data?.rates;
+
+  // Seed the form from the current rate once, when it first loads.
+  useEffect(() => {
+    if (rates && !seeded) {
+      setSeeded(true);
+      setForm({
+        baseFare: String(rates.baseFare ?? ""),
+        perMileRate: String(rates.perMileRate ?? ""),
+        perMinuteRate: String(rates.perMinuteRate ?? ""),
+        minimumFare: String(rates.minimumFare ?? ""),
+        surgeAdjustment: String(rates.surgeAdjustment ?? ""),
+      });
+    }
+  }, [rates, seeded]);
+
+  const save = useMutation({
+    mutationFn: async (body: Record<string, string>) => {
+      const res = await apiRequest("PUT", "/api/admin/rate-card", body);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/rate-card"] });
+      toast({ title: "Fares updated", description: "The new rate applies to every ride from now on." });
+    },
+    onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
+  });
+
+  const fields: { key: string; label: string; hint: string; step: string }[] = [
+    { key: "baseFare", label: "Base fare ($)", hint: "Flat amount every ride starts at", step: "0.01" },
+    { key: "perMileRate", label: "Per mile ($)", hint: "Charged for each mile travelled", step: "0.01" },
+    { key: "perMinuteRate", label: "Per minute ($)", hint: "Charged for each minute of the trip", step: "0.01" },
+    { key: "minimumFare", label: "Minimum fare ($)", hint: "The lowest a ride can ever cost", step: "0.01" },
+    { key: "surgeAdjustment", label: "Flat adjustment ($)", hint: "Added to every fare (leave 0 normally)", step: "0.01" },
+  ];
+
+  // Example fare preview for a typical 5-mile, 15-minute trip.
+  const preview = (() => {
+    const b = parseFloat(form.baseFare || "0"), pm = parseFloat(form.perMileRate || "0");
+    const pmin = parseFloat(form.perMinuteRate || "0"), min = parseFloat(form.minimumFare || "0"), s = parseFloat(form.surgeAdjustment || "0");
+    if ([b, pm, pmin, min, s].some((n) => !Number.isFinite(n))) return null;
+    const raw = b + pm * 5 + pmin * 15 + s;
+    return Math.max(raw, min).toFixed(2);
+  })();
+
+  if (isLoading) return <div data-testid="loading-pricing">Loading pricing…</div>;
+
+  return (
+    <div data-testid="panel-pricing" className="max-w-lg">
+      <div className="flex items-center gap-2 mb-2">
+        <DollarSign className="w-6 h-6 text-green-700" />
+        <h2 className="text-2xl font-bold">Pricing</h2>
+      </div>
+      <p className="text-muted-foreground text-sm mb-6">
+        One central rate for the whole app — every ride is priced the same, no matter which driver takes it.
+        Changes apply to all new fares immediately.
+      </p>
+
+      <div className="space-y-4">
+        {fields.map((f) => (
+          <div key={f.key}>
+            <label className="text-sm font-medium">{f.label}</label>
+            <Input
+              type="number"
+              step={f.step}
+              min="0"
+              value={form[f.key] ?? ""}
+              onChange={(e) => setForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+              data-testid={`rate-${f.key}`}
+            />
+            <p className="text-xs text-muted-foreground mt-1">{f.hint}</p>
+          </div>
+        ))}
+
+        {preview && (
+          <div className="rounded-lg border bg-muted/40 px-4 py-3 text-sm" data-testid="fare-preview">
+            Example: a <span className="font-medium">5&nbsp;mi · 15&nbsp;min</span> ride would cost <span className="font-bold">${preview}</span>.
+          </div>
+        )}
+
+        <Button
+          onClick={() => save.mutate(form)}
+          disabled={save.isPending}
+          data-testid="btn-save-rate"
+        >
+          {save.isPending ? "Saving…" : "Save fares"}
+        </Button>
+      </div>
     </div>
   );
 }

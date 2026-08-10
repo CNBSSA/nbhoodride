@@ -5104,20 +5104,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const distanceMiles = straightLineMiles * 1.3;
       const durationMinutes = Math.max(5, Math.round((distanceMiles / 25) * 60));
 
-      // Get driver rate card if specified
-      let rates;
-      if (driverId) {
-        const rateCard = await storage.getDriverRateCard(driverId);
-        if (rateCard && !rateCard.useSuggested) {
-          rates = {
-            minimumFare: parseFloat(rateCard.minimumFare || "7.65"),
-            baseFare: parseFloat(rateCard.baseFare || "4.00"),
-            perMinuteRate: parseFloat(rateCard.perMinuteRate || "0.2900"),
-            perMileRate: parseFloat(rateCard.perMileRate || "0.9000"),
-            surgeAdjustment: parseFloat(rateCard.surgeAdjustment || "0.00"),
-          };
-        }
-      }
+      // Central platform rate — every ride is quoted at the same admin-set price,
+      // regardless of which driver takes it.
+      const rates = await storage.getPlatformRates();
 
       // Get rider promo status
       const rider = await storage.getUser(userId);
@@ -5293,21 +5282,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Distance and duration required" });
       }
 
-      const SUGGESTED = { minimumFare: 7.65, baseFare: 4.00, perMinuteRate: 0.29, perMileRate: 0.90, surgeAdjustment: 0 };
-      let rates = SUGGESTED;
-
-      if (driverId) {
-        const rateCard = await storage.getDriverRateCard(driverId);
-        if (rateCard && !rateCard.useSuggested) {
-          rates = {
-            minimumFare: parseFloat(rateCard.minimumFare || "7.65"),
-            baseFare: parseFloat(rateCard.baseFare || "4.00"),
-            perMinuteRate: parseFloat(rateCard.perMinuteRate || "0.2900"),
-            perMileRate: parseFloat(rateCard.perMileRate || "0.9000"),
-            surgeAdjustment: parseFloat(rateCard.surgeAdjustment || "0.00"),
-          };
-        }
-      }
+      // Central platform rate — one price app-wide, regardless of driver.
+      const rates = await storage.getPlatformRates();
 
       const baseFare = rates.baseFare;
       const timeCharge = rates.perMinuteRate * duration;
@@ -5359,57 +5335,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
-      const card = await storage.getDriverRateCard(userId);
-      if (!card) {
-        return res.json({
-          driverId: userId,
-          minimumFare: "7.65",
-          baseFare: "4.00",
-          perMinuteRate: "0.2900",
-          perMileRate: "0.9000",
-          surgeAdjustment: "0.00",
-          useSuggested: true,
-        });
-      }
-      res.json(card);
+      // Rates are set centrally by PG Ride — return the platform rate read-only
+      // so any legacy client that reads this sees the one price everyone uses.
+      const rates = await storage.getPlatformRates();
+      res.json({
+        driverId: userId,
+        minimumFare: rates.minimumFare.toFixed(2),
+        baseFare: rates.baseFare.toFixed(2),
+        perMinuteRate: rates.perMinuteRate.toFixed(4),
+        perMileRate: rates.perMileRate.toFixed(4),
+        surgeAdjustment: rates.surgeAdjustment.toFixed(2),
+        centrallySet: true,
+      });
     } catch (error) {
       console.error("Error fetching rate card:", error);
       res.status(500).json({ message: "Failed to fetch rate card" });
     }
   });
 
-  app.put('/api/driver/rate-card', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-
-      const { minimumFare, baseFare, perMinuteRate, perMileRate, surgeAdjustment, useSuggested } = req.body;
-
-      const updateData: any = {};
-      if (minimumFare !== undefined) updateData.minimumFare = String(minimumFare);
-      if (baseFare !== undefined) updateData.baseFare = String(baseFare);
-      if (perMinuteRate !== undefined) updateData.perMinuteRate = String(perMinuteRate);
-      if (perMileRate !== undefined) updateData.perMileRate = String(perMileRate);
-      if (surgeAdjustment !== undefined) updateData.surgeAdjustment = String(surgeAdjustment);
-      if (useSuggested !== undefined) updateData.useSuggested = useSuggested;
-
-      const card = await storage.upsertDriverRateCard(userId, updateData);
-      res.json(card);
-    } catch (error) {
-      console.error("Error updating rate card:", error);
-      res.status(500).json({ message: "Failed to update rate card" });
-    }
+  app.put('/api/driver/rate-card', isAuthenticated, async (_req: any, res) => {
+    // Drivers no longer set their own price — PG Ride sets one central rate.
+    res.status(403).json({ message: "Fares are set centrally by PG Ride and can't be changed per driver." });
   });
 
-  // Get a specific driver's rate card (public, used for fare estimation)
+  // Public rate lookup (used for fare estimation). Always the central rate.
   app.get('/api/driver/:driverId/rate-card', async (req: any, res) => {
     try {
       const { driverId } = req.params;
-      const card = await storage.getDriverRateCard(driverId);
-      const SUGGESTED = { minimumFare: "7.65", baseFare: "4.00", perMinuteRate: "0.2900", perMileRate: "0.9000", surgeAdjustment: "0.00", useSuggested: true };
-      res.json(card || { driverId, ...SUGGESTED });
+      const rates = await storage.getPlatformRates();
+      res.json({
+        driverId,
+        minimumFare: rates.minimumFare.toFixed(2),
+        baseFare: rates.baseFare.toFixed(2),
+        perMinuteRate: rates.perMinuteRate.toFixed(4),
+        perMileRate: rates.perMileRate.toFixed(4),
+        surgeAdjustment: rates.surgeAdjustment.toFixed(2),
+        centrallySet: true,
+      });
     } catch (error) {
-      console.error("Error fetching driver rate card:", error);
-      res.status(500).json({ message: "Failed to fetch driver rate card" });
+      console.error("Error fetching rate card:", error);
+      res.status(500).json({ message: "Failed to fetch rate card" });
     }
   });
 
@@ -5521,6 +5486,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // The auditable queue behind the real-time WebSocket push. Admins can pull
   // the full incident list (including any that arrived while no dashboard was
   // open) and acknowledge / resolve them.
+  // ── Central pricing (admin sets the one rate that applies to every ride) ──
+  app.get('/api/admin/rate-card', isAdminOrSessionAuth, async (_req: any, res) => {
+    try {
+      const card = await storage.getPlatformRateCard();
+      const rates = await storage.getPlatformRates();
+      res.json({ card: card ?? null, rates });
+    } catch (error) {
+      console.error("Error fetching platform rate:", error);
+      res.status(500).json({ message: "Failed to fetch platform rate" });
+    }
+  });
+
+  app.put('/api/admin/rate-card', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const num = (v: any) => (v === undefined || v === null || v === "" ? undefined : Number(v));
+      const fields = {
+        minimumFare: num(req.body.minimumFare),
+        baseFare: num(req.body.baseFare),
+        perMinuteRate: num(req.body.perMinuteRate),
+        perMileRate: num(req.body.perMileRate),
+        surgeAdjustment: num(req.body.surgeAdjustment),
+      };
+      // Validate: fares must be finite and non-negative before they touch money.
+      for (const [k, v] of Object.entries(fields)) {
+        if (v !== undefined && (!Number.isFinite(v) || v < 0)) {
+          return res.status(400).json({ message: `Invalid value for ${k} — must be a non-negative number.` });
+        }
+      }
+      const patch: any = {};
+      if (fields.minimumFare !== undefined) patch.minimumFare = fields.minimumFare.toFixed(2);
+      if (fields.baseFare !== undefined) patch.baseFare = fields.baseFare.toFixed(2);
+      if (fields.perMinuteRate !== undefined) patch.perMinuteRate = fields.perMinuteRate.toFixed(4);
+      if (fields.perMileRate !== undefined) patch.perMileRate = fields.perMileRate.toFixed(4);
+      if (fields.surgeAdjustment !== undefined) patch.surgeAdjustment = fields.surgeAdjustment.toFixed(2);
+      const card = await storage.upsertPlatformRateCard(patch, req.adminUser.id);
+      await storage.logAdminAction(req.adminUser.id, 'update_platform_rate', 'platform_rate_card', card.id, patch);
+      res.json({ card, rates: await storage.getPlatformRates() });
+    } catch (error) {
+      console.error("Error updating platform rate:", error);
+      res.status(500).json({ message: "Failed to update platform rate" });
+    }
+  });
+
   app.get('/api/admin/emergency-incidents', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
