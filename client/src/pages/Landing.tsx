@@ -4,8 +4,10 @@ import { Link } from "wouter";
 
 import { BRAND } from "@shared/branding";
 import { PG_CARD } from "@shared/userFacingCopy";
+import { useFeatureFlags } from "@/hooks/useStripeConfig";
 
 export default function Landing() {
+  const { walletEnabled } = useFeatureFlags();
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-secondary/10 flex items-center justify-center p-4">
       <div className="w-full max-w-md mx-auto">
@@ -17,16 +19,20 @@ export default function Landing() {
                 <i className="fas fa-car text-2xl text-primary-foreground" />
               </div>
               <h1 className="text-2xl font-bold text-foreground">{BRAND.appName}</h1>
-              <p className="text-muted-foreground text-sm">{BRAND.tagline}</p>
+              <p className="text-muted-foreground text-sm">
+                {walletEnabled ? BRAND.tagline : "Rides in Prince George's County, Maryland"}
+              </p>
             </div>
 
             {/* Welcome Message */}
             <div className="space-y-3">
               <h2 className="text-xl font-semibold text-foreground">
-                Community-owned mobility
+                {walletEnabled ? "Community-owned mobility" : "Book a ride in minutes"}
               </h2>
               <p className="text-muted-foreground text-sm leading-relaxed">
-                {BRAND.shortDescription} Your ride from neighbors, by neighbors.
+                {walletEnabled
+                  ? `${BRAND.shortDescription} Your ride from neighbors, by neighbors.`
+                  : "On-demand rides with background-checked local drivers. Transparent fares up front, no surge pricing. Pay securely by card."}
                 <span className="block mt-2 text-xs">{BRAND.foundedNote}</span>
               </p>
             </div>
@@ -49,7 +55,7 @@ export default function Landing() {
                 <div className="w-8 h-8 bg-accent/20 rounded-full flex items-center justify-center">
                   <i className="fas fa-hand-holding-usd text-accent text-sm" />
                 </div>
-                <span className="text-sm">{PG_CARD.landingFeature}</span>
+                <span className="text-sm">{walletEnabled ? PG_CARD.landingFeature : "Pay securely by card — no surge pricing"}</span>
               </div>
               <div className="flex items-center space-x-3">
                 <div className="w-8 h-8 bg-destructive/20 rounded-full flex items-center justify-center">
