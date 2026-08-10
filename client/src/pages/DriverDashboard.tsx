@@ -913,23 +913,18 @@ export default function DriverDashboard() {
         </div>
         )}
 
-        {/* Rate Card */}
+        {/* Fares are set centrally by PG Ride — drivers no longer set their own. */}
         <Card>
           <CardContent className="p-4">
-            <Link href="/driver/rate-card">
-              <div className="flex items-center justify-between cursor-pointer" data-testid="link-rate-card">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900 flex items-center justify-center">
-                    <i className="fas fa-dollar-sign text-green-600" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold">Your Rate Card</h3>
-                    <p className="text-sm text-muted-foreground">Set your fares per mile, per minute, and more</p>
-                  </div>
-                </div>
-                <ChevronRight className="h-5 w-5 text-muted-foreground" />
+            <div className="flex items-center gap-3" data-testid="rate-card-central">
+              <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900 flex items-center justify-center">
+                <i className="fas fa-dollar-sign text-green-600" />
               </div>
-            </Link>
+              <div>
+                <h3 className="font-semibold">Fares set by PG Ride</h3>
+                <p className="text-sm text-muted-foreground">One competitive, transparent rate for every trip — no per-driver pricing.</p>
+              </div>
+            </div>
           </CardContent>
         </Card>
 

@@ -556,6 +556,20 @@ CREATE TABLE IF NOT EXISTS driver_rate_cards (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- ── Central platform rate (admin-set, one price app-wide) ────────────────────
+CREATE TABLE IF NOT EXISTS platform_rate_card (
+  id VARCHAR PRIMARY KEY DEFAULT 'platform',
+  minimum_fare DECIMAL(8,2) DEFAULT 7.65,
+  base_fare DECIMAL(8,2) DEFAULT 4.00,
+  per_minute_rate DECIMAL(8,4) DEFAULT 0.2900,
+  per_mile_rate DECIMAL(8,4) DEFAULT 0.9000,
+  surge_adjustment DECIMAL(8,2) DEFAULT 0.00,
+  updated_by VARCHAR REFERENCES users(id),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+-- Seed the single row with defaults so the admin screen always has a rate to edit.
+INSERT INTO platform_rate_card (id) VALUES ('platform') ON CONFLICT (id) DO NOTHING;
+
 -- ── Event tracking ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS event_tracking (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

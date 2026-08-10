@@ -120,6 +120,8 @@ import {
   type InsertEmergencyIncident,
   driverRateCards,
   type DriverRateCard,
+  platformRateCard,
+  type PlatformRateCard,
 } from "@shared/schema";
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
@@ -381,6 +383,9 @@ export interface IStorage {
   // Rate card operations
   getDriverRateCard(driverId: string): Promise<DriverRateCard | undefined>;
   upsertDriverRateCard(driverId: string, data: Partial<DriverRateCard>): Promise<DriverRateCard>;
+  getPlatformRates(): Promise<{ minimumFare: number; baseFare: number; perMinuteRate: number; perMileRate: number; surgeAdjustment: number }>;
+  getPlatformRateCard(): Promise<PlatformRateCard | undefined>;
+  upsertPlatformRateCard(data: Partial<PlatformRateCard>, updatedBy?: string): Promise<PlatformRateCard>;
 
   // AI Chat operations
   getConversationsByUser(userId: string): Promise<Conversation[]>;
@@ -1871,8 +1876,8 @@ export class DatabaseStorage implements IStorage {
       updateData.driverTraveledTime = durationMinutes;
       
       if (actualFare === undefined) {
-        const rateCard = ride.driverId ? await this.getDriverRateCard(ride.driverId) : undefined;
-        const rates = this.getRates(rateCard);
+        // Central platform rate — every ride is priced the same, set by admin.
+        const rates = await this.getPlatformRates();
 
         const baseFare = rates.baseFare;
         const timeCharge = rates.perMinuteRate * durationMinutes;
@@ -2817,9 +2822,8 @@ export class DatabaseStorage implements IStorage {
       duration = Math.round((now - startTime) / (1000 * 60));
     }
 
-    // Get driver rate card for fare calculation
-    const rateCard = ride.driverId ? await this.getDriverRateCard(ride.driverId) : undefined;
-    const rates = this.getRates(rateCard);
+    // Central platform rate — one price app-wide, set by admin.
+    const rates = await this.getPlatformRates();
 
     const baseFare = rates.baseFare;
     const timeCharge = rates.perMinuteRate * duration;
@@ -2836,16 +2840,37 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  private getRates(rateCard?: DriverRateCard) {
+  // Central platform rate — the single source of truth for fares (PG Ride sets
+  // one price app-wide; drivers do not set their own). Reads the admin-set
+  // platform_rate_card row, falling back to sensible defaults if it's unset.
+  async getPlatformRates() {
     const SUGGESTED = { minimumFare: 7.65, baseFare: 4.00, perMinuteRate: 0.29, perMileRate: 0.90, surgeAdjustment: 0 };
-    if (!rateCard || rateCard.useSuggested) return SUGGESTED;
+    const [card] = await db.select().from(platformRateCard).limit(1);
+    if (!card) return SUGGESTED;
     return {
-      minimumFare: parseFloat(rateCard.minimumFare || "7.65"),
-      baseFare: parseFloat(rateCard.baseFare || "4.00"),
-      perMinuteRate: parseFloat(rateCard.perMinuteRate || "0.2900"),
-      perMileRate: parseFloat(rateCard.perMileRate || "0.9000"),
-      surgeAdjustment: parseFloat(rateCard.surgeAdjustment || "0.00"),
+      minimumFare: parseFloat(card.minimumFare || "7.65"),
+      baseFare: parseFloat(card.baseFare || "4.00"),
+      perMinuteRate: parseFloat(card.perMinuteRate || "0.2900"),
+      perMileRate: parseFloat(card.perMileRate || "0.9000"),
+      surgeAdjustment: parseFloat(card.surgeAdjustment || "0.00"),
     };
+  }
+
+  async getPlatformRateCard(): Promise<PlatformRateCard | undefined> {
+    const [card] = await db.select().from(platformRateCard).limit(1);
+    return card;
+  }
+
+  async upsertPlatformRateCard(data: Partial<PlatformRateCard>, updatedBy?: string): Promise<PlatformRateCard> {
+    // Atomic single-row upsert on the fixed "platform" id — concurrent first
+    // writes can't PK-conflict (no select-then-insert race).
+    const patch: any = { ...data, updatedBy: updatedBy ?? null, updatedAt: new Date() };
+    const [row] = await db
+      .insert(platformRateCard)
+      .values({ id: "platform", ...patch })
+      .onConflictDoUpdate({ target: platformRateCard.id, set: patch })
+      .returning();
+    return row;
   }
 
   // Rate card operations
