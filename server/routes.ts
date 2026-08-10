@@ -5508,10 +5508,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         perMileRate: num(req.body.perMileRate),
         surgeAdjustment: num(req.body.surgeAdjustment),
       };
-      // Validate: fares must be finite and non-negative before they touch money.
+      // Bounds keep every value inside its DECIMAL(8,x) column (so an over-large
+      // number returns a clean 400, not a Postgres-overflow 500) AND preserve the
+      // money invariants: minimumFare can't exceed the hard $100 per-ride cap, and
+      // surgeAdjustment may be negative so an app-wide flat discount is possible.
+      const bounds: Record<string, { min: number; max: number }> = {
+        minimumFare: { min: 0, max: 100 },
+        baseFare: { min: 0, max: 100 },
+        perMileRate: { min: 0, max: 50 },
+        perMinuteRate: { min: 0, max: 20 },
+        surgeAdjustment: { min: -50, max: 50 },
+      };
       for (const [k, v] of Object.entries(fields)) {
-        if (v !== undefined && (!Number.isFinite(v) || v < 0)) {
-          return res.status(400).json({ message: `Invalid value for ${k} — must be a non-negative number.` });
+        if (v === undefined) continue;
+        const b = bounds[k];
+        if (!Number.isFinite(v) || v < b.min || v > b.max) {
+          return res.status(400).json({ message: `${k} must be a number between ${b.min} and ${b.max}.` });
         }
       }
       const patch: any = {};

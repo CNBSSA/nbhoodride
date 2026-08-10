@@ -2840,18 +2840,6 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  private getRates(rateCard?: DriverRateCard) {
-    const SUGGESTED = { minimumFare: 7.65, baseFare: 4.00, perMinuteRate: 0.29, perMileRate: 0.90, surgeAdjustment: 0 };
-    if (!rateCard || rateCard.useSuggested) return SUGGESTED;
-    return {
-      minimumFare: parseFloat(rateCard.minimumFare || "7.65"),
-      baseFare: parseFloat(rateCard.baseFare || "4.00"),
-      perMinuteRate: parseFloat(rateCard.perMinuteRate || "0.2900"),
-      perMileRate: parseFloat(rateCard.perMileRate || "0.9000"),
-      surgeAdjustment: parseFloat(rateCard.surgeAdjustment || "0.00"),
-    };
-  }
-
   // Central platform rate — the single source of truth for fares (PG Ride sets
   // one price app-wide; drivers do not set their own). Reads the admin-set
   // platform_rate_card row, falling back to sensible defaults if it's unset.
@@ -2874,14 +2862,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertPlatformRateCard(data: Partial<PlatformRateCard>, updatedBy?: string): Promise<PlatformRateCard> {
+    // Atomic single-row upsert on the fixed "platform" id — concurrent first
+    // writes can't PK-conflict (no select-then-insert race).
     const patch: any = { ...data, updatedBy: updatedBy ?? null, updatedAt: new Date() };
-    const [existing] = await db.select().from(platformRateCard).limit(1);
-    if (existing) {
-      const [updated] = await db.update(platformRateCard).set(patch).where(eq(platformRateCard.id, existing.id)).returning();
-      return updated;
-    }
-    const [created] = await db.insert(platformRateCard).values({ id: "platform", ...patch }).returning();
-    return created;
+    const [row] = await db
+      .insert(platformRateCard)
+      .values({ id: "platform", ...patch })
+      .onConflictDoUpdate({ target: platformRateCard.id, set: patch })
+      .returning();
+    return row;
   }
 
   // Rate card operations
