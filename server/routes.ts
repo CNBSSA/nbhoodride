@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { db } from "./db";
+import { featureFlags } from "./featureFlags";
 import { setupAuth, isAuthenticated, getSession } from "./replitAuth";
 import { csrfTokenEndpoint } from "./csrfProtection";
 import * as passwordPolicy from "./passwordPolicy";
@@ -1739,20 +1740,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     try {
       if (chargeAmount > 0) {
-        // 1. Take what we can from the rider's virtual balance, leave the
-        //    rest for Stripe to authorize.
-        const split = await storage.splitDeductForRide(ride.riderId, chargeAmount, rideId);
-        virtualDeducted = split.virtualDeducted;
-        stripeAuthAmount = split.stripeAmount;
+        // With the wallet enabled: take what we can from the rider's virtual
+        // balance first, then authorize any shortfall on their card.
+        // In lean (card-only) mode there is no stored balance, so the full fare
+        // is authorized directly on the saved card — no virtual deduction.
+        if (featureFlags.walletEnabled) {
+          const split = await storage.splitDeductForRide(ride.riderId, chargeAmount, rideId);
+          virtualDeducted = split.virtualDeducted;
+          stripeAuthAmount = split.stripeAmount;
+        } else {
+          virtualDeducted = 0;
+          stripeAuthAmount = chargeAmount;
+        }
 
-        // 2. If the virtual balance didn't fully cover it, authorize the
-        //    shortfall on the rider's saved Stripe card.
+        // Authorize whatever couldn't be covered by virtual balance (in lean
+        // mode that's the whole fare) on the rider's saved Stripe card.
         if (stripeAuthAmount > 0) {
           if (!stripeService.isEnabled) {
-            throw new Error("Stripe is not configured. Top up your virtual balance to cover the fare or contact support.");
+            throw new Error("Card payments are not configured. Please contact support.");
           }
           if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
-            throw new Error("Insufficient virtual balance and no card on file. Please add a card or top up your wallet.");
+            throw new Error(
+              featureFlags.walletEnabled
+                ? "Insufficient virtual balance and no card on file. Please add a card or top up your wallet."
+                : "No card on file. Please add a payment card to book a ride."
+            );
           }
           const intent = await stripeService.authorizeRideShortfall({
             amount: stripeAuthAmount,
@@ -4462,8 +4474,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const enabled = stripeService.isEnabled && !!process.env.VITE_STRIPE_PUBLIC_KEY;
     res.json({
       enabled,
-      topUpEnabled: enabled,
+      // Top-up is stored value — only offered when the wallet feature is on.
+      topUpEnabled: enabled && featureFlags.walletEnabled,
       cardOnFileEnabled: enabled,
+      // Lean-mode flags so the client can hide the wallet / driver / equity UI.
+      walletEnabled: featureFlags.walletEnabled,
+      driverMarketplaceEnabled: featureFlags.driverMarketplaceEnabled,
+      equityProgramEnabled: featureFlags.equityProgramEnabled,
     });
   });
 
@@ -4585,8 +4602,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Virtual PG Card top-up routes
-  app.post('/api/virtual-card/topup/create-intent', isAuthenticated, async (req: any, res) => {
+  // Virtual PG Card top-up routes. Disabled in lean (card-only) mode — the
+  // stored-value wallet is the money-transmitter surface we hide from Stripe.
+  const requireWallet = (_req: any, res: any, next: any) => {
+    if (!featureFlags.walletEnabled) {
+      return res.status(403).json({ message: "The prepaid balance is not available. Pay per ride with a card instead." });
+    }
+    next();
+  };
+
+  app.post('/api/virtual-card/topup/create-intent', isAuthenticated, requireWallet, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const user = await storage.getUser(userId);
@@ -4626,7 +4651,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/virtual-card/topup/confirm', isAuthenticated, async (req: any, res) => {
+  app.post('/api/virtual-card/topup/confirm', isAuthenticated, requireWallet, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { paymentIntentId } = req.body;
