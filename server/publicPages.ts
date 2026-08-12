@@ -164,6 +164,18 @@ function renderAboutPage(): string {
         <a class="cta secondary" href="/login">Log in</a>
       </p>
     </section>
+
+    <section id="contact">
+      <h2>Contact us</h2>
+      <p>Questions, help with a ride, or a refund? Reach our support team:</p>
+      <ul>
+        <li><strong>Phone / text:</strong> <a href="tel:${esc(SUPPORT_CONTACTS.phoneTel)}">${esc(SUPPORT_CONTACTS.phoneDisplay)}</a>
+          (<a href="${esc(SUPPORT_CONTACTS.phoneSms)}">text us</a>)</li>
+        <li><strong>Email:</strong> <a href="mailto:${esc(SUPPORT_CONTACTS.email)}">${esc(SUPPORT_CONTACTS.email)}</a></li>
+        <li><strong>Operated by:</strong> ${esc(LEGAL_ENTITY)}, Prince George's County, Maryland, USA</li>
+      </ul>
+      <p>${esc(SUPPORT_CONTACTS.channelsNote)}</p>
+    </section>
   </main>
 
   <footer>

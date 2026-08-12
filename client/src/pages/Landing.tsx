@@ -4,6 +4,7 @@ import { Link } from "wouter";
 
 import { BRAND } from "@shared/branding";
 import { PG_CARD } from "@shared/userFacingCopy";
+import { SUPPORT_CONTACTS } from "@shared/supportContacts";
 import { useFeatureFlags } from "@/hooks/useStripeConfig";
 
 export default function Landing() {
@@ -84,6 +85,21 @@ export default function Landing() {
                   Login
                 </Button>
               </Link>
+            </div>
+
+            {/* Contact / support — visible to riders and to a payment reviewer. */}
+            <div className="pt-4 border-t space-y-1">
+              <p className="text-xs font-medium text-foreground">Need help?</p>
+              <p className="text-xs text-muted-foreground">
+                Call or text{" "}
+                <a href={SUPPORT_CONTACTS.phoneTel ? `tel:${SUPPORT_CONTACTS.phoneTel}` : undefined} className="underline text-primary">
+                  {SUPPORT_CONTACTS.phoneDisplay}
+                </a>
+                {" · "}
+                <a href={`mailto:${SUPPORT_CONTACTS.email}`} className="underline text-primary">
+                  {SUPPORT_CONTACTS.email}
+                </a>
+              </p>
             </div>
 
             <p className="text-xs text-muted-foreground">
