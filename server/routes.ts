@@ -1719,11 +1719,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // confirm-scheduled endpoint (claimed scheduled/shared/circuit rides),
   // so both paths authorize payment identically instead of one silently
   // skipping it.
+  // Best-effort "your ride was cancelled" fan-out: a live WS nudge for an open
+  // app plus a durable push for a backgrounded one. Shared by the
+  // payment-failure cancel path and the decline "no drivers available" branch.
+  function notifyRiderRideCancelled(
+    riderId: string,
+    rideId: string,
+    opts: { wsReason: string; pushTitle: string; pushBody: string; tag: string },
+  ): void {
+    try {
+      const riderWs = activeConnections.get(riderId);
+      if (riderWs?.readyState === WebSocket.OPEN) {
+        riderWs.send(JSON.stringify({ type: "ride_cancelled", rideId, reason: opts.wsReason }));
+      }
+    } catch (wsErr) {
+      console.error("Failed to notify rider over WS of cancellation:", wsErr);
+    }
+    deliverUserNotification(riderId, {
+      type: "ride-cancelled",
+      title: opts.pushTitle,
+      body: opts.pushBody,
+      tag: opts.tag,
+      url: "/",
+      data: { rideId },
+    }).catch((notifyErr) =>
+      console.error("Failed to push ride-cancellation notification to rider:", notifyErr),
+    );
+  }
+
   async function authorizeCardPaymentForRide(
     rideId: string,
     ride: Ride,
     rider: User | undefined,
     actorUserId: string,
+    opts?: { onFailure?: "cancel" | "revert" },
   ): Promise<{ ok: true } | { ok: false; message: string }> {
     if (ride.paymentMethod !== 'card') return { ok: true };
 
@@ -1799,6 +1828,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Failed to authorize ride payment:", error);
 
+      const { db: dbInstance } = await import("./db");
+      const { rides: ridesTable } = await import("@shared/schema");
+      const { eq, and } = await import("drizzle-orm");
+
+      // Release any real card hold we placed before a LATER step (promo
+      // consume, authorization persist) threw. authorizeRideShortfall failing
+      // leaves stripeIntentId as the "virtual-" placeholder, so this only fires
+      // when an actual PaymentIntent hold exists — otherwise we'd cancel the
+      // rider's card authorization for a ride we're about to unwind and leave
+      // their funds held for a trip that never happens.
+      //
+      // Known residual edge: if authorizeRideShortfall CREATES the PaymentIntent
+      // but throws on the response (network drop) before intent.id is captured,
+      // stripeIntentId stays the "virtual-" placeholder and we can't cancel that
+      // orphaned hold here. Stripe voids uncaptured manual-capture holds
+      // automatically (~7 days); a metadata-based reconciliation sweep would
+      // close the gap sooner and is tracked as a follow-up.
+      if (stripeAuthAmount > 0 && !stripeIntentId.startsWith("virtual-")) {
+        try {
+          await stripeService.cancelPaymentIntent(stripeIntentId);
+        } catch (cancelErr) {
+          console.error("Failed to cancel Stripe hold after payment-auth failure:", cancelErr);
+        }
+      }
+
       // Roll back any virtual deduction we made before the Stripe step failed.
       if (virtualDeducted > 0) {
         try {
@@ -1808,17 +1862,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      const failMessage = error?.message || "Payment authorization failed. Please try a different payment method.";
+      const onFailure = opts?.onFailure ?? "revert";
+      let cancelled = false;
+
       try {
-        const { db: dbInstance } = await import("./db");
-        const { rides: ridesTable } = await import("@shared/schema");
-        const { eq, and } = await import("drizzle-orm");
-        await dbInstance.update(ridesTable)
-          .set({ status: "pending", acceptedAt: null, updatedAt: new Date() })
-          .where(and(eq(ridesTable.id, rideId), eq(ridesTable.status, "accepted")));
+        if (onFailure === "cancel") {
+          // Immediate on-demand accept: a payment failure here is rider-side
+          // (declined card, no card on file, Stripe down). Re-dispatching would
+          // just hit the same card on the next driver and bounce the ride, so
+          // we cancel and tell the rider to fix their payment. Clearing
+          // driverId also fixes the old strand bug: the ride used to be left
+          // pending with driverId still set, and getPendingRidesForDriver
+          // filters (driverId = <that driver> AND status = pending), so it
+          // vanished from the open dispatch board — the rider just saw an
+          // endless "searching" spinner with no explanation.
+          const result = await dbInstance.update(ridesTable)
+            .set({
+              status: "cancelled",
+              driverId: null,
+              acceptedAt: null,
+              paymentStatus: "cancelled",
+              cancellationReason: "Payment could not be authorized",
+              cancelledBy: "system",
+              cancelledByRole: "system",
+              // We voided any Stripe hold above; clear the authorization fields
+              // so a later settlement sweep can't target a cancelled intent.
+              virtualAmountAuthorized: "0.00",
+              stripeAuthorizedAmount: "0.00",
+              stripePaymentIntentId: null,
+              updatedAt: new Date(),
+            })
+            .where(and(eq(ridesTable.id, rideId), eq(ridesTable.status, "accepted")));
+          // Only claim the cancel (and notify below) if this update actually
+          // flipped the ride. If a concurrent transition already moved it off
+          // "accepted", the guard matched no row and the ride was cancelled for
+          // some other reason — a "payment failed" push would be wrong.
+          cancelled = (result.rowCount ?? 0) > 0;
+        } else {
+          // Scheduled / group confirm: "pending + still claimed" is a safe,
+          // reclaimable state — the caller rolls the whole group back and the
+          // driver retries /confirm, so we leave driverId in place. We DO clear
+          // the authorization fields, though: we just voided the Stripe hold
+          // above, so leaving stripeAuthorizedAmount / stripePaymentIntentId set
+          // would point a later settlement/capture at a cancelled intent. A
+          // fresh /confirm re-authorizes and repopulates them.
+          await dbInstance.update(ridesTable)
+            .set({
+              status: "pending",
+              acceptedAt: null,
+              virtualAmountAuthorized: "0.00",
+              stripeAuthorizedAmount: "0.00",
+              stripePaymentIntentId: null,
+              paymentStatus: "pending_payment",
+              updatedAt: new Date(),
+            })
+            .where(and(eq(ridesTable.id, rideId), eq(ridesTable.status, "accepted")));
+        }
       } catch (revertError) {
-        console.error("Failed to revert ride status after payment failure:", revertError);
+        console.error("Failed to unwind ride after payment failure:", revertError);
       }
-      return { ok: false, message: error?.message || "Payment authorization failed. Please try a different payment method." };
+
+      // Only tell the rider when we actually cancelled this ride for payment.
+      // The revert path keeps the ride alive (reclaimable), and a no-op update
+      // means something else already cancelled it — neither should notify.
+      if (cancelled) {
+        notifyRiderRideCancelled(ride.riderId, rideId, {
+          wsReason: "We couldn't authorize your payment. Please check your card and book again.",
+          pushTitle: "Payment couldn't be authorized",
+          pushBody: "We couldn't charge your card for this ride. Please update your payment method and try again.",
+          tag: "ride-payment-failed",
+        });
+      }
+
+      return { ok: false, message: failMessage };
     }
   }
 
@@ -1859,7 +1976,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         metadata: { estimatedFare: ride.estimatedFare },
       }).catch((err) => console.error("agent_audit_log write failed:", err));
 
-      const paymentResult = await authorizeCardPaymentForRide(rideId, ride, rider, userId);
+      // Immediate accept: on a payment failure, cancel the ride and notify the
+      // rider (their card is the problem) rather than leaving it stranded.
+      const paymentResult = await authorizeCardPaymentForRide(rideId, ride, rider, userId, { onFailure: "cancel" });
       if (!paymentResult.ok) {
         return res.status(402).json({ message: paymentResult.message });
       }
@@ -1932,15 +2051,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (err: any) {
         for (const done of confirmed) {
           try {
-            const virtualAuth = parseFloat(done.virtualAmountAuthorized || "0");
-            if (virtualAuth > 0) {
-              await storage.addVirtualCardBalance(done.riderId, virtualAuth, "ride_authorization_refund", done.id);
-            }
+            // Fully release the authorization we placed on this sibling when we
+            // confirmed it: refund the virtual portion AND void the real Stripe
+            // card hold. Refunding only the virtual leg (the old behavior) left
+            // the card authorized for a ride that just reverted to pending, so
+            // the driver's retry would place a SECOND hold on the same card.
+            await refundRideAuthorizationInFull(done);
             const { db: dbInstance } = await import("./db");
             const { rides: ridesTable } = await import("@shared/schema");
             const { eq } = await import("drizzle-orm");
+            // Keep driverId: for a scheduled/circuit group these siblings were
+            // claimed by this driver, and "pending + still claimed" is a safe,
+            // reclaimable state — the driver retries /confirm and re-confirms
+            // them. (Clearing driverId here would drop them from the driver's
+            // claimed board and from the retry target set.) Clear the stale
+            // authorization fields, though — we just voided the hold above.
             await dbInstance.update(ridesTable)
-              .set({ status: "pending", acceptedAt: null, updatedAt: new Date() })
+              .set({
+                status: "pending",
+                acceptedAt: null,
+                virtualAmountAuthorized: "0.00",
+                stripeAuthorizedAmount: "0.00",
+                stripePaymentIntentId: null,
+                paymentStatus: "pending_payment",
+                updatedAt: new Date(),
+              })
               .where(eq(ridesTable.id, done.id));
           } catch (rollbackErr) {
             console.error(`Failed to roll back ride ${done.id} after group-confirm failure:`, rollbackErr);
@@ -2120,22 +2255,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             cancelledBy: "system",
             cancelledByRole: "system",
           } as any);
-          const riderWs = activeConnections.get(ride.riderId);
-          if (riderWs?.readyState === WebSocket.OPEN) {
-            riderWs.send(JSON.stringify({
-              type: 'ride_cancelled',
-              rideId,
-              reason: 'No drivers available in your area right now. Please try again.',
-            }));
-          }
-          deliverUserNotification(ride.riderId, {
-            type: "ride-cancelled",
-            title: "No Drivers Available",
-            body: "We couldn't find a driver for your ride. Please try again.",
+          notifyRiderRideCancelled(ride.riderId, rideId, {
+            wsReason: "No drivers available in your area right now. Please try again.",
+            pushTitle: "No Drivers Available",
+            pushBody: "We couldn't find a driver for your ride. Please try again.",
             tag: "ride-cancelled",
-            url: "/",
-            data: { rideId },
-          }).catch(console.error);
+          });
         }
       }
 
@@ -8900,8 +9025,80 @@ Generate the FAQ list.`;
           const rideId = pi.metadata?.rideId;
           if (rideId) {
             const ride = await storage.getRide(rideId);
-            if (ride && ride.status === 'accepted') {
-              await storage.updateRide(rideId, { status: 'cancelled', cancellationReason: 'Payment failed', paymentStatus: 'cancelled' });
+            // Async decline: the hold looked fine at accept time but Stripe (or
+            // the issuer) failed it afterwards — while the driver is already
+            // assigned (accepted) or en route (driver_arriving). We cancel,
+            // clear driverId, and tell both parties: otherwise the ride is left
+            // assigned to a driver on a dead payment, invisible to the open
+            // board (getPendingRidesForDriver filters driverId + pending), with
+            // the rider never told why — the same strand the synchronous accept
+            // path guards against.
+            //
+            // This webhook is retryable and can be double-delivered, so the
+            // cancel is an ATOMIC guarded update: only the delivery that
+            // actually flips accepted/driver_arriving → cancelled proceeds to
+            // notify. That keeps it exactly-once WITHOUT doing any balance
+            // mutation here — the card hold already failed (nothing captured to
+            // refund), and re-crediting a virtual/promo leg from a retryable
+            // handler risks double-credit. In lean (card-only) production there
+            // is no virtual leg; wallet-mode virtual/promo reconciliation on
+            // this rare async-decline path is a tracked follow-up.
+            if (ride) {
+              const strandedDriverId = ride.driverId;
+              const { db: dbInstance } = await import("./db");
+              const { rides: ridesTable } = await import("@shared/schema");
+              const { eq, and, inArray } = await import("drizzle-orm");
+              const result = await dbInstance.update(ridesTable)
+                .set({
+                  status: 'cancelled',
+                  driverId: null,
+                  cancellationReason: 'Payment failed',
+                  cancelledBy: 'system',
+                  cancelledByRole: 'system',
+                  paymentStatus: 'cancelled',
+                  // Clear the dead authorization, matching the synchronous
+                  // cancel/revert paths, so no later sweep targets it.
+                  virtualAmountAuthorized: "0.00",
+                  stripeAuthorizedAmount: "0.00",
+                  stripePaymentIntentId: null,
+                  updatedAt: new Date(),
+                })
+                // Match the ride's CURRENT authorization (pi.id) too: a ride
+                // that was reverted and re-authorized on a fresh intent must not
+                // be cancelled by a payment_failed for the old, superseded one.
+                .where(and(
+                  eq(ridesTable.id, rideId),
+                  eq(ridesTable.stripePaymentIntentId, pi.id),
+                  inArray(ridesTable.status, ['accepted', 'driver_arriving']),
+                ));
+              if ((result.rowCount ?? 0) > 0) {
+                notifyRiderRideCancelled(ride.riderId, rideId, {
+                  wsReason: "We couldn't authorize your payment. Please check your card and book again.",
+                  pushTitle: "Payment couldn't be authorized",
+                  pushBody: "We couldn't charge your card for this ride. Please update your payment method and try again.",
+                  tag: "ride-payment-failed",
+                });
+                // Tell the driver too — we just pulled the ride out from under them.
+                if (strandedDriverId) {
+                  const driverWs = activeConnections.get(strandedDriverId);
+                  if (driverWs?.readyState === WebSocket.OPEN) {
+                    driverWs.send(JSON.stringify({
+                      type: 'ride_cancelled',
+                      rideId,
+                      reason: "This ride was cancelled — the rider's payment could not be processed.",
+                    }));
+                  }
+                  deliverUserNotification(strandedDriverId, {
+                    type: "ride-cancelled",
+                    title: "Ride cancelled",
+                    body: "A ride was cancelled because the rider's payment couldn't be processed.",
+                    tag: "ride-cancelled",
+                    url: "/",
+                    data: { rideId },
+                  }).catch((notifyErr) =>
+                    console.error("Failed to notify driver of payment-failed cancellation:", notifyErr));
+                }
+              }
             }
           }
           break;
@@ -8923,6 +9120,16 @@ Generate the FAQ list.`;
       res.json({ received: true });
     } catch (err) {
       console.error('Stripe webhook handler error:', err);
+      // Release the idempotency claim taken at the top of this handler so
+      // Stripe's automatic retry can re-process the event. Without this, the
+      // claim survives the failure and every subsequent retry short-circuits
+      // to the "already processed" 200 branch above — the event (ride
+      // paid-status sync, payment-failure cancellation) is then silently
+      // dropped for good, with no other reconciliation path. Mirrors the
+      // release already done for the inner top-up claim and the settlement
+      // retry handler.
+      await storage.releaseWebhookEvent('stripe', event.id).catch((relErr) =>
+        console.error('Failed to release stripe webhook claim after handler error:', relErr));
       res.status(500).json({ message: 'Webhook handler error' });
     }
   });
