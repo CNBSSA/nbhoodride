@@ -66,6 +66,13 @@ const recentCommits = sh("git", ["log", "origin/main", "--oneline", "-15"]);
 const checkRes = sh("npm", ["run", "check"]);
 const testRes = sh("npm", ["test"]);
 
+// Phase 0 public + legal-route smoke against production. This is the check the
+// 0.4-legal / 0.6-smoke readiness warns used to say "run manually" — it's
+// read-only (GET /privacy, /terms, /login, /signup, /health, CSRF, manifest,
+// icons) so it's safe to run on every scheduled report, making the legal-route
+// and public-route status deterministic daily instead of manual-only.
+const smokeRes = sh("npm", ["run", "smoke:production"]);
+
 const health = await tryFetch("/health/ready");
 const payCfg = await tryFetch("/api/payment/config");
 
@@ -94,6 +101,11 @@ ${testRes.out.split("\n").slice(-8).join("\n")}
 ## Production probes (${baseUrl})
 - /health/ready: ${health}
 - /api/payment/config: ${payCfg}
+
+## Production smoke — public + legal routes (${baseUrl})
+- npm run smoke:production exit code: ${smokeRes.code} ${smokeRes.code === 0 ? "(passing)" : "(FAILING — see tail)"}
+- smoke tail:
+${smokeRes.out.split("\n").slice(-14).join("\n")}
 
 ## Branch parity (origin/develop ↔ origin/main)
 - left-right count (developOnly mainOnly): ${parity.out || "unknown"}
