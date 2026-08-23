@@ -739,7 +739,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         lastName,
         phone: normalizedPhone,
         isApproved: false,
-        virtualCardBalance: "20.00",
+        // Only seed a wallet balance when the wallet is actually enabled. In
+        // lean (card-only) mode there is no wallet to spend it, so granting it
+        // would be dead value — and a stored balance a payment reviewer could
+        // see. The 4 promo rides work in both modes (a $5 discount applied to
+        // the card fare), so they're granted regardless.
+        virtualCardBalance: featureFlags.walletEnabled ? "20.00" : "0.00",
         promoRidesRemaining: 4,
         termsAcceptedAt: termsAccepted ? now : undefined,
         privacyAcceptedAt: privacyAccepted ? now : undefined,

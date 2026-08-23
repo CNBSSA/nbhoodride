@@ -6,7 +6,6 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useLocation, Link } from 'wouter';
 import { queryClient, getCsrfToken } from '@/lib/queryClient';
-import { PG_CARD } from '@shared/userFacingCopy';
 
 export default function Signup() {
   const [email, setEmail] = useState('');
@@ -336,7 +335,7 @@ export default function Signup() {
 
           <div className="mt-4 text-xs text-center">
             <p className="text-green-700 dark:text-green-400 font-medium">
-              🎉 New riders get $20 in {PG_CARD.name} credit + 4 rides with $5 off each!
+              🎉 New riders get 4 rides with $5 off each!
             </p>
           </div>
         </CardContent>

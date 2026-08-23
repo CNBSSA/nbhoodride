@@ -2,17 +2,21 @@
 import { BRAND } from "./branding";
 import { SUPPORT_CONTACTS } from "./supportContacts";
 
+// Card-only (lean) payment copy. Wallet/stored-value wording was removed so
+// nothing a rider or payment reviewer sees implies an in-app wallet, stored
+// balance, or top-up. (These strings render in payment UI; the wallet-specific
+// screens they used to serve are hidden when the wallet feature is disabled.)
 export const PG_CARD = {
-  name: "PG Card",
-  subtitle: "In-app wallet",
-  fullLabel: "PG Card (in-app wallet)",
-  payLine: "Paid from your PG Card",
-  confirmLine: "Charged to your PG Card when you confirm",
-  lowBalanceTitle: "Add funds to your PG Card",
+  name: "card",
+  subtitle: "Card payment",
+  fullLabel: "Card payment",
+  payLine: "Charged to your card",
+  confirmLine: "Charged to your card when you confirm",
+  lowBalanceTitle: "Payment couldn't be completed",
   lowBalanceBody:
-    "Your PG Card balance is lower than this fare. Add funds in Profile before booking, or use a welcome promo ride if you have one left.",
-  landingFeature: "Pay with your PG Card — no surge pricing",
-  profileMethods: "PG Card balance + optional card top-up",
+    "We couldn't charge your card for this ride. Please check your payment method and try again.",
+  landingFeature: "Pay securely by card — no surge pricing",
+  profileMethods: "Card on file",
 } as const;
 
 export const PG_EXPANDED = `${BRAND.pgMeans} (${BRAND.appName})`;
@@ -36,7 +40,7 @@ export function humanizePaymentStatus(status: string | null | undefined): string
 export function parseBookingErrorMessage(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("balance") || m.includes("insufficient") || m.includes("funds")) {
-    return "Your PG Card balance is too low for this ride. Add funds in Profile and try again.";
+    return "We couldn't charge your card for this ride. Please check your payment method and try again.";
   }
   if (m.includes("driver") && (m.includes("unavailable") || m.includes("not found"))) {
     return "That driver is no longer available. Pick another driver or try again in a moment.";
