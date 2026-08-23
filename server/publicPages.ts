@@ -52,6 +52,25 @@ function renderAboutPage(): string {
   const whatWeDo = wallet
     ? `${esc(BRAND.appName)} is a community rideshare (transportation-network) marketplace. Riders request an on-demand or scheduled local trip through our app and are matched with a vetted community driver. We sell local passenger transportation — there are no physical goods or digital downloads.`
     : `${esc(BRAND.appName)} is a rideshare (transportation-network) service. Riders request an on-demand or scheduled local trip through our app and are matched with a background-checked driver. We sell local passenger transportation — there are no physical goods or digital downloads.`;
+  // Hero eyebrow. In lean (card-only) mode we deliberately drop the
+  // "People-Governed" governance framing here: to a payments/compliance
+  // reviewer scanning for restricted industries, "people-governed /
+  // community-owned" reads like member ownership or a securities/co-op
+  // arrangement. The lean site is a plain rideshare, so it should say so.
+  const brandEyebrow = wallet
+    ? `${esc(BRAND.companyName)} · ${esc(BRAND.pgMeans)}`
+    : "Rideshare · Prince George's County, Maryland";
+  // "What you're paying for" — answers Stripe's restricted-business question
+  // directly on the page their crawler reads.
+  const payForItems = wallet
+    ? `<li><strong>A per-ride fare</strong> for local passenger transportation, charged to your card through Stripe; riders may optionally pre-load an in-app balance used only toward fares.</li>
+        <li><strong>No investment, equity, shares, or securities</strong> of any kind.</li>
+        <li><strong>No physical goods and no digital downloads.</strong></li>`
+    : `<li><strong>A per-ride fare</strong> for a local ride — charged to your payment card through Stripe. That is the only thing riders pay for.</li>
+        <li><strong>No stored value or prepaid wallet</strong> — we hold no balance on your behalf and transmit no money.</li>
+        <li><strong>No third-party payouts or marketplace</strong> — you are paying ${esc(BRAND.appName)} for the ride, not funding another seller.</li>
+        <li><strong>No investment, equity, shares, or securities</strong> of any kind.</li>
+        <li><strong>No physical goods and no digital downloads.</strong></li>`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -109,7 +128,7 @@ function renderAboutPage(): string {
 <body>
   <header class="hero">
     <div class="wrap">
-      <p class="brand">${esc(BRAND.companyName)} · ${esc(BRAND.pgMeans)}</p>
+      <p class="brand">${brandEyebrow}</p>
       <h1>${h1}</h1>
       <p class="tagline">${headerTagline}</p>
     </div>
@@ -157,6 +176,14 @@ function renderAboutPage(): string {
       <p>${paymentsBody}</p>
     </section>
 
+    <section id="what-you-pay-for">
+      <h2>What you're paying for</h2>
+      <p>${esc(BRAND.appName)} sells one thing — a local ride. For clarity for riders and payment partners:</p>
+      <ul>
+        ${payForItems}
+      </ul>
+    </section>
+
     <section>
       <h2>Get started</h2>
       <p>
@@ -190,7 +217,7 @@ function renderAboutPage(): string {
         <a href="/terms">Terms of Service</a> ·
         <a href="/privacy">Privacy Policy</a>
       </p>
-      <p>&copy; ${year} ${esc(BRAND.companyName)}. All rights reserved.</p>
+      <p>&copy; ${year} ${wallet ? esc(BRAND.companyName) : esc(LEGAL_ENTITY)}. All rights reserved.</p>
     </div>
   </footer>
 </body>
