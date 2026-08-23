@@ -168,7 +168,7 @@ export default function PwaInstallPrompt() {
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-sm">Install PG Ride</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Add People-Governed rideshare to your home screen — one tap to book.
+              Add PG Ride to your home screen — one tap to book.
             </p>
             <div className="flex gap-2 mt-3">
               <Button size="sm" className="h-8 text-xs" onClick={handleAndroidInstall}>

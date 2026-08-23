@@ -31,11 +31,11 @@ export function TermsOfService() {
           <section>
             <h2 className="font-semibold text-base mb-2">1. About PG Ride</h2>
             <p>
-              PG Ride ("PG Ride," "we," "us," or "our") is the mobility app of{" "}
-              {BRAND.companyName} ({BRAND.companyDomain}) — a community-owned rideshare platform.
-              <strong> PG means {BRAND.pgMeans}.</strong> We connect verified riders and drivers
-              under cooperative governance. {BRAND.foundedNote} By creating an account or using our
-              services, you agree to these Terms of Service.
+              PG Ride ("PG Ride," "we," "us," or "our") is a rideshare service operated by
+              Thrynova Insights LLC in Prince George's County, Maryland. We connect verified
+              riders with background-checked drivers for local trips, and riders pay a per-ride
+              fare by card. {BRAND.foundedNote} By creating an account or using our services, you
+              agree to these Terms of Service.
             </p>
           </section>
 
@@ -45,13 +45,13 @@ export function TermsOfService() {
           </section>
 
           <section>
-            <h2 className="font-semibold text-base mb-2">3. Virtual PG Card & Payments</h2>
-            <p>The Virtual PG Card is a stored-value account balance used to pay for rides on the platform. Balances are non-transferable, non-refundable except at our discretion, and have no cash value outside the platform. Top-up payments are processed securely by Stripe. No surge pricing is applied on PG Ride — fares are calculated transparently using distance and time only.</p>
+            <h2 className="font-semibold text-base mb-2">3. Payments</h2>
+            <p>Riders pay a per-ride fare charged to their payment card, processed securely by Stripe. When a driver accepts, the fare is authorized as a hold on the card and captured when the ride completes, or released if the ride is cancelled. There is no stored-value balance or prepaid wallet. No surge pricing is applied on PG Ride — fares are calculated transparently using distance and time only.</p>
           </section>
 
           <section>
-            <h2 className="font-semibold text-base mb-2">4. Welcome Promo Credit</h2>
-            <p>New users receive $20 in Virtual PG Card credit and 4 promo rides with a $5 discount each upon account approval. These credits are for personal use only, are non-transferable, and expire 12 months from account creation. We reserve the right to revoke credits for abuse or fraudulent activity.</p>
+            <h2 className="font-semibold text-base mb-2">4. Promotional Ride Discounts</h2>
+            <p>New riders receive up to 4 promotional ride discounts of $5 each, applied automatically to eligible fares after account approval. These discounts are for personal use only, are non-transferable, and expire 12 months from account creation. We reserve the right to revoke them for abuse or fraudulent activity.</p>
           </section>
 
           <section>
@@ -70,32 +70,27 @@ export function TermsOfService() {
           </section>
 
           <section>
-            <h2 className="font-semibold text-base mb-2">8. Cooperative Ownership</h2>
-            <p>PG Ride operates as a community cooperative. Qualified drivers may purchase ownership shares. Share purchases are subject to separate Share Certificate agreements and Maryland cooperative law. Dividends, if declared, are distributed proportionally to share ownership. Past distributions do not guarantee future returns.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">9. Prohibited Conduct</h2>
+            <h2 className="font-semibold text-base mb-2">8. Prohibited Conduct</h2>
             <p>You may not: use the platform for illegal activity; harass or threaten other users or drivers; create fraudulent accounts; attempt to circumvent fare or payment systems; reverse-engineer the platform; or resell access to the platform.</p>
           </section>
 
           <section>
-            <h2 className="font-semibold text-base mb-2">10. Limitation of Liability</h2>
+            <h2 className="font-semibold text-base mb-2">9. Limitation of Liability</h2>
             <p>PG Ride is a technology platform connecting riders and drivers. We are not a transportation carrier. Drivers are independent contractors. To the maximum extent permitted by law, PG Ride is not liable for personal injury, property damage, or other losses arising from rides facilitated through our platform. Our maximum liability to you for any claim is limited to the amount paid through your account in the 30 days preceding the claim.</p>
           </section>
 
           <section>
-            <h2 className="font-semibold text-base mb-2">11. Dispute Resolution</h2>
+            <h2 className="font-semibold text-base mb-2">10. Dispute Resolution</h2>
             <p>Disputes between riders and drivers should first be reported through the in-app dispute system. We will review disputes within 5 business days. Our decision is final for amounts under $100. For larger disputes, parties may pursue mediation under Maryland law.</p>
           </section>
 
           <section>
-            <h2 className="font-semibold text-base mb-2">12. Changes to These Terms</h2>
+            <h2 className="font-semibold text-base mb-2">11. Changes to These Terms</h2>
             <p>We may update these Terms at any time. We will notify you of material changes via email or in-app notification. Continued use of the platform after changes constitutes acceptance of the new Terms.</p>
           </section>
 
           <section>
-            <h2 className="font-semibold text-base mb-2">13. Contact</h2>
+            <h2 className="font-semibold text-base mb-2">12. Contact</h2>
             <p>For support, questions and enquiries, contact Thrynova Insights LLC any of these ways:</p>
             <div className="mt-2">
               <SupportContactLinks className="!justify-start" />
@@ -127,7 +122,7 @@ export function PrivacyPolicy() {
             <ul className="list-disc list-inside mt-2 space-y-1 text-muted-foreground">
               <li><strong className="text-foreground">Account information:</strong> Name, email, phone number, and password (hashed)</li>
               <li><strong className="text-foreground">Location data:</strong> GPS coordinates during active rides and route tracking</li>
-              <li><strong className="text-foreground">Payment information:</strong> Virtual card balance and transaction history (card details handled by Stripe)</li>
+              <li><strong className="text-foreground">Payment information:</strong> Payment card on file and ride transaction history (card details handled by Stripe)</li>
               <li><strong className="text-foreground">Driver documents:</strong> License, registration, and insurance uploads for verification</li>
               <li><strong className="text-foreground">Ride data:</strong> Origin, destination, timestamps, fare, and driver/rider feedback</li>
               <li><strong className="text-foreground">Usage data:</strong> App interactions, feature usage, and in-app AI assistant conversations</li>
@@ -138,7 +133,7 @@ export function PrivacyPolicy() {
             <h2 className="font-semibold text-base mb-2">2. How We Use Your Information</h2>
             <ul className="list-disc list-inside space-y-1 text-muted-foreground">
               <li>To match riders with nearby drivers</li>
-              <li>To process payments and maintain your Virtual PG Card balance</li>
+              <li>To process card payments for your rides</li>
               <li>To verify driver identities and credentials</li>
               <li>To provide real-time GPS tracking during rides</li>
               <li>To operate the SOS emergency feature and contact emergency services if needed</li>
