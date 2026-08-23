@@ -8,6 +8,8 @@ describe("userFacingCopy", () => {
   });
 
   it("parses booking errors", () => {
-    expect(parseBookingErrorMessage("Insufficient balance")).toMatch(/PG Card/);
+    // Card-only (lean) copy: a balance/insufficient-funds error is surfaced as a
+    // plain card-charge failure — no wallet/stored-value wording.
+    expect(parseBookingErrorMessage("Insufficient balance")).toMatch(/card/i);
   });
 });
