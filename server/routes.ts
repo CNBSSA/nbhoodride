@@ -296,9 +296,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // and adminAiLimiter — so each person gets their own budget instead of
   // sharing one. Ceiling also raised for headroom against realistic
   // multi-endpoint polling cadence.
+  // Sized against the app's OWN polling appetite, not just abuse: an online
+  // driver dashboard polls ~135 req/15min at idle (30-60s intervals across 6
+  // queries) and an active rider panel exceeds 400/15min (5-10s ride polls).
+  // The old max=300 meant a driver online for ~3 hours got 429 "Too many
+  // requests" on the ONE tap that mattered (Confirm & Accept) — field report
+  // 2026-08-24. 2000/15min (~2.2 req/s sustained) is far above any legitimate
+  // client cadence while still stopping runaway loops and scraping; auth/AI/
+  // chat/guardian endpoints keep their own much tighter limiters.
   const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 300,
+    max: 2000,
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) =>
@@ -1184,7 +1192,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // still false — the Profile page needs the application status either way.
       const driverProfile = await storage.getDriverProfile(userId) ?? null;
 
-      res.json({ ...toSafeUser(user), driverProfile });
+      res.json({
+        ...toSafeUser(user),
+        // Boolean only — never the Stripe ids. Lets booking UIs prompt for a
+        // card up front instead of failing at driver-accept time.
+        hasCardOnFile: Boolean(user.stripeCustomerId && user.stripePaymentMethodId),
+        driverProfile,
+      });
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
@@ -1724,6 +1738,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // confirm-scheduled endpoint (claimed scheduled/shared/circuit rides),
   // so both paths authorize payment identically instead of one silently
   // skipping it.
+  // Rides whose rider was already nudged to add a payment card — capped
+  // best-effort dedupe (process-lifetime) so repeated driver accept attempts
+  // on the same ride don't pile up duplicate in-app notifications.
+  const noCardNudgedRides = new Set<string>();
+
   // Best-effort "your ride was cancelled" fan-out: a live WS nudge for an open
   // app plus a durable push for a backgrounded one. Shared by the
   // payment-failure cancel path and the decline "no drivers available" branch.
@@ -1794,10 +1813,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
             throw new Error("Card payments are not configured. Please contact support.");
           }
           if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
+            // This message is surfaced to the DRIVER (they triggered the
+            // accept/confirm), so it must not read like the driver needs to
+            // add a card, and must not promise a retry (the immediate-accept
+            // path cancels the ride). Nudge the rider directly — they're the
+            // one who can fix it. (Booking now requires a card, so this is a
+            // legacy-ride or card-removed edge.) Once per ride per process so
+            // driver retries on scheduled rides don't spam the rider.
+            if (!noCardNudgedRides.has(rideId)) {
+              noCardNudgedRides.add(rideId);
+              deliverUserNotification(ride.riderId, {
+                type: "payment-action-needed",
+                title: "Add a payment card",
+                body: "A driver tried to accept your ride, but you don't have a payment card on file. Add one in Profile → Payment so your ride can be confirmed.",
+                tag: "add-payment-card",
+                url: "/card-setup",
+                data: { rideId },
+              }).catch(() => {});
+            }
             throw new Error(
               featureFlags.walletEnabled
                 ? "Insufficient virtual balance and no card on file. Please add a card or top up your wallet."
-                : "No card on file. Please add a payment card to book a ride."
+                : "This rider doesn't have a payment card on file, so the ride can't be accepted. We've asked them to add one."
             );
           }
           const intent = await stripeService.authorizeRideShortfall({
@@ -3508,6 +3545,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // In lean (card-only) mode a ride can only ever be paid by the rider's saved
+  // card — there is no wallet fallback. Without this booking-time check, a
+  // card-less rider could book/schedule freely and the failure only surfaced
+  // when a DRIVER tried to accept ("No card on file", shown to the wrong
+  // person, with the ride stuck). Field report: 2026-08-24.
+  const NEEDS_CARD_MESSAGE =
+    "Please add a payment card before booking. Open Profile → Payment and add a card — it takes a minute.";
+  function riderNeedsCardOnFile(rider: User | undefined): boolean {
+    if (!stripeService.isEnabled) return false; // dev/test envs without Stripe
+    if (featureFlags.walletEnabled) return false; // wallet mode can cover fares from balance
+    return !rider?.stripeCustomerId || !rider?.stripePaymentMethodId;
+  }
+
   app.post('/api/rides', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -3515,6 +3565,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // SECURITY: Enforce virtual card as the only payment method
       if (req.body.paymentMethod && req.body.paymentMethod !== 'card') {
         return res.status(400).json({ message: "Only virtual card payment is supported" });
+      }
+
+      const bookingRider = await storage.getUser(userId);
+      if (riderNeedsCardOnFile(bookingRider)) {
+        return res.status(400).json({ message: NEEDS_CARD_MESSAGE });
       }
 
       const pickup = req.body.pickupLocation as { lat: number; lng: number; address: string } | undefined;
@@ -3614,7 +3669,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const riderUser = await storage.getUser(userId);
+      // Already fetched for the card-on-file check at the top of this handler.
+      const riderUser = bookingRider;
       const isScheduledFuture = ride.scheduledAt && new Date(ride.scheduledAt) > new Date();
       const pickupCounty = validation.pickupCounty ?? null;
 
@@ -6273,6 +6329,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // Card-only mode: seat fares charge the rider's saved card.
+      const circuitRider = await storage.getUser(userId);
+      if (riderNeedsCardOnFile(circuitRider)) {
+        return res.status(400).json({ message: NEEDS_CARD_MESSAGE });
+      }
+
       let group = await storage.getCircuitRunGroup(circuit.id, w.runAt);
       if (!group) {
         group = await storage.createRideGroup({
@@ -6697,6 +6759,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Card-only mode: the fare charges the rider's saved card.
+      const multiStopRider = await storage.getUser(userId);
+      if (riderNeedsCardOnFile(multiStopRider)) {
+        return res.status(400).json({ message: NEEDS_CARD_MESSAGE });
+      }
+
       // Create a ride group first
       const group = await storage.createRideGroup({
         organizerId: userId,
@@ -6749,6 +6817,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Regulatory service area: every trip ORIGIN must be in Maryland.
       if (!isAllowedPickup(pickupLocation.lat, pickupLocation.lng)) {
         return res.status(400).json({ message: PICKUP_OUTSIDE_MD_MESSAGE });
+      }
+
+      // Card-only mode: the organizer's fare can only be charged to a saved
+      // card, so require one before the group ride is created.
+      const organizer = await storage.getUser(userId);
+      if (riderNeedsCardOnFile(organizer)) {
+        return res.status(400).json({ message: NEEDS_CARD_MESSAGE });
       }
 
       const scheduleCode = await generateScheduleCode();
@@ -6867,6 +6942,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Regulatory service area: every trip ORIGIN must be in Maryland.
     if (!isAllowedPickup(pickupLocation.lat, pickupLocation.lng)) {
       return { ok: false, status: 400, message: PICKUP_OUTSIDE_MD_MESSAGE };
+    }
+
+    // Card-only mode: the joiner's fare can only be charged to a saved card.
+    // Check BEFORE claiming a slot so a card-less joiner doesn't burn one.
+    const joiner = await storage.getUser(userId);
+    if (riderNeedsCardOnFile(joiner)) {
+      return { ok: false, status: 400, message: NEEDS_CARD_MESSAGE };
     }
 
     const claimedGroup = await storage.claimScheduleSlot(group.id);

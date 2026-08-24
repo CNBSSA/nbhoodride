@@ -21,6 +21,8 @@ interface User {
   emergencyContact?: string;
   virtualCardBalance: string;
   promoRidesRemaining?: number;
+  /** Card-only mode: whether a payment card is saved (boolean only — no Stripe ids). */
+  hasCardOnFile?: boolean;
   createdAt: string;
   updatedAt: string;
   driverProfile?: {
