@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import { NativeTimeSelects } from "@/components/NativeTimeSelects";
+import { AddCardBanner } from "@/components/AddCardBanner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
@@ -317,6 +318,7 @@ export default function ScheduleRideModal({
         </div>
         
         <CardContent className="p-4 space-y-4 overflow-y-auto h-full pb-32">
+          <AddCardBanner />
           {/* Ride Type Tabs */}
           <Tabs value={bookingType} onValueChange={(v) => setBookingType(v as "now" | "schedule")}>
             <TabsList className="grid w-full grid-cols-2">
