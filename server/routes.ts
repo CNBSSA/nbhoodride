@@ -6789,6 +6789,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
         groupId: group.id,
       });
 
+      // Dispatch: without this, a multi-stop booking sat pending forever —
+      // nothing ran findBestDriver, the driver (chosen OR auto-assigned) was
+      // never notified, and acceptRide refuses unassigned rides. Found by the
+      // 2026-08-24 full-lifecycle audit. Mirrors the immediate dispatch in
+      // POST /api/rides (a third copy of that block — extracting a shared
+      // dispatch helper is tracked follow-up work).
+      try {
+        const pickupCounty = await getCountyFromCoords(pickupLocation.lat, pickupLocation.lng).catch(() => null);
+        if (pickupCounty) await storage.updateRideCounty(ride.id, pickupCounty).catch(() => {});
+
+        let targetDriverId: string | null = ride.driverId ?? null;
+        if (!targetDriverId) {
+          const bestDriver = await findBestDriver(pickupLocation, pickupCounty, [], { riderId: userId });
+          if (bestDriver) {
+            await storage.updateRide(ride.id, { driverId: bestDriver.userId });
+            ride.driverId = bestDriver.userId;
+            targetDriverId = bestDriver.userId;
+            await logRideAudit({
+              rideId: ride.id,
+              event: "driver_auto_assigned",
+              actorId: bestDriver.userId,
+              details: { etaMinutes: bestDriver.etaMinutes, viaMultiStop: true },
+            });
+          }
+        }
+
+        if (targetDriverId) {
+          const riderUser = multiStopRider;
+          const stopCount = Array.isArray(pickupStops) ? pickupStops.length : 0;
+          const driverPayload = (toDriverId: string) => JSON.stringify({
+            type: "new_ride_request",
+            rideId: ride.id,
+            riderId: userId,
+            riderName: riderUser ? `${riderUser.firstName} ${riderUser.lastName?.[0] || ""}.` : "Rider",
+            riderRating: riderUser?.rating || "5.0",
+            pickupAddress: pickupLocation?.address || "",
+            destinationAddress: destinationLocation?.address || "",
+            estimatedFare: ride.estimatedFare,
+            pickupInstructions: pickupInstructions || "",
+            multiStop: true,
+            stopCount,
+            acceptanceTimeoutSeconds: ACCEPTANCE_TIMEOUT_SECONDS,
+          });
+          const notifyDriver = (toDriverId: string) => {
+            const ws = activeConnections.get(toDriverId);
+            if (ws?.readyState === WebSocket.OPEN) ws.send(driverPayload(toDriverId));
+            deliverUserNotification(toDriverId, {
+              type: "new-ride-request",
+              title: "New Multi-Stop Ride! 🚗",
+              body: `${riderUser?.firstName || "A rider"} needs a multi-stop ride from ${pickupLocation?.address?.split(",")[0] || "nearby"}`,
+              tag: "new-ride-request",
+              url: "/",
+              data: { rideId: ride.id },
+            }).catch(console.error);
+          };
+          notifyDriver(targetDriverId);
+          startAcceptanceTimer(
+            ride.id, targetDriverId, pickupLocation, pickupCounty, 1,
+            // onReassign: the replacement driver must actually hear about it,
+            // and the rider should see progress rather than a frozen spinner.
+            (newDriverId) => {
+              notifyDriver(newDriverId);
+              const riderWs = activeConnections.get(userId);
+              if (riderWs?.readyState === WebSocket.OPEN) {
+                riderWs.send(JSON.stringify({ type: "ride_reassigned", rideId: ride.id, message: "Finding you a new driver…" }));
+              }
+            },
+            // onCancel: all attempts exhausted — tell the rider.
+            () => {
+              notifyRiderRideCancelled(userId, ride.id, {
+                wsReason: "No drivers available in your area right now. Please try again.",
+                pushTitle: "No Drivers Available",
+                pushBody: "We couldn't find a driver for your multi-stop ride. Please try again.",
+                tag: "ride-cancelled",
+              });
+            },
+          );
+        }
+      } catch (dispatchErr) {
+        console.error("Multi-stop dispatch error (non-fatal):", dispatchErr);
+      }
+
       res.json({ ...ride, group });
     } catch (error) {
       console.error("Error creating multi-stop ride:", error);
