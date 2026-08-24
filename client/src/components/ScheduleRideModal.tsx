@@ -89,6 +89,10 @@ export default function ScheduleRideModal({
       return response.json();
     },
     onSuccess: (data) => {
+      // Swapping the visible driver list invalidates any prior selection —
+      // otherwise a driver no longer shown stays silently pinned while every
+      // visible radio (including "Open to all") renders unchecked.
+      setSelectedDriver("");
       if (data && data.length > 0) {
         setSearchedDrivers(data);
         toast({
@@ -442,7 +446,7 @@ export default function ScheduleRideModal({
                   )}
                   <Separator />
                   <div className="flex justify-between font-semibold">
-                    <span>Total (Virtual Card)</span>
+                    <span>Total</span>
                     <span data-testid="text-total-fare">
                       ${(fareEstimate.promoDiscount ?? 0) > 0 ? fareEstimate.totalAfterPromo?.toFixed(2) : fareEstimate.total.toFixed(2)}
                     </span>
@@ -506,6 +510,9 @@ export default function ScheduleRideModal({
                 onClick={() => {
                   setSearchedDrivers([]);
                   setPhoneSearch("");
+                  // The searched driver's card disappears with the search —
+                  // don't leave it invisibly selected.
+                  setSelectedDriver("");
                 }}
                 className="text-xs"
                 data-testid="button-clear-search"
@@ -518,19 +525,47 @@ export default function ScheduleRideModal({
           {/* Available Drivers */}
           <div>
             <h3 className="font-semibold mb-1">
-              {searchedDrivers.length > 0 ? "Search Results" : "Choose Your Driver"}
+              {searchedDrivers.length > 0
+                ? "Search Results"
+                : bookingType === "schedule"
+                ? "Driver (optional)"
+                : "Choose Your Driver"}
             </h3>
+            {/* Scheduled rides don't need a driver up front. The explicit
+                "open to all" radio (default) also lets a rider UN-pick a
+                driver — radio groups otherwise have no way back, which made
+                driver selection look mandatory. */}
             {bookingType === "schedule" && (
-              <p className="text-xs text-muted-foreground mb-3">
-                Optional — leave unselected and any available driver will claim your ride.
-              </p>
+              <label
+                className="flex items-center p-3 border-2 rounded-lg cursor-pointer hover:bg-muted mb-2 border-primary/40 bg-primary/5"
+                data-testid="driver-option-open"
+              >
+                <input
+                  type="radio"
+                  name="driver"
+                  value=""
+                  checked={!selectedDriver}
+                  onChange={() => setSelectedDriver("")}
+                  className="mr-3"
+                />
+                <div className="flex-1">
+                  <span className="font-medium">Open to all drivers</span>
+                  <p className="text-xs text-muted-foreground">
+                    Your ride goes on the driver board — the first available driver claims it. Recommended.
+                  </p>
+                </div>
+              </label>
             )}
             {availableDrivers.length === 0 ? (
-              <Card>
-                <CardContent className="p-6 text-center text-muted-foreground">
-                  <p>No drivers available</p>
-                </CardContent>
-              </Card>
+              // Scheduled rides don't need anyone online right now — the
+              // "no drivers" empty state only applies to Book Now.
+              bookingType !== "schedule" && (
+                <Card>
+                  <CardContent className="p-6 text-center text-muted-foreground">
+                    <p>No drivers available</p>
+                  </CardContent>
+                </Card>
+              )
             ) : (
               <div className="space-y-2">
                 {availableDrivers.map((driver) => (
