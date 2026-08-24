@@ -155,6 +155,9 @@ function CardSetupForm() {
         description: "Your payment method has been saved securely.",
       });
       queryClient.invalidateQueries({ queryKey: ['/api/payment/methods'] });
+      // hasCardOnFile lives on the auth user — refresh it so booking UIs
+      // (AddCardBanner) stop prompting the moment a card is saved.
+      queryClient.invalidateQueries({ queryKey: ['/api/auth/user'] });
     },
     onError: (error: any) => {
       toast({
@@ -272,6 +275,9 @@ export function CardSetupPage() {
     onSuccess: () => {
       toast({ title: 'Default card updated' });
       queryClient.invalidateQueries({ queryKey: ['/api/payment/methods'] });
+      // hasCardOnFile lives on the auth user — refresh it so booking UIs
+      // (AddCardBanner) stop prompting the moment a card is saved.
+      queryClient.invalidateQueries({ queryKey: ['/api/auth/user'] });
     },
     onError: (error: Error) => {
       toast({
