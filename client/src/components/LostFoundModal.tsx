@@ -2,11 +2,11 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Package } from "lucide-react";
+import { nativeSelectClass } from "@/components/NativeTimeSelects";
 
 interface LostFoundModalProps {
   isOpen: boolean;
@@ -77,16 +77,19 @@ export default function LostFoundModal({ isOpen, onClose, rideId }: LostFoundMod
           </p>
           <div>
             <label className="text-sm font-medium mb-1 block">Item type</label>
-            <Select value={itemCategory} onValueChange={setItemCategory}>
-              <SelectTrigger data-testid="select-lost-category">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CATEGORIES.map((c) => (
-                  <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {/* Native select: OS-rendered picker, immune to the portal/overlay
+                issues that froze dropdowns inside these full-screen sheets on
+                some phones (see NativeTimeSelects). */}
+            <select
+              className={`${nativeSelectClass} w-full`}
+              value={itemCategory}
+              onChange={(e) => setItemCategory(e.target.value)}
+              data-testid="select-lost-category"
+            >
+              {CATEGORIES.map((c) => (
+                <option key={c.value} value={c.value}>{c.label}</option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="text-sm font-medium mb-1 block">Describe the item</label>

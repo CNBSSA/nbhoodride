@@ -6,7 +6,7 @@ import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { NativeTimeSelects } from "@/components/NativeTimeSelects";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
@@ -345,39 +345,16 @@ export default function ScheduleRideModal({
                     <Clock className="w-4 h-4" />
                     Select Time
                   </label>
-                  <div className="flex gap-2">
-                    <Select value={scheduledHour} onValueChange={setScheduledHour}>
-                      <SelectTrigger className="w-20" data-testid="select-hour">
-                        <SelectValue placeholder="Hour" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Array.from({ length: 12 }, (_, i) => {
-                          const hour = (i + 1).toString().padStart(2, '0');
-                          return <SelectItem key={hour} value={hour}>{hour}</SelectItem>;
-                        })}
-                      </SelectContent>
-                    </Select>
-                    <span className="flex items-center">:</span>
-                    <Select value={scheduledMinute} onValueChange={setScheduledMinute}>
-                      <SelectTrigger className="w-20" data-testid="select-minute">
-                        <SelectValue placeholder="Min" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {["00", "15", "30", "45"].map((min) => (
-                          <SelectItem key={min} value={min}>{min}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={scheduledPeriod} onValueChange={(v) => setScheduledPeriod(v as "AM" | "PM")}>
-                      <SelectTrigger className="w-20" data-testid="select-period">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="AM">AM</SelectItem>
-                        <SelectItem value="PM">PM</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <NativeTimeSelects
+                    hour={scheduledHour}
+                    minute={scheduledMinute}
+                    period={scheduledPeriod}
+                    onHourChange={setScheduledHour}
+                    onMinuteChange={setScheduledMinute}
+                    onPeriodChange={setScheduledPeriod}
+                    hourOptions={Array.from({ length: 12 }, (_, i) => (i + 1).toString().padStart(2, "0"))}
+                    testIds={{ hour: "select-hour", minute: "select-minute", period: "select-period" }}
+                  />
                   {scheduledDate && (
                     <p className="text-sm text-muted-foreground">
                       Pickup scheduled for: <strong>{format(scheduledDate, "MMM dd, yyyy")} at {scheduledHour}:{scheduledMinute} {scheduledPeriod}</strong>

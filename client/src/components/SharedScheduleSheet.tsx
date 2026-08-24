@@ -12,7 +12,7 @@ import { X, Copy, CheckCircle, Users, Loader2, DollarSign, Shield, Star, Share2,
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { Calendar } from "@/components/ui/calendar";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { NativeTimeSelects } from "@/components/NativeTimeSelects";
 import { RecurringWeeklyToggle } from "@/components/RecurringWeeklyToggle";
 import { saveRecurringSchedule } from "@/lib/saveRecurringSchedule";
 import { format } from "date-fns";
@@ -341,36 +341,17 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
                     disabled={(d) => d < new Date(new Date().setHours(0, 0, 0, 0))}
                     className="mx-auto"
                   />
-                  <div className="flex gap-2 mt-2">
-                    <Select value={scheduledHour} onValueChange={setScheduledHour}>
-                      <SelectTrigger className="flex-1" data-testid="shared-schedule-hour">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Array.from({ length: 12 }, (_, i) => String(i + 1)).map((h) => (
-                          <SelectItem key={h} value={h}>{h}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={scheduledMinute} onValueChange={setScheduledMinute}>
-                      <SelectTrigger className="w-20" data-testid="shared-schedule-minute">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {["00", "15", "30", "45"].map((m) => (
-                          <SelectItem key={m} value={m}>{m}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={scheduledPeriod} onValueChange={(v) => setScheduledPeriod(v as "AM" | "PM")}>
-                      <SelectTrigger className="w-20" data-testid="shared-schedule-period">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="AM">AM</SelectItem>
-                        <SelectItem value="PM">PM</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <div className="mt-2">
+                    <NativeTimeSelects
+                      hour={scheduledHour}
+                      minute={scheduledMinute}
+                      period={scheduledPeriod}
+                      onHourChange={setScheduledHour}
+                      onMinuteChange={setScheduledMinute}
+                      onPeriodChange={setScheduledPeriod}
+                      hourOptions={Array.from({ length: 12 }, (_, i) => String(i + 1))}
+                      testIds={{ hour: "shared-schedule-hour", minute: "shared-schedule-minute", period: "shared-schedule-period" }}
+                    />
                   </div>
                   {scheduledDate && (
                     <p className="text-xs text-center text-muted-foreground mt-2">
