@@ -66,6 +66,7 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
     onSuccess: () => {
       setJoined(true);
       queryClient.invalidateQueries({ queryKey: ["/api/rides"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rides/scheduled"] });
     },
     onError: (error: any) => {
       toast({ title: "Failed to Join", description: error?.message || "Please try again.", variant: "destructive" });
