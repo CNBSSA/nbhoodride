@@ -105,7 +105,7 @@ ${testRes.out.split("\n").slice(-8).join("\n")}
 ## Production smoke — public + legal routes (${baseUrl})
 - npm run smoke:production exit code: ${smokeRes.code} ${smokeRes.code === 0 ? "(passing)" : "(FAILING — see tail)"}
 - smoke tail:
-${smokeRes.out.split("\n").slice(-14).join("\n")}
+${smokeRes.out.split("\n").slice(-45).join("\n")}
 
 ## Branch parity (origin/develop ↔ origin/main)
 - left-right count (developOnly mainOnly): ${parity.out || "unknown"}
