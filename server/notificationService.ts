@@ -10,6 +10,8 @@ export interface UserNotificationInput {
   url?: string;
   /** Send web push when VAPID is configured (default true). */
   push?: boolean;
+  /** Notification stays on screen until the user interacts (ride requests). */
+  requireInteraction?: boolean;
 }
 
 /** Persist in-app notification and optionally mirror to web push. */
@@ -40,6 +42,9 @@ export async function deliverUserNotification(userId: string, input: UserNotific
       body: input.body,
       tag: input.tag ?? input.type,
       url: input.url ?? "/",
+      // Ride requests must not slide away while the driver's phone is in a
+      // pocket — default sticky for that type, overridable per call.
+      requireInteraction: input.requireInteraction ?? input.type === "new-ride-request",
     };
     storage
       .getPushSubscriptionsByUser(userId)
