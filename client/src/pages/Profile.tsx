@@ -609,9 +609,12 @@ export default function Profile() {
                         permission_denied: "Notifications blocked. Enable them in your browser or device settings to get ride alerts.",
                         error: "Couldn't enable notifications. Please try again.",
                       };
+                      // Include the underlying error so a field report/screenshot
+                      // is immediately diagnosable instead of a generic retry.
+                      const detail = result.reason === "error" && result.detail ? ` (${result.detail})` : "";
                       toast({
                         title: "Notifications not enabled",
-                        description: messages[result.reason],
+                        description: messages[result.reason] + detail,
                         variant: "destructive",
                       });
                     }
