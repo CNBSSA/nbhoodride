@@ -14,7 +14,7 @@ export type PushPermission = "default" | "granted" | "denied" | "unsupported";
 
 export type SubscribeResult =
   | { ok: true }
-  | { ok: false; reason: "unsupported" | "not_configured" | "permission_denied" | "error" };
+  | { ok: false; reason: "unsupported" | "not_configured" | "permission_denied" | "error"; detail?: string };
 
 export function usePushNotifications() {
   const [permission, setPermission] = useState<PushPermission>("default");
@@ -59,19 +59,46 @@ export function usePushNotifications() {
       let reg = await navigator.serviceWorker.getRegistration("/sw.js");
       if (!reg) {
         reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
-        await navigator.serviceWorker.ready;
       }
+      // Always wait for an ACTIVE worker — pushManager.subscribe throws
+      // InvalidStateError against a registration that's still installing.
+      await navigator.serviceWorker.ready;
 
       // Request permission
       const perm = await Notification.requestPermission();
       setPermission(perm as PushPermission);
       if (perm !== "granted") return { ok: false, reason: "permission_denied" };
 
-      // Subscribe to push
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
-      });
+      const appServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
+
+      // A leftover browser-side subscription created under a DIFFERENT VAPID
+      // key makes subscribe() throw InvalidStateError forever ("a subscription
+      // with a different applicationServerKey already exists") — the classic
+      // aftermath of a key rotation. If one exists with the same key, just
+      // re-save it to the server (the toggle can show "off" when the server
+      // lost the row). If the key differs or can't be read, clear it and
+      // subscribe fresh.
+      let sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        const existingKey = sub.options?.applicationServerKey
+          ? new Uint8Array(sub.options.applicationServerKey)
+          : null;
+        const sameKey =
+          !!existingKey &&
+          existingKey.length === appServerKey.length &&
+          existingKey.every((b, i) => b === appServerKey[i]);
+        if (!sameKey) {
+          try { await sub.unsubscribe(); } catch { /* fresh subscribe below either way */ }
+          sub = null;
+        }
+      }
+
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: appServerKey,
+        });
+      }
 
       const json = sub.toJSON();
       await apiRequest("POST", "/api/push/subscribe", {
@@ -82,9 +109,12 @@ export function usePushNotifications() {
 
       setIsSubscribed(true);
       return { ok: true };
-    } catch (err) {
+    } catch (err: any) {
       console.error("Push subscribe error:", err);
-      return { ok: false, reason: "error" };
+      // Pass the real error up so the UI can show it — "please try again"
+      // with no detail made field failures undiagnosable.
+      const detail = [err?.name, err?.message].filter(Boolean).join(": ").slice(0, 140);
+      return { ok: false, reason: "error", detail: detail || undefined };
     } finally {
       setIsLoading(false);
     }
