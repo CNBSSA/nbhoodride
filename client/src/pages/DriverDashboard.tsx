@@ -23,12 +23,17 @@ import { BarChart3, Car, ChevronRight, ChevronDown, CalendarClock, CheckCircle2,
 import PayoutModal from "@/components/PayoutModal";
 import { LostFoundDriverCard } from "@/components/LostFoundDriverCard";
 import { DriverStatusBanner } from "@/components/DriverStatusBanner";
+import { DriverSetupPrompt } from "@/components/DriverSetupPrompt";
+import { useWakeLock } from "@/hooks/useWakeLock";
 import { UpcomingRideGroupCard } from "@/components/UpcomingRideGroupCard";
 import type { RideMessagePayload } from "@shared/rideChat";
 import { parseRideMessageWsEvent } from "@shared/rideChat";
 
 export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
+  // Keep the phone's screen awake while online so requests are never missed
+  // because the screen locked mid-shift.
+  useWakeLock(isOnline);
   const [showPayoutModal, setShowPayoutModal] = useState(false);
   const [showEarnings, setShowEarnings] = useState(false);
   const [showVehicleEdit, setShowVehicleEdit] = useState(false);
@@ -527,6 +532,9 @@ export default function DriverDashboard() {
       />
 
       <main className="space-y-4 p-4">
+        {/* One-time setup ask (ride alerts + battery guidance) — shown until
+            push is enabled or the driver dismisses it. */}
+        <DriverSetupPrompt />
         {/* Go-Online hero — action first. The driver's whole job on open is to
             go online and catch requests; money reports live behind a tap below. */}
         <Card className={`border-0 text-white shadow-lg ${isOnline ? 'bg-gradient-to-br from-green-600 to-emerald-700' : 'bg-gradient-to-br from-primary to-blue-900'}`}>
