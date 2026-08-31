@@ -36,6 +36,7 @@ import { retrieveKnowledgeContext, syncKnowledgeIndex } from "./ragService";
 import { anonymizeChatExcerpt, buildFaqExcerptBlock } from "@shared/faqExcerpts";
 import { mapNominatimResults, mapMapboxResults } from "@shared/geocodeSuggest";
 import { registerPublicPages } from "./publicPages";
+import { registerWellKnown } from "./wellKnown";
 import {
   parseMobilityUtterance,
   recordMobilityIntent,
@@ -279,6 +280,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Public, no-JavaScript pages (business description for crawlers / reviewers).
   // Mounted first so they win over the SPA catch-all added later in serveStatic.
   registerPublicPages(app);
+  registerWellKnown(app);
 
   // Rate limiting
   // Mounted on EVERY /api/* route, so this is the budget that dashboard
