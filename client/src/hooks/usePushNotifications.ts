@@ -1,20 +1,41 @@
 import { useState, useEffect, useCallback } from "react";
 import { apiRequest } from "@/lib/queryClient";
+import { checkVapidPublicKey } from "@shared/vapidKey";
 
-const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY as string;
+// Build-time copy, used only as a fallback. The authoritative key comes from
+// the server at runtime (see resolveVapidPublicKey): VITE_ variables are baked
+// into the bundle at build time, so a rotated key would leave every client
+// signing up with a stale one until the next rebuild — and a bad build-time
+// value produced the opaque "applicationServerKey is not valid" failure.
+const BUILD_TIME_VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
 
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = window.atob(base64);
-  return Uint8Array.from(rawData, (c) => c.charCodeAt(0));
+/**
+ * The key the SERVER actually signs pushes with wins. Falls back to the
+ * build-time value only when the endpoint is unreachable (offline/older
+ * server), so this can never be worse than the previous behaviour.
+ */
+async function resolveVapidPublicKey(): Promise<string> {
+  try {
+    const res = await fetch("/api/push/vapid-key", { credentials: "include" });
+    if (res.ok) {
+      const { publicKey } = await res.json();
+      if (typeof publicKey === "string" && publicKey.trim()) return publicKey.trim();
+    }
+  } catch {
+    /* fall through to the build-time key */
+  }
+  return (BUILD_TIME_VAPID_PUBLIC_KEY ?? "").trim();
 }
 
 export type PushPermission = "default" | "granted" | "denied" | "unsupported";
 
 export type SubscribeResult =
   | { ok: true }
-  | { ok: false; reason: "unsupported" | "not_configured" | "permission_denied" | "error"; detail?: string };
+  | {
+      ok: false;
+      reason: "unsupported" | "not_configured" | "invalid_key" | "permission_denied" | "error";
+      detail?: string;
+    };
 
 export function usePushNotifications() {
   const [permission, setPermission] = useState<PushPermission>("default");
@@ -49,12 +70,23 @@ export function usePushNotifications() {
 
   const subscribe = useCallback(async (): Promise<SubscribeResult> => {
     if (!isSupported) return { ok: false, reason: "unsupported" };
-    if (!VAPID_PUBLIC_KEY) {
-      console.error("Push subscribe error: VITE_VAPID_PUBLIC_KEY is not configured");
-      return { ok: false, reason: "not_configured" };
-    }
     setIsLoading(true);
     try {
+      // Resolve and validate the key BEFORE touching PushManager, so a
+      // misconfigured key reports what is actually wrong instead of the
+      // browser's opaque "applicationServerKey is not valid".
+      const vapidPublicKey = await resolveVapidPublicKey();
+      if (!vapidPublicKey) {
+        console.error("Push subscribe error: no VAPID public key from server or build");
+        return { ok: false, reason: "not_configured" };
+      }
+      const keyCheck = checkVapidPublicKey(vapidPublicKey);
+      if (!keyCheck.valid) {
+        console.error("Push subscribe error: invalid VAPID public key —", keyCheck.error);
+        return { ok: false, reason: "invalid_key", detail: keyCheck.error };
+      }
+      const appServerKey = keyCheck.bytes;
+
       // Register service worker if not already
       let reg = await navigator.serviceWorker.getRegistration("/sw.js");
       if (!reg) {
@@ -68,8 +100,6 @@ export function usePushNotifications() {
       const perm = await Notification.requestPermission();
       setPermission(perm as PushPermission);
       if (perm !== "granted") return { ok: false, reason: "permission_denied" };
-
-      const appServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
 
       // A leftover browser-side subscription created under a DIFFERENT VAPID
       // key makes subscribe() throw InvalidStateError forever ("a subscription
