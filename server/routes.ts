@@ -5364,6 +5364,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         incidentId,
         location
       });
+      // Guardians holding this incident's share link also get the live update.
+      sendToIncidentWatchers(incidentId, {
+        type: 'emergency_location_update',
+        incidentId,
+        location: { lat: chkLat, lng: chkLng }
+      });
 
       res.json({ success: true, incident: updatedIncident });
     } catch (error) {
@@ -5764,6 +5770,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         type: 'emergency_location_update',
         incidentId: userIncident.id,
         location: { lat, lng }
+      });
+      // Guardians holding this incident's share link also get the live update.
+      sendToIncidentWatchers(userIncident.id, {
+        type: 'emergency_location_update',
+        incidentId: userIncident.id,
+        location: { lat: numLat, lng: numLng }
       });
 
       res.json({ success: true, incident: updatedIncident });
@@ -9587,26 +9599,36 @@ Generate the FAQ list.`;
   wss.on('connection', (ws, req) => {
     console.log('WebSocket connection established');
     
-    // Reuse the single session middleware instance initialised above
+    // Reuse the single session middleware instance initialised above.
+    // The session-store lookup is async, so expose it as a promise and make
+    // every message handler wait for it — otherwise a 'join' sent immediately
+    // after connect races the lookup and sees an unauthenticated socket.
     const fakeRes = { on: () => {}, end: () => {}, setHeader: () => {}, getHeader: () => '' } as any;
-    wsSessionMiddleware(req as any, fakeRes, () => {
-      const session = (req as any).session;
-      const authenticatedUserId = session?.userId || session?.testUserId;
-      if (authenticatedUserId) {
-        wsAuthenticatedUsers.set(ws, authenticatedUserId);
-      }
+    const wsAuthReady = new Promise<void>((resolve) => {
+      wsSessionMiddleware(req as any, fakeRes, () => {
+        const session = (req as any).session;
+        const authenticatedUserId = session?.userId || session?.testUserId;
+        if (authenticatedUserId) {
+          wsAuthenticatedUsers.set(ws, authenticatedUserId);
+        }
+        resolve();
+      });
     });
-    
-    ws.on('message', (data) => {
+
+    ws.on('message', async (data) => {
       try {
         const message = JSON.parse(data.toString());
-        
+        await wsAuthReady;
+
         switch (message.type) {
           case 'join':
             if (message.userId && typeof message.userId === 'string') {
-              // If we have an authenticated session, only allow joining as that user
+              // Joining registers this socket to RECEIVE the user's targeted
+              // messages (ride updates, driver location), so it must be
+              // authenticated as that exact user — a session-less socket was
+              // previously able to register as anyone and eavesdrop.
               const authUserId = wsAuthenticatedUsers.get(ws);
-              if (authUserId && authUserId !== message.userId) {
+              if (authUserId !== message.userId) {
                 ws.send(JSON.stringify({ type: 'error', message: 'User ID mismatch' }));
                 break;
               }
@@ -9697,6 +9719,10 @@ Generate the FAQ list.`;
             if (statusAuthUserId && message.targetUserId && message.rideId && activeConnections.has(message.targetUserId)) {
               storage.getRide(message.rideId).then(ride => {
                 if (!ride || (ride.driverId !== statusAuthUserId && ride.riderId !== statusAuthUserId)) return;
+                // The target must also be a participant of the same ride — a
+                // participant must not be able to push status popups to
+                // arbitrary connected users.
+                if (message.targetUserId !== ride.driverId && message.targetUserId !== ride.riderId) return;
                 const targetWs = activeConnections.get(message.targetUserId);
                 if (targetWs && targetWs.readyState === WebSocket.OPEN) {
                   targetWs.send(JSON.stringify({
@@ -9711,13 +9737,41 @@ Generate the FAQ list.`;
             break;
           }
 
+          case 'watch_emergency': {
+            // Guardian tracking pages (/emergency/:shareToken) subscribe to
+            // live location updates for ONE incident. The unguessable share
+            // token — the same capability that unlocks the REST endpoint —
+            // is the authorization; no session is required (guardians are
+            // usually not app users).
+            if (typeof message.shareToken !== 'string' || !message.shareToken) break;
+            try {
+              const watchedIncident = await storage.getEmergencyIncidentByToken(message.shareToken);
+              if (!watchedIncident) {
+                ws.send(JSON.stringify({ type: 'error', message: 'Invalid share token' }));
+                break;
+              }
+              let watchers = incidentWatchers.get(watchedIncident.id);
+              if (!watchers) {
+                watchers = new Set();
+                incidentWatchers.set(watchedIncident.id, watchers);
+              }
+              watchers.add(ws);
+              ws.send(JSON.stringify({ type: 'watching_emergency', incidentId: watchedIncident.id }));
+            } catch {}
+            break;
+          }
+
           case 'emergency': {
             // Emergency alert - require authentication, and use the
             // authenticated identity rather than a client-claimed userId so
             // an SOS broadcast can't be spoofed as coming from someone else.
             const emergencyAuthUserId = wsAuthenticatedUsers.get(ws);
             if (!emergencyAuthUserId) break;
-            broadcast({
+            // Admins only: this payload carries a live location and incident
+            // detail, and the admin dashboard is its only real consumer —
+            // rider/driver clients just debug-log it. Matches the admin-only
+            // handling of every other emergency broadcast.
+            await broadcastToAdmins({
               type: 'emergency_alert',
               userId: emergencyAuthUserId,
               location: message.location,
@@ -9732,6 +9786,11 @@ Generate the FAQ list.`;
     });
     
     ws.on('close', () => {
+      // Drop this socket from any SOS-watcher sets (guardian tracking pages)
+      for (const [incidentId, watchers] of Array.from(incidentWatchers.entries())) {
+        watchers.delete(ws);
+        if (watchers.size === 0) incidentWatchers.delete(incidentId);
+      }
       // Remove from active connections and clear county cache
       for (const [userId, connection] of Array.from(activeConnections.entries())) {
         if (connection === ws) {
@@ -9793,6 +9852,22 @@ Generate the FAQ list.`;
     activeConnections.forEach((ws) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(messageStr);
+      }
+    });
+  }
+
+  // SOS watcher registry: sockets subscribed (via a valid share token) to one
+  // incident's live location — the guardian tracking page. Keyed by incident id.
+  const incidentWatchers = new Map<string, Set<WebSocket>>();
+
+  // Deliver an incident-scoped message to that incident's guardian watchers.
+  function sendToIncidentWatchers(incidentId: string, message: any) {
+    const watchers = incidentWatchers.get(incidentId);
+    if (!watchers || watchers.size === 0) return;
+    const messageStr = JSON.stringify(message);
+    watchers.forEach((watcherWs) => {
+      if (watcherWs.readyState === WebSocket.OPEN) {
+        watcherWs.send(messageStr);
       }
     });
   }
