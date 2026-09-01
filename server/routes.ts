@@ -20,6 +20,7 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import { isPushConfigured, getVapidPublicKey } from "./pushService";
 import {
+  sendAnnouncementEmail,
   sendAccountApprovedEmail,
   sendDriverApprovedEmail,
   sendEmailVerificationEmail,
@@ -80,6 +81,7 @@ import {
   normalizePhone,
 } from "@shared/smsMessages";
 import { sendSmsBestEffort } from "./smsService";
+import { checkAnnouncement, matchesAudience } from "@shared/announcementPolicy";
 import { validateVehicleTypeInput } from "@shared/vehicleTypes";
 import { computeDriverProTier, DRIVER_PRO_LABELS } from "@shared/driverProTier";
 import { processLostFoundReport, updateLostFoundStatus } from "./agents/lostFound";
@@ -5965,6 +5967,122 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error updating platform rate:", error);
       res.status(500).json({ message: "Failed to update platform rate" });
+    }
+  });
+
+  /**
+   * Send an operational announcement to riders and/or drivers.
+   *
+   * This is the only admin-to-user channel: until it existed, a service
+   * interruption or compliance instruction could only be relayed by looking
+   * up email addresses by hand. Delivery is in-app (always, so it persists
+   * and can be read later) plus web push, and optionally email.
+   */
+  app.post('/api/admin/announcements', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const check = checkAnnouncement(req.body ?? {});
+      if (!check.valid) {
+        return res.status(400).json({ message: check.error });
+      }
+      const { title, body, audience, targetUserIds } = check;
+      const urgent = Boolean(req.body?.urgent);
+      const emailAlso = Boolean(req.body?.emailAlso);
+
+      // Resolve the audience. Specific targets are fetched by id; the broad
+      // audiences are filtered from the user list so the same rules (no
+      // deleted, no suspended) apply in every case.
+      let recipients: User[];
+      if (audience === "specific") {
+        const fetched = await Promise.all(targetUserIds.map((id) => storage.getUser(id).catch(() => undefined)));
+        recipients = fetched.filter((u): u is User => Boolean(u) && matchesAudience(u!, audience));
+      } else {
+        const all = await storage.getAllUsers(2000, 0);
+        recipients = all.filter((u) => matchesAudience(u, audience));
+      }
+
+      if (recipients.length === 0) {
+        return res.status(400).json({ message: "No active recipients matched that audience." });
+      }
+
+      // Deliver sequentially-but-unblocked: each failure is isolated so one
+      // bad subscription can't stop the announcement reaching everyone else.
+      let delivered = 0;
+      await Promise.all(
+        recipients.map(async (user) => {
+          try {
+            await deliverUserNotification(user.id, {
+              type: urgent ? "announcement-urgent" : "announcement",
+              title,
+              body,
+              tag: `announcement-${Date.now()}`,
+              url: "/",
+              requireInteraction: urgent,
+              bypassQuietPreferences: urgent,
+              data: { audience, urgent },
+            });
+            delivered += 1;
+          } catch (err) {
+            console.error(`[announcement] delivery failed for ${user.id}:`, err);
+          }
+        }),
+      );
+
+      if (emailAlso) {
+        for (const user of recipients) {
+          if (!user.email) continue;
+          sendAnnouncementEmail({ email: user.email, firstName: user.firstName, title, body }).catch((err) =>
+            console.error('[announcement] email failed:', err),
+          );
+        }
+      }
+
+      const record = await storage.createAnnouncement({
+        createdBy: adminId,
+        title,
+        body,
+        audience,
+        targetUserIds: audience === "specific" ? targetUserIds : null,
+        urgent,
+        emailAlso,
+        recipientCount: recipients.length,
+      });
+
+      opsAlert(formatOpsAlert(urgent ? "📣 URGENT announcement sent" : "📣 Announcement sent", [
+        ["Title", title],
+        ["Audience", audience],
+        ["Recipients", recipients.length],
+        ["Delivered", delivered],
+      ]));
+
+      res.json({ id: record.id, recipientCount: recipients.length, delivered, emailQueued: emailAlso });
+    } catch (error) {
+      console.error("Error sending announcement:", error);
+      res.status(500).json({ message: "Failed to send announcement" });
+    }
+  });
+
+  /** Audience size preview so the admin sees the reach before sending. */
+  app.get('/api/admin/announcements/audience-counts', isAdminOrSessionAuth, async (_req: any, res) => {
+    try {
+      const all = await storage.getAllUsers(2000, 0);
+      res.json({
+        all: all.filter((u) => matchesAudience(u, "all")).length,
+        riders: all.filter((u) => matchesAudience(u, "riders")).length,
+        drivers: all.filter((u) => matchesAudience(u, "drivers")).length,
+      });
+    } catch (error) {
+      console.error("Error counting announcement audience:", error);
+      res.status(500).json({ message: "Failed to count audience" });
+    }
+  });
+
+  app.get('/api/admin/announcements', isAdminOrSessionAuth, async (_req: any, res) => {
+    try {
+      res.json(await storage.getRecentAnnouncements(50));
+    } catch (error) {
+      console.error("Error fetching announcements:", error);
+      res.status(500).json({ message: "Failed to fetch announcements" });
     }
   });
 

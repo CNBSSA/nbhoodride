@@ -1156,6 +1156,27 @@ export const smsBookingSessions = pgTable("sms_booking_sessions", {
 });
 
 /**
+ * Operational announcements sent by an admin to riders and/or drivers.
+ * Stored so there is an auditable record of what was told to whom and when —
+ * important when the message is a compliance or safety instruction.
+ */
+export const announcements = pgTable("announcements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  title: varchar("title").notNull(),
+  body: text("body").notNull(),
+  /** all | riders | drivers | specific */
+  audience: varchar("audience").notNull(),
+  /** Populated when audience = specific. */
+  targetUserIds: jsonb("target_user_ids").$type<string[]>(),
+  /** Urgent notices reach users who muted routine notifications. */
+  urgent: boolean("urgent").default(false).notNull(),
+  emailAlso: boolean("email_also").default(false).notNull(),
+  recipientCount: integer("recipient_count").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/**
  * Phone numbers that have opted out of SMS (replied STOP), keyed by the
  * number itself rather than a user id — the people we text most often, the
  * passengers on a ride booked for a friend, have no account at all. Every
@@ -1546,6 +1567,7 @@ export type AgentActionProposal = typeof agentActionProposals.$inferSelect;
 export type ComplianceRecord = typeof complianceRecords.$inferSelect;
 export type SmsBookingSession = typeof smsBookingSessions.$inferSelect;
 export type SmsOptOut = typeof smsOptOuts.$inferSelect;
+export type Announcement = typeof announcements.$inferSelect;
 export type UserRidePreferences = typeof userRidePreferences.$inferSelect;
 export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
 export type DriverScorecardEntry = typeof driverScorecard.$inferSelect;
