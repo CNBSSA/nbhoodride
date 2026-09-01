@@ -15,3 +15,5 @@ Corporation-wide workflow and audits: `autonomusFV/CLAUDE.md`. Product positioni
 ## Workflow
 
 Develop on `develop`; promote to `main` only with Festus's explicit approval after testing. Planning → change-impact audit → implement → test → post-implementation audit.
+
+**Promotion timing (standing instruction, Festus 2026-09-01):** promotions to `main` are batched to the daily quiet window (~03:30 ET / 07:30 UTC) so deploy restarts never blip riders during riding hours. Merge reviewed work to `develop` any time; it ships to `main` in the next window. Exception: urgent rider-blocking fixes promote immediately.
