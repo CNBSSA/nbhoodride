@@ -2,7 +2,20 @@ import { Resend } from "resend";
 import { resolveAppUrl } from "./appUrl";
 import { featureFlags } from "./featureFlags";
 
-const FROM_ADDRESS = (process.env.RESEND_FROM || "noreply@pgride.app").trim();
+/**
+ * Bare sender address. RESEND_FROM is often pasted in display-name form
+ * ("PG Ride <noreply@example.com>"), which the header builder below would
+ * wrap a second time into "PG Ride <PG Ride <noreply@…>>" — malformed, and
+ * rejected by the provider with an error about the from address. Extract the
+ * address so either form works.
+ */
+function normalizeFromAddress(raw: string): string {
+  const value = raw.trim();
+  const angled = value.match(/<([^>]+)>/);
+  return (angled ? angled[1] : value).trim();
+}
+
+const FROM_ADDRESS = normalizeFromAddress(process.env.RESEND_FROM || "noreply@pgride.app");
 const FROM_NAME = "PG Ride";
 
 /**
