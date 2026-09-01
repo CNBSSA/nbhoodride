@@ -6666,7 +6666,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { userId } = req.params;
       // SECURITY: Whitelist fields that admins may update on a driver profile
-      const DRIVER_PROFILE_ALLOWED = ['approvalStatus', 'isOnline', 'isVerifiedNeighbor', 'verificationNotes', 'backgroundCheckStatus', 'licenseNumber', 'licenseExpiry', 'insuranceProvider', 'insuranceExpiry'];
+      const DRIVER_PROFILE_ALLOWED = ['approvalStatus', 'isOnline', 'isSuspended', 'isVerifiedNeighbor', 'verificationNotes', 'backgroundCheckStatus', 'licenseNumber', 'licenseExpiry', 'insuranceProvider', 'insuranceExpiry'];
       const rawUpdates = req.body;
       const updates: Record<string, any> = {};
       for (const key of DRIVER_PROFILE_ALLOWED) {
