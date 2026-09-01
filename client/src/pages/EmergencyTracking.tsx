@@ -72,6 +72,12 @@ export default function EmergencyTracking() {
     
     try {
       const ws = new WebSocket(wsUrl);
+      // Subscribe to this incident's live location. The share token from the
+      // URL is the authorization — the server only streams updates for the
+      // incident it unlocks.
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'watch_emergency', shareToken: token }));
+      };
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type === 'emergency_location_update' && data.incidentId === incident.id) {
