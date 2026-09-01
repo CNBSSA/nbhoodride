@@ -21,6 +21,8 @@ import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import { isPushConfigured, getVapidPublicKey } from "./pushService";
 import {
   sendAnnouncementEmail,
+  getEmailConfigSummary,
+  sendTestEmail,
   sendAccountApprovedEmail,
   sendDriverApprovedEmail,
   sendEmailVerificationEmail,
@@ -6059,6 +6061,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error sending announcement:", error);
       res.status(500).json({ message: "Failed to send announcement" });
+    }
+  });
+
+  /**
+   * Email diagnostic: reports the non-secret configuration and, on POST,
+   * actually sends a test message and returns the provider's real error.
+   * Outbound email failing silently (unverified sender domain, missing key)
+   * previously required reading deploy logs to diagnose.
+   */
+  app.get('/api/admin/email-status', isAdminOrSessionAuth, async (_req: any, res) => {
+    res.json(getEmailConfigSummary());
+  });
+
+  app.post('/api/admin/test-email', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const admin = await storage.getUser(adminId);
+      const to = typeof req.body?.to === 'string' && req.body.to.includes('@') ? req.body.to.trim() : admin?.email;
+      if (!to) {
+        return res.status(400).json({ message: 'No destination address — set an email on your admin account.' });
+      }
+      const config = getEmailConfigSummary();
+      const result = await sendTestEmail(to);
+      res.json({ ...result, to, config });
+    } catch (error) {
+      console.error('Error sending test email:', error);
+      res.status(500).json({ message: 'Failed to send test email' });
     }
   });
 

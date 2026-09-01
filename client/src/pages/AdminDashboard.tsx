@@ -1343,6 +1343,82 @@ function ReconciliationPanel() {
 }
 
 
+// Outbound email either works or it does not, and when it does not the cause
+// is almost always configuration the provider rejects — invisible unless you
+// read deploy logs. One button, real answer.
+function EmailHealthCard() {
+  const { toast } = useToast();
+  const [result, setResult] = useState<{ ok: boolean; error?: string; to?: string } | null>(null);
+  const { data: status } = useQuery<{
+    apiKeyPresent: boolean; from: string; fromDomain: string; usingUnverifiedDefault: boolean;
+  }>({ queryKey: ["/api/admin/email-status"] });
+
+  const testMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/test-email", {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setResult(data);
+      if (data.ok) {
+        toast({ title: "Test email sent", description: `Check the inbox for ${data.to}.` });
+      }
+    },
+    onError: (err: Error) => {
+      setResult({ ok: false, error: err.message });
+    },
+  });
+
+  const broken = status && (!status.apiKeyPresent || status.usingUnverifiedDefault);
+
+  return (
+    <Card data-testid="email-health-card">
+      <CardContent className="pt-6 space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-sm">Email delivery</h3>
+            {status ? (
+              <p className="text-xs text-muted-foreground mt-1" data-testid="text-email-status">
+                {status.apiKeyPresent ? "Resend key set" : "No Resend API key"} · sending as{" "}
+                <span className="font-mono">{status.from}</span>
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground mt-1">Checking…</p>
+            )}
+            {broken && (
+              <p className="text-xs text-red-600 mt-1" data-testid="text-email-warning">
+                {!status?.apiKeyPresent
+                  ? "RESEND_API_KEY is missing — no email can be sent."
+                  : "RESEND_FROM is not set, so mail is sent from an unverifiable domain and every send is rejected."}
+              </p>
+            )}
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => testMutation.mutate()}
+            disabled={testMutation.isPending}
+            data-testid="btn-test-email"
+          >
+            {testMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+            Send test email
+          </Button>
+        </div>
+        {result && (
+          <div
+            className={`text-xs rounded-md p-2 ${result.ok ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}
+            data-testid="text-email-test-result"
+          >
+            {result.ok
+              ? `Sent to ${result.to} — check that inbox.`
+              : `Failed: ${result.error}`}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Announcements ───────────────────────────────────────────────────────────
 // The only admin-to-rider channel. Everything else the app sends is triggered
 // by a ride event; this is where a human tells people something.
@@ -1415,6 +1491,8 @@ function AnnouncementsPanel() {
           Send a message to riders or drivers. It appears in their app and as a notification.
         </p>
       </div>
+
+      <EmailHealthCard />
 
       <Card>
         <CardContent className="pt-6 space-y-4">
