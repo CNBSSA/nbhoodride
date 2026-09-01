@@ -180,12 +180,25 @@ export function PrivacyPolicy() {
           </section>
 
           <section>
-            <h2 className="font-semibold text-base mb-2">9. Children's Privacy</h2>
+            <h2 className="font-semibold text-base mb-2">9. Delete Your Account</h2>
+            <p className="text-muted-foreground">
+              You can permanently delete your PG Ride account at any time: open the app,
+              go to <strong className="text-foreground">Profile → Delete account</strong>, and confirm with your
+              password. Deletion removes your personal information (name, email, phone,
+              photos, documents, and saved payment method). Ride and payment records are
+              retained in anonymized form as required for legal and financial
+              record-keeping. If you can't access the app, email us at the address in the
+              Contact section from your account email and we'll process the deletion for you.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="font-semibold text-base mb-2">10. Children's Privacy</h2>
             <p className="text-muted-foreground">PG Ride is not intended for users under 18. We do not knowingly collect personal information from minors.</p>
           </section>
 
           <section>
-            <h2 className="font-semibold text-base mb-2">10. Contact</h2>
+            <h2 className="font-semibold text-base mb-2">11. Contact</h2>
             <p className="text-muted-foreground">Questions about your privacy? Reach us any of these ways:</p>
             <div className="mt-2">
               <SupportContactLinks className="!justify-start" />

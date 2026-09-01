@@ -403,6 +403,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api/auth/signup', authLimiter);
   app.use('/api/auth/forgot-password', authLimiter);
   app.use('/api/auth/reset-password', authLimiter);
+  // Password-confirmation endpoint — same throttle as login so a hijacked
+  // session can't brute-force the password through it.
+  app.use('/api/auth/delete-account', authLimiter);
   app.use('/api/auth/verify-email', authLimiter);
   app.use('/api/auth/resend-verification', authLimiter);
   app.use('/api/auth/test-login', authLimiter);
@@ -943,7 +946,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Find user by email (case-insensitive)
       const user = await storage.getUserByEmail(email);
-      if (!user || !user.password) {
+      if (!user || !user.password || user.deletedAt) {
         console.log(`[AUDIT] login_failed ip=${ip} email=${email} reason=user_not_found`);
         return res.status(401).json({ message: "Invalid email or password" });
       }
@@ -1188,7 +1191,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
-      
+      // A deleted account's session is dead — end it here so any device still
+      // holding a cookie gets logged out on its next request.
+      if (user.deletedAt) {
+        req.session?.destroy?.(() => {});
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       // Fetch the driver profile unconditionally: an APPLICANT (submitted a
       // driver application, not yet approved) has a profile but isDriver is
       // still false — the Profile page needs the application status either way.
@@ -1204,6 +1213,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
+
+  // Account deletion — required by Google Play's account-deletion policy and
+  // Apple guideline 5.1.1(v). Anonymizes the account (rides and payment
+  // records survive as financial records with personal data scrubbed) and
+  // ends the session. Password confirmation guards against an unattended
+  // phone deleting the account.
+  app.post('/api/auth/delete-account', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const user = await storage.getUser(userId);
+      if (!user || user.deletedAt) {
+        return res.status(400).json({ message: "Account not found." });
+      }
+
+      // Accounts without a local password (OAuth/test artifacts) have no way
+      // to confirm the owner is present — route them to support rather than
+      // allowing zero-confirmation deletion.
+      if (!user.password) {
+        return res.status(400).json({ message: "Please contact support to delete this account." });
+      }
+      const { password } = req.body ?? {};
+      if (!password) {
+        return res.status(400).json({ message: "Enter your password to confirm deletion." });
+      }
+      const ok = await bcrypt.compare(password, user.password);
+      if (!ok) {
+        // 403, NOT 401 — the client treats 401 app-wide as a dead session and
+        // hard-redirects to /login, which would swallow this message.
+        return res.status(403).json({ message: "Incorrect password." });
+      }
+
+      // No deleting mid-ride — as rider or driver. Finish or cancel first so
+      // the other person isn't left with a ghost counterpart.
+      const active = await storage.getActiveRides(userId);
+      if (active.length > 0) {
+        return res.status(400).json({
+          message: "You have an active or upcoming ride. Complete or cancel it before deleting your account.",
+        });
+      }
+
+      // Money owed to the user must be resolved first. A usable wallet
+      // balance (wallet mode only — in lean mode the promo balance is not
+      // spendable money) or a pending driver payout would be silently
+      // forfeited otherwise.
+      const walletBalance = parseFloat(user.virtualCardBalance || "0");
+      if (featureFlags.walletEnabled && walletBalance > 0.009) {
+        return res.status(400).json({
+          message: `You have a $${walletBalance.toFixed(2)} balance. Use it or contact support to withdraw it before deleting your account.`,
+        });
+      }
+      const payouts = await storage.getDriverPayoutRequests(userId).catch(() => []);
+      if (payouts.some((p) => p.status === "pending" || p.status === "processing")) {
+        return res.status(400).json({
+          message: "You have a pending payout. Once it's paid you can delete your account.",
+        });
+      }
+
+      // Best-effort: remove the saved payment identity at Stripe too, so no
+      // card stays attached to a dead account. Local scrub below succeeds
+      // regardless.
+      if (stripeService.isEnabled && user.stripeCustomerId) {
+        try { await stripeService.deleteCustomer(user.stripeCustomerId); } catch (e) {
+          console.error("Stripe customer cleanup on account deletion failed (non-fatal):", e);
+        }
+      }
+
+      await storage.deleteUserAccount(userId);
+      console.log(`[AUDIT] account_deleted userId=${userId}`);
+
+      req.session?.destroy?.(() => {});
+      res.json({ success: true, message: "Your account has been deleted." });
+    } catch (error) {
+      console.error("Error deleting account:", error);
+      res.status(500).json({ message: "Failed to delete account. Please try again or contact support." });
     }
   });
 

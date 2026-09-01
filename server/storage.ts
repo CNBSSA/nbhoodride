@@ -215,6 +215,7 @@ export interface IStorage {
   // User operations (required for Replit Auth)
   getUser(id: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  deleteUserAccount(userId: string): Promise<void>;
   createUser(user: UpsertUser): Promise<User>;
   upsertUser(user: UpsertUser): Promise<User>;
   updatePassword(userId: string, hashedPassword: string): Promise<void>;
@@ -651,6 +652,79 @@ export class DatabaseStorage implements IStorage {
       sql`LOWER(${users.email}) = LOWER(${email})`
     );
     return user;
+  }
+
+  // Account deletion (Google Play + Apple 5.1.1 requirement): anonymize rather
+  // than hard-delete — rides and wallet_transactions reference the user and
+  // must survive as financial records, but every piece of personal data is
+  // scrubbed and the account becomes permanently unusable. Transactional so a
+  // partial scrub can't leave a half-deleted account.
+  async deleteUserAccount(userId: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      await tx.update(users)
+        .set({
+          email: `deleted-${userId}@removed.invalid`,
+          firstName: "Deleted",
+          lastName: "User",
+          phone: null,
+          password: null,
+          profileImageUrl: null,
+          emergencyContact: null,
+          stripeCustomerId: null,
+          stripePaymentMethodId: null,
+          passwordResetToken: null,
+          passwordResetExpiry: null,
+          emailVerificationToken: null,
+          emailVerificationExpiry: null,
+          isApproved: false,
+          isSuspended: true,
+          deletedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+
+      // Driver applicants/drivers: scrub identity documents and go dark.
+      await tx.update(driverProfiles)
+        .set({
+          licenseNumber: null,
+          licenseImageUrl: null,
+          insuranceImageUrl: null,
+          vehiclePhotoUrls: null,
+          currentLocation: null,
+          isOnline: false,
+          updatedAt: new Date(),
+        })
+        .where(eq(driverProfiles.userId, userId));
+
+      // Vehicle identity: plate + photos are PII the privacy policy promises
+      // to remove (make/model/color stay — they identify a car type, not a
+      // person, and completed rides reference them).
+      await tx.update(vehicles)
+        .set({ licensePlate: "REMOVED", photos: [] })
+        .where(sql`${vehicles.driverProfileId} IN (SELECT id FROM driver_profiles WHERE user_id = ${userId})`);
+
+      // Book-for-friend passenger contact details stored on the rider's rides.
+      await tx.update(rides)
+        .set({ passengerName: null, passengerPhone: null })
+        .where(eq(rides.riderId, userId));
+
+      // Payout destinations are contact/financial PII (Zelle/CashApp/PayPal
+      // handles). The request rows stay for accounting; the handle goes.
+      await tx.update(payoutRequests)
+        .set({ payoutDetails: "removed" })
+        .where(eq(payoutRequests.driverId, userId));
+
+      // Uploaded documents live as rows in stored_objects — actually delete
+      // them (license/insurance images, profile photos), not just the URLs.
+      await tx.delete(storedObjects).where(eq(storedObjects.ownerUserId, userId));
+
+      await tx.delete(pushSubscriptions).where(eq(pushSubscriptions.userId, userId));
+
+      // Kill every session this user holds, on every device — not just the
+      // one that issued the deletion. connect-pg-simple stores our keys
+      // inside the sess JSON.
+      await tx.execute(sql`DELETE FROM sessions WHERE sess->>'userId' = ${userId} OR sess->>'testUserId' = ${userId}`);
+    });
   }
 
   async createUser(userData: UpsertUser): Promise<User> {
