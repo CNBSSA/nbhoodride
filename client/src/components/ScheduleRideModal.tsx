@@ -13,6 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { parseBookingErrorMessage } from "@shared/userFacingCopy";
+import { checkScheduleTime, MIN_SCHEDULE_LEAD_HOURS } from "@shared/schedulingPolicy";
 import { useToast } from "@/hooks/use-toast";
 import { Calendar as CalendarIcon, Clock, Search, X, Users } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
@@ -304,6 +305,23 @@ export default function ScheduleRideModal({
 
   const availableDrivers = searchedDrivers.length > 0 ? searchedDrivers : drivers;
 
+  // Live check of the chosen pickup time against the scheduling policy the
+  // server enforces (minimum notice, booking horizon), so the rider sees why
+  // the confirm button is disabled instead of a rejected request.
+  const selectedScheduleTime = (() => {
+    if (bookingType !== "schedule" || !scheduledDate) return null;
+    const hour24 = scheduledPeriod === "PM" && scheduledHour !== "12"
+      ? parseInt(scheduledHour) + 12
+      : scheduledPeriod === "AM" && scheduledHour === "12"
+      ? 0
+      : parseInt(scheduledHour);
+    const dt = new Date(scheduledDate);
+    dt.setHours(hour24, parseInt(scheduledMinute), 0, 0);
+    return dt;
+  })();
+  const scheduleTimeCheck = selectedScheduleTime ? checkScheduleTime(selectedScheduleTime) : null;
+  const scheduleTimeError = scheduleTimeCheck && !scheduleTimeCheck.valid ? scheduleTimeCheck.error : null;
+
   if (!isOpen) return null;
 
   return (
@@ -340,10 +358,13 @@ export default function ScheduleRideModal({
                     mode="single"
                     selected={scheduledDate}
                     onSelect={setScheduledDate}
-                    disabled={(date) => date < new Date() || date > addDays(new Date(), 30)}
+                    disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0)) || date > addDays(new Date(), 30)}
                     className="rounded-md border"
                     data-testid="calendar-schedule-date"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Same-day scheduling works — pickup just needs to be at least {MIN_SCHEDULE_LEAD_HOURS} hours from now.
+                  </p>
                 </div>
 
                 <div className="space-y-2">
@@ -620,6 +641,11 @@ export default function ScheduleRideModal({
               Pickup: {format(scheduledDate, "MMM dd")} at {scheduledHour}:{scheduledMinute} {scheduledPeriod}
             </p>
           )}
+          {scheduleTimeError && (
+            <p className="text-sm text-center text-destructive" data-testid="text-schedule-time-error">
+              {scheduleTimeError}
+            </p>
+          )}
           <Button
             onClick={handleBookRide}
             disabled={
@@ -627,7 +653,7 @@ export default function ScheduleRideModal({
               !destinationAddress ||
               !fareEstimate ||
               (bookingType === "now" && !selectedDriver) ||
-              (bookingType === "schedule" && !scheduledDate)
+              (bookingType === "schedule" && (!scheduledDate || !!scheduleTimeError))
             }
             className="w-full"
             data-testid="button-confirm-booking"
