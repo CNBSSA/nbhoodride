@@ -142,6 +142,7 @@ import {
   ACCEPTANCE_TIMEOUT_SECONDS,
   MAX_ASSIGNMENT_ATTEMPTS,
 } from "./rideWorkflowService";
+import { opsAlert, formatOpsAlert } from "./telegramOps";
 
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
@@ -807,6 +808,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       sendSignupPendingEmail({ email: user.email, firstName: user.firstName }).catch(console.error);
 
+      opsAlert(formatOpsAlert("👤 New signup (awaiting approval)", [
+        ["Name", `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim()],
+        ["Email", user.email],
+        ["Approve", `${resolveAppUrl(`https://${req.get("host")}`)}/admin`],
+      ]));
+
       res.json({
         message: emailVerificationSent
           ? isEmailVerificationMandatory()
@@ -1450,6 +1457,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let profile;
       try {
         profile = await storage.createDriverProfile(profileData);
+        storage.getUser(userId).then((applicant) => {
+          opsAlert(formatOpsAlert("🚙 New driver application", [
+            ["Name", `${applicant?.firstName ?? ""} ${applicant?.lastName ?? ""}`.trim() || userId],
+            ["Phone", applicant?.phone],
+            ["Review", `${resolveAppUrl()}/admin`],
+          ]));
+        }).catch(() => {});
       } catch (insertErr: any) {
         // Defensive: if a profile already exists for this user (e.g. concurrent
         // double-click, or the idempotency check raced), fall back to the
@@ -3171,6 +3185,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("Failed to send receipt email:", emailErr);
       }
 
+      opsAlert(formatOpsAlert("✅ Ride completed", [
+        ["From", (ride.pickupLocation as any)?.address],
+        ["To", (ride.destinationLocation as any)?.address],
+        ["Fare", `$${parseFloat(ride.actualFare || ride.estimatedFare || "0").toFixed(2)}`],
+      ]));
+
       res.json(ride);
     } catch (error) {
       console.error("Error completing ride:", error);
@@ -3725,6 +3745,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const rideData = insertRideSchema.parse(dataToValidate);
       const ride = await storage.createRide(rideData);
+
+      opsAlert(formatOpsAlert(req.body.scheduledAt ? "📅 Ride scheduled" : "🚗 New ride booked", [
+        ["Rider", `${bookingRider?.firstName ?? ""} ${bookingRider?.lastName ?? ""}`.trim() || userId],
+        ["From", pickup.address],
+        ["To", destination.address],
+        ["Fare", `$${Number(req.body.estimatedFare ?? 0).toFixed(2)}`],
+        ["Pickup at", req.body.scheduledAt ? new Date(req.body.scheduledAt).toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET" : "now"],
+        ["For a friend", bookedForFriend ? passengerName : null],
+      ]));
 
       // Persist pickup county
       if (validation.pickupCounty) {
@@ -5204,7 +5233,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       
       const incident = await storage.createEmergencyIncidentWithSharing(incidentData);
-      
+
+      opsAlert(formatOpsAlert("🚨 SOS ALERT", [
+        ["Type", incidentType],
+        ["Details", description],
+        ["Map", location?.lat != null && location?.lng != null ? `https://maps.google.com/?q=${Number(location.lat)},${Number(location.lng)}` : null],
+        ["Admin", `${resolveAppUrl()}/admin`],
+      ]));
+
       let smsDeliveryStatus = "skipped";
       
       // Send SMS alert to emergency contact if available
@@ -5341,6 +5377,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       const incident = await storage.createEmergencyIncident(incidentData);
+
+      opsAlert(formatOpsAlert("🚨 SOS ALERT", [
+        ["Type", incident.incidentType],
+        ["Map", (incident.location as any)?.lat != null ? `https://maps.google.com/?q=${Number((incident.location as any).lat)},${Number((incident.location as any).lng)}` : null],
+        ["Admin", `${resolveAppUrl()}/admin`],
+      ]));
+
       res.json(incident);
     } catch (error) {
       console.error("Error creating emergency incident:", error);
@@ -6887,6 +6930,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         groupId: group.id,
       });
 
+      opsAlert(formatOpsAlert("🚗 Multi-stop ride booked", [
+        ["From", pickupLocation.address],
+        ["To", destinationLocation.address],
+        ["Stops", Array.isArray(pickupStops) ? pickupStops.length : 0],
+        ["Fare", `$${Number(estimatedFare).toFixed(2)}`],
+      ]));
+
       // Dispatch: without this, a multi-stop booking sat pending forever —
       // nothing ran findBestDriver, the driver (chosen OR auto-assigned) was
       // never notified, and acceptRide refuses unassigned rides. Found by the
@@ -7038,6 +7088,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         groupId: group.id,
         scheduledAt: departAt,
       });
+
+      opsAlert(formatOpsAlert("👥 Coworker group ride created", [
+        ["Organizer", `${organizer?.firstName ?? ""} ${organizer?.lastName ?? ""}`.trim() || userId],
+        ["To", destinationLocation.address],
+        ["Departs", departAt.toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET"],
+        ["Open to others", visibility === "open" ? "yes" : "invite-code only"],
+      ]));
 
       let pickupCounty: string | null = null;
       try {
