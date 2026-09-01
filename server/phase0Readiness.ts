@@ -183,6 +183,16 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
       : "Twilio not configured — SOS still supports 911, calls, and your phone's SMS app",
   });
 
+  checks.push({
+    id: "0.5-sms-optout",
+    label: "SMS opt-out webhook (TCPA)",
+    status: twilioReady ? "warn" : "warn",
+    owner: "track_b",
+    detail: twilioReady
+      ? "Point the Twilio number's inbound webhook at /api/webhooks/twilio/sms so STOP is recorded, and complete A2P 10DLC registration before texting riders"
+      : "Configure Twilio first; then point its inbound webhook at /api/webhooks/twilio/sms",
+  });
+
   const assistantReady = envPresent("ANTHROPIC_API_KEY");
   checks.push({
     id: "0.5-assistant",
