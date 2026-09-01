@@ -93,6 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_users_created_at ON users (created_at);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token VARCHAR;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_expiry TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_completed_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_accepted_at TIMESTAMP;

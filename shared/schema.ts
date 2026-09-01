@@ -90,6 +90,9 @@ export const users = pgTable("users", {
   emailVerificationToken: varchar("email_verification_token"),
   emailVerificationExpiry: timestamp("email_verification_expiry"),
   emailVerifiedAt: timestamp("email_verified_at"),
+  // Account deletion (store-policy requirement): set when the user deletes
+  // their account; the row is retained anonymized for financial records.
+  deletedAt: timestamp("deleted_at"),
   // Registration & consent tracking
   registrationCompletedAt: timestamp("registration_completed_at"),
   termsAcceptedAt: timestamp("terms_accepted_at"),

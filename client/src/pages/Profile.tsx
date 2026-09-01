@@ -163,6 +163,27 @@ export default function Profile() {
     }
   });
 
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const deleteAccountMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/delete-account", { password: deletePassword });
+      return res.json();
+    },
+    onSuccess: async () => {
+      toast({ title: "Account deleted", description: "Your account and personal information have been removed." });
+      queryClient.clear();
+      window.location.href = "/";
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Couldn't delete account",
+        description: error.message || "Please try again or contact support.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleLogout = async () => {
     try {
       await fetch('/api/auth/logout', {
@@ -658,6 +679,63 @@ export default function Profile() {
             </CardContent>
           </Card>
         )}
+
+        {/* Account deletion — required by Google Play / Apple store policy.
+            Password-confirmed; the server refuses mid-ride deletions. */}
+        <Card className="border-destructive/40">
+          <CardContent className="p-4 space-y-3">
+            <div>
+              <h3 className="font-semibold text-destructive">Delete account</h3>
+              <p className="text-sm text-muted-foreground">
+                Permanently deletes your account and removes your personal information.
+                Ride and payment records are kept anonymized for legal and financial
+                record-keeping. This cannot be undone.
+              </p>
+            </div>
+            {!showDeleteConfirm ? (
+              <Button
+                variant="outline"
+                className="w-full border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                onClick={() => setShowDeleteConfirm(true)}
+                data-testid="button-delete-account"
+              >
+                Delete my account
+              </Button>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Enter your password to confirm:</p>
+                <input
+                  type="password"
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  value={deletePassword}
+                  onChange={(e) => setDeletePassword(e.target.value)}
+                  placeholder="Your password"
+                  autoComplete="current-password"
+                  data-testid="input-delete-password"
+                />
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => { setShowDeleteConfirm(false); setDeletePassword(""); }}
+                    data-testid="button-delete-cancel"
+                  >
+                    Keep my account
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    className="flex-1"
+                    disabled={deleteAccountMutation.isPending || !deletePassword}
+                    onClick={() => deleteAccountMutation.mutate()}
+                    data-testid="button-delete-confirm"
+                  >
+                    {deleteAccountMutation.isPending ? "Deleting…" : "Delete forever"}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* App Information */}
         <Card className="bg-muted/50">
