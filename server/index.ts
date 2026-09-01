@@ -5,6 +5,7 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { csrfMiddleware } from "./csrfProtection";
 import { resolveAppUrl } from "./appUrl";
+import { opsAlert, telegramOpsEnabled } from "./telegramOps";
 
 // Ensure crashes are always visible in Railway logs
 process.on('uncaughtException', (err) => {
@@ -146,6 +147,11 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
+    // Self-verifying: the operator gets a Telegram message on every deploy,
+    // proving the bot token + chat id wiring end-to-end.
+    if (telegramOpsEnabled()) {
+      opsAlert("✅ PG Ride server deployed — ops alerts are connected. You'll get SOS alerts, bookings, completions, signups, and driver applications here.");
+    }
   });
 })().catch((err) => {
   console.error('Fatal startup error:', err);
