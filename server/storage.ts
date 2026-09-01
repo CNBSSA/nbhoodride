@@ -41,6 +41,7 @@ import {
   agentActionProposals,
   complianceRecords,
   smsBookingSessions,
+  smsOptOuts,
   userRidePreferences,
   l4ReadinessEvents,
   certificateProvenance,
@@ -553,6 +554,11 @@ export interface IStorage {
     metadata?: Record<string, unknown>;
   }): Promise<ComplianceRecord>;
   getComplianceRecords(driverId?: string): Promise<ComplianceRecord[]>;
+  // SMS opt-out registry (TCPA). Keyed by phone, not user id — the friend
+  // passengers we text most often have no account.
+  isPhoneOptedOut(phone: string): Promise<boolean>;
+  recordSmsOptOut(phone: string, source?: string): Promise<void>;
+  clearSmsOptOut(phone: string): Promise<void>;
   getOrCreateSmsBookingSession(phone: string): Promise<SmsBookingSession>;
   updateSmsBookingSession(phone: string, updates: Partial<{ state: string; context: Record<string, unknown>; activeRideId: string | null; userId: string }>): Promise<SmsBookingSession>;
   getUserRidePreferences(userId: string): Promise<UserRidePreferences>;
@@ -4970,6 +4976,25 @@ export class DatabaseStorage implements IStorage {
       return db.select().from(complianceRecords).where(eq(complianceRecords.driverId, driverId));
     }
     return db.select().from(complianceRecords).orderBy(desc(complianceRecords.updatedAt));
+  }
+
+  async isPhoneOptedOut(phone: string): Promise<boolean> {
+    const [row] = await db.select().from(smsOptOuts).where(eq(smsOptOuts.phone, phone));
+    return Boolean(row);
+  }
+
+  async recordSmsOptOut(phone: string, source = "stop_keyword"): Promise<void> {
+    await db
+      .insert(smsOptOuts)
+      .values({ phone, source })
+      .onConflictDoUpdate({
+        target: smsOptOuts.phone,
+        set: { optedOutAt: new Date(), source },
+      });
+  }
+
+  async clearSmsOptOut(phone: string): Promise<void> {
+    await db.delete(smsOptOuts).where(eq(smsOptOuts.phone, phone));
   }
 
   async getOrCreateSmsBookingSession(phone: string): Promise<SmsBookingSession> {

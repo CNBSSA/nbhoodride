@@ -72,6 +72,14 @@ import { recordCertificateProvenance, recordAllActiveCertificateHashes } from ".
 import { allocateGreenBonusForRide, getEvEligibleDrivers, GREEN_BONUS_PER_RIDE } from "./agents/greenBonus";
 import { validateFriendRideInput } from "@shared/rideForFriend";
 import { checkScheduleTime, MIN_SCHEDULE_LEAD_HOURS, MAX_SCHEDULE_DAYS_AHEAD } from "@shared/schedulingPolicy";
+import {
+  classifyKeyword,
+  friendRideArrivedSms,
+  friendRideAssignedSms,
+  friendRideCompletedSms,
+  normalizePhone,
+} from "@shared/smsMessages";
+import { sendSmsBestEffort } from "./smsService";
 import { validateVehicleTypeInput } from "@shared/vehicleTypes";
 import { computeDriverProTier, DRIVER_PRO_LABELS } from "@shared/driverProTier";
 import { processLostFoundReport, updateLostFoundStatus } from "./agents/lostFound";
@@ -1831,6 +1839,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
         data: { rideId: ride.id },
       }).catch(console.error);
     }
+
+    // The passenger on a ride booked for a friend is not an app user: no push,
+    // no email, no account. SMS is the only channel that reaches them, so tell
+    // them a driver is coming and give them a link to watch the trip.
+    if (ride.bookedForFriend && ride.passengerPhone) {
+      notifyFriendPassengerAssigned(ride, rider, rideAcceptedMessage.driverName, vehicleDesc).catch(
+        (err) => console.error("[sms] friend assigned notify failed:", err),
+      );
+    }
+  }
+
+  /**
+   * Builds a short-lived tracking link for the friend passenger and texts them
+   * that a driver is on the way. Best-effort: a failure here must never affect
+   * the ride that was just accepted.
+   */
+  async function notifyFriendPassengerAssigned(
+    ride: Ride,
+    booker: User | undefined,
+    driverName: string,
+    vehicleDesc: string | null,
+  ) {
+    let trackingUrl: string | null = null;
+    try {
+      const token = createGuardianShareToken();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await storage.createGuardianLink({
+        riderUserId: ride.riderId,
+        guardianName: ride.passengerName || "Passenger",
+        shareToken: token,
+        activeRideId: ride.id,
+        expiresAt,
+      });
+      trackingUrl = `${resolveAppUrl()}/guardian/${token}`;
+    } catch (err) {
+      // Link creation is a nicety — still send the message without it.
+      console.error("[sms] tracking link for friend passenger failed:", err);
+    }
+
+    sendSmsBestEffort(
+      ride.passengerPhone,
+      friendRideAssignedSms({
+        passengerName: ride.passengerName,
+        bookerName: booker?.firstName ?? null,
+        driverName,
+        vehicle: vehicleDesc,
+        trackingUrl,
+      }),
+      `friend-assigned ride=${ride.id}`,
+    );
   }
 
   // Authorizes card payment for a just-accepted ride: splits the charge
@@ -2540,6 +2598,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         data: { rideId },
       }).catch(console.error);
 
+      // Friend passenger (no app): the arrival text is the one that actually
+      // gets them out the door.
+      if (ride.bookedForFriend && ride.passengerPhone) {
+        storage.getUser(ride.driverId!).then((driverUser) => {
+          sendSmsBestEffort(
+            ride.passengerPhone,
+            friendRideArrivedSms({
+              driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] ?? ""}.`.trim() : null,
+            }),
+            `friend-arrived ride=${rideId}`,
+          );
+        }).catch(() => {
+          sendSmsBestEffort(ride.passengerPhone, friendRideArrivedSms({}), `friend-arrived ride=${rideId}`);
+        });
+      }
+
       res.json({
         success: true,
         withinGeofence,
@@ -3183,6 +3257,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } catch (emailErr) {
         console.error("Failed to send receipt email:", emailErr);
+      }
+
+      if (ride.bookedForFriend && ride.passengerPhone) {
+        sendSmsBestEffort(
+          ride.passengerPhone,
+          friendRideCompletedSms({ passengerName: ride.passengerName }),
+          `friend-completed ride=${ride.id}`,
+        );
       }
 
       opsAlert(formatOpsAlert("✅ Ride completed", [
@@ -9313,6 +9395,58 @@ Generate the FAQ list.`;
   });
 
   // ── STRIPE WEBHOOK ──────────────────────────────────────────────────────────
+  /**
+   * Twilio inbound SMS — STOP / START / HELP keyword handling.
+   *
+   * Honouring opt-out is a TCPA requirement and a carrier condition of A2P
+   * 10DLC registration. Twilio's own Advanced Opt-Out already auto-replies to
+   * these keywords and blocks the number at its edge, so we deliberately
+   * respond with EMPTY TwiML (no second text) and use this hook to mirror the
+   * decision into our own registry — otherwise the app keeps queueing messages
+   * Twilio silently drops, and we would have no record of who opted out.
+   */
+  app.post('/api/webhooks/twilio/sms', async (req: any, res) => {
+    const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
+    const sendEmptyTwiml = () => res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+
+    if (!authToken) {
+      console.error('[sms] inbound webhook hit but TWILIO_AUTH_TOKEN is not set');
+      return res.status(503).json({ message: 'SMS not configured' });
+    }
+
+    // Verify the request really came from Twilio before trusting any field.
+    const signature = req.get('X-Twilio-Signature') || '';
+    const proto = (req.get('X-Forwarded-Proto') || req.protocol || 'https').split(',')[0].trim();
+    const url = `${proto}://${req.get('host')}${req.originalUrl}`;
+    const params = (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) ? req.body : {};
+    if (!twilio.validateRequest(authToken, signature, url, params)) {
+      console.warn('[sms] inbound webhook signature rejected');
+      return res.status(403).json({ message: 'Invalid signature' });
+    }
+
+    try {
+      const from = normalizePhone(params.From);
+      const keyword = classifyKeyword(params.Body);
+      if (from && keyword === 'stop') {
+        await storage.recordSmsOptOut(from, 'stop_keyword');
+        console.log('[sms] opt-out recorded for an inbound STOP');
+        opsAlert(formatOpsAlert('🔕 SMS opt-out', [['Number', from]]));
+      } else if (from && keyword === 'start') {
+        await storage.clearSmsOptOut(from);
+        console.log('[sms] opt-out cleared for an inbound START');
+      }
+      // HELP needs no state change — Twilio answers it with the registered
+      // help text; we log it so support can see people asking.
+      if (keyword === 'help') console.log('[sms] inbound HELP received');
+      return sendEmptyTwiml();
+    } catch (error) {
+      console.error('[sms] inbound webhook error:', error);
+      // Still 200 with empty TwiML: retries would only duplicate the work, and
+      // Twilio has already applied its own opt-out at the edge.
+      return sendEmptyTwiml();
+    }
+  });
+
   app.post('/api/webhooks/stripe', async (req: any, res) => {
     if (!stripe) return res.status(503).json({ message: 'Stripe not configured' });
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;

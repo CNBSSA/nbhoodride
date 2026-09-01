@@ -54,14 +54,21 @@ export function RideForFriendFields({
               type="tel"
               value={passengerPhone}
               onChange={(e) => onPassengerPhoneChange(e.target.value)}
-              placeholder="Driver can call if needed"
+              placeholder="For ride updates and driver calls"
               className="h-9 text-sm mt-1"
               data-testid="input-passenger-phone"
             />
           </div>
           <p className="text-[11px] text-muted-foreground">
-            You pay with your PG Card. The driver will see who to pick up.
+            You pay for the ride. The driver will see who to pick up.
           </p>
+          {passengerPhone.trim().length > 0 && (
+            <p className="text-[11px] text-muted-foreground" data-testid="text-sms-consent-notice">
+              By adding their number you confirm this passenger agreed to get ride
+              texts from PG Ride (driver on the way, arrival, trip complete). They
+              can reply STOP at any time. Message and data rates may apply.
+            </p>
+          )}
         </div>
       )}
     </div>
