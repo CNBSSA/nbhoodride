@@ -12,6 +12,13 @@ export interface UserNotificationInput {
   push?: boolean;
   /** Notification stays on screen until the user interacts (ride requests). */
   requireInteraction?: boolean;
+  /**
+   * Deliver even to users who muted routine notifications (calm ride mode /
+   * minimize notifications). Reserved for safety and compliance notices the
+   * rider genuinely needs to see — routine announcements must respect the
+   * quiet preference.
+   */
+  bypassQuietPreferences?: boolean;
 }
 
 /** Persist in-app notification and optionally mirror to web push. */
@@ -25,7 +32,7 @@ export async function deliverUserNotification(userId: string, input: UserNotific
   });
 
   let allowPush = input.push !== false;
-  if (allowPush && input.type !== "sos" && input.type !== "emergency") {
+  if (allowPush && !input.bypassQuietPreferences && input.type !== "sos" && input.type !== "emergency") {
     try {
       const prefs = await storage.getUserRidePreferences(userId);
       if (prefs.minimizeNotifications || (prefs.calmRideMode && prefs.calmRideMode !== "off")) {

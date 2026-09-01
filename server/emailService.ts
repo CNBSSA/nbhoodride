@@ -431,6 +431,36 @@ export async function sendSignupPendingEmail(user: {
   );
 }
 
+/**
+ * Operational announcement from the PG Ride team. Title and body are admin
+ * free text, so both are escaped — an announcement must never be able to
+ * inject markup into the email.
+ */
+export async function sendAnnouncementEmail(params: {
+  email: string;
+  firstName: string | null;
+  title: string;
+  body: string;
+}): Promise<void> {
+  const name = params.firstName || "there";
+  const title = escapeHtml(params.title);
+  // Preserve the admin's line breaks without allowing any other markup.
+  const body = escapeHtml(params.body).replace(/\n/g, "<br>");
+
+  await sendEmail(
+    params.email,
+    title,
+    baseTemplate(`
+      <p>Hi ${escapeHtml(name)},</p>
+      <div class="card">
+        <div class="card-row"><span class="card-label">${title}</span></div>
+        <p style="font-size:14px; color:#374151; margin:8px 0 0;">${body}</p>
+      </div>
+      <p style="font-size:13px;color:#6b7280;">This is a service message from PG Ride about your account or our service.</p>
+    `)
+  );
+}
+
 export async function sendCircuitReminderEmail(
   email: string,
   firstName: string | null,

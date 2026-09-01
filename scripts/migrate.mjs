@@ -939,6 +939,20 @@ CREATE TABLE IF NOT EXISTS sms_booking_sessions (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS announcements (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_by VARCHAR NOT NULL REFERENCES users(id),
+  title VARCHAR NOT NULL,
+  body TEXT NOT NULL,
+  audience VARCHAR NOT NULL,
+  target_user_ids JSONB,
+  urgent BOOLEAN NOT NULL DEFAULT false,
+  email_also BOOLEAN NOT NULL DEFAULT false,
+  recipient_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_announcements_created_at ON announcements (created_at DESC);
+
 CREATE TABLE IF NOT EXISTS sms_opt_outs (
   phone VARCHAR PRIMARY KEY,
   opted_out_at TIMESTAMP NOT NULL DEFAULT NOW(),
