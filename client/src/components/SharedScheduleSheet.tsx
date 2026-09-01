@@ -7,6 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { parseBookingErrorMessage } from "@shared/userFacingCopy";
+import { checkScheduleTime } from "@shared/schedulingPolicy";
 import { useToast } from "@/hooks/use-toast";
 import { X, Copy, CheckCircle, Users, Loader2, DollarSign, Shield, Star, Share2, Calendar as CalendarIcon, Clock, MapPin } from "lucide-react";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
@@ -198,6 +199,11 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
     const scheduledAt = buildScheduledAt();
     if (!scheduledAt) {
       toast({ title: "When do you leave?", description: "Pick a shift-end date and time.", variant: "destructive" });
+      return;
+    }
+    const scheduleCheck = checkScheduleTime(scheduledAt);
+    if (!scheduleCheck.valid) {
+      toast({ title: "Pick a later time", description: scheduleCheck.error, variant: "destructive" });
       return;
     }
     bookMutation.mutate({
