@@ -182,6 +182,17 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
       : "Twilio not configured — SOS still supports 911, calls, and your phone's SMS app",
   });
 
+  const assistantReady = envPresent("ANTHROPIC_API_KEY");
+  checks.push({
+    id: "0.5-assistant",
+    label: "AI assistant (Anthropic)",
+    status: assistantReady ? "pass" : "warn",
+    owner: "track_b",
+    detail: assistantReady
+      ? "PG Ride Assistant can answer rider questions"
+      : "ANTHROPIC_API_KEY missing — assistant chat falls back to contact options",
+  });
+
   const stripeReady =
     envPresent("STRIPE_SECRET_KEY") &&
     envPresent("VITE_STRIPE_PUBLIC_KEY") &&
