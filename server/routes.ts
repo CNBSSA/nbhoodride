@@ -5287,21 +5287,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Send emergency alert via WebSocket to admins only (not all users)
-      const connEntries = Array.from(activeConnections.entries());
-      for (const [connUserId, connWs] of connEntries) {
-        if (connWs.readyState === WebSocket.OPEN) {
-          try {
-            const connUser = await storage.getUser(connUserId);
-            if (connUser?.isAdmin || connUser?.isSuperAdmin) {
-              connWs.send(JSON.stringify({
-                type: 'emergency_alert',
-                incident,
-                userId
-              }));
-            }
-          } catch {}
-        }
-      }
+      await broadcastToAdmins({
+        type: 'emergency_alert',
+        incident,
+        userId
+      });
 
       // Durable fallback: the WebSocket push above only reaches admin tabs that
       // happen to be open right now. Email every admin so an SOS still lands
@@ -5340,7 +5330,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { incidentId } = req.params;
       const { location } = req.body;
-      
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
       if (!location || location.lat === undefined || location.lng === undefined) {
         return res.status(400).json({ message: "Valid location coordinates required" });
       }
@@ -5350,16 +5345,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
           !Number.isFinite(chkLng) || chkLng < -180 || chkLng > 180) {
         return res.status(400).json({ message: "Invalid coordinate values" });
       }
-      
+
+      // Ownership check: the incident must belong to the caller, otherwise any
+      // authenticated user could overwrite another user's live SOS location
+      // just by guessing/observing an incident id.
+      const activeIncidents = await storage.getActiveEmergencyIncidents();
+      const ownIncident = activeIncidents.find(incident => incident.id === incidentId && incident.userId === userId);
+      if (!ownIncident) {
+        return res.status(404).json({ message: "No active emergency incident found" });
+      }
+
       const updatedIncident = await storage.updateEmergencyIncidentLocation(incidentId, { lat: chkLat, lng: chkLng });
-      
-      // Broadcast location update via WebSocket
-      broadcast({
+
+      // Broadcast location update via WebSocket to admins only (not all users) —
+      // this carries a live SOS location and must not leak to other riders/drivers.
+      await broadcastToAdmins({
         type: 'emergency_location_update',
         incidentId,
         location
       });
-      
+
       res.json({ success: true, incident: updatedIncident });
     } catch (error) {
       console.error("Error updating emergency location:", error);
@@ -5752,9 +5757,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Update incident location
       const updatedIncident = await storage.updateEmergencyIncidentLocation(userIncident.id, { lat, lng });
-      
-      // Broadcast location update via WebSocket
-      broadcast({
+
+      // Broadcast location update via WebSocket to admins only (not all users) —
+      // this carries a live SOS location and must not leak to other riders/drivers.
+      await broadcastToAdmins({
         type: 'emergency_location_update',
         incidentId: userIncident.id,
         location: { lat, lng }
@@ -6660,7 +6666,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { userId } = req.params;
       // SECURITY: Whitelist fields that admins may update on a driver profile
-      const DRIVER_PROFILE_ALLOWED = ['approvalStatus', 'isOnline', 'isVerifiedNeighbor', 'verificationNotes', 'backgroundCheckStatus', 'licenseNumber', 'licenseExpiry', 'insuranceProvider', 'insuranceExpiry'];
+      const DRIVER_PROFILE_ALLOWED = ['approvalStatus', 'isOnline', 'isSuspended', 'isVerifiedNeighbor', 'verificationNotes', 'backgroundCheckStatus', 'licenseNumber', 'licenseExpiry', 'insuranceProvider', 'insuranceExpiry'];
       const rawUpdates = req.body;
       const updates: Record<string, any> = {};
       for (const key of DRIVER_PROFILE_ALLOWED) {
@@ -9630,8 +9636,12 @@ Generate the FAQ list.`;
             }
             break;
             
-          case 'location_update':
-            if (message.userId && message.location) {
+          case 'location_update': {
+            // Require the connection to be authenticated as the driver whose
+            // location this claims to be — otherwise anyone could spoof any
+            // driver's live GPS position to that driver's rider.
+            const locAuthUserId = wsAuthenticatedUsers.get(ws);
+            if (message.userId && message.location && locAuthUserId && locAuthUserId === message.userId) {
               const { lat, lng } = message.location;
               const driverUserId = message.userId;
               // Persist location (skip if HTTP POST already handled it for this tick)
@@ -9676,31 +9686,45 @@ Generate the FAQ list.`;
               }
             }
             break;
-            
-          case 'ride_status':
-            // Ride status updates
-            if (message.targetUserId && activeConnections.has(message.targetUserId)) {
-              const targetWs = activeConnections.get(message.targetUserId);
-              if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-                targetWs.send(JSON.stringify({
-                  type: 'ride_status_update',
-                  rideId: message.rideId,
-                  status: message.status,
-                  message: message.message
-                }));
-              }
+          }
+
+          case 'ride_status': {
+            // Ride status updates — require an authenticated sender who is
+            // actually a participant (driver or rider) of the ride they're
+            // reporting on, otherwise anyone with an open socket could push
+            // fake status updates to any other connected user.
+            const statusAuthUserId = wsAuthenticatedUsers.get(ws);
+            if (statusAuthUserId && message.targetUserId && message.rideId && activeConnections.has(message.targetUserId)) {
+              storage.getRide(message.rideId).then(ride => {
+                if (!ride || (ride.driverId !== statusAuthUserId && ride.riderId !== statusAuthUserId)) return;
+                const targetWs = activeConnections.get(message.targetUserId);
+                if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+                  targetWs.send(JSON.stringify({
+                    type: 'ride_status_update',
+                    rideId: message.rideId,
+                    status: message.status,
+                    message: message.message
+                  }));
+                }
+              }).catch(() => {});
             }
             break;
-            
-          case 'emergency':
-            // Emergency alert - notify all relevant parties
+          }
+
+          case 'emergency': {
+            // Emergency alert - require authentication, and use the
+            // authenticated identity rather than a client-claimed userId so
+            // an SOS broadcast can't be spoofed as coming from someone else.
+            const emergencyAuthUserId = wsAuthenticatedUsers.get(ws);
+            if (!emergencyAuthUserId) break;
             broadcast({
               type: 'emergency_alert',
-              userId: message.userId,
+              userId: emergencyAuthUserId,
               location: message.location,
               incident: message.incident
             });
             break;
+          }
         }
       } catch (error) {
         console.error('WebSocket message error:', error);
@@ -9771,6 +9795,24 @@ Generate the FAQ list.`;
         ws.send(messageStr);
       }
     });
+  }
+
+  // Send to admin/super-admin connections only — used for SOS/emergency
+  // payloads (live location, incident detail) that must never reach the
+  // general rider/driver population.
+  async function broadcastToAdmins(message: any) {
+    const messageStr = JSON.stringify(message);
+    const connEntries = Array.from(activeConnections.entries());
+    for (const [connUserId, connWs] of connEntries) {
+      if (connWs.readyState === WebSocket.OPEN) {
+        try {
+          const connUser = await storage.getUser(connUserId);
+          if (connUser?.isAdmin || connUser?.isSuperAdmin) {
+            connWs.send(messageStr);
+          }
+        } catch {}
+      }
+    }
   }
 
   // ── Scheduled ride monitor: fires every minute ──
