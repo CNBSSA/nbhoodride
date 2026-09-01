@@ -1,6 +1,7 @@
 import { pool } from "./db";
 import { resolveAppUrl } from "./appUrl";
 import { checkVapidPublicKey } from "@shared/vapidKey";
+import { getEmailConfigSummary } from "./emailService";
 
 export type Phase0CheckStatus = "pass" | "warn" | "fail";
 
@@ -158,15 +159,21 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
     detail: "Run npm run smoke:production — SPA serves /privacy and /terms",
   });
 
-  const resendReady = envPresent("RESEND_API_KEY");
+  // Reports the SENDER too, not just the key: the usual cause of silently
+  // failing email is RESEND_FROM being unset, which falls back to a domain
+  // that cannot be verified, so every send is rejected by the provider.
+  const emailCfg = getEmailConfigSummary();
+  const emailReady = emailCfg.apiKeyPresent && !emailCfg.usingUnverifiedDefault;
   checks.push({
     id: "0.5-email",
     label: "Transactional email (Resend)",
-    status: resendReady ? "pass" : "warn",
+    status: emailReady ? "pass" : emailCfg.apiKeyPresent ? "fail" : "warn",
     owner: "track_b",
-    detail: resendReady
-      ? "Verification and approval emails can be sent"
-      : "RESEND_API_KEY missing — signups see success but verification email will not send",
+    detail: !emailCfg.apiKeyPresent
+      ? "RESEND_API_KEY missing — signups see success but no verification email is sent"
+      : emailCfg.usingUnverifiedDefault
+        ? `RESEND_FROM is not set, so mail is sent from ${emailCfg.from} — that domain has no DNS and cannot be verified, so every send is rejected. Set RESEND_FROM to an address on your verified domain.`
+        : `Sending as ${emailCfg.from}`,
   });
 
   const twilioReady =

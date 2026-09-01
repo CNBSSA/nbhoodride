@@ -2,8 +2,52 @@ import { Resend } from "resend";
 import { resolveAppUrl } from "./appUrl";
 import { featureFlags } from "./featureFlags";
 
-const FROM_ADDRESS = process.env.RESEND_FROM || "noreply@pgride.app";
+const FROM_ADDRESS = (process.env.RESEND_FROM || "noreply@pgride.app").trim();
 const FROM_NAME = "PG Ride";
+
+/**
+ * Non-secret view of the email configuration, for the admin diagnostic and the
+ * readiness report. Never exposes the API key itself.
+ *
+ * `usingUnverifiedDefault` is the trap this exists to catch: when RESEND_FROM
+ * is unset the sender falls back to noreply@pgride.app, a domain with no DNS
+ * and therefore no possible Resend verification — so every send fails with a
+ * domain error that is invisible unless someone reads the server logs.
+ */
+export function getEmailConfigSummary() {
+  const fromDomain = FROM_ADDRESS.includes("@") ? FROM_ADDRESS.split("@")[1] : "";
+  return {
+    apiKeyPresent: Boolean(process.env.RESEND_API_KEY?.trim()),
+    from: FROM_ADDRESS,
+    fromDomain,
+    usingUnverifiedDefault: !process.env.RESEND_FROM?.trim(),
+  };
+}
+
+/**
+ * Send a real email and report exactly what happened. Used by the admin
+ * "send test email" button so a misconfiguration is diagnosable in ten
+ * seconds instead of by reading deploy logs.
+ */
+export async function sendTestEmail(to: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await sendEmail(
+      to,
+      "PG Ride email test",
+      baseTemplate(`
+        <p>This is a test message from your PG Ride admin dashboard.</p>
+        <p>If you are reading this, outbound email is working: verification emails,
+        ride receipts, approval notices and announcements will all reach your riders.</p>
+      `),
+    );
+    return { ok: true };
+  } catch (err: any) {
+    // Resend puts the useful part (e.g. "The domain is not verified") in
+    // message/name; surface it verbatim rather than a generic failure.
+    const parts = [err?.name, err?.message, err?.error?.message].filter(Boolean);
+    return { ok: false, error: parts.join(": ").slice(0, 300) || "Unknown email error" };
+  }
+}
 
 const APP_URL = resolveAppUrl();
 
@@ -59,7 +103,22 @@ async function sendEmail(to: string, subject: string, html: string): Promise<voi
   }
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      await resend.emails.send({ from: `${FROM_NAME} <${FROM_ADDRESS}>`, to, subject, html });
+      // The Resend SDK does NOT throw on API errors — it resolves with
+      // { data: null, error }. Awaiting it and moving on therefore counted
+      // every rejected send (unverified sender domain, bad key, rate limit)
+      // as a success: no retry, no log, and the caller told the user their
+      // email was on its way. Inspect the payload and throw so the existing
+      // retry and error handling actually apply.
+      const response = await resend.emails.send({
+        from: `${FROM_NAME} <${FROM_ADDRESS}>`,
+        to,
+        subject,
+        html,
+      });
+      if (response?.error) {
+        const { name, message } = response.error as { name?: string; message?: string };
+        throw new Error(`Resend rejected the message (${name ?? "error"}): ${message ?? "no detail"}`);
+      }
       return;
     } catch (err) {
       if (attempt === 2) {
