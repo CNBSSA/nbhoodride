@@ -152,6 +152,11 @@ export class StripeService {
     return await requireStripe().paymentIntents.cancel(paymentIntentId);
   }
 
+  /** Account deletion: remove the customer (and their attached cards) at Stripe. */
+  async deleteCustomer(customerId: string): Promise<void> {
+    await requireStripe().customers.del(customerId);
+  }
+
   async captureCancellationFee(params: CancellationFeeParams): Promise<Stripe.PaymentIntent> {
     const { paymentIntentId, cancellationFee } = params;
     return await requireStripe().paymentIntents.capture(paymentIntentId, {
