@@ -94,6 +94,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token VARCHAR;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_expiry TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sms_consent_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_completed_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_accepted_at TIMESTAMP;
@@ -936,6 +937,26 @@ CREATE TABLE IF NOT EXISTS sms_booking_sessions (
   active_ride_id VARCHAR REFERENCES rides(id),
   updated_at TIMESTAMP DEFAULT NOW(),
   created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS announcements (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_by VARCHAR NOT NULL REFERENCES users(id),
+  title VARCHAR NOT NULL,
+  body TEXT NOT NULL,
+  audience VARCHAR NOT NULL,
+  target_user_ids JSONB,
+  urgent BOOLEAN NOT NULL DEFAULT false,
+  email_also BOOLEAN NOT NULL DEFAULT false,
+  recipient_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_announcements_created_at ON announcements (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS sms_opt_outs (
+  phone VARCHAR PRIMARY KEY,
+  opted_out_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  source VARCHAR NOT NULL DEFAULT 'stop_keyword'
 );
 
 CREATE TABLE IF NOT EXISTS user_ride_preferences (

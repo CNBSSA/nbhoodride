@@ -13,12 +13,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import {
+  ANNOUNCEMENT_BODY_MAX,
+  ANNOUNCEMENT_TITLE_MAX,
+  type AnnouncementAudience,
+} from "@shared/announcementPolicy";
+import {
   LayoutDashboard, Users, Car, MapPin, AlertTriangle,
   DollarSign, Award, TrendingUp, Shield, Activity,
   CheckCircle, XCircle, Eye, Ban, UserCheck, Clock,
   ChevronLeft, BarChart3, Brain, AlertCircle, BookOpen,
   RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2, Banknote, FlaskConical, Train, Package,
-  Route, Plus, Pencil, Siren, Phone, MapPinned
+  Route, Plus, Pencil, Siren, Phone, MapPinned, Megaphone, Send
 } from "lucide-react";
 import { format } from "date-fns";
 import { useLocation } from "wouter";
@@ -32,7 +37,7 @@ import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
 const SOS_INCIDENTS_KEY = "/api/admin/emergency-incidents?limit=500";
 const AWAITING_SETTLEMENT_KEY = "/api/admin/rides/awaiting-settlement";
 
-type AdminTab = "dashboard" | "sos" | "reconciliation" | "pricing" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
+type AdminTab = "dashboard" | "announcements" | "sos" | "reconciliation" | "pricing" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
 function useAdminNavPendingCounts() {
   const { data: pendingUsers = [] } = useQuery<any[]>({
@@ -85,6 +90,7 @@ export default function AdminDashboard() {
 
   const tabs: { id: AdminTab; label: string; icon: any }[] = [
     { id: "dashboard", label: "Overview", icon: LayoutDashboard },
+    { id: "announcements", label: "Announcements", icon: Megaphone },
     { id: "sos", label: "SOS / Emergency", icon: Siren },
     { id: "reconciliation", label: "Reconciliation", icon: Banknote },
     { id: "pricing", label: "Pricing", icon: DollarSign },
@@ -177,6 +183,7 @@ export default function AdminDashboard() {
 
         <main className="flex-1 p-6 md:p-8 mt-12 md:mt-0 max-w-6xl">
           {activeTab === "dashboard" && <DashboardOverview />}
+          {activeTab === "announcements" && <AnnouncementsPanel />}
           {activeTab === "sos" && <SosPanel />}
           {activeTab === "reconciliation" && <ReconciliationPanel />}
           {activeTab === "pricing" && <PricingPanel />}
@@ -1329,6 +1336,252 @@ function ReconciliationPanel() {
           <p className="text-muted-foreground text-center py-8" data-testid="reconciliation-empty">
             No failed settlements. All completed rides are settled.
           </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ── Announcements ───────────────────────────────────────────────────────────
+// The only admin-to-rider channel. Everything else the app sends is triggered
+// by a ride event; this is where a human tells people something.
+function AnnouncementsPanel() {
+  const { toast } = useToast();
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [audience, setAudience] = useState<AnnouncementAudience>("riders");
+  const [urgent, setUrgent] = useState(false);
+  const [emailAlso, setEmailAlso] = useState(false);
+  const [personQuery, setPersonQuery] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const { data: counts } = useQuery<{ all: number; riders: number; drivers: number }>({
+    queryKey: ["/api/admin/announcements/audience-counts"],
+  });
+  const { data: history = [] } = useQuery<any[]>({ queryKey: ["/api/admin/announcements"] });
+  const { data: allUsers = [] } = useQuery<any[]>({
+    queryKey: ["/api/admin/users"],
+    enabled: audience === "specific",
+  });
+
+  const matches = personQuery.trim().length === 0
+    ? []
+    : allUsers
+        .filter((u: any) => {
+          const hay = `${u.firstName ?? ""} ${u.lastName ?? ""} ${u.email ?? ""} ${u.phone ?? ""}`.toLowerCase();
+          return hay.includes(personQuery.trim().toLowerCase());
+        })
+        .slice(0, 8);
+
+  const sendMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/announcements", {
+        title, body, audience, urgent, emailAlso,
+        targetUserIds: audience === "specific" ? selectedIds : undefined,
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({
+        title: "Announcement sent",
+        description: `Delivered to ${data.delivered} of ${data.recipientCount} ${data.recipientCount === 1 ? "person" : "people"}.`,
+      });
+      setTitle(""); setBody(""); setSelectedIds([]); setPersonQuery(""); setUrgent(false); setEmailAlso(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/announcements"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Couldn't send", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const reach = audience === "specific"
+    ? selectedIds.length
+    : audience === "all" ? counts?.all ?? 0 : audience === "riders" ? counts?.riders ?? 0 : counts?.drivers ?? 0;
+  const canSend = title.trim().length > 0 && body.trim().length > 0 && reach > 0 && !sendMutation.isPending;
+
+  const audienceOptions: { id: AnnouncementAudience; label: string; hint: string }[] = [
+    { id: "riders", label: "Riders", hint: `${counts?.riders ?? "—"} people` },
+    { id: "drivers", label: "Drivers", hint: `${counts?.drivers ?? "—"} people` },
+    { id: "all", label: "Everyone", hint: `${counts?.all ?? "—"} people` },
+    { id: "specific", label: "Specific people", hint: `${selectedIds.length} selected` },
+  ];
+
+  return (
+    <div className="space-y-6" data-testid="announcements-panel">
+      <div>
+        <h2 className="text-2xl font-bold">Announcements</h2>
+        <p className="text-sm text-muted-foreground">
+          Send a message to riders or drivers. It appears in their app and as a notification.
+        </p>
+      </div>
+
+      <Card>
+        <CardContent className="pt-6 space-y-4">
+          <div>
+            <label className="text-sm font-medium">Who should receive this?</label>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">
+              {audienceOptions.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setAudience(opt.id)}
+                  className={`rounded-md border p-3 text-left transition ${
+                    audience === opt.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-gray-50"
+                  }`}
+                  data-testid={`audience-${opt.id}`}
+                >
+                  <div className="text-sm font-medium">{opt.label}</div>
+                  <div className="text-xs text-muted-foreground">{opt.hint}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {audience === "specific" && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Find people</label>
+              <Input
+                value={personQuery}
+                onChange={(e) => setPersonQuery(e.target.value)}
+                placeholder="Search by name, email, or phone"
+                data-testid="input-person-search"
+              />
+              {matches.length > 0 && (
+                <div className="border rounded-md divide-y">
+                  {matches.map((u: any) => {
+                    const chosen = selectedIds.includes(u.id);
+                    return (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={() =>
+                          setSelectedIds((prev) => (chosen ? prev.filter((id) => id !== u.id) : [...prev, u.id]))
+                        }
+                        className={`w-full text-left p-2 text-sm flex items-center justify-between ${chosen ? "bg-primary/5" : "hover:bg-gray-50"}`}
+                        data-testid={`person-option-${u.id}`}
+                      >
+                        <span>
+                          {u.firstName} {u.lastName} <span className="text-muted-foreground">· {u.email}</span>
+                        </span>
+                        {chosen && <CheckCircle className="w-4 h-4 text-primary" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {selectedIds.length > 0 && (
+                <p className="text-xs text-muted-foreground" data-testid="text-selected-count">
+                  {selectedIds.length} selected.{" "}
+                  <button type="button" className="underline" onClick={() => setSelectedIds([])}>Clear</button>
+                </p>
+              )}
+            </div>
+          )}
+
+          <div>
+            <label className="text-sm font-medium">Title</label>
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value.slice(0, ANNOUNCEMENT_TITLE_MAX))}
+              placeholder="Service paused tonight"
+              className="mt-1"
+              data-testid="input-announcement-title"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Message</label>
+            <Textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value.slice(0, ANNOUNCEMENT_BODY_MAX))}
+              placeholder="Because of the snow, we are pausing rides until 6am tomorrow. Scheduled rides will be rebooked."
+              rows={4}
+              className="mt-1"
+              data-testid="input-announcement-body"
+            />
+            <p className="text-xs text-muted-foreground mt-1">{body.length}/{ANNOUNCEMENT_BODY_MAX}</p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={urgent}
+                onChange={(e) => setUrgent(e.target.checked)}
+                className="mt-1"
+                data-testid="checkbox-urgent"
+              />
+              <span>
+                <span className="font-medium">Urgent</span>
+                <span className="block text-xs text-muted-foreground">
+                  Reaches people who muted routine notifications, and stays on screen until tapped. Use for safety and
+                  compliance only.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={emailAlso}
+                onChange={(e) => setEmailAlso(e.target.checked)}
+                className="mt-1"
+                data-testid="checkbox-email-also"
+              />
+              <span>
+                <span className="font-medium">Also send as email</span>
+                <span className="block text-xs text-muted-foreground">
+                  For anything people may need to read later or act on.
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <div className="flex items-center justify-between border-t pt-4">
+            <p className="text-sm text-muted-foreground" data-testid="text-reach">
+              Will reach <span className="font-medium text-foreground">{reach}</span>{" "}
+              {reach === 1 ? "person" : "people"}
+            </p>
+            <Button onClick={() => sendMutation.mutate()} disabled={!canSend} data-testid="btn-send-announcement">
+              {sendMutation.isPending ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Sending…</>
+              ) : (
+                <><Send className="w-4 h-4 mr-2" /> Send announcement</>
+              )}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div>
+        <h3 className="text-lg font-semibold mb-2">Sent</h3>
+        {history.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="text-no-announcements">
+            Nothing sent yet.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {history.map((a: any) => (
+              <Card key={a.id} data-testid={`announcement-${a.id}`}>
+                <CardContent className="py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-sm">
+                        {a.urgent && <span className="text-red-600 mr-1">URGENT</span>}
+                        {a.title}
+                      </p>
+                      <p className="text-sm text-muted-foreground whitespace-pre-wrap">{a.body}</p>
+                    </div>
+                    <div className="text-right text-xs text-muted-foreground shrink-0">
+                      <div>{a.audience}</div>
+                      <div>{a.recipientCount} sent</div>
+                      <div>{a.createdAt ? new Date(a.createdAt).toLocaleString() : ""}</div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
         )}
       </div>
     </div>

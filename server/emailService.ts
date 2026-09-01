@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import { resolveAppUrl } from "./appUrl";
+import { featureFlags } from "./featureFlags";
 
 const FROM_ADDRESS = process.env.RESEND_FROM || "noreply@pgride.app";
 const FROM_NAME = "PG Ride";
@@ -130,7 +131,19 @@ export async function sendAccountApprovedEmail(user: {
 }): Promise<void> {
   if (!user.email) return;
   const name = user.firstName || "there";
-  const balance = parseFloat(user.virtualCardBalance || "20.00").toFixed(2);
+  const promoRides = user.promoRidesRemaining ?? 4;
+
+  // Only promise a wallet balance when the wallet is actually enabled. In
+  // card-only mode no balance is granted at signup, so advertising one would
+  // promise new riders money that does not exist. The $5 promo rides are real
+  // in BOTH modes (the discount is applied to the card fare), so they stay.
+  const balanceRow = featureFlags.walletEnabled
+    ? `
+        <div class="card-row">
+          <span class="card-label">Virtual PG Card Balance</span>
+          <span class="card-value highlight">$${parseFloat(user.virtualCardBalance || "20.00").toFixed(2)}</span>
+        </div>`
+    : "";
 
   await sendEmail(
     user.email,
@@ -138,19 +151,15 @@ export async function sendAccountApprovedEmail(user: {
     baseTemplate(`
       <p>Hi ${name},</p>
       <p>Great news — your PG Ride account has been approved by our team! You can now log in and start booking rides.</p>
-      <div class="card">
-        <div class="card-row">
-          <span class="card-label">Virtual PG Card Balance</span>
-          <span class="card-value highlight">$${balance}</span>
-        </div>
+      <div class="card">${balanceRow}
         <div class="card-row">
           <span class="card-label">Welcome Promo Rides</span>
-          <span class="card-value">${user.promoRidesRemaining ?? 4} rides × $5 off each</span>
+          <span class="card-value">${promoRides} rides × $5 off each</span>
         </div>
       </div>
-      <p>Your first 4 rides each come with a $5 discount automatically — no code needed. Just open the app and book!</p>
+      <p>Your first ${promoRides} rides each come with a $5 discount automatically — no code needed. Just open the app and book!</p>
       <a href="${APP_URL}" class="btn">Open PG Ride</a>
-      <p style="font-size:13px; color:#6b7280; margin-top:8px;">No surge pricing · Community-owned · PG County only</p>
+      <p style="font-size:13px; color:#6b7280; margin-top:8px;">No surge pricing · Local drivers · Prince George's County</p>
     `)
   );
 }
@@ -418,15 +427,49 @@ export async function sendSignupPendingEmail(user: {
     "Welcome to PG Ride — your account is pending approval",
     baseTemplate(`
       <p>Hi ${name},</p>
-      <p>Thanks for signing up for PG Ride, Prince George's County's community-owned rideshare!</p>
+      <p>Thanks for signing up for PG Ride, ridesharing built for Prince George's County!</p>
       <p>Your account is currently <strong>pending approval</strong> by our team. We typically review new accounts within 24 hours. You'll receive another email as soon as you're approved and ready to ride.</p>
       <div class="card">
         <div class="card-row">
           <span class="card-label">What happens next?</span>
         </div>
-        <p style="font-size:14px; color:#374151; margin:8px 0 0;">Our team reviews your account to keep the PG Ride community safe. Once approved, you'll get $20 in Virtual PG Card credit and 4 rides with $5 off each.</p>
+        <p style="font-size:14px; color:#374151; margin:8px 0 0;">Our team reviews your account to keep the PG Ride community safe.${
+          featureFlags.walletEnabled
+            ? " Once approved, you'll get $20 in Virtual PG Card credit and 4 rides with $5 off each."
+            : " Once approved, your first 4 rides each come with $5 off."
+        }</p>
       </div>
       <p>Questions? Reply to this email and we'll help you out.</p>
+    `)
+  );
+}
+
+/**
+ * Operational announcement from the PG Ride team. Title and body are admin
+ * free text, so both are escaped — an announcement must never be able to
+ * inject markup into the email.
+ */
+export async function sendAnnouncementEmail(params: {
+  email: string;
+  firstName: string | null;
+  title: string;
+  body: string;
+}): Promise<void> {
+  const name = params.firstName || "there";
+  const title = escapeHtml(params.title);
+  // Preserve the admin's line breaks without allowing any other markup.
+  const body = escapeHtml(params.body).replace(/\n/g, "<br>");
+
+  await sendEmail(
+    params.email,
+    title,
+    baseTemplate(`
+      <p>Hi ${escapeHtml(name)},</p>
+      <div class="card">
+        <div class="card-row"><span class="card-label">${title}</span></div>
+        <p style="font-size:14px; color:#374151; margin:8px 0 0;">${body}</p>
+      </div>
+      <p style="font-size:13px;color:#6b7280;">This is a service message from PG Ride about your account or our service.</p>
     `)
   );
 }

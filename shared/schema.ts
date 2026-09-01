@@ -97,6 +97,9 @@ export const users = pgTable("users", {
   registrationCompletedAt: timestamp("registration_completed_at"),
   termsAcceptedAt: timestamp("terms_accepted_at"),
   privacyAcceptedAt: timestamp("privacy_accepted_at"),
+  // TCPA: when this user agreed to receive ride-related SMS. Null means no
+  // consent on file — transactional ride texts to them must not be sent.
+  smsConsentAt: timestamp("sms_consent_at"),
   // Activity tracking
   lastLoginAt: timestamp("last_login_at"),
   // Per-account login throttling (R-L5). failedLoginAttempts increments on
@@ -1152,6 +1155,39 @@ export const smsBookingSessions = pgTable("sms_booking_sessions", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/**
+ * Operational announcements sent by an admin to riders and/or drivers.
+ * Stored so there is an auditable record of what was told to whom and when —
+ * important when the message is a compliance or safety instruction.
+ */
+export const announcements = pgTable("announcements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  title: varchar("title").notNull(),
+  body: text("body").notNull(),
+  /** all | riders | drivers | specific */
+  audience: varchar("audience").notNull(),
+  /** Populated when audience = specific. */
+  targetUserIds: jsonb("target_user_ids").$type<string[]>(),
+  /** Urgent notices reach users who muted routine notifications. */
+  urgent: boolean("urgent").default(false).notNull(),
+  emailAlso: boolean("email_also").default(false).notNull(),
+  recipientCount: integer("recipient_count").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/**
+ * Phone numbers that have opted out of SMS (replied STOP), keyed by the
+ * number itself rather than a user id — the people we text most often, the
+ * passengers on a ride booked for a friend, have no account at all. Every
+ * outbound message checks this table first, and START clears the row.
+ */
+export const smsOptOuts = pgTable("sms_opt_outs", {
+  phone: varchar("phone").primaryKey(),
+  optedOutAt: timestamp("opted_out_at").defaultNow().notNull(),
+  source: varchar("source").default("stop_keyword").notNull(),
+});
+
 /** Phase F1 — L4 readiness research (waypoint quality, disengagement). */
 export const l4ReadinessEvents = pgTable("l4_readiness_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1530,6 +1566,8 @@ export type RecurringRideSchedule = typeof recurringRideSchedules.$inferSelect;
 export type AgentActionProposal = typeof agentActionProposals.$inferSelect;
 export type ComplianceRecord = typeof complianceRecords.$inferSelect;
 export type SmsBookingSession = typeof smsBookingSessions.$inferSelect;
+export type SmsOptOut = typeof smsOptOuts.$inferSelect;
+export type Announcement = typeof announcements.$inferSelect;
 export type UserRidePreferences = typeof userRidePreferences.$inferSelect;
 export type DemandHeatmapEntry = typeof demandHeatmap.$inferSelect;
 export type DriverScorecardEntry = typeof driverScorecard.$inferSelect;

@@ -20,6 +20,7 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import { isPushConfigured, getVapidPublicKey } from "./pushService";
 import {
+  sendAnnouncementEmail,
   sendAccountApprovedEmail,
   sendDriverApprovedEmail,
   sendEmailVerificationEmail,
@@ -72,6 +73,15 @@ import { recordCertificateProvenance, recordAllActiveCertificateHashes } from ".
 import { allocateGreenBonusForRide, getEvEligibleDrivers, GREEN_BONUS_PER_RIDE } from "./agents/greenBonus";
 import { validateFriendRideInput } from "@shared/rideForFriend";
 import { checkScheduleTime, MIN_SCHEDULE_LEAD_HOURS, MAX_SCHEDULE_DAYS_AHEAD } from "@shared/schedulingPolicy";
+import {
+  classifyKeyword,
+  friendRideArrivedSms,
+  friendRideAssignedSms,
+  friendRideCompletedSms,
+  normalizePhone,
+} from "@shared/smsMessages";
+import { sendSmsBestEffort } from "./smsService";
+import { checkAnnouncement, matchesAudience } from "@shared/announcementPolicy";
 import { validateVehicleTypeInput } from "@shared/vehicleTypes";
 import { computeDriverProTier, DRIVER_PRO_LABELS } from "@shared/driverProTier";
 import { processLostFoundReport, updateLostFoundStatus } from "./agents/lostFound";
@@ -1831,6 +1841,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
         data: { rideId: ride.id },
       }).catch(console.error);
     }
+
+    // The passenger on a ride booked for a friend is not an app user: no push,
+    // no email, no account. SMS is the only channel that reaches them, so tell
+    // them a driver is coming and give them a link to watch the trip.
+    if (ride.bookedForFriend && ride.passengerPhone) {
+      notifyFriendPassengerAssigned(ride, rider, rideAcceptedMessage.driverName, vehicleDesc).catch(
+        (err) => console.error("[sms] friend assigned notify failed:", err),
+      );
+    }
+  }
+
+  /**
+   * Builds a short-lived tracking link for the friend passenger and texts them
+   * that a driver is on the way. Best-effort: a failure here must never affect
+   * the ride that was just accepted.
+   */
+  async function notifyFriendPassengerAssigned(
+    ride: Ride,
+    booker: User | undefined,
+    driverName: string,
+    vehicleDesc: string | null,
+  ) {
+    let trackingUrl: string | null = null;
+    try {
+      const token = createGuardianShareToken();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await storage.createGuardianLink({
+        riderUserId: ride.riderId,
+        guardianName: ride.passengerName || "Passenger",
+        shareToken: token,
+        activeRideId: ride.id,
+        expiresAt,
+      });
+      trackingUrl = `${resolveAppUrl()}/guardian/${token}`;
+    } catch (err) {
+      // Link creation is a nicety — still send the message without it.
+      console.error("[sms] tracking link for friend passenger failed:", err);
+    }
+
+    sendSmsBestEffort(
+      ride.passengerPhone,
+      friendRideAssignedSms({
+        passengerName: ride.passengerName,
+        bookerName: booker?.firstName ?? null,
+        driverName,
+        vehicle: vehicleDesc,
+        trackingUrl,
+      }),
+      `friend-assigned ride=${ride.id}`,
+    );
   }
 
   // Authorizes card payment for a just-accepted ride: splits the charge
@@ -2540,6 +2600,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         data: { rideId },
       }).catch(console.error);
 
+      // Friend passenger (no app): the arrival text is the one that actually
+      // gets them out the door.
+      if (ride.bookedForFriend && ride.passengerPhone) {
+        storage.getUser(ride.driverId!).then((driverUser) => {
+          sendSmsBestEffort(
+            ride.passengerPhone,
+            friendRideArrivedSms({
+              driverName: driverUser ? `${driverUser.firstName} ${driverUser.lastName?.[0] ?? ""}.`.trim() : null,
+            }),
+            `friend-arrived ride=${rideId}`,
+          );
+        }).catch(() => {
+          sendSmsBestEffort(ride.passengerPhone, friendRideArrivedSms({}), `friend-arrived ride=${rideId}`);
+        });
+      }
+
       res.json({
         success: true,
         withinGeofence,
@@ -3183,6 +3259,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } catch (emailErr) {
         console.error("Failed to send receipt email:", emailErr);
+      }
+
+      if (ride.bookedForFriend && ride.passengerPhone) {
+        sendSmsBestEffort(
+          ride.passengerPhone,
+          friendRideCompletedSms({ passengerName: ride.passengerName }),
+          `friend-completed ride=${ride.id}`,
+        );
       }
 
       opsAlert(formatOpsAlert("✅ Ride completed", [
@@ -5883,6 +5967,122 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error updating platform rate:", error);
       res.status(500).json({ message: "Failed to update platform rate" });
+    }
+  });
+
+  /**
+   * Send an operational announcement to riders and/or drivers.
+   *
+   * This is the only admin-to-user channel: until it existed, a service
+   * interruption or compliance instruction could only be relayed by looking
+   * up email addresses by hand. Delivery is in-app (always, so it persists
+   * and can be read later) plus web push, and optionally email.
+   */
+  app.post('/api/admin/announcements', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const adminId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const check = checkAnnouncement(req.body ?? {});
+      if (!check.valid) {
+        return res.status(400).json({ message: check.error });
+      }
+      const { title, body, audience, targetUserIds } = check;
+      const urgent = Boolean(req.body?.urgent);
+      const emailAlso = Boolean(req.body?.emailAlso);
+
+      // Resolve the audience. Specific targets are fetched by id; the broad
+      // audiences are filtered from the user list so the same rules (no
+      // deleted, no suspended) apply in every case.
+      let recipients: User[];
+      if (audience === "specific") {
+        const fetched = await Promise.all(targetUserIds.map((id) => storage.getUser(id).catch(() => undefined)));
+        recipients = fetched.filter((u): u is User => Boolean(u) && matchesAudience(u!, audience));
+      } else {
+        const all = await storage.getAllUsers(2000, 0);
+        recipients = all.filter((u) => matchesAudience(u, audience));
+      }
+
+      if (recipients.length === 0) {
+        return res.status(400).json({ message: "No active recipients matched that audience." });
+      }
+
+      // Deliver sequentially-but-unblocked: each failure is isolated so one
+      // bad subscription can't stop the announcement reaching everyone else.
+      let delivered = 0;
+      await Promise.all(
+        recipients.map(async (user) => {
+          try {
+            await deliverUserNotification(user.id, {
+              type: urgent ? "announcement-urgent" : "announcement",
+              title,
+              body,
+              tag: `announcement-${Date.now()}`,
+              url: "/",
+              requireInteraction: urgent,
+              bypassQuietPreferences: urgent,
+              data: { audience, urgent },
+            });
+            delivered += 1;
+          } catch (err) {
+            console.error(`[announcement] delivery failed for ${user.id}:`, err);
+          }
+        }),
+      );
+
+      if (emailAlso) {
+        for (const user of recipients) {
+          if (!user.email) continue;
+          sendAnnouncementEmail({ email: user.email, firstName: user.firstName, title, body }).catch((err) =>
+            console.error('[announcement] email failed:', err),
+          );
+        }
+      }
+
+      const record = await storage.createAnnouncement({
+        createdBy: adminId,
+        title,
+        body,
+        audience,
+        targetUserIds: audience === "specific" ? targetUserIds : null,
+        urgent,
+        emailAlso,
+        recipientCount: recipients.length,
+      });
+
+      opsAlert(formatOpsAlert(urgent ? "📣 URGENT announcement sent" : "📣 Announcement sent", [
+        ["Title", title],
+        ["Audience", audience],
+        ["Recipients", recipients.length],
+        ["Delivered", delivered],
+      ]));
+
+      res.json({ id: record.id, recipientCount: recipients.length, delivered, emailQueued: emailAlso });
+    } catch (error) {
+      console.error("Error sending announcement:", error);
+      res.status(500).json({ message: "Failed to send announcement" });
+    }
+  });
+
+  /** Audience size preview so the admin sees the reach before sending. */
+  app.get('/api/admin/announcements/audience-counts', isAdminOrSessionAuth, async (_req: any, res) => {
+    try {
+      const all = await storage.getAllUsers(2000, 0);
+      res.json({
+        all: all.filter((u) => matchesAudience(u, "all")).length,
+        riders: all.filter((u) => matchesAudience(u, "riders")).length,
+        drivers: all.filter((u) => matchesAudience(u, "drivers")).length,
+      });
+    } catch (error) {
+      console.error("Error counting announcement audience:", error);
+      res.status(500).json({ message: "Failed to count audience" });
+    }
+  });
+
+  app.get('/api/admin/announcements', isAdminOrSessionAuth, async (_req: any, res) => {
+    try {
+      res.json(await storage.getRecentAnnouncements(50));
+    } catch (error) {
+      console.error("Error fetching announcements:", error);
+      res.status(500).json({ message: "Failed to fetch announcements" });
     }
   });
 
@@ -9313,6 +9513,58 @@ Generate the FAQ list.`;
   });
 
   // ── STRIPE WEBHOOK ──────────────────────────────────────────────────────────
+  /**
+   * Twilio inbound SMS — STOP / START / HELP keyword handling.
+   *
+   * Honouring opt-out is a TCPA requirement and a carrier condition of A2P
+   * 10DLC registration. Twilio's own Advanced Opt-Out already auto-replies to
+   * these keywords and blocks the number at its edge, so we deliberately
+   * respond with EMPTY TwiML (no second text) and use this hook to mirror the
+   * decision into our own registry — otherwise the app keeps queueing messages
+   * Twilio silently drops, and we would have no record of who opted out.
+   */
+  app.post('/api/webhooks/twilio/sms', async (req: any, res) => {
+    const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
+    const sendEmptyTwiml = () => res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+
+    if (!authToken) {
+      console.error('[sms] inbound webhook hit but TWILIO_AUTH_TOKEN is not set');
+      return res.status(503).json({ message: 'SMS not configured' });
+    }
+
+    // Verify the request really came from Twilio before trusting any field.
+    const signature = req.get('X-Twilio-Signature') || '';
+    const proto = (req.get('X-Forwarded-Proto') || req.protocol || 'https').split(',')[0].trim();
+    const url = `${proto}://${req.get('host')}${req.originalUrl}`;
+    const params = (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) ? req.body : {};
+    if (!twilio.validateRequest(authToken, signature, url, params)) {
+      console.warn('[sms] inbound webhook signature rejected');
+      return res.status(403).json({ message: 'Invalid signature' });
+    }
+
+    try {
+      const from = normalizePhone(params.From);
+      const keyword = classifyKeyword(params.Body);
+      if (from && keyword === 'stop') {
+        await storage.recordSmsOptOut(from, 'stop_keyword');
+        console.log('[sms] opt-out recorded for an inbound STOP');
+        opsAlert(formatOpsAlert('🔕 SMS opt-out', [['Number', from]]));
+      } else if (from && keyword === 'start') {
+        await storage.clearSmsOptOut(from);
+        console.log('[sms] opt-out cleared for an inbound START');
+      }
+      // HELP needs no state change — Twilio answers it with the registered
+      // help text; we log it so support can see people asking.
+      if (keyword === 'help') console.log('[sms] inbound HELP received');
+      return sendEmptyTwiml();
+    } catch (error) {
+      console.error('[sms] inbound webhook error:', error);
+      // Still 200 with empty TwiML: retries would only duplicate the work, and
+      // Twilio has already applied its own opt-out at the edge.
+      return sendEmptyTwiml();
+    }
+  });
+
   app.post('/api/webhooks/stripe', async (req: any, res) => {
     if (!stripe) return res.status(503).json({ message: 'Stripe not configured' });
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;

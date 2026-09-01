@@ -41,6 +41,8 @@ import {
   agentActionProposals,
   complianceRecords,
   smsBookingSessions,
+  smsOptOuts,
+  announcements,
   userRidePreferences,
   l4ReadinessEvents,
   certificateProvenance,
@@ -106,6 +108,7 @@ import {
   type AgentActionProposal,
   type ComplianceRecord,
   type SmsBookingSession,
+  type Announcement,
   type UserRidePreferences,
   type L4ReadinessEvent,
   type CertificateProvenance,
@@ -553,6 +556,23 @@ export interface IStorage {
     metadata?: Record<string, unknown>;
   }): Promise<ComplianceRecord>;
   getComplianceRecords(driverId?: string): Promise<ComplianceRecord[]>;
+  // Operational announcements from an admin to riders/drivers.
+  createAnnouncement(data: {
+    createdBy: string;
+    title: string;
+    body: string;
+    audience: string;
+    targetUserIds?: string[] | null;
+    urgent: boolean;
+    emailAlso: boolean;
+    recipientCount: number;
+  }): Promise<Announcement>;
+  getRecentAnnouncements(limit?: number): Promise<Announcement[]>;
+  // SMS opt-out registry (TCPA). Keyed by phone, not user id — the friend
+  // passengers we text often have no account.
+  isPhoneOptedOut(phone: string): Promise<boolean>;
+  recordSmsOptOut(phone: string, source?: string): Promise<void>;
+  clearSmsOptOut(phone: string): Promise<void>;
   getOrCreateSmsBookingSession(phone: string): Promise<SmsBookingSession>;
   updateSmsBookingSession(phone: string, updates: Partial<{ state: string; context: Record<string, unknown>; activeRideId: string | null; userId: string }>): Promise<SmsBookingSession>;
   getUserRidePreferences(userId: string): Promise<UserRidePreferences>;
@@ -4970,6 +4990,55 @@ export class DatabaseStorage implements IStorage {
       return db.select().from(complianceRecords).where(eq(complianceRecords.driverId, driverId));
     }
     return db.select().from(complianceRecords).orderBy(desc(complianceRecords.updatedAt));
+  }
+
+  async createAnnouncement(data: {
+    createdBy: string;
+    title: string;
+    body: string;
+    audience: string;
+    targetUserIds?: string[] | null;
+    urgent: boolean;
+    emailAlso: boolean;
+    recipientCount: number;
+  }): Promise<Announcement> {
+    const [row] = await db
+      .insert(announcements)
+      .values({
+        createdBy: data.createdBy,
+        title: data.title,
+        body: data.body,
+        audience: data.audience,
+        targetUserIds: data.targetUserIds ?? null,
+        urgent: data.urgent,
+        emailAlso: data.emailAlso,
+        recipientCount: data.recipientCount,
+      })
+      .returning();
+    return row;
+  }
+
+  async getRecentAnnouncements(limit = 50): Promise<Announcement[]> {
+    return db.select().from(announcements).orderBy(desc(announcements.createdAt)).limit(limit);
+  }
+
+  async isPhoneOptedOut(phone: string): Promise<boolean> {
+    const [row] = await db.select().from(smsOptOuts).where(eq(smsOptOuts.phone, phone));
+    return Boolean(row);
+  }
+
+  async recordSmsOptOut(phone: string, source = "stop_keyword"): Promise<void> {
+    await db
+      .insert(smsOptOuts)
+      .values({ phone, source })
+      .onConflictDoUpdate({
+        target: smsOptOuts.phone,
+        set: { optedOutAt: new Date(), source },
+      });
+  }
+
+  async clearSmsOptOut(phone: string): Promise<void> {
+    await db.delete(smsOptOuts).where(eq(smsOptOuts.phone, phone));
   }
 
   async getOrCreateSmsBookingSession(phone: string): Promise<SmsBookingSession> {
