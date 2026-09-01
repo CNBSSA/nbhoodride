@@ -71,7 +71,7 @@ import { getTransitAlertsForRiders, refreshTransitFeeds } from "./agents/transit
 import { recordCertificateProvenance, recordAllActiveCertificateHashes } from "./agents/certificateProvenance";
 import { allocateGreenBonusForRide, getEvEligibleDrivers, GREEN_BONUS_PER_RIDE } from "./agents/greenBonus";
 import { validateFriendRideInput } from "@shared/rideForFriend";
-import { checkScheduleTime } from "@shared/schedulingPolicy";
+import { checkScheduleTime, MIN_SCHEDULE_LEAD_HOURS, MAX_SCHEDULE_DAYS_AHEAD } from "@shared/schedulingPolicy";
 import { validateVehicleTypeInput } from "@shared/vehicleTypes";
 import { computeDriverProTier, DRIVER_PRO_LABELS } from "@shared/driverProTier";
 import { processLostFoundReport, updateLostFoundStatus } from "./agents/lostFound";
@@ -7612,16 +7612,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // AI ASSISTANT CHAT ROUTES
   // ============================================================
 
-  const BASE_SYSTEM_PROMPT = `You are PG Ride Assistant, a helpful AI assistant for the PG County Community Ride-Share Platform. You help riders and drivers with questions about:
-- How to book rides, schedule rides, and find drivers
-- Payment information (Virtual PG Card system, fare estimation)
-- Driver registration and verification
-- Safety features (SOS, emergency contacts, live tracking)
-- Ride history, ratings, and disputes
-- The cooperative ownership model for drivers
-- General questions about the platform
+  const BASE_SYSTEM_PROMPT = `You are PG Ride Assistant, the in-app helper for PG Ride, the ride-share service for Prince George's County, Maryland. You help riders and drivers with questions about:
+- Booking a ride now, scheduling ahead, multi-stop trips, and booking a ride for a friend
+- Coworker shared rides (schedule codes and the group discount)
+- Payments and fares
+- Driver sign-up, approval, and going online
+- Safety features (SOS, live trip sharing with a guardian, driver ratings)
+- Ride history, receipts, and support
 
-Be friendly, concise, and helpful. Keep responses brief but informative.`;
+Platform facts — state these accurately and never invent policies:
+- Scheduled rides need at least ${MIN_SCHEDULE_LEAD_HOURS} hours' notice and can be booked up to ${MAX_SCHEDULE_DAYS_AHEAD} days ahead. For a sooner pickup, use Ride Now.
+- A scheduled ride can be left open to all drivers (any approved driver can claim it from the ride board) or offered to a specific driver.
+- Coworker shared rides: one person schedules the ride and shares its PG-code; coworkers join by entering the code, and everyone in the group gets 30% off. Any driver can pick up the trip.
+- Riders pay with the card saved in the app; a payment card on file is required to book, and the card is charged when the ride completes.
+- Fares are shown up front, calculated from distance and time only — there is no surge pricing.
+If you're unsure of an answer, or it needs account-specific action you can't perform, say so and point the user to support (text +1 571-245-8187 or email thrynovainsights@gmail.com).
+
+FORMATTING: Your replies render as plain text in a small phone chat window — markdown is NOT rendered. Never use asterisks, hash headings, bullet or numbered list markers, or any other markup. Write short, friendly plain-text paragraphs. Keep responses brief but informative.`;
 
   async function buildPersonalizedPrompt(userId: string): Promise<string> {
     try {
@@ -7637,7 +7644,13 @@ Be friendly, concise, and helpful. Keep responses brief but informative.`;
       context += `\nRole: ${user.isDriver ? 'Driver' : 'Rider'}`;
       context += `\nRating: ${user.rating || '5.00'}/5`;
       context += `\nTotal Rides: ${user.totalRides || 0}`;
-      context += `\nVirtual Card Balance: $${user.virtualCardBalance || '0.00'}`;
+      if (featureFlags.walletEnabled) {
+        context += `\nWallet Balance: $${user.virtualCardBalance || '0.00'}`;
+      } else {
+        // Card-only mode: balance is meaningless, but card-on-file status lets
+        // the assistant explain why booking is blocked and where to fix it.
+        context += `\nPayment card on file: ${user.stripeCustomerId && user.stripePaymentMethodId ? 'Yes' : 'No (add one under Profile before booking)'}`;
+      }
 
       if (activeRides.length > 0) {
         context += `\nActive Rides: ${activeRides.length} (statuses: ${activeRides.map(r => r.status).join(', ')})`;
