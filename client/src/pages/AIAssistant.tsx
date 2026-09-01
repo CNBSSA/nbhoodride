@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { SupportContactLinks } from "@/components/SupportContactLinks";
 import type { Conversation, ChatMessage, FaqEntry } from "@shared/schema";
+import { cleanAssistantText } from "@shared/assistantFormatting";
 
 export default function AIAssistant() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -377,7 +378,7 @@ export default function AIAssistant() {
                         : "bg-muted"
                     )}
                   >
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
+                    <p className="whitespace-pre-wrap">{msg.role === "assistant" ? cleanAssistantText(msg.content) : msg.content}</p>
                   </div>
                   {msg.role === "user" && (
                     <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -440,7 +441,7 @@ export default function AIAssistant() {
                   <Bot className="w-4 h-4 text-primary" />
                 </div>
                 <div className="max-w-[80%] rounded-2xl px-3 py-2 text-sm bg-muted">
-                  <p className="whitespace-pre-wrap">{streamingContent}</p>
+                  <p className="whitespace-pre-wrap">{cleanAssistantText(streamingContent)}</p>
                 </div>
               </div>
             )}
