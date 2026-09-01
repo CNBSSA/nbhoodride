@@ -71,6 +71,7 @@ import { getTransitAlertsForRiders, refreshTransitFeeds } from "./agents/transit
 import { recordCertificateProvenance, recordAllActiveCertificateHashes } from "./agents/certificateProvenance";
 import { allocateGreenBonusForRide, getEvEligibleDrivers, GREEN_BONUS_PER_RIDE } from "./agents/greenBonus";
 import { validateFriendRideInput } from "@shared/rideForFriend";
+import { checkScheduleTime } from "@shared/schedulingPolicy";
 import { validateVehicleTypeInput } from "@shared/vehicleTypes";
 import { computeDriverProTier, DRIVER_PRO_LABELS } from "@shared/driverProTier";
 import { processLostFoundReport, updateLostFoundStatus } from "./agents/lostFound";
@@ -3683,6 +3684,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ? vehicleTypeCheck.type
           : undefined;
 
+      // Scheduled rides need enough runway for a driver to claim the ride
+      // and reach the pickup — minimum lead time is enforced here, not just
+      // in the booking UI.
+      if (req.body.scheduledAt) {
+        const scheduleCheck = checkScheduleTime(req.body.scheduledAt);
+        if (!scheduleCheck.valid) {
+          return res.status(400).json({ message: scheduleCheck.error });
+        }
+      }
+
       // ── Step 1: Validate ride request (service area, distance, rate limit) ──
       const validation = await validateRideRequest(userId, pickup, destination);
       if (!validation.valid) {
@@ -6980,8 +6991,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       const departAt = new Date(scheduledAt);
-      if (Number.isNaN(departAt.getTime()) || departAt.getTime() <= Date.now()) {
-        return res.status(400).json({ message: "Departure time must be in the future." });
+      const scheduleCheck = checkScheduleTime(departAt);
+      if (!scheduleCheck.valid) {
+        return res.status(400).json({ message: scheduleCheck.error });
       }
       // Regulatory service area: every trip ORIGIN must be in Maryland.
       if (!isAllowedPickup(pickupLocation.lat, pickupLocation.lng)) {
