@@ -1,5 +1,6 @@
 import { pool } from "./db";
 import { resolveAppUrl } from "./appUrl";
+import { checkVapidPublicKey } from "@shared/vapidKey";
 
 export type Phase0CheckStatus = "pass" | "warn" | "fail";
 
@@ -191,6 +192,23 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
     detail: assistantReady
       ? "PG Ride Assistant can answer rider questions"
       : "ANTHROPIC_API_KEY missing — assistant chat falls back to contact options",
+  });
+
+  // Validate the key's shape, not just its presence: a truncated or
+  // wrong-half VAPID key is present-but-useless and previously only surfaced
+  // as a rider seeing "Couldn't enable notifications".
+  const vapidCheck = checkVapidPublicKey(process.env.VAPID_PUBLIC_KEY);
+  const pushReady = vapidCheck.valid && envPresent("VAPID_PRIVATE_KEY");
+  checks.push({
+    id: "0.5-push",
+    label: "Push notifications (VAPID)",
+    status: pushReady ? "pass" : "warn",
+    owner: "track_b",
+    detail: pushReady
+      ? "Riders and drivers can receive ride alerts"
+      : vapidCheck.valid
+        ? "VAPID_PRIVATE_KEY missing — push disabled"
+        : `Push disabled — ${vapidCheck.error}`,
   });
 
   const stripeReady =

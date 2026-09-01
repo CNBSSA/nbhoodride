@@ -627,12 +627,16 @@ export default function Profile() {
                       const messages: Record<typeof result.reason, string> = {
                         unsupported: "Your browser doesn't support push notifications.",
                         not_configured: "Push notifications aren't set up for this app yet. Check back soon!",
+                        invalid_key: "Push notifications are misconfigured on our side — we've been alerted. Nothing you need to do.",
                         permission_denied: "Notifications blocked. Enable them in your browser or device settings to get ride alerts.",
                         error: "Couldn't enable notifications. Please try again.",
                       };
                       // Include the underlying error so a field report/screenshot
                       // is immediately diagnosable instead of a generic retry.
-                      const detail = result.reason === "error" && result.detail ? ` (${result.detail})` : "";
+                      const detail =
+                        (result.reason === "error" || result.reason === "invalid_key") && result.detail
+                          ? ` (${result.detail})`
+                          : "";
                       toast({
                         title: "Notifications not enabled",
                         description: messages[result.reason] + detail,
