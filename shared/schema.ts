@@ -90,6 +90,12 @@ export const users = pgTable("users", {
   emailVerificationToken: varchar("email_verification_token"),
   emailVerificationExpiry: timestamp("email_verification_expiry"),
   emailVerifiedAt: timestamp("email_verified_at"),
+  // Set when the login gate admitted this account WITHOUT verification because
+  // the server could not send a verification email. Recorded per user so that
+  // repairing email delivery does not retroactively lock out people who were
+  // already let in. Distinct from emailVerifiedAt: it records a waiver, not a
+  // proof of ownership.
+  emailVerificationWaivedAt: timestamp("email_verification_waived_at"),
   // Account deletion (store-policy requirement): set when the user deletes
   // their account; the row is retained anonymized for financial records.
   deletedAt: timestamp("deleted_at"),
