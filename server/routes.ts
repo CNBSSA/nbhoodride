@@ -108,7 +108,7 @@ import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from 
 import { resolveAppUrl } from "./appUrl";
 import { matchLocalLandmarks, nearestLandmarkLabel } from "./localLandmarks";
 import { isAllowedPickup, PICKUP_OUTSIDE_MD_MESSAGE } from "@shared/serviceArea";
-import { isEmailVerificationMandatory } from "@shared/emailVerificationPolicy";
+import { evaluateEmailVerificationGate, isEmailVerificationMandatory } from "@shared/emailVerificationPolicy";
 import { findFrequentDestination } from "@shared/frequentTrip";
 import { toSafeUser } from "./safeUser";
 import { isUniqueViolation } from "./pgErrors";
@@ -1016,13 +1016,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Only enforced for users who went through the new signup flow
       // (registrationCompletedAt set). Pre-existing accounts created before
       // verification was wired in are exempt. Admins/super admins bypass.
-      const requiresEmailVerification =
-        isEmailVerificationMandatory() &&
-        !!user.registrationCompletedAt &&
-        !user.emailVerifiedAt &&
-        !user.isAdmin &&
-        !user.isSuperAdmin;
-      if (requiresEmailVerification) {
+      // The gate stands down when the server cannot actually send a
+      // verification email — otherwise riders are told to click a link that
+      // was never sent, and every legitimate signup is locked out while no
+      // attacker is stopped (admin approval remains the real control).
+      const emailCfg = getEmailConfigSummary();
+      const emailDeliverable = emailCfg.apiKeyPresent && !emailCfg.usingUnverifiedDefault;
+      const gate = evaluateEmailVerificationGate(user, { emailDeliverable });
+      if (gate.allow && gate.waive) {
+        console.warn(
+          `[AUDIT] email_verification_waived userId=${user.id} reason=email_undeliverable from=${emailCfg.from}`,
+        );
+        await storage.waiveEmailVerification(user.id).catch((err) =>
+          console.error("Failed to record email verification waiver:", err),
+        );
+      }
+      if (!gate.allow) {
         console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=email_not_verified`);
         return res.status(403).json({
           message: "Please verify your email before logging in. Check your inbox for the verification link.",

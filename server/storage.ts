@@ -227,6 +227,8 @@ export interface IStorage {
   setEmailVerificationToken(userId: string, token: string, expiry: Date): Promise<void>;
   getUserByVerificationToken(token: string): Promise<User | undefined>;
   markEmailVerified(userId: string): Promise<User>;
+  /** Record that login admitted this account without a verified email. */
+  waiveEmailVerification(userId: string): Promise<void>;
   updateLastLogin(userId: string): Promise<void>;
   recordFailedLogin(userId: string, opts: { threshold: number; lockoutMinutes: number }): Promise<{ attempts: number; lockoutUntil: Date | null }>;
   
@@ -854,6 +856,14 @@ export class DatabaseStorage implements IStorage {
       .where(eq(users.id, userId))
       .returning();
     return user;
+  }
+
+  async waiveEmailVerification(userId: string): Promise<void> {
+    const now = new Date();
+    await db
+      .update(users)
+      .set({ emailVerificationWaivedAt: now, updatedAt: now })
+      .where(eq(users.id, userId));
   }
 
   async updateLastLogin(userId: string): Promise<void> {
