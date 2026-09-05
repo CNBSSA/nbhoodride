@@ -467,7 +467,7 @@ function UsersPanel() {
                     <div>
                       <p className="font-semibold" data-testid={`user-name-${u.id}`}>{u.firstName} {u.lastName}</p>
                       <p className="text-sm text-muted-foreground">{u.email}</p>
-                      {u.phone && <p className="text-xs text-muted-foreground">{u.phone}</p>}
+                      {u.phone ? <p className="text-xs text-muted-foreground">{u.phone}</p> : <p className="text-xs text-amber-700" data-testid={`text-no-phone-${u.id}`}>No phone on file</p>}
                       <div className="flex gap-1 mt-1">
                         <Badge className="bg-orange-500 text-white text-xs" data-testid={`status-pending-${u.id}`}>
                           <Clock className="w-3 h-3 mr-1" /> Pending
@@ -518,7 +518,7 @@ function UsersPanel() {
                 <div>
                   <p className="font-semibold" data-testid={`user-name-${u.id}`}>{u.firstName} {u.lastName}</p>
                   <p className="text-sm text-muted-foreground">{u.email}</p>
-                  {u.phone && <p className="text-xs text-muted-foreground">{u.phone}</p>}
+                  {u.phone ? <p className="text-xs text-muted-foreground">{u.phone}</p> : <p className="text-xs text-amber-700" data-testid={`text-no-phone-${u.id}`}>No phone on file</p>}
                   <div className="flex gap-1 mt-1 flex-wrap">
                     {u.isSuperAdmin && (
                       <Badge className="bg-blue-600 text-white text-xs" data-testid={`role-superadmin-${u.id}`}>
