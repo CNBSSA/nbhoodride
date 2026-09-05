@@ -941,9 +941,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Your account is pending approval by an administrator. Please check back later." });
       }
 
-      // Set session and record last login
+      // Set session and record last login. The same write clears the
+      // lockout counters, so it is awaited: "Login successful" must not be
+      // sent while the account still reads as locked (a slow runner exposed
+      // exactly that window).
       req.session.userId = user.id;
-      storage.updateLastLogin(user.id).catch(console.error);
+      await storage.updateLastLogin(user.id).catch(console.error);
 
       console.log(`[AUDIT] login_success ip=${ip} userId=${user.id} email=${email}`);
 
@@ -5569,7 +5572,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ? `${driverUser.firstName || ''} ${driverUser.lastName?.[0] || ''}.`.trim()
         : "Your driver";
 
-      const receipt = buildRideReceipt(ride as any, driverName);
+      const receipt = buildRideReceipt(ride as any, driverName, { walletEnabled: featureFlags.walletEnabled });
       res.json(receipt);
     } catch (error) {
       console.error("Error fetching ride receipt:", error);
