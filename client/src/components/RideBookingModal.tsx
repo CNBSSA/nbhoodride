@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { AddCardBanner } from "@/components/AddCardBanner";
+import { AddPhoneBanner } from "@/components/AddPhoneBanner";
 import { Separator } from "@/components/ui/separator";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -302,6 +303,7 @@ export default function RideBookingModal({
         
         <CardContent className="p-4 space-y-4 overflow-y-auto flex-1">
           <AddCardBanner />
+          <AddPhoneBanner />
           <div className="space-y-3 p-3 bg-gray-50 dark:bg-gray-900 rounded-xl">
             <div className="flex items-start gap-3">
               <div className="flex flex-col items-center mt-1">

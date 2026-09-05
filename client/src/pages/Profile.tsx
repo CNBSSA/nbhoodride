@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { reportClientError } from "@/lib/reportClientError";
+import { AddPhoneBanner } from "@/components/AddPhoneBanner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -263,10 +264,12 @@ export default function Profile() {
                 <p className="text-sm text-muted-foreground" data-testid="text-user-email">
                   {user?.email}
                 </p>
-                {user?.phone && (
+                {user?.phone ? (
                   <p className="text-sm text-muted-foreground" data-testid="text-user-phone">
                     {user.phone}
                   </p>
+                ) : (
+                  <p className="text-sm text-amber-700" data-testid="text-user-no-phone">No phone number on file</p>
                 )}
                 <div className="flex items-center space-x-1 mt-1">
                   <div className="flex text-sm">
@@ -283,6 +286,7 @@ export default function Profile() {
             </div>
           </CardContent>
         </Card>
+        <AddPhoneBanner onAdd={() => setIsEditProfileOpen(true)} />
 
         {/* Virtual PG Card Balance — hidden in lean (card-only) mode. */}
         {walletEnabled && (
