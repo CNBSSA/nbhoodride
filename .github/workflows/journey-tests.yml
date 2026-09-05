@@ -55,9 +55,13 @@ jobs:
         run: npm run build
       - name: Run journeys
         run: npm run test:journeys
-      - name: Install Chromium for the layout audit
-        run: npx playwright install --with-deps chromium
-      - name: Mobile layout audit (primary actions on screen and tappable)
+      - name: Install Chromium + WebKit for the layout audit
+        run: npx playwright install --with-deps chromium webkit
+      - name: Mobile layout audit — Chromium (Android)
+        run: npm run test:layout
+      - name: Mobile layout audit — WebKit (iPhone Safari engine)
+        env:
+          PW_BROWSER: webkit
         run: npm run test:layout
       - name: Server log (on failure)
         if: failure()

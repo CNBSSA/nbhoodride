@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { SheetPortal } from "@/components/SheetPortal";
 import { Input } from "@/components/ui/input";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
@@ -326,9 +327,10 @@ export default function ScheduleRideModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center max-w-[430px] mx-auto">
+    <SheetPortal>
+    <div className="fixed inset-0 z-[60] flex items-end justify-center max-w-[430px] mx-auto" style={{ height: "100dvh" }}>
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <Card className="relative z-10 w-full h-[calc(100dvh-1.5rem)] max-h-[calc(100dvh-1.5rem)] rounded-t-xl border-0 shadow-2xl flex flex-col overflow-hidden">
+      <Card className="relative z-10 w-full h-[calc(100dvh-1.5rem)] rounded-t-xl border-0 shadow-2xl flex flex-col overflow-hidden" style={{ maxHeight: "calc(100dvh - 1.5rem)" }}>
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Schedule a Ride</h2>
           <Button variant="ghost" size="sm" onClick={onClose} data-testid="button-close-schedule">
@@ -637,7 +639,7 @@ export default function ScheduleRideModal({
           </div>
         </CardContent>
 
-        <div className="p-4 bg-card border-t space-y-2 shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <div className="p-4 bg-card border-t space-y-2 shrink-0 sticky bottom-0" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
           {bookingType === "schedule" && scheduledDate && (
             <p className="text-sm text-center text-muted-foreground">
               Pickup: {format(scheduledDate, "MMM dd")} at {scheduledHour}:{scheduledMinute} {scheduledPeriod}
@@ -669,5 +671,6 @@ export default function ScheduleRideModal({
         </div>
       </Card>
     </div>
+    </SheetPortal>
   );
 }

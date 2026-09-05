@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { SheetPortal } from "@/components/SheetPortal";
 import { Card, CardContent } from "@/components/ui/card";
 import { ObjectUploader } from "@/components/ObjectUploader";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -168,7 +169,8 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto">
+    <SheetPortal>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto" style={{ height: "100dvh" }}>
       {/* Backdrop MUST be absolute, not fixed: a fixed sibling is a positioned
           element and paints ABOVE a plain-static Card regardless of DOM
           order, silently swallowing every click meant for the form
@@ -182,7 +184,7 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
           Review" is always on screen. Previously the whole card scrolled and
           on a phone the button ended up a sliver under the bottom nav. dvh
           (not vh) so the mobile browser chrome is accounted for. */}
-      <Card className="relative z-10 w-full mx-4 max-h-[calc(100dvh-1.5rem)] flex flex-col overflow-hidden">
+      <Card className="relative z-10 w-full mx-4 flex flex-col overflow-hidden" style={{ maxHeight: "calc(100dvh - 1.5rem)" }}>
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Driver Documents</h2>
           <Button
@@ -281,7 +283,7 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
           </div>
         </CardContent>
 
-        <div className="p-4 border-t bg-background shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <div className="p-4 border-t bg-background shrink-0 sticky bottom-0" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
           <Button
             onClick={handleSubmit}
             disabled={submitDocumentsMutation.isPending}
@@ -296,5 +298,6 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
         </div>
       </Card>
     </div>
+    </SheetPortal>
   );
 }

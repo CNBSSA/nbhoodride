@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { randomBytes } from "crypto";
+import { secureCookies } from "./cookieSecurity";
 
 // Minimal CSRF protection using the double-submit-cookie pattern.
 //
@@ -46,7 +47,7 @@ function issueToken(req: Request, res: Response): string {
     // so it intentionally is NOT httpOnly. SameSite + same-origin policy
     // prevent cross-site reads.
     httpOnly: false,
-    secure: process.env.NODE_ENV === "production",
+    secure: secureCookies(),
     sameSite: "lax",
     path: "/",
     // Refresh the cookie roughly each session (1 week). It's not strictly
