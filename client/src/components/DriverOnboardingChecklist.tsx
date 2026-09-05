@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 
 const STEPS = [
-  { key: "email", label: "Verify your email" },
   { key: "account", label: "Account approved by PG Ride" },
   { key: "profile", label: "Submit your driver application" },
   { key: "documents", label: "Upload license, insurance & vehicle photos" },
@@ -26,7 +25,6 @@ export function DriverOnboardingChecklist() {
   });
   if (!user) return null;
 
-  const emailDone = !!user.emailVerifiedAt;
   const accountDone = !!user.isApproved;
   const profileDone = !!user.driverProfile || !!user.isDriver;
   const docsOnFile =
@@ -36,7 +34,7 @@ export function DriverOnboardingChecklist() {
   const approval = user.driverProfile?.approvalStatus;
   const driverDone = approval === "approved";
 
-  const done = [emailDone, accountDone, profileDone, docsOnFile, driverDone];
+  const done = [accountDone, profileDone, docsOnFile, driverDone];
 
   return (
     <div className="rounded-lg border bg-muted/30 p-3 space-y-2" data-testid="driver-onboarding-checklist">

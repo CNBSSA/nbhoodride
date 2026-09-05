@@ -28,7 +28,6 @@ export default function Signup() {
     /[0-9]/.test(password) &&
     /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
   const [pendingApproval, setPendingApproval] = useState(false);
-  const [emailDeliveryWarning, setEmailDeliveryWarning] = useState<string | null>(null);
   const [signupEmail, setSignupEmail] = useState('');
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -81,12 +80,10 @@ export default function Signup() {
       
       if (data.pendingApproval) {
         setSignupEmail(email);
-        setEmailDeliveryWarning(data.emailDeliveryWarning ?? null);
         setPendingApproval(true);
         toast({
-          title: data.emailVerificationSent ? "Account Created!" : "Account Created — check email setup",
-          description: data.emailDeliveryWarning || data.message,
-          variant: data.emailVerificationSent ? "default" : "destructive",
+          title: "Account Created!",
+          description: data.message,
         });
         return;
       }
@@ -120,26 +117,16 @@ export default function Signup() {
             <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <i className="fas fa-clock text-2xl text-orange-500" />
             </div>
-            <h2 className="text-xl font-bold mb-2" data-testid="text-pending-title">Almost there — two steps</h2>
-            <ol className="text-left text-sm text-muted-foreground mb-4 space-y-2 list-decimal list-inside">
-              <li>
-                <strong className="text-foreground">Verify your email</strong> — we sent a link to{" "}
-                <span className="font-medium text-foreground">{signupEmail || email}</span>. Check spam/junk too.
-              </li>
-              <li>
-                <strong className="text-foreground">Account approval</strong> — after you verify, our team reviews new accounts (usually within 24 hours). We will email you when you can log in.
-              </li>
-            </ol>
-            {emailDeliveryWarning && (
-              <p className="text-sm text-destructive mb-4" data-testid="text-email-warning">
-                {emailDeliveryWarning}
-              </p>
-            )}
+            <h2 className="text-xl font-bold mb-2" data-testid="text-pending-title">Almost there</h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              <strong className="text-foreground">Account approval</strong> — our team reviews new accounts (usually within 24 hours). We will let you know at{" "}
+              <span className="font-medium text-foreground">{signupEmail || email}</span> when you can log in.
+            </p>
             <p className="text-xs text-muted-foreground mb-4">
               Want to drive? After you can log in, open Profile to upload driver documents. That review is separate from your account approval.
             </p>
             <Link href="/login">
-              <Button variant="outline" className="w-full mb-2" data-testid="btn-back-to-login">Back to Login (resend verification)</Button>
+              <Button variant="outline" className="w-full mb-2" data-testid="btn-back-to-login">Back to Login</Button>
             </Link>
           </CardContent>
         </Card>

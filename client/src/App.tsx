@@ -17,7 +17,6 @@ import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
-import VerifyEmail from "@/pages/VerifyEmail";
 import AdminDashboard from "@/pages/AdminDashboard";
 import DriverInsights from "@/pages/DriverInsights";
 import { TermsOfService, PrivacyPolicy } from "@/pages/LegalPages";
@@ -55,7 +54,6 @@ function Router() {
       <Route path="/signup">{() => <AuthRedirect component={Signup} />}</Route>
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
-      <Route path="/verify-email" component={VerifyEmail} />
       <Route path="/test-login" component={TestLogin} />
       
       {isLoading || !isAuthenticated ? (

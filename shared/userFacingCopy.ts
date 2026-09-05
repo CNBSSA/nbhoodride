@@ -48,9 +48,6 @@ export function parseBookingErrorMessage(message: string): string {
   if (m.includes("approve") || m.includes("pending approval")) {
     return "Your account still needs administrator approval before you can book.";
   }
-  if (m.includes("verify") && m.includes("email")) {
-    return "Please verify your email before booking. Use Resend verification on the login page.";
-  }
   if (m.includes("geocode") || m.includes("address") || m.includes("destination")) {
     return "We couldn't use that destination. Try picking an address from the suggestions list.";
   }
