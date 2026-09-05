@@ -457,35 +457,6 @@ export async function sendRideReceiptEmail(params: {
   );
 }
 
-// 5a. Email verification
-export async function sendEmailVerificationEmail(
-  email: string,
-  firstName: string | null,
-  verificationToken: string,
-  appUrlOverride?: string
-): Promise<void> {
-  const name = firstName || "there";
-  const base = (appUrlOverride || APP_URL || resolveAppUrl()).replace(/\/+$/, "");
-  if (!base) {
-    console.error("[EMAIL] Cannot build verification link — PUBLIC_APP_URL is not set");
-    throw new EmailNotConfiguredError();
-  }
-  const verifyUrl = `${base}/verify-email?token=${verificationToken}`;
-
-  await sendEmail(
-    email,
-    "Verify your PG Ride email address",
-    baseTemplate(`
-      <p>Hi ${name},</p>
-      <p>Thanks for signing up for PG Ride! Please verify your email address to complete your registration.</p>
-      <a href="${verifyUrl}" class="btn">Verify My Email</a>
-      <p>This link expires in <strong>24 hours</strong>. If you didn't create a PG Ride account, you can safely ignore this email.</p>
-      <p style="font-size:13px; color:#6b7280;">If the button above doesn't work, copy and paste this link into your browser:<br/>
-      <a href="${verifyUrl}" style="color:#2563eb; word-break:break-all;">${verifyUrl}</a></p>
-    `)
-  );
-}
-
 // 5. New signup — pending approval notice
 export async function sendSignupPendingEmail(user: {
   email: string | null;
