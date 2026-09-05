@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { SheetPortal } from "@/components/SheetPortal";
 import { MapPin, CheckSquare, Square, X } from "lucide-react";
 import { MD_COUNTIES } from "@shared/schema";
 
@@ -32,14 +33,15 @@ export default function CountySelectionSheet({ open, defaultCounties, onConfirm,
   const selectNone = () => setSelected([]);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center max-w-[430px] mx-auto">
+    <SheetPortal>
+    <div className="fixed inset-0 z-[60] flex items-end justify-center max-w-[430px] mx-auto" style={{ height: "100dvh" }}>
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/50" onClick={onCancel} />
 
       {/* Sheet */}
       {/* dvh, not vh: on iOS the browser chrome makes 85vh taller than what is
           visible, which pushed the Go Online footer below the fold. */}
-      <div className="relative bg-white rounded-t-2xl w-full max-w-lg max-h-[calc(100dvh-1.5rem)] flex flex-col shadow-2xl" data-testid="county-selection-sheet">
+      <div className="relative bg-white rounded-t-2xl w-full max-w-lg flex flex-col shadow-2xl overflow-hidden" style={{ maxHeight: "calc(100dvh - 1.5rem)" }} data-testid="county-selection-sheet">
         {/* Header */}
         <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100">
           <div className="flex items-center gap-2">
@@ -93,7 +95,7 @@ export default function CountySelectionSheet({ open, defaultCounties, onConfirm,
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-4 border-t border-gray-100 flex gap-3 shrink-0 bg-white pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <div className="px-5 py-4 border-t border-gray-100 flex gap-3 shrink-0 bg-white sticky bottom-0" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
           <Button variant="outline" className="flex-1 h-12" onClick={onCancel} data-testid="button-county-cancel">
             Cancel
           </Button>
@@ -108,5 +110,6 @@ export default function CountySelectionSheet({ open, defaultCounties, onConfirm,
         </div>
       </div>
     </div>
+    </SheetPortal>
   );
 }

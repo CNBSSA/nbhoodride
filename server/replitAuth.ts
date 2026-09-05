@@ -1,4 +1,5 @@
 import passport from "passport";
+import { secureCookies } from "./cookieSecurity";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
 import memoize from "memoizee";
@@ -68,7 +69,7 @@ export function getSession() {
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: secureCookies(),
       sameSite: "lax",
       maxAge: sessionTtl,
     },
