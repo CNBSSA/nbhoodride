@@ -237,16 +237,29 @@ export default function Profile() {
             <p className="text-xs text-muted-foreground">Account & Settings</p>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleLogout}
-          className="text-destructive"
-          data-testid="button-logout"
-          aria-label="Log out"
-        >
-          <i className="fas fa-sign-out-alt" aria-hidden />
-        </Button>
+        <div className="flex items-center gap-2">
+          {(user?.isAdmin || user?.isSuperAdmin) && (
+            <Button
+              size="sm"
+              onClick={() => setLocation("/admin")}
+              className="rounded-full h-8 px-3 text-xs"
+              data-testid="button-admin-panel"
+            >
+              <i className="fas fa-shield-alt mr-1" aria-hidden />
+              Admin
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleLogout}
+            className="text-destructive"
+            data-testid="button-logout"
+            aria-label="Log out"
+          >
+            <i className="fas fa-sign-out-alt" aria-hidden />
+          </Button>
+        </div>
       </header>
 
       <main className="p-4 space-y-6">
