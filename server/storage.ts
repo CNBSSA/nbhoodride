@@ -127,6 +127,7 @@ import {
   type PlatformRateCard,
 } from "@shared/schema";
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
+import { resolveCompletedFare, type FarePricing } from "@shared/farePolicy";
 import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
 import { db } from "./db";
 import { isUniqueViolation } from "./pgErrors";
@@ -375,7 +376,7 @@ export interface IStorage {
   acceptRide(rideId: string, driverId: string): Promise<Ride>;
   declineRide(rideId: string, driverId: string): Promise<void>;
   startRide(rideId: string, driverId: string): Promise<Ride>;
-  completeRide(rideId: string, driverId: string, actualFare?: number, tipAmount?: number): Promise<Ride>;
+  completeRide(rideId: string, driverId: string, actualFare?: number, tipAmount?: number, pricing?: FarePricing): Promise<Ride>;
   getActiveRidesForDriver(driverId: string): Promise<any[]>;
   
   // GPS tracking operations
@@ -1901,7 +1902,17 @@ export class DatabaseStorage implements IStorage {
     return updatedRide;
   }
 
-  async completeRide(rideId: string, driverId: string, actualFare?: number, tipAmount?: number): Promise<Ride> {
+  /**
+   * Marks the ride completed and fixes its fare.
+   *
+   * pricing "quoted" (default, normal completion): the rider pays the fare
+   * quoted at booking (minus any promo). GPS distance/time are still recorded
+   * on the ride for records, but they no longer set the price — see
+   * shared/farePolicy.ts for why.
+   * pricing "metered" (ride ended early mid-trip): GPS-based fare, capped at
+   * the quote.
+   */
+  async completeRide(rideId: string, driverId: string, actualFare?: number, tipAmount?: number, pricing: FarePricing = "quoted"): Promise<Ride> {
     // Verify the ride belongs to this driver and is in progress
     const ride = await this.getRide(rideId);
     if (!ride) {
@@ -1921,10 +1932,12 @@ export class DatabaseStorage implements IStorage {
       updatedAt: new Date()
     };
     
-    // Calculate actual distance and time from GPS tracking
+    // Record actual distance and time from GPS tracking. The metered fare is
+    // computed alongside but only used for pricing when the caller asks for
+    // it (early end) — a normal completion charges the quote.
     const routePath = (ride.routePath as Array<{lat: number, lng: number, timestamp: number}>) || [];
-    let calculatedFare = actualFare;
-    
+    let meteredFare: number | undefined;
+
     if (routePath.length >= 2 && ride.startedAt) {
       // Calculate actual distance from GPS waypoints
       const actualDistance = this.calculateActualDistance(routePath);
@@ -1960,15 +1973,23 @@ export class DatabaseStorage implements IStorage {
           fareAmount = Math.max(0, fareAmount - promoDiscount);
         }
 
-        calculatedFare = Math.round(fareAmount * 100) / 100;
+        meteredFare = Math.round(fareAmount * 100) / 100;
       }
     }
-    
-    // Use calculated fare or fallback to estimated fare
-    if (calculatedFare !== undefined) {
-      updateData.actualFare = calculatedFare.toString();
+
+    const resolved = resolveCompletedFare({
+      pricing,
+      explicit: actualFare,
+      quotedFare: ride.estimatedFare,
+      promoDiscount: ride.promoDiscountApplied,
+      metered: meteredFare,
+    });
+    if (resolved) {
+      updateData.actualFare = resolved.fare.toFixed(2);
+      if (meteredFare !== undefined && Math.abs(meteredFare - resolved.fare) >= 0.01) {
+        console.log(`[fare] ride ${rideId}: charging ${resolved.basis} $${resolved.fare.toFixed(2)} (GPS-metered would have been $${meteredFare.toFixed(2)})`);
+      }
     } else if (!ride.actualFare) {
-      // If no GPS data and no fare provided, use estimated fare
       updateData.actualFare = ride.estimatedFare;
     }
 
