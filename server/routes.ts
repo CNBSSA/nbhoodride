@@ -4194,10 +4194,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // ── Mid-trip: this is an early completion, not a cancellation ──
       // The pre-pickup fee ladder is the wrong formula once the passenger is
-      // aboard; charge the fare actually earned so far (GPS-based, same path
-      // as a normal completion, discounts preserved) and settle normally.
+      // aboard; charge the fare actually earned so far (GPS-metered, capped at
+      // the quote, discounts preserved) and settle normally.
       if (ride.status === "in_progress") {
-        const completed = await storage.completeRide(rideId, ride.driverId!, undefined);
+        const completed = await storage.completeRide(rideId, ride.driverId!, undefined, undefined, "metered");
         await settleCardPaymentForCompletedRide(completed, undefined, 0);
         await storage.updateRide(rideId, {
           cancellationReason: reason || `Ride ended early by ${role}`,
