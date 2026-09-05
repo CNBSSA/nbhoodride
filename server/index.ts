@@ -7,6 +7,7 @@ import { csrfMiddleware } from "./csrfProtection";
 import { resolveAppUrl } from "./appUrl";
 import { opsAlert, telegramOpsEnabled } from "./telegramOps";
 import { riderAlert } from "./riderAlerts";
+import { readFileSync } from "node:fs";
 
 // Ensure crashes are always visible in Railway logs
 process.on('uncaughtException', (err) => {
@@ -59,6 +60,18 @@ const app = express();
 // CRITICAL: Health check endpoint MUST be first for deployment health checks
 app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok' });
+});
+
+// Which build is running. The client compares this with the id baked into
+// its bundle and refreshes itself when a newer deploy is live — without it a
+// phone (iOS in particular) can keep running a stale bundle for days.
+let buildInfo: { id: string; builtAt: string } = { id: "dev", builtAt: "" };
+try {
+  buildInfo = JSON.parse(readFileSync("build-id.json", "utf8"));
+} catch { /* dev or missing file */ }
+app.get('/api/version', (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json(buildInfo);
 });
 
 app.get('/health/ready', async (_req, res) => {

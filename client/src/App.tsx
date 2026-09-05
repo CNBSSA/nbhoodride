@@ -1,6 +1,7 @@
 import { Switch, Route, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { installGlobalErrorReporting } from "@/lib/reportClientError";
+import { UpdateBanner } from "@/components/UpdateBanner";
 
 installGlobalErrorReporting();
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -85,6 +86,7 @@ function App() {
         <LocaleProvider>
           <TooltipProvider>
             <Toaster />
+        <UpdateBanner />
             <PwaInstallGate />
             <Router />
             <PushNotificationPrompt />

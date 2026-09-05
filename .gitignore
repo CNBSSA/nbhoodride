@@ -17,3 +17,6 @@ ios/App/Pods/
 ios/App/build/
 ios/DerivedData/
 reliability-report.md
+
+# generated at build time (scripts/write-build-id.mjs)
+build-id.json
