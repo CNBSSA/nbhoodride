@@ -5569,7 +5569,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ? `${driverUser.firstName || ''} ${driverUser.lastName?.[0] || ''}.`.trim()
         : "Your driver";
 
-      const receipt = buildRideReceipt(ride as any, driverName);
+      const receipt = buildRideReceipt(ride as any, driverName, { walletEnabled: featureFlags.walletEnabled });
       res.json(receipt);
     } catch (error) {
       console.error("Error fetching ride receipt:", error);

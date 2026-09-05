@@ -60,14 +60,23 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-export function formatPaymentMethodLabel(method: string | null | undefined): string {
-  if (method === "card") return "PG Card (virtual wallet)";
+export interface PaymentLabelOptions {
+  /**
+   * Whether the prepaid wallet is enabled. In lean (card-only) mode there is
+   * no wallet, so a card ride must not be described as one — the first real
+   * rider's history read "PG Card (virtual wallet)" for a plain card charge.
+   */
+  walletEnabled?: boolean;
+}
+
+export function formatPaymentMethodLabel(method: string | null | undefined, opts: PaymentLabelOptions = {}): string {
+  if (method === "card") return opts.walletEnabled ? "PG Card (virtual wallet)" : "Card on file";
   if (method === "cash") return "Cash";
-  return method ?? "PG Card";
+  return method ?? (opts.walletEnabled ? "PG Card" : "Card");
 }
 
 /** Build a structured receipt from a completed ride row. */
-export function buildRideReceipt(ride: RideReceiptInput, driverName: string): RideReceipt {
+export function buildRideReceipt(ride: RideReceiptInput, driverName: string, opts: PaymentLabelOptions = {}): RideReceipt {
   const fare = parseFloat(ride.actualFare ?? ride.estimatedFare ?? "0");
   const tip = parseFloat(ride.tipAmount ?? "0");
   const promoDiscount = parseFloat(ride.promoDiscountApplied ?? "0");
@@ -115,7 +124,7 @@ export function buildRideReceipt(ride: RideReceiptInput, driverName: string): Ri
     tip: round2(tip),
     totalCharged: round2(totalCharged),
     paymentMethod: ride.paymentMethod ?? "card",
-    paymentMethodLabel: formatPaymentMethodLabel(ride.paymentMethod),
+    paymentMethodLabel: formatPaymentMethodLabel(ride.paymentMethod, opts),
     paymentStatus: ride.paymentStatus ?? "unknown",
     riderRating: ride.riderRating,
     driverRating: ride.driverRating,

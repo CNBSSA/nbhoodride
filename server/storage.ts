@@ -1114,11 +1114,17 @@ export class DatabaseStorage implements IStorage {
         id: rides.id,
         riderId: rides.riderId,
         driverId: rides.driverId,
+        // Group identity so a coworker ride can be recognised as one on the
+        // rider's Upcoming list (pickup order, "everyone's 30% off" copy).
+        groupId: rides.groupId,
+        rideType: rides.rideType,
         pickupLocation: rides.pickupLocation,
         destinationLocation: rides.destinationLocation,
         pickupInstructions: rides.pickupInstructions,
         status: rides.status,
         estimatedFare: rides.estimatedFare,
+        originalFare: rides.originalFare,
+        groupDiscountAmount: rides.groupDiscountAmount,
         scheduledAt: rides.scheduledAt,
         createdAt: rides.createdAt,
         driver: {
