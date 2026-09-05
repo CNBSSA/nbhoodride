@@ -1,8 +1,13 @@
 import { defineConfig } from "vite";
+import { existsSync, readFileSync } from "node:fs";
+
+// Build id from scripts/write-build-id.mjs (run by `npm run build`); "dev" otherwise.
+const buildId = existsSync("build-id.json") ? JSON.parse(readFileSync("build-id.json", "utf8")).id : "dev";
 import react from "@vitejs/plugin-react";
 import path from "path";
 
 export default defineConfig({
+  define: { __BUILD_ID__: JSON.stringify(buildId) },
   plugins: [react()],
   resolve: {
     alias: {
