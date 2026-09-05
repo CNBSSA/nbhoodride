@@ -48,7 +48,10 @@ async function assertPrimary(page, label, testid) {
 }
 
 const db = await connectDb(); await seedFixtures(db); await db.end();
-const server = await startServer({ DRIVER_MARKETPLACE_ENABLED: "true" });
+// E2E_INSECURE_COOKIES: the build runs in production mode over plain http on
+// loopback. Chromium still accepts Secure cookies there; WebKit drops them,
+// so without this Safari's engine can never log in (CSRF 403).
+const server = await startServer({ DRIVER_MARKETPLACE_ENABLED: "true", E2E_INSECURE_COOKIES: "1" });
 const browser = await engine.launch(engine === chromium ? { executablePath, args: ["--no-sandbox", "--no-proxy-server"] } : {});
 try {
   const ctx = await browser.newContext({ viewport: VIEWPORT, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
