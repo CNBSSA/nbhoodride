@@ -1,0 +1,60 @@
+# PG Ride — rider / driver / admin journey tests.
+#
+# Boots the PRODUCTION BUNDLE against a real Postgres and walks the flows a
+# real person takes: signup → approval → login → card wall → book → schedule,
+# lockout → admin reset, driver document saves, announcements, SMS opt-out,
+# rider-trouble alerts. Runs on every pull request into develop or main and
+# on every push to main, so "it worked yesterday" regressions are caught
+# before they reach a rider — not after one texts about it.
+name: Journey Tests
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: journeys-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  journeys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: pgride
+          POSTGRES_PASSWORD: pgride
+          POSTGRES_DB: pgride
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pgride"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://pgride:pgride@127.0.0.1:5432/pgride
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Migrate
+        run: npm run db:push
+      - name: Build production bundle
+        run: npm run build
+      - name: Run journeys
+        run: npm run test:journeys
+      - name: Server log (on failure)
+        if: failure()
+        run: tail -n 200 /tmp/pgride-e2e-*.log || true
