@@ -7,11 +7,16 @@
  * This is the guard for the "I can see a sliver of the button" class of bug.
  * Run locally: npm run test:layout   (needs a built app + Postgres, like the journeys)
  */
-import { chromium } from "playwright";
+import { chromium, webkit } from "playwright";
 import { connectDb, seedFixtures, startServer, stopServer, FIXTURES, PASSWORD, check, section, summary } from "./harness.mjs";
 
 const VIEWPORT = { width: 390, height: 844 };
 const executablePath = process.env.PW_CHROMIUM_PATH || undefined;
+// PW_BROWSER=webkit runs the same audit on Safari's engine — the one iPhones
+// use — because a sheet can pass on Chromium (Android) and still lose its
+// footer on iOS. CI runs both.
+const engine = process.env.PW_BROWSER === "webkit" ? webkit : chromium;
+console.log(`engine: ${process.env.PW_BROWSER === "webkit" ? "webkit (Safari)" : "chromium"}`);
 
 async function loginAs(page, base, email) {
   await page.goto(base + "/login", { waitUntil: "domcontentloaded" });
@@ -44,7 +49,7 @@ async function assertPrimary(page, label, testid) {
 
 const db = await connectDb(); await seedFixtures(db); await db.end();
 const server = await startServer({ DRIVER_MARKETPLACE_ENABLED: "true" });
-const browser = await chromium.launch({ executablePath, args: ["--no-sandbox", "--no-proxy-server"] });
+const browser = await engine.launch(engine === chromium ? { executablePath, args: ["--no-sandbox", "--no-proxy-server"] } : {});
 try {
   const ctx = await browser.newContext({ viewport: VIEWPORT, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
     geolocation: { latitude: 38.9073, longitude: -76.7781 }, permissions: ["geolocation"] });
