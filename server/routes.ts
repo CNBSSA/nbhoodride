@@ -153,6 +153,7 @@ import {
   MAX_ASSIGNMENT_ATTEMPTS,
 } from "./rideWorkflowService";
 import { opsAlert, formatOpsAlert } from "./telegramOps";
+import { riderAlert } from "./riderAlerts";
 
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
@@ -811,10 +812,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Signup error:", error);
+      const attemptedEmail = typeof req.body?.email === "string" ? req.body.email : ip;
       if (error instanceof z.ZodError) {
+        riderAlert("signup_failed", attemptedEmail, [["Email", attemptedEmail], ["Reason", error.errors[0].message]]);
         return res.status(400).json({ message: error.errors[0].message });
       }
       console.log(`[AUDIT] signup_error ip=${ip} error=${String(error)}`);
+      riderAlert("signup_failed", attemptedEmail, [["Email", attemptedEmail], ["Reason", `server error: ${String((error as any)?.message ?? error).slice(0, 160)}`]]);
       res.status(500).json({ message: "Signup failed" });
     }
   });
@@ -887,6 +891,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (user.lockoutUntil && new Date(user.lockoutUntil) > new Date()) {
         const minutesLeft = Math.ceil((new Date(user.lockoutUntil).getTime() - Date.now()) / 60000);
         console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=account_locked minutesLeft=${minutesLeft}`);
+        riderAlert("login_locked_out", user.id, [["Name", `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim()], ["Email", email], ["Phone", user.phone], ["Unlocks in", `${minutesLeft} min`]]);
         return res.status(429).json({
           message: `Too many failed login attempts. Try again in ${minutesLeft} minute${minutesLeft === 1 ? '' : 's'}.`,
           accountLocked: true,
@@ -903,6 +908,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           lockoutMinutes: LOGIN_LOCKOUT_MINUTES,
         });
         console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=wrong_password attempts=${attempts}${lockoutUntil ? ' lockedUntil=' + lockoutUntil.toISOString() : ''}`);
+        if (attempts >= 3) {
+          riderAlert("login_wrong_password", user.id, [["Name", `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim()], ["Email", email], ["Phone", user.phone], ["Failed attempts", attempts], ["Tip", "They may need Forgot password"]]);
+        }
         if (lockoutUntil) {
           return res.status(429).json({
             message: `Too many failed login attempts. Account locked for ${LOGIN_LOCKOUT_MINUTES} minutes.`,
@@ -916,12 +924,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Check if suspended
       if (user.isSuspended) {
         console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=suspended`);
+        riderAlert("login_suspended", user.id, [["Name", `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim()], ["Email", email], ["Phone", user.phone]]);
         return res.status(403).json({ message: "Your account has been suspended. Please contact support." });
       }
 
       // Check if user is approved (admins and super admins skip this check)
       if (!user.isApproved && !user.isAdmin && !user.isSuperAdmin) {
         console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=pending_approval`);
+        riderAlert("login_pending_approval", user.id, [["Name", `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim()], ["Email", email], ["Phone", user.phone], ["Approve now", `${resolveAppUrl(`https://${req.get("host")}`)}/admin`]]);
         return res.status(403).json({ message: "Your account is pending approval by an administrator. Please check back later." });
       }
 
@@ -2074,6 +2084,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // rider (their card is the problem) rather than leaving it stranded.
       const paymentResult = await authorizeCardPaymentForRide(rideId, ride, rider, userId, { onFailure: "cancel" });
       if (!paymentResult.ok) {
+        riderAlert("payment_auth_failed", rideId, [["Rider", `${rider?.firstName ?? ""} ${rider?.lastName ?? ""}`.trim() || ride.riderId], ["Phone", rider?.phone], ["Ride", rideId.slice(0, 8)], ["Reason", paymentResult.message], ["Effect", "Ride cancelled — rider needs to fix their card"]]);
         return res.status(402).json({ message: paymentResult.message });
       }
 
@@ -2215,6 +2226,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const result = await confirmRidesForDriver(targets, userId);
       if (!result.ok) {
+        riderAlert("payment_auth_failed", String(result.failedRideId ?? "confirm"), [["Ride", String(result.failedRideId ?? "").slice(0, 8)], ["Reason", result.message], ["Context", "scheduled/shared confirm"]]);
         return res.status(402).json({ message: result.message, failedRideId: result.failedRideId });
       }
       res.json({ confirmed: result.confirmed });
@@ -2255,6 +2267,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const result = await confirmRidesForDriver(targets, userId);
       if (!result.ok) {
+        riderAlert("payment_auth_failed", String(result.failedRideId ?? "confirm"), [["Ride", String(result.failedRideId ?? "").slice(0, 8)], ["Reason", result.message], ["Context", "scheduled/shared confirm"]]);
         return res.status(402).json({ message: result.message, failedRideId: result.failedRideId });
       }
       res.json({ confirmed: result.confirmed });
@@ -2349,6 +2362,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             cancelledBy: "system",
             cancelledByRole: "system",
           } as any);
+          riderAlert("no_driver_found", rideId, [["Ride", rideId.slice(0, 8)], ["From", (ride.pickupLocation as any)?.address], ["To", (ride.destinationLocation as any)?.address], ["Effect", "Cancelled by system after all attempts"]]);
           notifyRiderRideCancelled(ride.riderId, rideId, {
             wsReason: "No drivers available in your area right now. Please try again.",
             pushTitle: "No Drivers Available",
@@ -3065,6 +3079,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await settleCardPaymentForCompletedRide(ride, actualFare, tipAmount);
       } catch (settleErr) {
         console.error(`[complete] PAYMENT SETTLEMENT FAILED for ride ${rideId} — ride completed, needs manual reconciliation:`, settleErr);
+        riderAlert("settlement_failed", rideId, [["Ride", rideId.slice(0, 8)], ["Fare", `$${Number(actualFare ?? 0).toFixed(2)}`], ["Reason", String((settleErr as any)?.message ?? settleErr).slice(0, 200)], ["Where", "Admin → Reconciliation"]]);
         // Durable marker so this stuck payment is visible fleet-wide in the
         // admin reconciliation queue, not just in the server logs. Best-effort:
         // marking must never fail the completion response either.
@@ -3651,6 +3666,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const bookingRider = await storage.getUser(userId);
       if (riderNeedsCardOnFile(bookingRider)) {
+        riderAlert("booking_refused", `${userId}:no_card`, [["Rider", `${bookingRider?.firstName ?? ""} ${bookingRider?.lastName ?? ""}`.trim() || userId], ["Phone", bookingRider?.phone], ["Reason", "No payment card on file — they were told to add one in Profile"]]);
         return res.status(400).json({ message: NEEDS_CARD_MESSAGE });
       }
 
@@ -3684,6 +3700,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (req.body.scheduledAt) {
         const scheduleCheck = checkScheduleTime(req.body.scheduledAt);
         if (!scheduleCheck.valid) {
+          riderAlert("booking_refused", `${userId}:schedule`, [["Rider", `${bookingRider?.firstName ?? ""} ${bookingRider?.lastName ?? ""}`.trim() || userId], ["Phone", bookingRider?.phone], ["Reason", scheduleCheck.error]]);
           return res.status(400).json({ message: scheduleCheck.error });
         }
       }
@@ -3691,6 +3708,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // ── Step 1: Validate ride request (service area, distance, rate limit) ──
       const validation = await validateRideRequest(userId, pickup, destination);
       if (!validation.valid) {
+        riderAlert("booking_refused", `${userId}:${validation.error?.slice(0, 40)}`, [["Rider", `${bookingRider?.firstName ?? ""} ${bookingRider?.lastName ?? ""}`.trim() || userId], ["Phone", bookingRider?.phone], ["From", pickup.address], ["To", destination.address], ["Reason", validation.error]]);
         return res.status(400).json({ message: validation.error });
       }
 
@@ -3921,6 +3939,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             },
             // onCancel: notify rider
             () => {
+              riderAlert("no_driver_found", updatedRide.id, [["Ride", updatedRide.id.slice(0, 8)], ["From", pickup.address], ["To", destination.address], ["Effect", "Cancelled by system after all attempts"]]);
               if (activeConnections.has(userId)) {
                 const riderWs = activeConnections.get(userId);
                 if (riderWs?.readyState === WebSocket.OPEN) {
@@ -3956,6 +3975,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Error creating ride:", error);
+      riderAlert("server_error", "POST /api/rides", [["Route", "POST /api/rides"], ["Error", String((error as any)?.message ?? error).slice(0, 200)]]);
       if (error instanceof z.ZodError) {
         console.error("Zod validation errors:", JSON.stringify(error.errors, null, 2));
       }
@@ -5979,6 +5999,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /**
+   * In-app error intake: the client reports uncaught errors and failed
+   * notification setups here so the operator hears about a rider's broken
+   * screen before the rider does. Authenticated or not (login page errors
+   * matter too), tightly rate-limited, never trusted beyond a log line.
+   */
+  const clientErrorLimiter = rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false });
+  app.post('/api/client-errors', clientErrorLimiter, async (req: any, res) => {
+    try {
+      const kind = req.body?.kind === "push_subscribe_failed" ? "push_subscribe_failed" : "client_error";
+      const message = String(req.body?.message ?? "").slice(0, 300);
+      const page = String(req.body?.page ?? "").slice(0, 120);
+      if (!message) return res.status(400).json({ message: "message required" });
+      const userId = req.session?.userId || req.session?.testUserId || null;
+      const who = userId ? await storage.getUser(userId).catch(() => undefined) : undefined;
+      riderAlert(kind, `${userId ?? req.ip}:${message.slice(0, 40)}`, [
+        ["User", who ? `${who.firstName ?? ""} ${who.lastName ?? ""}`.trim() || userId : "not signed in"],
+        ["Phone", who?.phone],
+        ["Page", page],
+        ["Error", message],
+      ]);
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("client-errors intake failed:", error);
+      res.status(500).json({ message: "failed" });
+    }
+  });
+
   /** Audience size preview so the admin sees the reach before sending. */
   app.get('/api/admin/announcements/audience-counts', isAdminOrSessionAuth, async (_req: any, res) => {
     try {
@@ -7123,6 +7171,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             },
             // onCancel: all attempts exhausted — tell the rider.
             () => {
+              riderAlert("no_driver_found", ride.id, [["Ride", ride.id.slice(0, 8)], ["From", pickupLocation.address], ["To", destinationLocation.address], ["Effect", "Multi-stop cancelled by system after all attempts"]]);
               notifyRiderRideCancelled(userId, ride.id, {
                 wsReason: "No drivers available in your area right now. Please try again.",
                 pushTitle: "No Drivers Available",

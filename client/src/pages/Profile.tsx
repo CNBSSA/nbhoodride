@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { reportClientError } from "@/lib/reportClientError";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -637,6 +638,7 @@ export default function Profile() {
                         (result.reason === "error" || result.reason === "invalid_key") && result.detail
                           ? ` (${result.detail})`
                           : "";
+                      reportClientError({ kind: "push_subscribe_failed", message: `${result.reason}${result.detail ? `: ${result.detail}` : ""}` });
                       toast({
                         title: "Notifications not enabled",
                         description: messages[result.reason] + detail,
