@@ -31,15 +31,23 @@ describe("buildRideReceipt", () => {
 
     expect(receipt.totalCharged).toBe(14.5);
     expect(receipt.promoDiscount).toBe(5);
-    expect(receipt.paymentMethodLabel).toBe("PG Card (virtual wallet)");
+    expect(receipt.paymentMethodLabel).toBe("Card on file");
     expect(receipt.passengerName).toBe("Maria");
     expect(receipt.requestedVehicleType).toBe("xl");
   });
 });
 
 describe("formatPaymentMethodLabel", () => {
-  it("labels card as PG Card", () => {
-    expect(formatPaymentMethodLabel("card")).toContain("PG Card");
+  it("does not mention a wallet in card-only mode", () => {
+    expect(formatPaymentMethodLabel("card")).toBe("Card on file");
+    expect(formatPaymentMethodLabel("card", { walletEnabled: false })).toBe("Card on file");
+  });
+  it("labels card as the PG Card wallet only when the wallet is enabled", () => {
+    expect(formatPaymentMethodLabel("card", { walletEnabled: true })).toBe("PG Card (virtual wallet)");
+  });
+  it("labels cash as Cash either way", () => {
+    expect(formatPaymentMethodLabel("cash")).toBe("Cash");
+    expect(formatPaymentMethodLabel("cash", { walletEnabled: true })).toBe("Cash");
   });
 });
 
