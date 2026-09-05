@@ -30,6 +30,23 @@ async function loginAs(page, base, email) {
   try { await page.tap('[data-testid="welcome-dismiss"]', { timeout: 3000 }); } catch {}
 }
 
+/**
+ * Assert a modal overlay is the topmost layer across the WHOLE screen, not
+ * just where its buttons are. Samples the corners, edges, centre and the
+ * bottom band where the home sheet and navigation live: if any sample hits
+ * something outside the overlay, another layer is drawn over the dialog.
+ */
+async function assertModalOnTop(page, label, overlayTestid) {
+  const loc = page.locator(`[data-testid="${overlayTestid}"]`).first();
+  await loc.waitFor({ timeout: 15000 });
+  const { width: w, height: h } = VIEWPORT;
+  const points = [[w / 2, 30], [w / 2, h / 2], [16, h / 2], [w - 16, h / 2], [w / 2, h - 60], [w / 2, h - 140], [w / 2, h - 220], [40, h - 90]];
+  const misses = await page.evaluate(({ points, overlayTestid }) => points
+    .filter(([x, y]) => !document.elementFromPoint(x, y)?.closest(`[data-testid="${overlayTestid}"]`))
+    .map(([x, y]) => `${Math.round(x)},${Math.round(y)}`), { points, overlayTestid });
+  check(`${label}: dialog is the top layer everywhere on screen`, misses.length === 0, misses.length ? `covered at ${misses.join(" ")}` : "");
+}
+
 /** Assert the element with this testid is fully visible and tappable. */
 async function assertPrimary(page, label, testid) {
   const loc = page.locator(`[data-testid="${testid}"]`).first();
@@ -106,5 +123,48 @@ try {
   await page.waitForSelector('[data-testid="suggestion-0"]', { timeout: 10000 });
   await page.tap('[data-testid="suggestion-0"]');
   await assertPrimary(page, "Book-now driver panel", "button-confirm-booking");
+
+  // Cancel dialogs. These sit ON TOP of the home bottom sheet, which is the
+  // exact case that shipped broken: the question was visible, the buttons
+  // were under the sheet. Seed one live ride per role straight into the DB.
+  const rideDb = await connectDb();
+  const loc = (address, lat, lng) => JSON.stringify({ address, lat, lng });
+  const { rows: [riderRide] } = await rideDb.query(
+    `INSERT INTO rides (rider_id, status, pickup_location, destination_location, estimated_fare, payment_method)
+     VALUES ($1, 'pending', $2, $3, 7.65, 'card') RETURNING id`,
+    [FIXTURES.rider.id, loc("Tulip Tree Dr, Lake Arbor, MD", 38.9073, -76.7781), loc("National Harbor, MD", 38.7823, -77.0166)]);
+  const { rows: [driverRide] } = await rideDb.query(
+    `INSERT INTO rides (rider_id, driver_id, status, pickup_location, destination_location, estimated_fare, payment_method)
+     VALUES ($1, $2, 'accepted', $3, $4, 7.65, 'card') RETURNING id`,
+    [FIXTURES.admin.id, FIXTURES.driver.id, loc("Tulip Tree Dr, Lake Arbor, MD", 38.9073, -76.7781), loc("National Harbor, MD", 38.7823, -77.0166)]);
+  try {
+    section("Rider: cancel-ride dialog over the home sheet");
+    page = await ctx.newPage();
+    await loginAs(page, server.base, FIXTURES.rider.email);
+    await page.evaluate(() => localStorage.setItem("pgride:lastMode", "rider"));
+    await page.goto(server.base + "/", { waitUntil: "domcontentloaded" });
+    try { await page.tap('[data-testid="welcome-dismiss"]', { timeout: 3000 }); } catch {}
+    await page.waitForSelector(`[data-testid="btn-cancel-ride-${riderRide.id}"]`, { timeout: 20000 });
+    await page.tap(`[data-testid="btn-cancel-ride-${riderRide.id}"]`);
+    await assertModalOnTop(page, "Rider cancel dialog", "cancel-confirm-overlay");
+    await assertPrimary(page, "Rider cancel dialog", "btn-cancel-dialog-confirm");
+    await assertPrimary(page, "Rider cancel dialog (keep)", "btn-cancel-dialog-keep");
+    await page.tap('[data-testid="btn-cancel-dialog-keep"]');
+
+    section("Driver: cancel-ride dialog over the active ride card");
+    page = await ctx.newPage();
+    await loginAs(page, server.base, FIXTURES.driver.email);
+    await page.evaluate(() => localStorage.setItem("pgride:lastMode", "driver"));
+    await page.goto(server.base + "/", { waitUntil: "domcontentloaded" });
+    await page.waitForSelector(`[data-testid="button-driver-cancel-${driverRide.id}"]`, { timeout: 20000 });
+    await page.tap(`[data-testid="button-driver-cancel-${driverRide.id}"]`);
+    await assertModalOnTop(page, "Driver cancel dialog", "driver-cancel-confirm-overlay");
+    await assertPrimary(page, "Driver cancel dialog", "btn-driver-cancel-confirm");
+    await assertPrimary(page, "Driver cancel dialog (keep)", "btn-driver-cancel-keep");
+    await page.tap('[data-testid="btn-driver-cancel-keep"]');
+  } finally {
+    await rideDb.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [[riderRide.id, driverRide.id]]).catch(() => {});
+    await rideDb.end();
+  }
 } finally { await browser.close(); stopServer(server); }
 process.exit(summary() === 0 ? 0 : 1);
