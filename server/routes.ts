@@ -25,7 +25,6 @@ import {
   sendTestEmail,
   sendAccountApprovedEmail,
   sendDriverApprovedEmail,
-  sendEmailVerificationEmail,
   sendPasswordResetEmail,
   sendRideAcceptedEmail,
   sendRideReceiptEmail,
@@ -108,7 +107,6 @@ import { tryMatchSharedRide, getSharedGroupRides, getMyActiveSharedGroup } from 
 import { resolveAppUrl } from "./appUrl";
 import { matchLocalLandmarks, nearestLandmarkLabel } from "./localLandmarks";
 import { isAllowedPickup, PICKUP_OUTSIDE_MD_MESSAGE } from "@shared/serviceArea";
-import { evaluateEmailVerificationGate, isEmailVerificationMandatory } from "@shared/emailVerificationPolicy";
 import { findFrequentDestination } from "@shared/frequentTrip";
 import { toSafeUser } from "./safeUser";
 import { isUniqueViolation } from "./pgErrors";
@@ -420,8 +418,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Password-confirmation endpoint — same throttle as login so a hijacked
   // session can't brute-force the password through it.
   app.use('/api/auth/delete-account', authLimiter);
-  app.use('/api/auth/verify-email', authLimiter);
-  app.use('/api/auth/resend-verification', authLimiter);
   app.use('/api/auth/test-login', authLimiter);
   app.use('/api/admin/setup-super-admin', authLimiter);
   // R-M4: rate-limit driver profile creation. POST creates the row;
@@ -778,11 +774,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         registrationCompletedAt: now,
       });
 
-      // ── Email verification token ─────────────────────────────────────────
-      const verificationToken = nanoid(40);
-      const verificationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
-      await storage.setEmailVerificationToken(user.id, verificationToken, verificationExpiry);
-
       // ── Welcome bonus ledger entry (R-M1) ────────────────────────────────
       // Mirror the $20 starting balance set on the user row above into the
       // wallet_transactions ledger so we have an auditable record of the
@@ -800,24 +791,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // ── Audit log ────────────────────────────────────────────────────────
       console.log(`[AUDIT] signup_success ip=${ip} userId=${user.id} email=${user.email}`);
 
-      const appUrl = resolveAppUrl(`https://${req.get("host")}`);
-      let emailVerificationSent = false;
-      let emailDeliveryWarning: string | undefined;
-      try {
-        await sendEmailVerificationEmail(
-          user.email!,
-          user.firstName,
-          verificationToken,
-          appUrl
-        );
-        emailVerificationSent = true;
-      } catch (emailErr) {
-        console.error("[EMAIL] signup verification failed:", emailErr);
-        emailDeliveryWarning =
-          emailErr instanceof EmailNotConfiguredError
-            ? "We could not send a verification email because email is not configured on the server. Contact support or ask an admin to verify your email from the dashboard."
-            : "We could not send the verification email right now. Use Resend verification on the login page or contact support.";
-      }
       sendSignupPendingEmail({ email: user.email, firstName: user.firstName }).catch(console.error);
 
       opsAlert(formatOpsAlert("👤 New signup (awaiting approval)", [
@@ -827,14 +800,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ]));
 
       res.json({
-        message: emailVerificationSent
-          ? isEmailVerificationMandatory()
-            ? "Account created! Check your email to verify your address, then wait for administrator approval before you can log in."
-            : "Account created! We sent a verification email (optional for now). Wait for administrator approval before you can log in."
-          : "Account created! Your account needs administrator approval before you can log in.",
+        message: "Account created! Your account needs administrator approval before you can log in.",
         pendingApproval: true,
-        emailVerificationSent,
-        emailDeliveryWarning,
         user: {
           id: user.id,
           email: user.email,
@@ -849,66 +816,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       console.log(`[AUDIT] signup_error ip=${ip} error=${String(error)}`);
       res.status(500).json({ message: "Signup failed" });
-    }
-  });
-
-  // POST /api/auth/verify-email - Verify email address with token
-  app.post('/api/auth/verify-email', async (req, res) => {
-    try {
-      const schema = z.object({ token: z.string().min(1, "Verification token is required") });
-      const { token } = schema.parse(req.body);
-
-      const user = await storage.getUserByVerificationToken(token);
-      if (!user) {
-        return res.status(400).json({ message: "Invalid or expired verification link. Please request a new one." });
-      }
-
-      await storage.markEmailVerified(user.id);
-      console.log(`[AUDIT] email_verified userId=${user.id} email=${user.email}`);
-
-      res.json({
-        message: "Email verified successfully! Your account is now pending administrator approval.",
-        emailVerified: true,
-      });
-    } catch (error) {
-      console.error("Email verification error:", error);
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message });
-      }
-      res.status(500).json({ message: "Email verification failed" });
-    }
-  });
-
-  // POST /api/auth/resend-verification - Resend email verification
-  app.post('/api/auth/resend-verification', authLimiter, async (req, res) => {
-    try {
-      const schema = z.object({ email: z.string().email("Invalid email address") });
-      const { email } = schema.parse(req.body);
-
-      const user = await storage.getUserByEmail(email);
-      // Always return success to avoid revealing whether the email exists
-      if (!user || user.emailVerifiedAt) {
-        return res.json({ message: "If the email exists and is unverified, a new verification link has been sent." });
-      }
-
-      const verificationToken = nanoid(40);
-      const verificationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      await storage.setEmailVerificationToken(user.id, verificationToken, verificationExpiry);
-      const appUrl = resolveAppUrl(`https://${req.get("host")}`);
-      try {
-        await sendEmailVerificationEmail(user.email!, user.firstName, verificationToken, appUrl);
-      } catch (emailErr) {
-        console.error("[EMAIL] resend verification failed:", emailErr);
-        return res.status(503).json({
-          message:
-            "We could not send the verification email. Email may not be configured on the server — contact support or ask an admin to verify your email.",
-        });
-      }
-
-      res.json({ message: "If the email exists and is unverified, a new verification link has been sent." });
-    } catch (error) {
-      console.error("Resend verification error:", error);
-      res.status(500).json({ message: "Failed to resend verification email" });
     }
   });
 
@@ -1010,34 +917,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (user.isSuspended) {
         console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=suspended`);
         return res.status(403).json({ message: "Your account has been suspended. Please contact support." });
-      }
-
-      // Email verification gate (R-H1).
-      // Only enforced for users who went through the new signup flow
-      // (registrationCompletedAt set). Pre-existing accounts created before
-      // verification was wired in are exempt. Admins/super admins bypass.
-      // The gate stands down when the server cannot actually send a
-      // verification email — otherwise riders are told to click a link that
-      // was never sent, and every legitimate signup is locked out while no
-      // attacker is stopped (admin approval remains the real control).
-      const emailCfg = getEmailConfigSummary();
-      const emailDeliverable = emailCfg.apiKeyPresent && !emailCfg.usingUnverifiedDefault;
-      const gate = evaluateEmailVerificationGate(user, { emailDeliverable });
-      if (gate.allow && gate.waive) {
-        console.warn(
-          `[AUDIT] email_verification_waived userId=${user.id} reason=email_undeliverable from=${emailCfg.from}`,
-        );
-        await storage.waiveEmailVerification(user.id).catch((err) =>
-          console.error("Failed to record email verification waiver:", err),
-        );
-      }
-      if (!gate.allow) {
-        console.log(`[AUDIT] login_failed ip=${ip} userId=${user.id} email=${email} reason=email_not_verified`);
-        return res.status(403).json({
-          message: "Please verify your email before logging in. Check your inbox for the verification link.",
-          emailVerificationRequired: true,
-          email: user.email,
-        });
       }
 
       // Check if user is approved (admins and super admins skip this check)
@@ -6302,24 +6181,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin attests the user's email in person (family, signup tables, church
   // onboarding) — removes the dependency on email delivery, which blocks ALL
   // registration when the Resend domain isn't verified yet.
-  app.post('/api/admin/users/:userId/verify-email', isAdminOrSessionAuth, async (req: any, res) => {
-    try {
-      const { userId } = req.params;
-      const adminId = req.adminUser.id;
-      const targetUser = await storage.getUser(userId);
-      if (!targetUser) return res.status(404).json({ message: "User not found" });
-      if (targetUser.emailVerifiedAt) return res.status(400).json({ message: "Email already verified" });
-
-      const user = await storage.markEmailVerified(userId);
-      await storage.logAdminAction(adminId, 'verify_email_manual', 'user', userId, { email: targetUser.email });
-      console.log(`[AUDIT] email_verified_by_admin adminId=${adminId} userId=${userId} email=${targetUser.email}`);
-      res.json(user);
-    } catch (error) {
-      console.error("Error manually verifying email:", error);
-      res.status(500).json({ message: "Failed to verify email" });
-    }
-  });
-
   app.post('/api/admin/users/:userId/approve', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const { userId } = req.params;
