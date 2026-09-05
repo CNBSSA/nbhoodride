@@ -6301,6 +6301,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /**
+   * Admin-issued temporary password. The self-serve reset depends on email
+   * delivery; when that is down a rider who forgets their password is locked
+   * out with no recovery path. The temporary password is returned ONCE to the
+   * admin (never emailed, never stored in plain text) so they can pass it to
+   * the rider directly, and any login lockout is cleared at the same time.
+   */
+  app.post('/api/admin/users/:userId/reset-password', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const { userId } = req.params;
+      const adminId = req.adminUser.id;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser || targetUser.deletedAt) return res.status(404).json({ message: "User not found" });
+      if (targetUser.isSuperAdmin) return res.status(403).json({ message: "Cannot reset a super admin's password" });
+      if (targetUser.isAdmin && !req.adminUser.isSuperAdmin) return res.status(403).json({ message: "Only super admin can reset another admin's password" });
+
+      // Readable over the phone, and satisfies the signup policy (upper,
+      // lower, digit, symbol) so a later self-service change is not refused.
+      const digits = String(Math.floor(1000 + Math.random() * 9000));
+      const temporaryPassword = `Ride-${digits}-Go!`;
+      const hash = await bcrypt.hash(temporaryPassword, 10);
+      await storage.setTemporaryPassword(userId, hash);
+      await storage.logAdminAction(adminId, 'reset_password', 'user', userId, { email: targetUser.email });
+      console.log(`[AUDIT] password_reset_by_admin adminId=${adminId} userId=${userId} email=${targetUser.email}`);
+      res.json({ temporaryPassword, email: targetUser.email, firstName: targetUser.firstName });
+    } catch (error) {
+      console.error("Error resetting password:", error);
+      res.status(500).json({ message: "Failed to reset password" });
+    }
+  });
+
   app.post('/api/admin/users/:userId/revoke-approval', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const { userId } = req.params;

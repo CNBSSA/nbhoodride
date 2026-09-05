@@ -226,6 +226,8 @@ export interface IStorage {
   getUserByResetToken(token: string): Promise<User | undefined>;
   updateLastLogin(userId: string): Promise<void>;
   recordFailedLogin(userId: string, opts: { threshold: number; lockoutMinutes: number }): Promise<{ attempts: number; lockoutUntil: Date | null }>;
+  /** Admin-issued temporary password; also clears any login lockout. */
+  setTemporaryPassword(userId: string, passwordHash: string): Promise<void>;
   
   deleteUser(userId: string): Promise<void>;
   deleteDriverProfile(userId: string): Promise<void>;
@@ -830,6 +832,13 @@ export class DatabaseStorage implements IStorage {
   // R-L5: bump the failed-login counter for a user and, once we've crossed
   // the threshold, set lockoutUntil. Returns the new attempt count and the
   // resulting lockout time (or null) so the route can branch.
+  async setTemporaryPassword(userId: string, passwordHash: string): Promise<void> {
+    await db
+      .update(users)
+      .set({ password: passwordHash, failedLoginAttempts: 0, lockoutUntil: null, updatedAt: new Date() })
+      .where(eq(users.id, userId));
+  }
+
   async recordFailedLogin(userId: string, opts: { threshold: number; lockoutMinutes: number }): Promise<{ attempts: number; lockoutUntil: Date | null }> {
     const [u] = await db.select().from(users).where(eq(users.id, userId));
     const next = (u?.failedLoginAttempts ?? 0) + 1;
