@@ -32,12 +32,14 @@ export default function CountySelectionSheet({ open, defaultCounties, onConfirm,
   const selectNone = () => setSelected([]);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center">
+    <div className="fixed inset-0 z-[60] flex items-end justify-center max-w-[430px] mx-auto">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/50" onClick={onCancel} />
 
       {/* Sheet */}
-      <div className="relative bg-white rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-2xl">
+      {/* dvh, not vh: on iOS the browser chrome makes 85vh taller than what is
+          visible, which pushed the Go Online footer below the fold. */}
+      <div className="relative bg-white rounded-t-2xl w-full max-w-lg max-h-[calc(100dvh-1.5rem)] flex flex-col shadow-2xl" data-testid="county-selection-sheet">
         {/* Header */}
         <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100">
           <div className="flex items-center gap-2">
@@ -65,7 +67,7 @@ export default function CountySelectionSheet({ open, defaultCounties, onConfirm,
         </div>
 
         {/* County List */}
-        <div className="overflow-y-auto flex-1 px-5 py-2">
+        <div className="overflow-y-auto flex-1 min-h-0 px-5 py-2">
           <div className="grid grid-cols-2 gap-1 py-2">
             {MD_COUNTIES.map(county => {
               const isSelected = selected.includes(county);
@@ -91,14 +93,15 @@ export default function CountySelectionSheet({ open, defaultCounties, onConfirm,
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-4 border-t border-gray-100 flex gap-3">
-          <Button variant="outline" className="flex-1" onClick={onCancel}>
+        <div className="px-5 py-4 border-t border-gray-100 flex gap-3 shrink-0 bg-white pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <Button variant="outline" className="flex-1 h-12" onClick={onCancel} data-testid="button-county-cancel">
             Cancel
           </Button>
           <Button
-            className="flex-1 bg-blue-600 hover:bg-blue-700"
+            className="flex-1 h-12 bg-blue-600 hover:bg-blue-700"
             disabled={selected.length === 0}
             onClick={() => onConfirm(selected)}
+            data-testid="button-go-online-confirm"
           >
             Go Online ({selected.length} {selected.length === MD_COUNTIES.length ? "all" : selected.length === 1 ? "county" : "counties"})
           </Button>

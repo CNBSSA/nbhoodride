@@ -58,7 +58,7 @@ export default function RideDetailsModal({
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <Card className="relative z-10 w-full mx-4 max-h-[90vh] overflow-y-auto">
+      <Card className="relative z-10 w-full mx-4 max-h-[calc(100dvh-1.5rem)] flex flex-col overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Ride Receipt</h2>
           <Button
@@ -71,7 +71,7 @@ export default function RideDetailsModal({
           </Button>
         </div>
         
-        <CardContent className="p-4 space-y-6">
+        <CardContent className="p-4 space-y-6 flex-1 min-h-0 overflow-y-auto">
           {/* Route Map Placeholder */}
           <Card className="bg-muted">
             <CardContent className="p-4 h-48 flex items-center justify-center">
@@ -201,7 +201,7 @@ export default function RideDetailsModal({
           )}
         </CardContent>
 
-        <div className="p-4 border-t space-y-2">
+        <div className="p-4 border-t space-y-2 shrink-0 bg-background pb-[max(1rem,env(safe-area-inset-bottom))]">
           <Button className="w-full" data-testid="button-download-receipt">
             <i className="fas fa-download mr-2" />
             Download Receipt

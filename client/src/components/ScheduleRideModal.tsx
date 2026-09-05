@@ -328,7 +328,7 @@ export default function ScheduleRideModal({
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center max-w-[430px] mx-auto">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <Card className="relative z-10 w-full h-[90vh] rounded-t-xl border-0 shadow-2xl">
+      <Card className="relative z-10 w-full h-[calc(100dvh-1.5rem)] max-h-[calc(100dvh-1.5rem)] rounded-t-xl border-0 shadow-2xl flex flex-col overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Schedule a Ride</h2>
           <Button variant="ghost" size="sm" onClick={onClose} data-testid="button-close-schedule">
@@ -336,7 +336,7 @@ export default function ScheduleRideModal({
           </Button>
         </div>
         
-        <CardContent className="p-4 space-y-4 overflow-y-auto h-full pb-32">
+        <CardContent className="p-4 space-y-4 overflow-y-auto flex-1 min-h-0">
           <AddCardBanner />
           <AddPhoneBanner />
           {/* Ride Type Tabs */}
@@ -637,7 +637,7 @@ export default function ScheduleRideModal({
           </div>
         </CardContent>
 
-        <div className="absolute bottom-0 left-0 right-0 p-4 bg-card border-t space-y-2">
+        <div className="p-4 bg-card border-t space-y-2 shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))]">
           {bookingType === "schedule" && scheduledDate && (
             <p className="text-sm text-center text-muted-foreground">
               Pickup: {format(scheduledDate, "MMM dd")} at {scheduledHour}:{scheduledMinute} {scheduledPeriod}
