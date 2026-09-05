@@ -60,7 +60,9 @@ export async function startServer(env = {}) {
   const port = 5700 + Math.floor(Math.random() * 200);
   const logPath = `/tmp/pgride-e2e-${port}.log`;
   const out = createWriteStream(logPath);
-  const child = spawn("node", ["dist/index.js"], {
+  // Absolute path so the harness works from any cwd (CI, scripts, ad-hoc checks).
+  const entry = new URL("../../dist/index.js", import.meta.url).pathname;
+  const child = spawn("node", [entry], {
     env: {
       ...process.env,
       NODE_ENV: "production", PORT: String(port), DATABASE_URL, SESSION_SECRET: "e2e-secret",
