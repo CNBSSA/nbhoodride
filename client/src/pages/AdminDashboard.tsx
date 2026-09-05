@@ -404,7 +404,7 @@ function UsersPanel() {
         <CardContent className="pt-4 pb-3 text-sm text-muted-foreground">
           <strong className="text-foreground">New signups always appear here (Users tab)</strong>, not under Drivers.
           Drivers only show in the <strong>Drivers</strong> tab after they log in and submit license, insurance, and vehicle photos.
-          If email never arrives, use <strong>Email unverified — verify manually</strong> or fix <code className="text-xs">RESEND_API_KEY</code> on Railway.
+          Approving an account is the only step a rider needs from you — there is no email verification.
         </CardContent>
       </Card>
 
