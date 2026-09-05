@@ -20,6 +20,7 @@
     "check:migration-drift": "node scripts/check-migration-drift.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:journeys": "node scripts/e2e/run.mjs",
     "db:push": "node scripts/migrate.mjs"
   },
   "dependencies": {
