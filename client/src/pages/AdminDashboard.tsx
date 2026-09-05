@@ -289,6 +289,20 @@ function UsersPanel() {
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  // Temporary password shown inline (toasts vanish before it can be copied).
+  const [tempPasswords, setTempPasswords] = useState<Record<string, string>>({});
+  const resetPassword = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("POST", `/api/admin/users/${userId}/reset-password`);
+      return res.json() as Promise<{ temporaryPassword: string; email: string | null; firstName: string | null }>;
+    },
+    onSuccess: (data, userId) => {
+      setTempPasswords((prev) => ({ ...prev, [userId]: data.temporaryPassword }));
+      toast({ title: "Temporary password set", description: `Send it to ${data.firstName || data.email} — it is shown on their card and unlocks their account.` });
+    },
+    onError: (err: Error) => toast({ title: "Couldn't reset password", description: err.message, variant: "destructive" }),
+  });
+
   const revokeApproval = useMutation({
     mutationFn: async (userId: string) => {
       await apiRequest("POST", `/api/admin/users/${userId}/revoke-approval`);
@@ -556,6 +570,20 @@ function UsersPanel() {
                       >
                         Revoke Approval
                       </Button>
+                    )}
+                    <Button size="sm" variant="outline"
+                      onClick={() => resetPassword.mutate(u.id)}
+                      disabled={resetPassword.isPending}
+                      title="Sets a temporary password and unlocks the account. Text it to the rider."
+                      data-testid={`btn-reset-password-${u.id}`}
+                    >
+                      Reset password
+                    </Button>
+                    {tempPasswords[u.id] && (
+                      <div className="w-full rounded-md border border-green-300 bg-green-50 p-2 text-sm" data-testid={`text-temp-password-${u.id}`}>
+                        Temporary password: <code className="font-semibold select-all">{tempPasswords[u.id]}</code>
+                        <span className="block text-xs text-muted-foreground">Text this to {u.firstName || "the rider"}. Their old password no longer works; the lockout is cleared.</span>
+                      </div>
                     )}
                     <Button size="sm" variant={u.isSuspended ? "default" : "destructive"}
                       onClick={() => updateUser.mutate({ userId: u.id, updates: { isSuspended: !u.isSuspended } })}
