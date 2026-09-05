@@ -697,7 +697,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         password: z.string().min(1, "Password is required"),
         firstName: z.string().min(1, "First name is required").max(50, "First name too long"),
         lastName: z.string().min(1, "Last name is required").max(50, "Last name too long"),
-        phone: z.string().optional(),
+        // Required: the phone is how a driver reaches the rider at pickup,
+        // how SOS contacts are notified, and how a forgotten password is
+        // recovered by text. An account without one is unreachable.
+        phone: z.string().trim().min(1, "Phone number is required"),
         termsAccepted: z.boolean().refine(v => v === true, {
           message: "You must accept the Terms of Service to register",
         }),

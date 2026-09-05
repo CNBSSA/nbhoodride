@@ -191,15 +191,17 @@ export default function Signup() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="phone">Phone Number (Optional)</Label>
+              <Label htmlFor="phone">Phone Number</Label>
               <Input
                 id="phone"
                 type="tel"
                 placeholder="(202) 555-1234"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
+                required
                 data-testid="input-phone"
               />
+              <p className="text-xs text-muted-foreground">Your driver uses this to reach you at pickup, and it's how you recover your password by text.</p>
             </div>
 
             <div className="space-y-2">
