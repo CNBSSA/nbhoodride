@@ -178,7 +178,11 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
           context, matching the working pattern used elsewhere in this
           codebase (SharedScheduleSheet, JoinScheduleModal, etc). */}
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <Card className="relative z-10 w-full mx-4 max-h-[90vh] overflow-y-auto">
+      {/* Flex column: the body scrolls, the footer does not — so "Submit for
+          Review" is always on screen. Previously the whole card scrolled and
+          on a phone the button ended up a sliver under the bottom nav. dvh
+          (not vh) so the mobile browser chrome is accounted for. */}
+      <Card className="relative z-10 w-full mx-4 max-h-[calc(100dvh-1.5rem)] flex flex-col overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Driver Documents</h2>
           <Button
@@ -192,7 +196,7 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
           </Button>
         </div>
         
-        <CardContent className="p-4 space-y-6">
+        <CardContent className="p-4 space-y-6 flex-1 min-h-0 overflow-y-auto">
           {/* Driver's License */}
           <div className="space-y-3">
             <h3 className="font-semibold">Driver's License</h3>
@@ -277,11 +281,11 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
           </div>
         </CardContent>
 
-        <div className="p-4 border-t">
+        <div className="p-4 border-t bg-background shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <Button
             onClick={handleSubmit}
             disabled={submitDocumentsMutation.isPending}
-            className="w-full"
+            className="w-full h-12 text-base"
             data-testid="button-submit-documents"
           >
             {submitDocumentsMutation.isPending ? "Submitting..." : "Submit for Review"}
