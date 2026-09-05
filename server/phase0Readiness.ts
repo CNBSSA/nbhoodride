@@ -190,6 +190,17 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
       : "Twilio not configured — SOS still supports 911, calls, and your phone's SMS app",
   });
 
+  const verifyReady = twilioReady && envPresent("TWILIO_VERIFY_SERVICE_SID");
+  checks.push({
+    id: "0.5-password-reset-sms",
+    label: "Password reset by text (Twilio Verify)",
+    status: verifyReady ? "pass" : "warn",
+    owner: "track_b",
+    detail: verifyReady
+      ? "Riders can reset a forgotten password with a code texted to their phone"
+      : "Set TWILIO_VERIFY_SERVICE_SID (create a Verify Service in Twilio → Verify) — works before toll-free verification clears; until then only admin reset is available",
+  });
+
   checks.push({
     id: "0.5-sms-optout",
     label: "SMS opt-out webhook (TCPA)",

@@ -79,9 +79,10 @@ import {
   friendRideArrivedSms,
   friendRideAssignedSms,
   friendRideCompletedSms,
-  normalizePhone,
+  normalizePhone as normalizePhoneE164,
 } from "@shared/smsMessages";
 import { sendSmsBestEffort } from "./smsService";
+import { isVerifyConfigured, startPhoneVerification, checkPhoneVerification } from "./verifyService";
 import { checkAnnouncement, matchesAudience } from "@shared/announcementPolicy";
 import { validateVehicleTypeInput } from "@shared/vehicleTypes";
 import { computeDriverProTier, DRIVER_PRO_LABELS } from "@shared/driverProTier";
@@ -416,6 +417,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api/auth/signup', authLimiter);
   app.use('/api/auth/forgot-password', authLimiter);
   app.use('/api/auth/reset-password', authLimiter);
+  app.use('/api/auth/forgot-password-sms', authLimiter);
+  app.use('/api/auth/reset-password-sms', authLimiter);
   // Password-confirmation endpoint — same throttle as login so a hijacked
   // session can't brute-force the password through it.
   app.use('/api/auth/delete-account', authLimiter);
@@ -997,6 +1000,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: error.errors[0].message });
       }
       res.status(500).json({ message: "Password reset request failed" });
+    }
+  });
+
+  /**
+   * Password reset by text message. Email delivery is not something every
+   * deployment can rely on; a rider who forgets their password must still
+   * have a self-service way back in. Twilio Verify texts a one-time code to
+   * the phone number on the rider's profile.
+   *
+   * Responses never reveal whether an account or phone exists.
+   */
+  app.get('/api/auth/reset-options', (_req, res) => {
+    res.json({ sms: isVerifyConfigured() });
+  });
+
+  app.post('/api/auth/forgot-password-sms', async (req, res) => {
+    try {
+      const { email } = z.object({ email: z.string().email("Invalid email address") }).parse(req.body);
+      const generic = { message: "If that account has a phone number on file, we just texted it a code." };
+      if (!isVerifyConfigured()) {
+        return res.status(503).json({ message: "Reset by text is not available right now. Please contact support." });
+      }
+      const user = await storage.getUserByEmail(email);
+      const phone = normalizePhoneE164(user?.phone);
+      if (!user || user.deletedAt || !phone) return res.json(generic);
+      try {
+        await startPhoneVerification(phone);
+        console.log(`[AUDIT] password_reset_sms_sent userId=${user.id}`);
+      } catch (err) {
+        console.error("[verify] start failed:", err);
+        riderAlert("server_error", "POST /api/auth/forgot-password-sms", [["Route", "forgot-password-sms"], ["Error", String((err as any)?.message ?? err).slice(0, 200)]]);
+        return res.status(503).json({ message: "We couldn't send a code right now. Please try again in a minute or contact support." });
+      }
+      res.json(generic);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.errors[0].message });
+      console.error("forgot-password-sms error:", error);
+      res.status(500).json({ message: "Password reset request failed" });
+    }
+  });
+
+  app.post('/api/auth/reset-password-sms', async (req, res) => {
+    try {
+      const { email, code, newPassword } = z.object({
+        email: z.string().email("Invalid email address"),
+        code: z.string().regex(/^\d{4,10}$/, "Enter the code from the text message"),
+        newPassword: z.string().min(1, "New password is required"),
+      }).parse(req.body);
+      const { valid: passwordValid, feedback } = validatePasswordComplexity(newPassword);
+      if (!passwordValid) {
+        return res.status(400).json({ message: `Password must contain: ${feedback.join(", ")}.`, passwordRequirements: { missing: feedback } });
+      }
+      if (!isVerifyConfigured()) return res.status(503).json({ message: "Reset by text is not available right now." });
+      const user = await storage.getUserByEmail(email);
+      const phone = normalizePhoneE164(user?.phone);
+      const invalid = { message: "That code is not valid or has expired. Request a new one." };
+      if (!user || user.deletedAt || !phone) return res.status(400).json(invalid);
+      let approved = false;
+      try {
+        approved = await checkPhoneVerification(phone, code);
+      } catch (err) {
+        // Twilio returns 404 for a code that was never issued or already used.
+        approved = false;
+      }
+      if (!approved) return res.status(400).json(invalid);
+      const hash = await bcrypt.hash(newPassword, 12);
+      // Also clears any login lockout — the usual reason someone is here.
+      await storage.setTemporaryPassword(user.id, hash);
+      console.log(`[AUDIT] password_reset_sms userId=${user.id} email=${user.email}`);
+      res.json({ message: "Password reset successful" });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.errors[0].message });
+      console.error("reset-password-sms error:", error);
+      res.status(500).json({ message: "Password reset failed" });
     }
   });
 
@@ -9522,7 +9599,7 @@ Generate the FAQ list.`;
     }
 
     try {
-      const from = normalizePhone(params.From);
+      const from = normalizePhoneE164(params.From);
       const keyword = classifyKeyword(params.Body);
       if (from && keyword === 'stop') {
         await storage.recordSmsOptOut(from, 'stop_keyword');
