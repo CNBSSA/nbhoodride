@@ -55,5 +55,7 @@ export async function run({ base, db }) {
   const earlyFare = Number(c?.actual_fare);
   check("early-end fare is metered and at most the quote", earlyFare > 0 && earlyFare <= 23.21, `actualFare=${c?.actual_fare}`);
 
-  await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [[rideA, rideB, rideC]]).catch(() => {});
+  const ids = [rideA, rideB, rideC];
+  await db.query("DELETE FROM l4_readiness_events WHERE ride_id = ANY($1::varchar[])", [ids]).catch(() => {});
+  await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [ids]).catch(() => {});
 }
