@@ -20,6 +20,7 @@ import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { NotificationBell } from "@/components/NotificationBell";
 import { RecurringRebookBanner } from "@/components/RecurringRebookBanner";
 import { RideChat } from "@/components/RideChat";
+import { SheetPortal } from "@/components/SheetPortal";
 import type { RideMessagePayload } from "@shared/rideChat";
 import { parseRideMessageWsEvent } from "@shared/rideChat";
 import { MobilityIntentCard, type IntentResolution } from "@/components/MobilityIntentCard";
@@ -1434,9 +1435,14 @@ export default function RiderDashboard() {
 
       {/* Modals */}
       <ScheduleRideModal isOpen={isScheduleModalOpen} onClose={() => setIsScheduleModalOpen(false)} drivers={drivers} userLocation={userLocation} />
-      {/* Cancel confirmation — fee shown before the rider commits */}
+      {/* Cancel confirmation — fee shown before the rider commits.
+          Portaled to <body> and layered above the bottom sheet (z-55) and
+          the search panel (z-60): at z-50 inside the page the sheet was
+          drawn over the buttons, so riders saw the question but could not
+          answer it. */}
       {cancelConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" data-testid="cancel-confirm-overlay">
+        <SheetPortal>
+        <div className="fixed inset-0 z-[80] bg-black/50 flex items-center justify-center p-6" style={{ height: "100dvh" }} data-testid="cancel-confirm-overlay">
           <div className="bg-white rounded-2xl p-5 w-full max-w-sm shadow-xl">
             <h3 className="font-bold text-gray-900 mb-1">Cancel this ride?</h3>
             {cancelConfirm.fee > 0 ? (
@@ -1452,7 +1458,7 @@ export default function RiderDashboard() {
             <div className="flex gap-2 mt-2">
               <Button
                 variant="outline"
-                className="flex-1"
+                className="flex-1 h-12"
                 onClick={() => setCancelConfirm(null)}
                 data-testid="btn-cancel-dialog-keep"
               >
@@ -1460,7 +1466,7 @@ export default function RiderDashboard() {
               </Button>
               <Button
                 variant="destructive"
-                className="flex-1"
+                className="flex-1 h-12"
                 onClick={() => { cancelRide.mutate(cancelConfirm.rideId); setCancelConfirm(null); }}
                 data-testid="btn-cancel-dialog-confirm"
               >
@@ -1469,6 +1475,7 @@ export default function RiderDashboard() {
             </div>
           </div>
         </div>
+        </SheetPortal>
       )}
 
       <SOSModal isOpen={isSOSModalOpen} onClose={() => setIsSOSModalOpen(false)} />

@@ -11,6 +11,7 @@ import { useAnalytics } from "@/hooks/useAnalytics";
 import { RideProgressStepper } from "@/components/RideProgressStepper";
 import { RideChat } from "@/components/RideChat";
 import { RideMapView } from "@/components/RideMapView";
+import { SheetPortal } from "@/components/SheetPortal";
 import type { RideMessagePayload } from "@shared/rideChat";
 import { formatPassengerLabel } from "@shared/rideForFriend";
 
@@ -538,9 +539,12 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
         {getStatusDisplay()}
       </CardContent>
 
-      {/* Driver-cancel confirmation — free for the rider, a strike for the driver */}
+      {/* Driver-cancel confirmation — free for the rider, a strike for the driver.
+          Portaled out of the card so no ancestor can clip or re-anchor it, and
+          layered above every sheet so the buttons are always tappable. */}
       {showDriverCancelConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6" data-testid="driver-cancel-confirm-overlay">
+        <SheetPortal>
+        <div className="fixed inset-0 z-[80] bg-black/50 flex items-center justify-center p-6" style={{ height: "100dvh" }} data-testid="driver-cancel-confirm-overlay">
           <div className="bg-white dark:bg-gray-900 rounded-2xl p-5 w-full max-w-sm shadow-xl">
             <h3 className="font-bold mb-1">Cancel this ride?</h3>
             <p className="text-sm text-muted-foreground mb-3">
@@ -550,7 +554,7 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
             <div className="flex gap-2">
               <Button
                 variant="outline"
-                className="flex-1"
+                className="flex-1 h-12"
                 onClick={() => setShowDriverCancelConfirm(false)}
                 data-testid="btn-driver-cancel-keep"
               >
@@ -558,7 +562,7 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
               </Button>
               <Button
                 variant="destructive"
-                className="flex-1"
+                className="flex-1 h-12"
                 disabled={driverCancelMutation.isPending}
                 onClick={() => { setIsUpdating(true); driverCancelMutation.mutate(ride.id); }}
                 data-testid="btn-driver-cancel-confirm"
@@ -568,6 +572,7 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
             </div>
           </div>
         </div>
+        </SheetPortal>
       )}
     </Card>
   );
