@@ -6,6 +6,7 @@ import { setupVite, serveStatic, log } from "./vite";
 import { csrfMiddleware } from "./csrfProtection";
 import { resolveAppUrl } from "./appUrl";
 import { opsAlert, telegramOpsEnabled } from "./telegramOps";
+import { riderAlert } from "./riderAlerts";
 
 // Ensure crashes are always visible in Railway logs
 process.on('uncaughtException', (err) => {
@@ -28,7 +29,7 @@ function checkEnv() {
   const recommendedInProd: { name: string; why: string; ok?: () => boolean }[] = [
     { name: "ALLOWED_ORIGINS", why: "without it, CORS is fully disabled — browser clients on a different origin can't reach the API" },
     { name: "PUBLIC_APP_URL", why: "email/share links will fall back to req.host which can be wrong behind Railway's proxy", ok: () => resolveAppUrl() !== "" },
-    { name: "RESEND_API_KEY", why: "all transactional email (verification, approvals, receipts) will fail" },
+    { name: "RESEND_API_KEY", why: "all transactional email (approvals, receipts, announcements) will fail" },
     { name: "RESEND_FROM", why: "Resend will reject sends without a verified sender" },
   ];
 
@@ -126,12 +127,15 @@ app.use((req, res, next) => {
 (async () => {
   const server = await registerRoutes(app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
     res.status(status).json({ message });
     console.error("Unhandled error:", err.stack || err);
+    if (status >= 500 && req.path.startsWith("/api/")) {
+      riderAlert("server_error", `${req.method} ${req.path}`, [["Route", `${req.method} ${req.path}`], ["Error", String(message).slice(0, 200)]]);
+    }
   });
 
   if (app.get("env") === "development") {
