@@ -133,7 +133,10 @@ export default function Home() {
 
   return (
     <div className="h-[100dvh] bg-background max-w-[430px] mx-auto relative flex flex-col overflow-hidden">
-      {(user?.isAdmin || user?.isSuperAdmin) && (
+      {/* Floating shortcut for admins — hidden on the Profile tab, whose own
+          header carries an Admin button next to Log out (the floating pill
+          sat exactly on top of that logout button). */}
+      {(user?.isAdmin || user?.isSuperAdmin) && activeTab !== "profile" && (
         <button
           onClick={() => setLocation("/admin")}
           className="fixed top-2 right-2 z-50 flex items-center gap-1 px-3 py-1.5 bg-primary text-primary-foreground rounded-full text-xs font-medium shadow-lg hover:opacity-90 transition-opacity"
