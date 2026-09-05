@@ -78,6 +78,35 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
     };
   };
 
+  // Save each document to the driver profile the moment it finishes
+  // uploading. Previously nothing was recorded until "Submit for Review", so
+  // closing the sheet (or the app) discarded every upload and the driver had
+  // to do it all again — the single most-reported frustration in onboarding.
+  const persistMutation = useMutation({
+    mutationFn: async (docs: UploadedDocument[]) => {
+      const onFile = profileDocs?.vehiclePhotoUrls ?? [];
+      const slot = (i: number) => docs.find((d) => d.type === `vehicle-${i}`)?.url ?? onFile[i];
+      const vehiclePhotoUrls = [0, 1, 2, 3].map(slot).filter((u): u is string => Boolean(u));
+      const body: Record<string, unknown> = {};
+      const lic = docs.find((d) => d.type === "license")?.url; if (lic) body.licenseImageUrl = lic;
+      const ins = docs.find((d) => d.type === "insurance")?.url; if (ins) body.insuranceImageUrl = ins;
+      if (docs.some((d) => d.type.startsWith("vehicle-"))) body.vehiclePhotoUrls = vehiclePhotoUrls;
+      const response = await apiRequest("PUT", "/api/driver/profile", body);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/driver/profile/me"] });
+    },
+    onError: () => {
+      toast({ title: "Saved on this screen only", description: "We couldn't save that to your profile yet — press Submit for Review before leaving.", variant: "destructive" });
+    },
+  });
+
+  const LABELS: Record<string, string> = {
+    license: "Driver's license", insurance: "Insurance",
+    "vehicle-0": "Front photo", "vehicle-1": "Side photo", "vehicle-2": "Interior photo", "vehicle-3": "Back photo",
+  };
+
   const handleUploadComplete = (type: string) => (result: { successful: Array<{ uploadURL: string; name: string }> }) => {
     if (result.successful && result.successful[0]) {
       const file = result.successful[0];
@@ -86,15 +115,17 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
         url: file.uploadURL,
         name: file.name ?? type,
       };
-      
+
       setUploadedDocuments(prev => {
         const filtered = prev.filter(doc => doc.type !== type);
-        return [...filtered, newDoc];
+        const next = [...filtered, newDoc];
+        persistMutation.mutate(next);
+        return next;
       });
 
       toast({
-        title: "Upload Successful",
-        description: `${type} document uploaded successfully.`,
+        title: `${LABELS[type] ?? type} saved`,
+        description: "Saved to your profile — it stays even if you leave and come back.",
       });
     }
   };
@@ -109,10 +140,14 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
       (profileDocs?.vehiclePhotoUrls?.length ?? 0) > 0;
 
     if (!hasLicense || !hasInsurance || !hasVehicle) {
+      const missing = [
+        !hasLicense && "your driver's license",
+        !hasInsurance && "your insurance",
+        !hasVehicle && "at least one vehicle photo",
+      ].filter(Boolean) as string[];
       toast({
-        title: "Documents incomplete",
-        description:
-          "Please upload your license, insurance, and at least one vehicle photo before submitting.",
+        title: missing.length === 1 ? "One thing missing" : "Documents incomplete",
+        description: `Still needed: ${missing.join(", ")}. Everything else is saved.`,
         variant: "destructive",
       });
       return;
@@ -231,9 +266,11 @@ export default function DocumentUploadModal({ isOpen, onClose }: DocumentUploadM
                   >
                     <span data-testid={`button-upload-vehicle-${index}`}>Add Photo</span>
                   </ObjectUploader>
-                  {uploadedDocuments.find(d => d.type === `vehicle-${index}`) && (
-                    <p className="text-xs text-secondary mt-1">✓</p>
-                  )}
+                  {uploadedDocuments.find(d => d.type === `vehicle-${index}`) ? (
+                    <p className="text-xs text-secondary mt-1">✓ saved</p>
+                  ) : profileDocs?.vehiclePhotoUrls?.[index] ? (
+                    <p className="text-xs text-green-600 mt-1" data-testid={`vehicle-on-file-${index}`}>✓ on file</p>
+                  ) : null}
                 </div>
               ))}
             </div>
