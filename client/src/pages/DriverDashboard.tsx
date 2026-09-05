@@ -8,6 +8,7 @@ import { DRIVER_PRO_LABELS, type DriverProTier } from "@shared/driverProTier";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
+import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import { useToast } from "@/hooks/use-toast";
 import { useGeolocationWatcher } from "@/hooks/useGeolocation";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -41,6 +42,7 @@ export default function DriverDashboard() {
   const [incomingRideMessages, setIncomingRideMessages] = useState<Record<string, RideMessagePayload>>({});
   const [todayCounties, setTodayCounties] = useState<string[]>([]);
   const { user } = useAuth();
+  const { equityProgramEnabled } = useFeatureFlags();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { trackPageView, trackFeatureUsed } = useAnalytics();
@@ -583,7 +585,11 @@ export default function DriverDashboard() {
             {!isOnline && (
               <div className="mt-4 pt-3 border-t border-white/20 flex items-center gap-2 text-white/85">
                 <Sparkles className="w-4 h-4 shrink-0" />
-                <p className="text-xs">Every trip builds your ownership stake — you drive <span className="font-semibold">and</span> own a piece.</p>
+                <p className="text-xs">
+                  {equityProgramEnabled
+                    ? <>Every trip builds your ownership stake — you drive <span className="font-semibold">and</span> own a piece.</>
+                    : <>Fixed, transparent fares — no surge, no per-driver pricing.</>}
+                </p>
               </div>
             )}
           </CardContent>

@@ -129,7 +129,7 @@ export default function SafetyPrivacyModal({ isOpen, onClose }: SafetyPrivacyMod
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center max-w-[430px] mx-auto">
       <div className="absolute inset-0 bg-black/70" onClick={onClose} />
-      <Card className="relative z-10 w-full mx-4 max-h-[90vh] overflow-y-auto">
+      <Card className="relative z-10 w-full mx-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-lg font-semibold">Safety & Privacy</CardTitle>
           <Button

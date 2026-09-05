@@ -253,7 +253,7 @@ export default function Profile() {
             variant="ghost"
             size="sm"
             onClick={handleLogout}
-            className="text-destructive"
+            className="text-destructive h-10 w-10 p-0"
             data-testid="button-logout"
             aria-label="Log out"
           >

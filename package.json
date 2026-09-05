@@ -21,6 +21,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:journeys": "node scripts/e2e/run.mjs",
+    "test:layout": "node scripts/e2e/layout-audit.mjs",
     "db:push": "node scripts/migrate.mjs"
   },
   "dependencies": {
@@ -145,6 +146,7 @@
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.20",
     "esbuild": "^0.25.0",
+    "playwright": "^1.63.0",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.20.5",
