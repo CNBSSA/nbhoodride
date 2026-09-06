@@ -148,6 +148,11 @@ export default function RiderDashboard() {
   const [isLostFoundOpen, setIsLostFoundOpen] = useState(false);
   const [incomingRideMessage, setIncomingRideMessage] = useState<RideMessagePayload | null>(null);
   const [realtimeDrivers, setRealtimeDrivers] = useState<Record<string, { lat: number; lng: number }>>({});
+  // When each driver's position last arrived. A driver navigating in Google
+  // Maps stops reporting; the rider should see "paused", not a frozen dot.
+  const [driverSeenAt, setDriverSeenAt] = useState<Record<string, number>>({});
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => { const t = setInterval(() => setClock(Date.now()), 10000); return () => clearInterval(t); }, []);
   const [recentlyCompletedRide, setRecentlyCompletedRide] = useState<any>(null);
   const [quickRating, setQuickRating] = useState(0);
   const [quickRatingSubmitted, setQuickRatingSubmitted] = useState(false);
@@ -565,6 +570,14 @@ export default function RiderDashboard() {
     queryClient.invalidateQueries({ queryKey: ['/api/rides/nearby-drivers'] });
   }, []);
 
+  /** Milliseconds since the driver's position last arrived, or null if never. */
+  const driverLocationAge = (ride: any): number | null => {
+    const driverId = ride.driverId || ride.driver?.id;
+    const t = driverId ? driverSeenAt[driverId] : undefined;
+    return t ? clock - t : null;
+  };
+  const DRIVER_LOCATION_STALE_MS = 45_000;
+
   const getDriverETA = (ride: any): number | null => {
     const driverId = ride.driverId || ride.driver?.id;
     const driverLoc = driverId ? realtimeDrivers[driverId] : null;
@@ -592,6 +605,7 @@ export default function RiderDashboard() {
           ?? activeRidesRef.current[0];
         const driverId = lastMessage.driverId ?? activeRide?.driverId ?? 'active-driver';
         setRealtimeDrivers(prev => ({ ...prev, [driverId]: loc }));
+        setDriverSeenAt(prev => ({ ...prev, [driverId]: Date.now() }));
       }
     } else if (lastMessage.type === 'ride_message' || lastMessage.type === 'ride_quick_message') {
       const payload = parseRideMessageWsEvent(lastMessage as Record<string, unknown>);
@@ -819,9 +833,18 @@ export default function RiderDashboard() {
                 {activeRide.status === 'in_progress' && <><Route className="w-4 h-4 text-blue-600" /><span className="text-sm font-semibold text-blue-600">Ride in progress</span></>}
               </div>
               <div className="flex items-center gap-2">
-                {getDriverETA(activeRide) !== null && (
+                {getDriverETA(activeRide) !== null && (driverLocationAge(activeRide) ?? 0) <= DRIVER_LOCATION_STALE_MS && (
                   <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
                     ~{getDriverETA(activeRide)} min
+                  </span>
+                )}
+                {(driverLocationAge(activeRide) ?? 0) > DRIVER_LOCATION_STALE_MS && (
+                  <span
+                    className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-medium"
+                    title="Your driver's phone is probably showing navigation. Their position updates as soon as they return to PG Ride."
+                    data-testid="driver-location-paused"
+                  >
+                    Driver location paused · {Math.max(1, Math.round((driverLocationAge(activeRide) ?? 0) / 60000))}m
                   </span>
                 )}
                 <span className="text-sm font-bold text-gray-900">${parseFloat(activeRide.estimatedFare || '0').toFixed(2)}</span>

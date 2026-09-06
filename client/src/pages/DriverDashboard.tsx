@@ -332,6 +332,35 @@ export default function DriverDashboard() {
     locationRef.current = location;
   }, [location]);
 
+  // Coming back from Google Maps (or any other app): the browser has been
+  // sitting on a stale, throttled position. Take a fresh fix right away and
+  // push it over both channels so the rider's map catches up immediately
+  // instead of waiting for the next throttled tick.
+  const activeRidesRef = useRef<any[]>([]);
+  useEffect(() => { activeRidesRef.current = activeRides; }, [activeRides]);
+  useEffect(() => {
+    const resume = () => {
+      if (document.visibilityState !== 'visible' || !navigator.geolocation) return;
+      navigator.geolocation.getCurrentPosition((pos) => {
+        const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        lastLocationUpdateRef.current = Date.now();
+        if (isOnline && isConnected && user?.id) {
+          sendMessage({ type: 'location_update', userId: user.id, location: loc });
+        }
+        const ride = activeRidesRef.current.find((r: any) => r.status === 'in_progress');
+        if (ride?.id) apiRequest('POST', `/api/driver/rides/${ride.id}/track-location`, loc).catch(() => {});
+      }, () => {}, { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 });
+    };
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('pageshow', resume);
+    window.addEventListener('focus', resume);
+    return () => {
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('pageshow', resume);
+      window.removeEventListener('focus', resume);
+    };
+  }, [isOnline, isConnected, user?.id, sendMessage]);
+
   // Send location updates via WebSocket when location changes and driver is online
   // SECURITY/PERFORMANCE: Throttled to once every 5 seconds to prevent server flooding
   useEffect(() => {

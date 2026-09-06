@@ -16,6 +16,7 @@ import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { parseBookingErrorMessage } from "@shared/userFacingCopy";
 import { checkScheduleTime, MIN_SCHEDULE_LEAD_HOURS } from "@shared/schedulingPolicy";
+import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { useToast } from "@/hooks/use-toast";
 import { Calendar as CalendarIcon, Clock, Search, X, Users } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
@@ -194,6 +195,10 @@ export default function ScheduleRideModal({
   const [destCoords, setDestCoords] = useState<{lat: number, lng: number} | null>(null);
   const [estimatedDistance, setEstimatedDistance] = useState<number | null>(null);
   const [estimatedDuration, setEstimatedDuration] = useState<number | null>(null);
+  // "Add a stop": extra destinations on the way, quoted over the whole route.
+  const [stops, setStops] = useState<Array<{ address: string; lat: number; lng: number }>>([]);
+  const [addingStop, setAddingStop] = useState(false);
+  const [stopDraft, setStopDraft] = useState("");
 
   // Rider picks a destination from the autocomplete → resolve coords, compute
   // distance/duration, and kick off the fare estimate. No more single-shot
@@ -201,17 +206,25 @@ export default function ScheduleRideModal({
   const handleDestinationSelect = (s: AddressSuggestion) => {
     setDestinationAddress(s.label);
     setDestCoords({ lat: s.lat, lng: s.lng });
-    const R = 3959;
-    const dLat = (s.lat - userLocation.lat) * Math.PI / 180;
-    const dLng = (s.lng - userLocation.lng) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(s.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-    const straightLineDist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    const distance = Math.round(straightLineDist * 1.3 * 10) / 10;
-    const duration = Math.round((distance / 25) * 60);
+    const { miles: distance, minutes: duration } = estimateRoute([userLocation, ...stops, s]);
     setEstimatedDistance(distance);
     setEstimatedDuration(duration);
     calculateFareMutation.mutate({ distance, duration, driverId: selectedDriver || undefined });
   };
+
+  const requoteWithStops = (nextStops: Array<{ lat: number; lng: number }>) => {
+    setStops(nextStops as Array<{ address: string; lat: number; lng: number }>);
+    if (!destCoords) return;
+    const { miles: distance, minutes: duration } = estimateRoute([userLocation, ...nextStops, destCoords]);
+    setEstimatedDistance(distance);
+    setEstimatedDuration(duration);
+    calculateFareMutation.mutate({ distance, duration, driverId: selectedDriver || undefined });
+  };
+  const addStop = (s: AddressSuggestion) => {
+    setAddingStop(false); setStopDraft("");
+    requoteWithStops([...stops, { address: s.label, lat: s.lat, lng: s.lng }]);
+  };
+  const removeStop = (index: number) => requoteWithStops(stops.filter((_, i) => i !== index));
 
   useEffect(() => {
     if (selectedDriver && estimatedDistance && estimatedDuration) {
@@ -299,6 +312,7 @@ export default function ScheduleRideModal({
       estimatedFare: fareEstimate?.total || 0,
       distance: estimatedDistance,
       duration: estimatedDuration,
+      stops: stops.length > 0 ? stops : undefined,
       scheduledAt,
       paymentMethod: 'card',
       wantsSharedRide,
@@ -439,6 +453,43 @@ export default function ScheduleRideModal({
                 data-testid="input-destination"
               />
             </div>
+          </div>
+
+          {/* Stops on the way ("Add a stop") */}
+          <div className="space-y-2" data-testid="stops-block-schedule">
+            {stops.map((st, i) => (
+              <div key={i} className="flex items-center space-x-2 text-sm">
+                <div className="w-3 h-3 bg-amber-400 rounded-full flex-shrink-0" />
+                <span className="flex-1 truncate">Stop {i + 1}: {st.address}</span>
+                <button
+                  type="button"
+                  onClick={() => removeStop(i)}
+                  className="w-10 h-10 -mr-2 flex items-center justify-center rounded-full text-gray-500 text-xl leading-none active:bg-gray-100"
+                  aria-label="Remove stop"
+                  data-testid={`button-remove-stop-schedule-${i}`}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            {addingStop ? (
+              <div className="flex items-center space-x-2">
+                <div className="w-3 h-3 bg-amber-400 rounded-full flex-shrink-0" />
+                <AddressAutocomplete
+                  value={stopDraft}
+                  onChange={setStopDraft}
+                  onSelect={addStop}
+                  placeholder="Add a stop — start typing an address"
+                  className="flex-1"
+                  data-testid="input-stop-schedule"
+                />
+                <button type="button" onClick={() => { setAddingStop(false); setStopDraft(""); }} className="text-xs text-muted-foreground px-2 py-2">Cancel</button>
+              </div>
+            ) : stops.length < MAX_RIDE_STOPS ? (
+              <button type="button" onClick={() => setAddingStop(true)} className="text-sm text-primary font-semibold py-1" data-testid="button-add-stop-schedule">
+                + Add a stop
+              </button>
+            ) : null}
           </div>
 
           {/* Fare Estimate */}
