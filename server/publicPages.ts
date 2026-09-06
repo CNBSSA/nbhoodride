@@ -17,7 +17,7 @@
  * catch-all (which is mounted later, in serveStatic/setupVite).
  */
 
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import { BRAND } from "@shared/branding";
 import { SUPPORT_CONTACTS } from "@shared/supportContacts";
 import { featureFlags } from "./featureFlags";
@@ -184,6 +184,22 @@ function renderAboutPage(): string {
       </ul>
     </section>
 
+    <section id="refunds">
+      <h2>Refunds, cancellations &amp; disputes</h2>
+      <p><strong>What you are charged.</strong> The fare shown before you confirm, less any promotion. Your card is authorized when a driver accepts and is captured only when the ride is completed. If the ride is cancelled, the authorization is released.</p>
+      <p><strong>Cancelling a ride.</strong> Free while your request is still waiting for a driver, and for 3 minutes after a driver accepts. After that a small fee applies: $3.50 if you cancel 3 to 5 minutes after the driver accepted, $5.00 after 5 minutes, and $7.00 once the driver has arrived and is waiting. Scheduled rides cancel free more than 2 hours before departure. If the driver or ${esc(BRAND.appName)} cancels, you are never charged.</p>
+      <p><strong>Refunds and disputes.</strong> If a fare, route, safety or lost-item issue comes up, report it from Ride History → Report Issue in the app, or text or email support below. Our team reviews every report within 24 hours and refunds to the original payment card where warranted. You may also dispute a charge with your card issuer at any time.</p>
+    </section>
+
+    <section id="promotions">
+      <h2>Promotions</h2>
+      <ul>
+        <li><strong>New riders:</strong> 4 promotional rides at $5 off each, applied automatically at booking.</li>
+        <li><strong>Coworker rides:</strong> when 2 or 3 coworkers share one scheduled ride using a PG-code, every seat in that car is 30% off.</li>
+      </ul>
+      <p>One promotion per ride. Promotions have no cash value and may be changed or ended at any time. The price shown before you confirm already includes any promotion.</p>
+    </section>
+
     <section>
       <h2>Get started</h2>
       <p>
@@ -240,4 +256,20 @@ export function registerPublicPages(app: Express): void {
 
   app.get("/about", serveAbout);
   app.get("/business", serveAbout);
+
+  // The bare root, for a visitor with no session, is the business page —
+  // not the app's sign-in screen. Stripe's reviewer fetched
+  // www.peoplegoverned.com, met the login form, and recorded the site as
+  // "password protected"; search engines see the same thing. Everything
+  // that identifies itself as the app keeps the SPA: a logged-in session,
+  // the installed PWA (start_url carries ?source=pwa), QR install links
+  // (?qr=1), and any other query string.
+  const hasSession = (req: Request) => /(?:^|;\s*)connect\.sid=/.test(req.headers.cookie ?? "");
+  app.get("/", (req: Request, res: Response, next: NextFunction) => {
+    const accept = req.headers.accept ?? "";
+    const wantsHtml = !accept || accept.includes("text/html");
+    const bare = !req.originalUrl.includes("?");
+    if (wantsHtml && bare && !hasSession(req)) return serveAbout(req, res);
+    next();
+  });
 }
