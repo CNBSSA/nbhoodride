@@ -240,6 +240,10 @@ export const rides = pgTable("rides", {
   distance: decimal("distance", { precision: 8, scale: 2 }),
   duration: integer("duration"),
   tipAmount: decimal("tip_amount", { precision: 8, scale: 2 }).default("0.00"),
+  /** PG Ride's share of the fare, fixed at completion (see shared/payoutPolicy.ts). */
+  platformFee: decimal("platform_fee", { precision: 8, scale: 2 }),
+  /** What the driver is credited for this ride: 85% of the fare + 100% of the tip. */
+  driverEarnings: decimal("driver_earnings", { precision: 8, scale: 2 }),
   paymentStatus: paymentStatusEnum("payment_status").default("pending_payment"),
   stripePaymentIntentId: varchar("stripe_payment_intent_id"),
   virtualAmountAuthorized: decimal("virtual_amount_authorized", { precision: 8, scale: 2 }).default("0.00"),

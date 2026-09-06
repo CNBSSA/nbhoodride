@@ -157,6 +157,7 @@ import { opsAlert, formatOpsAlert } from "./telegramOps";
 import { riderAlert } from "./riderAlerts";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
+import { splitFare } from "@shared/payoutPolicy";
 
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
@@ -2995,7 +2996,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // most once even under concurrent retries — the guarantee no longer depends
       // on the coarse retry claim lock.
       if (ride.driverId && finalAmount > 0) {
-        await storage.creditDriverEarningsOnce(rideId, ride.driverId, finalAmount);
+        // 85% of the fare + 100% of the tip; PG Ride's 15% (and the card
+        // processing fee, which PG Ride absorbs) stays in the Stripe balance.
+        const driverCredit = splitFare(finalFare, tip).driverEarnings;
+        if (driverCredit > 0) await storage.creditDriverEarningsOnce(rideId, ride.driverId, driverCredit);
       }
 
       await storage.captureRidePayment(rideId, actualFare, tipAmount);

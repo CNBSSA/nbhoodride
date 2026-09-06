@@ -939,7 +939,7 @@ export default function DriverDashboard() {
               </div>
               <div>
                 <h3 className="font-semibold">Fares set by PG Ride</h3>
-                <p className="text-sm text-muted-foreground">One competitive, transparent rate for every trip — no per-driver pricing.</p>
+                <p className="text-sm text-muted-foreground">One transparent rate for every trip. You keep 85% of every fare and 100% of tips; PG Ride covers card-processing fees.</p>
               </div>
             </div>
           </CardContent>

@@ -128,6 +128,7 @@ import {
 } from "@shared/schema";
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { resolveCompletedFare, type FarePricing } from "@shared/farePolicy";
+import { splitFare } from "@shared/payoutPolicy";
 import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
 import { db } from "./db";
 import { isUniqueViolation } from "./pgErrors";
@@ -1729,8 +1730,14 @@ export class DatabaseStorage implements IStorage {
         )
       );
 
-    const fare = completedRides.reduce((sum, ride) => sum + parseFloat(ride.actualFare?.toString() || '0'), 0);
+    // The driver's share of each fare. Rides completed before the payout
+    // policy have no recorded split; the driver was credited the full fare.
     const tips = completedRides.reduce((sum, ride) => sum + parseFloat(ride.tipAmount?.toString() || '0'), 0);
+    const fare = completedRides.reduce((sum, ride) => {
+      const tip = parseFloat(ride.tipAmount?.toString() || '0');
+      const earnings = ride.driverEarnings != null ? parseFloat(ride.driverEarnings.toString()) - tip : parseFloat(ride.actualFare?.toString() || '0');
+      return sum + Math.max(0, earnings);
+    }, 0);
 
     return {
       fare,
@@ -2010,6 +2017,15 @@ export class DatabaseStorage implements IStorage {
     if (tipAmount !== undefined) {
       updateData.tipAmount = tipAmount.toString();
     }
+
+    // Fix the money split at completion so earnings, payouts and admin
+    // revenue all read the same numbers: 85% of the fare to the driver,
+    // 15% to PG Ride, 100% of the tip to the driver.
+    const fareForSplit = parseFloat(updateData.actualFare ?? ride.actualFare ?? ride.estimatedFare ?? "0");
+    const tipForSplit = tipAmount !== undefined ? tipAmount : parseFloat(ride.tipAmount ?? "0");
+    const split = splitFare(fareForSplit, tipForSplit);
+    updateData.platformFee = split.platformFee.toFixed(2);
+    updateData.driverEarnings = split.driverEarnings.toFixed(2);
 
     // Update ride status to completed
     const [updatedRide] = await db
@@ -3018,10 +3034,13 @@ export class DatabaseStorage implements IStorage {
       and(eq(rides.status, "completed"), gte(rides.completedAt, today))
     );
 
-    const todayRevenue = await db.select({ total: sum(rides.actualFare) }).from(rides).where(
+    // Admin "revenue" is PG Ride's share (platform_fee), not gross fares:
+    // 85% of every fare belongs to the driver. Pre-policy rides have no
+    // platform fee recorded and contribute 0, which is what PG Ride kept.
+    const todayRevenue = await db.select({ total: sum(rides.platformFee) }).from(rides).where(
       and(eq(rides.status, "completed"), gte(rides.completedAt, today))
     );
-    const monthRevenue = await db.select({ total: sum(rides.actualFare) }).from(rides).where(
+    const monthRevenue = await db.select({ total: sum(rides.platformFee) }).from(rides).where(
       and(eq(rides.status, "completed"), gte(rides.completedAt, monthStart))
     );
 
