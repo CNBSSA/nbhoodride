@@ -3813,8 +3813,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         bodyData.estimatedFare = bodyData.estimatedFare.toString();
       }
 
+      // Record the QUOTED route (road miles + minutes) on the ride. The fare
+      // is the quote, so the receipt and history must show the miles the
+      // quote was built from — not the GPS breadcrumbs, which read ~0 on the
+      // first real trip and made the receipt look like a time-only charge.
+      const clientDistance = Number(req.body.distance);
+      const clientDuration = Number(req.body.duration);
+      const quotedMiles = Number.isFinite(clientDistance) && clientDistance > 0 && clientDistance < 500
+        ? clientDistance
+        : validation.distanceMiles ?? 0; // already road miles (straight-line × 1.3)
+      const quotedMinutes = Number.isFinite(clientDuration) && clientDuration > 0 && clientDuration < 1440
+        ? Math.round(clientDuration)
+        : validation.durationMinutes ?? 0;
+
       const dataToValidate = {
         ...bodyData,
+        distance: quotedMiles > 0 ? quotedMiles.toFixed(2) : undefined,
+        duration: quotedMinutes > 0 ? quotedMinutes : undefined,
         riderId: userId,
         pickupCounty: validation.pickupCounty ?? undefined,
       };

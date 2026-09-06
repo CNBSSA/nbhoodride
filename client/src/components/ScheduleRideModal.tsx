@@ -297,6 +297,8 @@ export default function ScheduleRideModal({
       pickupInstructions,
       driverId: selectedDriver,
       estimatedFare: fareEstimate?.total || 0,
+      distance: estimatedDistance,
+      duration: estimatedDuration,
       scheduledAt,
       paymentMethod: 'card',
       wantsSharedRide,

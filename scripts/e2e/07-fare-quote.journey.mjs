@@ -28,6 +28,20 @@ export async function run({ base, db }) {
     await driver.req("POST", `/api/driver/rides/${rideId}/track-location`, { lat: PICKUP.lat - 0.003, lng: PICKUP.lng - 0.003 });
   };
 
+  section("Booking records the quoted route, and the receipt shows it");
+  const rider = new Session(base);
+  check("rider logs in", (await rider.login(FIXTURES.rider.email)).status === 200);
+  const booked = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 23.21, paymentMethod: "card", distance: 17.3, duration: 42 });
+  check("booking accepted", booked.status === 200, JSON.stringify(booked.json?.message ?? booked.status));
+  check("quoted miles and minutes stored on the ride", Number(booked.json?.distance) === 17.3 && booked.json?.duration === 42, `distance=${booked.json?.distance} duration=${booked.json?.duration}`);
+  const noFigures = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 23.21, paymentMethod: "card" });
+  check("server fills in route miles when the app sends none", Number(noFigures.json?.distance) > 5 && noFigures.json?.duration >= 5, `distance=${noFigures.json?.distance} duration=${noFigures.json?.duration}`);
+  await db.query("UPDATE rides SET driver_id=$1, status='completed', actual_fare='23.21', started_at=NOW() - interval '45 minutes', completed_at=NOW(), driver_traveled_distance='0.26', driver_traveled_time=45 WHERE id=$2", [FIXTURES.driver.id, booked.json.id]);
+  const receipt = await rider.req("GET", `/api/rides/${booked.json.id}/receipt`);
+  check("receipt shows the quoted 17.3 mi, not the 0.26 mi GPS track", receipt.status === 200 && receipt.json?.distanceMiles === 17.3 && receipt.json?.durationMinutes === 42, JSON.stringify({ d: receipt.json?.distanceMiles, t: receipt.json?.durationMinutes }));
+  check("receipt has a real distance charge", (receipt.json?.distanceCharge ?? 0) > 10, `distanceCharge=${receipt.json?.distanceCharge}`);
+  await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [[booked.json.id, noFigures.json?.id].filter(Boolean)]).catch(() => {});
+
   section("Normal completion charges the quoted fare");
   const rideA = await seed();
   check("driver starts the ride", (await driver.req("POST", `/api/driver/rides/${rideA}/start`)).status === 200);
