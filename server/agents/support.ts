@@ -7,6 +7,7 @@ import {
 import { deliverUserNotification } from "../notificationService";
 import type { IStorage } from "../storage";
 import { createAgentProposal } from "./agentProposals";
+import { featureFlags } from "../featureFlags";
 
 export interface SupportResolutionResult {
   disputeId: string;
@@ -57,6 +58,29 @@ export async function tryAutoResolveDispute(
       refundAmount: 0,
       message: "This report was already handled.",
       needsAdminReview: false,
+    };
+  }
+
+  // Guard 0 — no wallet, no auto-credit. In card-only mode the "PG Card
+  // credit" this agent issues has nowhere to land and the rider would be
+  // told about money they cannot spend, while the report is marked resolved
+  // and the founder never sees it. Every report goes to a human instead.
+  if (!featureFlags.walletEnabled) {
+    const proposal = await createAgentProposal(storage, {
+      agent: "support",
+      action: "manual_dispute_review",
+      userId: dispute.reporterId,
+      rideId: dispute.rideId,
+      reasoning: "Wallet is disabled — credits cannot be issued automatically; a card refund or reply needs a human",
+      payload: { disputeId, issueType: dispute.issueType },
+    });
+    return {
+      disputeId,
+      autoResolved: false,
+      refundAmount: 0,
+      message: "Your report was sent to our team.",
+      needsAdminReview: true,
+      proposalId: proposal.id,
     };
   }
 

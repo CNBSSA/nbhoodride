@@ -78,22 +78,22 @@ export default function ReportModal({ isOpen, onClose, rideId }: ReportModalProp
 
   const issueTypes = [
     {
-      id: "fare-dispute",
+      id: "fare_dispute",
       title: "Fare Dispute",
       description: "Driver charged incorrect amount"
     },
     {
-      id: "route-issue",
+      id: "wrong_route",
       title: "Route Issue",
       description: "Driver took longer/wrong route"
     },
     {
-      id: "safety-concern",
+      id: "safety",
       title: "Safety Concern",
       description: "Driver behavior or vehicle condition"
     },
     {
-      id: "lost-item",
+      id: "lost_item_minor",
       title: "Lost Item",
       description: "Left something in the vehicle"
     },
