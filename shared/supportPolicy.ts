@@ -24,6 +24,26 @@ export const ALL_ISSUE_TYPES = [
 ] as const;
 export type IssueType = (typeof ALL_ISSUE_TYPES)[number];
 
+/**
+ * Ids the Report Issue sheet used to send (hyphenated, worded differently)
+ * mapped to the canonical issue types. The server accepts both so a phone
+ * that has not self-updated can still file a report.
+ */
+export const LEGACY_ISSUE_TYPE_ALIASES: Record<string, IssueType> = {
+  "fare-dispute": "fare_dispute",
+  "route-issue": "wrong_route",
+  "safety-concern": "safety",
+  "lost-item": "lost_item_minor",
+};
+
+/** Canonical issue type for whatever the client sent; unknown values pass through and fail validation. */
+export function normalizeDisputeIssueType(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const key = raw.trim().toLowerCase();
+  if ((ALL_ISSUE_TYPES as readonly string[]).includes(key)) return key;
+  return LEGACY_ISSUE_TYPE_ALIASES[key] ?? LEGACY_ISSUE_TYPE_ALIASES[key.replace(/_/g, "-")] ?? key;
+}
+
 export const AUTO_RESOLVABLE_ISSUE_TYPES = new Set([
   "fare_dispute",
   "short_wait",

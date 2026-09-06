@@ -20,4 +20,33 @@ export async function run({ base, db, server }) {
   check("pending-approval login alerted once (second attempt folded)", n("login_pending_approval", u.id) === 1);
   check("no-card booking alerted", n("booking_refused", `${u.id}:no_card`) === 1);
   check("push failure alerted", n("push_subscribe_failed", u.id) >= 1);
+
+  // Report Issue: every report from the app was rejected because the sheet
+  // sent "fare-dispute" and the schema only knew "fare_dispute". Both must
+  // work, a report must alert, and in card-only mode it must reach a human
+  // rather than be auto-"resolved" with a credit to a wallet that is off.
+  section("Report Issue reaches the founder");
+  const loc = (p) => JSON.stringify(p);
+  const { rows: [done] } = await db.query(
+    `INSERT INTO rides (rider_id, driver_id, status, pickup_location, destination_location, estimated_fare, actual_fare, payment_method, completed_at)
+     VALUES ($1, $2, 'completed', $3, $4, 23.21, 23.21, 'cash', NOW()) RETURNING id`,
+    [u.id, FIXTURES.driver.id, loc(PICKUP), loc(DEST)]);
+  try {
+    const legacy = await r.req("POST", "/api/disputes", { rideId: done.id, issueType: "fare-dispute", description: "The quote was $23.21 and I am only paid $7.12" });
+    check("report with the app's old issue id is accepted", legacy.status === 200, JSON.stringify(legacy.json?.message ?? legacy.status));
+    check("issue type stored in canonical form", legacy.json?.issueType === "fare_dispute", `issueType=${legacy.json?.issueType}`);
+    const canonical = await r.req("POST", "/api/disputes", { rideId: done.id, issueType: "wrong_route", description: "Went the long way round" });
+    check("report with the canonical issue id is accepted", canonical.status === 200, JSON.stringify(canonical.json?.message ?? canonical.status));
+    const bad = await r.req("POST", "/api/disputes", { rideId: done.id, issueType: "nonsense", description: "x" });
+    check("unknown issue type is refused with a reason, not a blank failure", bad.status === 400 && /issueType/i.test(bad.json?.message ?? ""), JSON.stringify(bad.json));
+    await new Promise((res) => setTimeout(res, 400));
+    const log2 = serverLog(server);
+    check("each report alerts the founder", (log2.match(/\[rider-alert\] dispute_filed key=/g) || []).length >= 2);
+    const mine = await r.req("GET", `/api/disputes/ride/${done.id}`);
+    check("reports wait for a human (no phantom wallet credit in card-only mode)", mine.status === 200 && (mine.json ?? []).length === 2 && mine.json.every((d) => d.status === "pending"), JSON.stringify((mine.json ?? []).map((d) => d.status)));
+  } finally {
+    await db.query("DELETE FROM agent_action_proposals WHERE ride_id=$1", [done.id]).catch(() => {});
+    await db.query("DELETE FROM disputes WHERE ride_id=$1", [done.id]).catch(() => {});
+    await db.query("DELETE FROM rides WHERE id=$1", [done.id]).catch(() => {});
+  }
 }
