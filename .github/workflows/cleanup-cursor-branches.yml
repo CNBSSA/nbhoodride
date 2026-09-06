@@ -1,0 +1,65 @@
+# One-off, manually triggered: delete the leftover Cursor-agent branches that
+# the founder reviewed on 2026-09-06 (all merged into develop or superseded by
+# later work). Runs with the repository's own Actions token — no personal
+# token anywhere. Refuses to touch anything not on this explicit list.
+name: Cleanup Cursor branches
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DELETE to proceed'
+        required: true
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.event.inputs.confirm == 'DELETE'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Delete reviewed Cursor branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+          branches="
+          cursor/app-store-readiness-a737 cursor/autonomous-directive-rule-a737
+          cursor/autonomous-ops-phase-e-a737 cursor/autonomous-phase-a-a737
+          cursor/autonomous-phase-a9-a11-a737 cursor/cnbssa-claude-pointer-a737
+          cursor/consolidate-master-plan-a737 cursor/daily-audit-20260705-a737
+          cursor/daily-audit-20260828-a737 cursor/daily-audit-develop-workflow-a737
+          cursor/daily-audit-prompt-a737 cursor/docs-execution-tracks-a737
+          cursor/docs-phase-e-pr-link-a737 cursor/driver-signup-admin-email-a737
+          cursor/fix-tsc-check-errors-a737 cursor/free-text-chat-deploy-a737
+          cursor/lost-found-audit-docs-a737 cursor/lost-found-workflow-a737
+          cursor/mobility-purge-doc-sync-a737 cursor/pg-ride-daily-audit-0a44
+          cursor/pg-ride-daily-audit-1fc0 cursor/pg-ride-daily-audit-488d
+          cursor/pg-ride-daily-audit-75a0 cursor/pg-ride-daily-audit-7f3a
+          cursor/pg-ride-daily-audit-bd3d cursor/pg-ride-daily-audit-c116
+          cursor/pg-ride-daily-audit-c6a9 cursor/pg-ride-daily-audit-d2da
+          cursor/predictive-co-op-phase-d-a737 cursor/qr-install-gate-a737
+          cursor/recurring-rides-three-modes-a737 cursor/referral-credits-pro-tiers-a737
+          cursor/research-phase-f-a737 cursor/rff-audit-docs-a737
+          cursor/ride-for-friend-credentials-a737 cursor/ride-receipts-polish-a737
+          cursor/shift-worker-group-schedule-a737 cursor/stripe-branding-pwa-a737
+          cursor/support-contacts-email-grace-card-mask-27be cursor/sync-develop-with-main-a737
+          cursor/trust-graph-phase-c-a737 cursor/user-friendliness-assessment-a737
+          cursor/user-friendliness-implementation-a737 cursor/vehicle-routes-referral-a737
+          "
+          ok=0; missing=0; failed=0
+          for b in $branches; do
+            case "$b" in cursor/*) ;; *) echo "refusing non-cursor branch: $b"; failed=$((failed+1)); continue;; esac
+            if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${b}" >/dev/null 2>&1; then
+              echo "deleted  $b"; ok=$((ok+1))
+            elif ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${b}" >/dev/null 2>&1; then
+              echo "already gone  $b"; missing=$((missing+1))
+            else
+              echo "FAILED  $b"; failed=$((failed+1))
+            fi
+          done
+          echo "deleted=$ok already_gone=$missing failed=$failed"
+          [ "$failed" -eq 0 ]
