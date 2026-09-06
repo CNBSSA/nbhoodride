@@ -27,6 +27,48 @@ const LEGAL_ENTITY = "Thrynova Insights LLC";
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+const PAGE_CSS = `<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: #1a1d21;
+    background: #ffffff;
+  }
+  a { color: #1c7ed6; }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 0 20px; }
+  header.hero {
+    background: linear-gradient(135deg, #1971c2 0%, #0c5bb5 100%);
+    color: #fff;
+    padding: 56px 0 48px;
+  }
+  header.hero .wrap { padding-top: 0; }
+  .brand { font-size: 15px; letter-spacing: .12em; text-transform: uppercase; opacity: .9; margin: 0 0 10px; }
+  h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 12px; }
+  .tagline { font-size: 1.15rem; opacity: .95; margin: 0; max-width: 44ch; }
+  h2 { font-size: 1.35rem; margin: 40px 0 10px; }
+  section { padding: 8px 0; }
+  ul { padding-left: 1.2em; }
+  li { margin: 6px 0; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-top: 12px; }
+  .card { border: 1px solid #e6e8eb; border-radius: 12px; padding: 18px; }
+  .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
+  .card p { margin: 0; color: #495057; font-size: .95rem; }
+  .cta { display: inline-block; margin-top: 8px; margin-right: 10px; background: #1971c2; color: #fff; text-decoration: none; padding: 12px 22px; border-radius: 10px; font-weight: 600; }
+  .cta.secondary { background: transparent; color: #1971c2; border: 1px solid #1971c2; }
+  footer { border-top: 1px solid #e6e8eb; margin-top: 48px; padding: 28px 0 48px; color: #6b7178; font-size: .9rem; }
+  footer a { color: #6b7178; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #101418; color: #e6e8eb; }
+    .card { border-color: #2b3138; }
+    .card p { color: #aeb4bb; }
+    footer { border-color: #2b3138; color: #99a0a8; }
+    footer a { color: #99a0a8; }
+  }
+</style>`;
+
 function renderAboutPage(): string {
   const year = 2026; // Date.* is unavailable in some sandboxes; a static year is fine for a footer.
   // Lean mode: describe a plain per-ride card-charge rideshare — no stored-value
@@ -83,47 +125,7 @@ function renderAboutPage(): string {
 <meta property="og:title" content="${ogTitle}" />
 <meta property="og:description" content="Verified neighborhood drivers, transparent fares, no surge pricing. Pickups in Maryland; drop-offs across the DMV." />
 <meta property="og:type" content="website" />
-<style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    line-height: 1.6;
-    color: #1a1d21;
-    background: #ffffff;
-  }
-  a { color: #1c7ed6; }
-  .wrap { max-width: 820px; margin: 0 auto; padding: 0 20px; }
-  header.hero {
-    background: linear-gradient(135deg, #1971c2 0%, #0c5bb5 100%);
-    color: #fff;
-    padding: 56px 0 48px;
-  }
-  header.hero .wrap { padding-top: 0; }
-  .brand { font-size: 15px; letter-spacing: .12em; text-transform: uppercase; opacity: .9; margin: 0 0 10px; }
-  h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 12px; }
-  .tagline { font-size: 1.15rem; opacity: .95; margin: 0; max-width: 44ch; }
-  h2 { font-size: 1.35rem; margin: 40px 0 10px; }
-  section { padding: 8px 0; }
-  ul { padding-left: 1.2em; }
-  li { margin: 6px 0; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-top: 12px; }
-  .card { border: 1px solid #e6e8eb; border-radius: 12px; padding: 18px; }
-  .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
-  .card p { margin: 0; color: #495057; font-size: .95rem; }
-  .cta { display: inline-block; margin-top: 8px; margin-right: 10px; background: #1971c2; color: #fff; text-decoration: none; padding: 12px 22px; border-radius: 10px; font-weight: 600; }
-  .cta.secondary { background: transparent; color: #1971c2; border: 1px solid #1971c2; }
-  footer { border-top: 1px solid #e6e8eb; margin-top: 48px; padding: 28px 0 48px; color: #6b7178; font-size: .9rem; }
-  footer a { color: #6b7178; }
-  @media (prefers-color-scheme: dark) {
-    body { background: #101418; color: #e6e8eb; }
-    .card { border-color: #2b3138; }
-    .card p { color: #aeb4bb; }
-    footer { border-color: #2b3138; color: #99a0a8; }
-    footer a { color: #99a0a8; }
-  }
-</style>
+${PAGE_CSS}
 </head>
 <body>
   <header class="hero">
@@ -205,6 +207,7 @@ function renderAboutPage(): string {
       <p>
         <a class="cta" href="/signup">Sign up</a>
         <a class="cta secondary" href="/login">Log in</a>
+        ${marketplace ? '<a class="cta secondary" href="/drive">Drive with us</a>' : ""}
       </p>
     </section>
 
@@ -231,9 +234,156 @@ function renderAboutPage(): string {
       </p>
       <p>
         <a href="/terms">Terms of Service</a> ·
-        <a href="/privacy">Privacy Policy</a>
+        <a href="/privacy">Privacy Policy</a>${marketplace ? ' ·\n        <a href="/drive">Drive with ' + esc(BRAND.appName) + '</a>' : ""}
       </p>
       <p>&copy; ${year} ${wallet ? esc(BRAND.companyName) : esc(LEGAL_ENTITY)}. All rights reserved.</p>
+    </div>
+  </footer>
+</body>
+</html>`;
+}
+
+
+/**
+ * Driver recruiting page — leads with the split. The pitch to a driver who
+ * is tired of a 40–50% take: 85% of every fare, 100% of every tip, PG Ride
+ * absorbs card-processing fees, quotes are fixed so a driver knows what a
+ * ride pays before accepting, and standing weekly rides give a predictable
+ * week. Static, no sign-in, crawlable; the same lean/full fork as /about
+ * (equity language only when the program is enabled).
+ */
+function renderDrivePage(): string {
+  const year = 2026;
+  const equity = featureFlags.equityProgramEnabled && featureFlags.walletEnabled;
+  const exampleFare = 23.21;
+  const exampleTip = 5;
+  const platformShare = 0.15;
+  const fee = Math.round(exampleFare * platformShare * 100) / 100;
+  const driverFare = Math.round((exampleFare - fee) * 100) / 100;
+  const driverTotal = Math.round((driverFare + exampleTip) * 100) / 100;
+  const money = (n: number) => `$${n.toFixed(2)}`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Drive with ${esc(BRAND.appName)} — keep 85% of every fare</title>
+<meta name="description" content="Drive with ${esc(BRAND.appName)} in Prince George's County, Maryland. Keep 85% of every fare and 100% of every tip. Fixed quotes, no surge games, standing weekly rides you can count on." />
+<meta name="robots" content="index,follow" />
+<link rel="canonical" href="https://${esc(BRAND.companyDomain)}/drive" />
+<meta property="og:title" content="Drive with ${esc(BRAND.appName)} — keep 85% of every fare" />
+<meta property="og:description" content="85% of every fare, 100% of every tip, PG Ride pays the card fees. Prince George's County, Maryland." />
+<meta property="og:type" content="website" />
+${PAGE_CSS}
+<style>
+  .big { font-size: 3.2rem; line-height: 1; font-weight: 800; margin: 0 0 6px; letter-spacing: -.02em; }
+  .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 16px; }
+  .split .card { text-align: center; background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.25); color: #fff; }
+  .split .card strong { display: block; font-size: 1.6rem; }
+  .split .card p { color: rgba(255,255,255,.9); }
+  table.example { border-collapse: collapse; width: 100%; max-width: 480px; margin-top: 8px; font-size: .98rem; }
+  table.example td { padding: 8px 6px; border-bottom: 1px solid #e6e8eb; }
+  table.example td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  table.example tr.total td { font-weight: 700; border-bottom: 0; }
+  .note { color: #6b7178; font-size: .9rem; }
+  @media (prefers-color-scheme: dark) {
+    table.example td { border-color: #2b3138; }
+    .note { color: #99a0a8; }
+  }
+</style>
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <p class="brand">Drive with ${esc(BRAND.appName)} · Prince George's County, Maryland</p>
+      <p class="big">Keep 85%<br />of every fare.</p>
+      <p class="tagline">And 100% of every tip. ${esc(BRAND.appName)} pays the card-processing fees. Fixed quotes, so you know what a ride pays before you accept it.</p>
+      <div class="split">
+        <div class="card"><strong>85%</strong><p>of every fare is yours</p></div>
+        <div class="card"><strong>100%</strong><p>of every tip is yours</p></div>
+        <div class="card"><strong>$0</strong><p>card fees taken from you</p></div>
+      </div>
+      <p style="margin-top:22px"><a class="cta" style="background:#fff;color:#0c5bb5" href="/signup">Start driving</a></p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>What a ride pays</h2>
+      <p>One example, with real numbers. A ${money(exampleFare)} ride where the rider adds a ${money(exampleTip)} tip:</p>
+      <table class="example">
+        <tr><td>Fare the rider was quoted and paid</td><td>${money(exampleFare)}</td></tr>
+        <tr><td>${esc(BRAND.appName)}'s 15%</td><td>&minus;${money(fee)}</td></tr>
+        <tr><td>Your 85% of the fare</td><td>${money(driverFare)}</td></tr>
+        <tr><td>Tip, all of it</td><td>${money(exampleTip)}</td></tr>
+        <tr class="total"><td>You earn</td><td>${money(driverTotal)}</td></tr>
+      </table>
+      <p class="note">Card-processing fees come out of ${esc(BRAND.appName)}'s 15%, never out of your 85%. The fare a rider is quoted is the fare charged — no surge, and no re-pricing after the trip.</p>
+    </section>
+
+    <section>
+      <h2>Why drivers switch</h2>
+      <div class="cards">
+        <div class="card"><h3>A bigger share</h3><p>Big-app drivers routinely keep half of what riders pay. Here, you keep 85 cents of every fare dollar and every cent of every tip.</p></div>
+        <div class="card"><h3>Know the pay before you accept</h3><p>Every request shows the quoted fare. What you see is what the ride pays.</p></div>
+        <div class="card"><h3>Standing rides</h3><p>Riders on a weekly plan ride the same route at the same time every weekday. Claim one and you know your week.</p></div>
+        <div class="card"><h3>Scheduled rides board</h3><p>Rides are posted ahead of time. Pick the ones that fit your day instead of chasing pings.</p></div>
+        <div class="card"><h3>Your neighbors</h3><p>Rides start in Maryland and stay in the DMV. You'll see the same riders again, and they'll ask for you.</p></div>
+        ${equity ? `<div class="card"><h3>Own a piece of it</h3><p>${esc(BRAND.appName)} is people-governed. Active drivers build a stake in the company over time.</p></div>` : ""}
+      </div>
+    </section>
+
+    <section id="requirements">
+      <h2>What you need</h2>
+      <ul>
+        <li>A valid driver's license and a clean driving record.</li>
+        <li>A 4-door vehicle, model year 1990 or newer, in good condition, with current registration and insurance.</li>
+        <li>Identity verification and a background check, completed before your first ride.</li>
+        <li>A smartphone. ${esc(BRAND.appName)} runs in your browser or as an installed app — nothing to download from a store.</li>
+      </ul>
+    </section>
+
+    <section id="how-it-works">
+      <h2>How it works</h2>
+      <div class="cards">
+        <div class="card"><h3>1. Sign up</h3><p>Create your account, then open Profile and add your license, insurance and vehicle photos.</p></div>
+        <div class="card"><h3>2. Get approved</h3><p>We review your documents and background check. You'll hear from a person, not a bot.</p></div>
+        <div class="card"><h3>3. Drive</h3><p>Go online for ride-now requests, or claim scheduled and standing rides from the board ahead of time.</p></div>
+        <div class="card"><h3>4. Get paid</h3><p>Your earnings show up per ride in the app. Request a payout from your Earnings tab whenever you like; ${esc(BRAND.appName)} pays you directly.</p></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Get started</h2>
+      <p>
+        <a class="cta" href="/signup">Sign up to drive</a>
+        <a class="cta secondary" href="/login">Log in</a>
+        <a class="cta secondary" href="/about">About ${esc(BRAND.appName)}</a>
+      </p>
+      <p class="note">Already have a rider account? Log in, open Profile, and tap "Become a driver."</p>
+    </section>
+
+    <section id="contact">
+      <h2>Contact us</h2>
+      <p>Questions before you apply? Talk to us:</p>
+      <ul>
+        <li><strong>Phone / text:</strong> <a href="tel:${esc(SUPPORT_CONTACTS.phoneTel)}">${esc(SUPPORT_CONTACTS.phoneDisplay)}</a>
+          (<a href="${esc(SUPPORT_CONTACTS.phoneSms)}">text us</a>)</li>
+        <li><strong>Email:</strong> <a href="mailto:${esc(SUPPORT_CONTACTS.email)}">${esc(SUPPORT_CONTACTS.email)}</a></li>
+        <li><strong>Operated by:</strong> ${esc(LEGAL_ENTITY)}, Prince George's County, Maryland, USA</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>${esc(BRAND.foundedNote)}</p>
+      <p>
+        <a href="/about">About</a> ·
+        <a href="/terms">Terms of Service</a> ·
+        <a href="/privacy">Privacy Policy</a>
+      </p>
+      <p>&copy; ${year} ${esc(LEGAL_ENTITY)}. All rights reserved.</p>
     </div>
   </footer>
 </body>
@@ -256,6 +406,17 @@ export function registerPublicPages(app: Express): void {
 
   app.get("/about", serveAbout);
   app.get("/business", serveAbout);
+
+  // Driver recruiting — the page the promo cards and "Drive with us" link to.
+  const serveDrive = (_req: Request, res: Response) => {
+    res
+      .status(200)
+      .type("html")
+      .set("Cache-Control", "public, max-age=300, must-revalidate")
+      .send(renderDrivePage());
+  };
+  app.get("/drive", serveDrive);
+  app.get("/drivers", serveDrive);
 
   // The bare root, for a visitor with no session, is the business page —
   // not the app's sign-in screen. Stripe's reviewer fetched

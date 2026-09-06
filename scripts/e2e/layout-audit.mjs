@@ -127,6 +127,14 @@ try {
   check("Schedule: stop added to the route", await page.locator('[data-testid="button-remove-stop-schedule-0"]').isVisible());
   await assertPrimary(page, "Schedule sheet with a stop", "button-confirm-booking");
   await assertPrimary(page, "Schedule: remove-stop control", "button-remove-stop-schedule-0");
+  // Standing weekly plan: switching it on swaps the calendar for day chips
+  // and a price line; Confirm must stay pinned and every chip must be a
+  // real tap target.
+  await page.tap('[data-testid="toggle-weekly-plan"]');
+  await page.waitForSelector('[data-testid="plan-days"]', { timeout: 10000 });
+  check("Schedule: weekly plan shows a per-ride price", await page.locator('[data-testid="text-plan-price"]').isVisible());
+  await assertPrimary(page, "Schedule: weekly plan on", "button-confirm-booking");
+  await assertPrimary(page, "Weekly plan: day chip", "plan-day-1");
   await page.tap('[data-testid="button-close-schedule"]');
   await page.waitForSelector('[data-testid="button-book-ride"]', { timeout: 10000 });
   // Book-now is destination-first: type, pick a suggestion, then the driver

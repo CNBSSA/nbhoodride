@@ -276,6 +276,8 @@ export const rides = pgTable("rides", {
   pickupStops: jsonb("pickup_stops").$type<Array<{lat: number, lng: number, address: string}>>(),
   /** Extra destinations on the way, in order, between pickup and destination ("Add a stop"). */
   stops: jsonb("stops").$type<Array<{lat: number, lng: number, address: string}>>(),
+  /** Set when this ride was booked automatically by a standing weekly plan (shared/weeklyPlan.ts). */
+  planId: varchar("plan_id"),
   originalFare: decimal("original_fare", { precision: 8, scale: 2 }),
   groupDiscountAmount: decimal("group_discount_amount", { precision: 8, scale: 2 }).default("0.00"),
   promoDiscountApplied: decimal("promo_discount_applied", { precision: 8, scale: 2 }).default("0.00"),
@@ -1080,6 +1082,43 @@ export const recurringRideSchedules = pgTable("recurring_ride_schedules", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+
+/**
+ * Standing weekly ride plans (shared/weeklyPlan.ts) — "same route, same
+ * time, Mon–Fri". Each occurrence is booked ahead as an ordinary scheduled
+ * ride (rides.plan_id points back here) at the per-ride fare locked when the
+ * plan was created. Nothing is prepaid; every ride settles on its own.
+ */
+export const weeklyRidePlans = pgTable("weekly_ride_plans", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  riderId: varchar("rider_id").notNull().references(() => users.id),
+  label: varchar("label").notNull().default("Weekly ride"),
+  pickup: jsonb("pickup").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  destination: jsonb("destination").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  stops: jsonb("stops").$type<Array<{ lat: number; lng: number; address: string }>>(),
+  pickupInstructions: text("pickup_instructions"),
+  /** Days of the week the ride runs, 0 = Sunday … 6 = Saturday. */
+  days: jsonb("days").$type<number[]>().notNull(),
+  departureHour: integer("departure_hour").notNull(),
+  departureMinute: integer("departure_minute").notNull().default(0),
+  timezone: varchar("timezone").notNull().default("America/New_York"),
+  /** One-off quote for the same trip, before the plan rate. */
+  fullFare: decimal("full_fare", { precision: 8, scale: 2 }).notNull(),
+  /** What each plan ride is booked at — locked for the life of the plan. */
+  perRideFare: decimal("per_ride_fare", { precision: 8, scale: 2 }).notNull(),
+  quotedMiles: decimal("quoted_miles", { precision: 8, scale: 2 }),
+  quotedMinutes: integer("quoted_minutes"),
+  pickupCounty: varchar("pickup_county"),
+  /** Rider asked for a particular driver; each booked ride is offered to them first. */
+  preferredDriverId: varchar("preferred_driver_id").references(() => users.id),
+  isActive: boolean("is_active").notNull().default(true),
+  pausedAt: timestamp("paused_at"),
+  /** Latest departure the sweep has booked, so the rolling window is cheap to top up. */
+  bookedThrough: timestamp("booked_through"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 /**
  * Circuits (docs/CIRCUITS_LAUNCH_PLAN.md) — named recurring shared runs that
  * form the published weekly timetable: "Sunday Church Circuit, 9:00am,
@@ -1575,6 +1614,8 @@ export type DemandForecast = typeof demandForecasts.$inferSelect;
 export type CommunityBonusPool = typeof communityBonusPool.$inferSelect;
 export type BonusAllocation = typeof bonusAllocations.$inferSelect;
 export type RecurringRideSchedule = typeof recurringRideSchedules.$inferSelect;
+export type WeeklyRidePlan = typeof weeklyRidePlans.$inferSelect;
+export type InsertWeeklyRidePlan = typeof weeklyRidePlans.$inferInsert;
 export type AgentActionProposal = typeof agentActionProposals.$inferSelect;
 export type ComplianceRecord = typeof complianceRecords.$inferSelect;
 export type SmsBookingSession = typeof smsBookingSessions.$inferSelect;

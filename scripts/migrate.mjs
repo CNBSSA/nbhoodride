@@ -198,6 +198,7 @@ CREATE TABLE IF NOT EXISTS rides (
   ride_type VARCHAR DEFAULT 'solo',
   pickup_stops JSONB,
   stops JSONB,
+  plan_id VARCHAR,
   original_fare DECIMAL(8,2),
   group_discount_amount DECIMAL(8,2) DEFAULT 0.00,
   promo_discount_applied DECIMAL(8,2) DEFAULT 0.00,
@@ -1128,6 +1129,37 @@ ALTER TABLE rides ADD COLUMN IF NOT EXISTS requested_vehicle_type VARCHAR;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS stops JSONB;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS platform_fee DECIMAL(8,2);
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS driver_earnings DECIMAL(8,2);
+
+-- Standing weekly ride plans (shared/weeklyPlan.ts): each occurrence is an
+-- ordinary scheduled ride pointing back via rides.plan_id.
+CREATE TABLE IF NOT EXISTS weekly_ride_plans (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  rider_id VARCHAR NOT NULL REFERENCES users(id),
+  label VARCHAR NOT NULL DEFAULT 'Weekly ride',
+  pickup JSONB NOT NULL,
+  destination JSONB NOT NULL,
+  stops JSONB,
+  pickup_instructions TEXT,
+  days JSONB NOT NULL,
+  departure_hour INTEGER NOT NULL,
+  departure_minute INTEGER NOT NULL DEFAULT 0,
+  timezone VARCHAR NOT NULL DEFAULT 'America/New_York',
+  full_fare DECIMAL(8,2) NOT NULL,
+  per_ride_fare DECIMAL(8,2) NOT NULL,
+  quoted_miles DECIMAL(8,2),
+  quoted_minutes INTEGER,
+  pickup_county VARCHAR,
+  preferred_driver_id VARCHAR REFERENCES users(id),
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  paused_at TIMESTAMP,
+  booked_through TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_weekly_ride_plans_rider ON weekly_ride_plans (rider_id) WHERE is_active;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS plan_id VARCHAR;
+-- One booked ride per plan per departure: the rolling sweep can never double-book.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rides_plan_departure ON rides (plan_id, scheduled_at) WHERE plan_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS community_routes (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

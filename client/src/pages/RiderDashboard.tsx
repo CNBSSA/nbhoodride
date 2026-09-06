@@ -44,8 +44,9 @@ import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import {
   MapPin, Navigation, Star, Clock, X, Shield, Car,
-  Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign, CalendarClock, UserCheck, Users, AlertTriangle, Bus
+  Loader2, CheckCircle, Route, ThumbsUp, Search, Calendar, DollarSign, CalendarClock, UserCheck, Users, AlertTriangle, Bus, Repeat
 } from "lucide-react";
+import { describePlanDays, describePlanTime } from "@shared/weeklyPlan";
 import { format } from "date-fns";
 
 interface Driver {
@@ -252,6 +253,32 @@ export default function RiderDashboard() {
   const { data: scheduledRides = [] } = useQuery<any[]>({
     queryKey: ['/api/rides/scheduled'],
     refetchInterval: 30000,
+  });
+
+  // Standing weekly ride plans (shared/weeklyPlan.ts) — shown above Upcoming
+  // with a one-tap pause.
+  const { data: weeklyPlans = [] } = useQuery<any[]>({
+    queryKey: ['/api/rider/weekly-plans'],
+    refetchInterval: 60000,
+  });
+  const pausePlanMutation = useMutation({
+    mutationFn: async (planId: string) => {
+      const r = await apiRequest('POST', `/api/rider/weekly-plans/${planId}/pause`);
+      return r.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/rider/weekly-plans'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
+      toast({
+        title: "Weekly ride paused",
+        description: data?.kept > 0
+          ? `${data.cancelled} unclaimed ride(s) withdrawn. ${data.kept} ride(s) a driver already confirmed stay on your list — cancel those individually if you don't need them.`
+          : `${data?.cancelled ?? 0} booked ride(s) withdrawn. Start a new plan any time from Schedule.`,
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Could not pause", description: err.message.replace(/^\d+:\s*/, ""), variant: "destructive" });
+    },
   });
 
   const { data: sharedGroup } = useQuery<any>({
@@ -1190,6 +1217,41 @@ export default function RiderDashboard() {
               </>
             )}
 
+            {/* Standing weekly ride plans */}
+            {weeklyPlans.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                  <Repeat className="w-3.5 h-3.5" /> My Weekly Ride
+                </p>
+                {weeklyPlans.map((plan: any) => (
+                  <div
+                    key={plan.id}
+                    className="flex items-start justify-between gap-2 rounded-xl p-3 border bg-violet-50 border-violet-100"
+                    data-testid={`weekly-plan-${plan.id}`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-gray-800">
+                        {describePlanDays(plan.days ?? [])} at {describePlanTime(plan.departureHour, plan.departureMinute ?? 0)}
+                      </p>
+                      <p className="text-xs text-gray-600 truncate">→ {plan.destination?.address || 'Destination'}</p>
+                      <p className="text-xs text-violet-700 mt-1">
+                        ${Number(plan.perRideFare).toFixed(2)} per ride · {plan.upcoming?.length ?? 0} booked this week
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => pausePlanMutation.mutate(plan.id)}
+                      disabled={pausePlanMutation.isPending}
+                      className="shrink-0 h-10 px-3 rounded-full text-xs font-semibold text-violet-700 bg-white border border-violet-200 active:bg-violet-100"
+                      data-testid={`button-pause-plan-${plan.id}`}
+                    >
+                      Pause
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Upcoming scheduled rides */}
             {scheduledRides.length > 0 && (
               <div className="mt-4 space-y-2">
@@ -1234,6 +1296,7 @@ export default function RiderDashboard() {
                         </div>
                         <p className="text-xs text-gray-600 truncate">
                           → {ride.destinationLocation?.address || 'Destination'}
+                          {ride.planId && <span className="ml-1 text-violet-700 font-semibold">· weekly ride</span>}
                         </p>
                         <div className="mt-1.5 flex items-center gap-1">
                           {urgency === 'no_driver' ? (

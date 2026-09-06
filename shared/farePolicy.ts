@@ -64,3 +64,21 @@ export function resolveCompletedFare(input: ResolveFareInput): { fare: number; b
   if (quoted !== undefined) return { fare: quoted, basis: "quoted" };
   return undefined;
 }
+
+/** The new-rider welcome credit: $5 off each of the first promo rides. */
+export const WELCOME_CREDIT = 5;
+
+/**
+ * Welcome credit to take off a ride at accept time. One promotion per ride:
+ * a standing weekly-plan ride is already booked at the plan rate, so the
+ * credit is kept for a one-off trip instead.
+ */
+export function welcomeCreditFor(
+  rawFare: number,
+  promoRidesRemaining: number | null | undefined,
+  opts: { planRide?: boolean } = {},
+): number {
+  if (opts.planRide) return 0;
+  if ((promoRidesRemaining ?? 0) <= 0) return 0;
+  return round2(Math.min(WELCOME_CREDIT, Math.max(0, num(rawFare))));
+}
