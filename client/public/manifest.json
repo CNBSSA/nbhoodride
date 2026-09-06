@@ -2,7 +2,7 @@
   "name": "PG Ride — Rideshare in Prince George's County, MD",
   "short_name": "PG Ride",
   "description": "On-demand rideshare in Prince George's County, Maryland. Background-checked local drivers, transparent fares, no surge pricing. Pay by card.",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
