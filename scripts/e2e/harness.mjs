@@ -85,6 +85,21 @@ export async function startServer(env = {}) {
   child.kill();
   throw new Error(`server did not become healthy; see ${logPath}`);
 }
+/**
+ * Delete rides and every row that references them (audit logs, disputes,
+ * readiness events, chat…) so journeys can clean up after themselves on a
+ * database that has seen earlier runs.
+ */
+export async function deleteRides(db, ids) {
+  ids = (ids || []).filter(Boolean);
+  if (ids.length === 0) return;
+  for (const [table, col] of [["disputes", "ride_id"], ["emergency_incidents", "ride_id"], ["agent_audit_log", "ride_id"], ["ride_surface_cache", "ride_id"], ["bonus_allocations", "ride_id"], ["agent_action_proposals", "ride_id"], ["l4_readiness_events", "ride_id"], ["lost_found_reports", "ride_id"], ["ride_messages", "ride_id"]]) {
+    await db.query(`DELETE FROM ${table} WHERE ${col} = ANY($1::varchar[])`, [ids]).catch(() => {});
+  }
+  await db.query("UPDATE guardian_links SET active_ride_id=NULL WHERE active_ride_id = ANY($1::varchar[])", [ids]).catch(() => {});
+  await db.query("UPDATE sms_booking_sessions SET active_ride_id=NULL WHERE active_ride_id = ANY($1::varchar[])", [ids]).catch(() => {});
+  await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [ids]);
+}
 export function stopServer(server) { try { server.child.kill(); } catch {} }
 export function serverLog(server) { try { return readFileSync(server.logPath, "utf8"); } catch { return ""; } }
 

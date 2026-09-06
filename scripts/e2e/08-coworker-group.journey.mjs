@@ -1,4 +1,4 @@
-import { Session, check, section, FIXTURES, PICKUP, DEST, PASSWORD } from "./harness.mjs";
+import { Session, check, section, deleteRides, FIXTURES, PICKUP, DEST, PASSWORD } from "./harness.mjs";
 import bcrypt from "bcrypt";
 
 /**
@@ -94,7 +94,10 @@ export async function run({ base, db }) {
     const mine = (up.json ?? []).find((r) => r.groupId === cleanup.groupId);
     check("joiner now sees the driver on their upcoming ride", !!mine?.driverId && mine.driverId === FIXTURES.driver.id, `driverId=${mine?.driverId}`);
   } finally {
-    if (cleanup.groupId) await db.query("DELETE FROM rides WHERE group_id=$1", [cleanup.groupId]).catch(() => {});
+    if (cleanup.groupId) {
+      const { rows } = await db.query("SELECT id FROM rides WHERE group_id=$1", [cleanup.groupId]).catch(() => ({ rows: [] }));
+      await deleteRides(db, rows.map((r) => r.id)).catch(() => {});
+    }
     if (cleanup.groupId) await db.query("DELETE FROM ride_groups WHERE id=$1", [cleanup.groupId]).catch(() => {});
     await db.query("DELETE FROM users WHERE id = ANY($1::varchar[])", [extras.map((e) => e.id)]).catch(() => {});
   }
