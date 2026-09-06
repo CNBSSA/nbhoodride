@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS rides (
   group_id VARCHAR,
   ride_type VARCHAR DEFAULT 'solo',
   pickup_stops JSONB,
+  stops JSONB,
   original_fare DECIMAL(8,2),
   group_discount_amount DECIMAL(8,2) DEFAULT 0.00,
   promo_discount_applied DECIMAL(8,2) DEFAULT 0.00,
@@ -1114,6 +1115,7 @@ END $$;
 -- ── Backlog: Vehicle types, community routes, referral UI ─────────────────────
 ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS vehicle_type VARCHAR DEFAULT 'standard';
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS requested_vehicle_type VARCHAR;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS stops JSONB;
 
 CREATE TABLE IF NOT EXISTS community_routes (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

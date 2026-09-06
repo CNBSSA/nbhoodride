@@ -270,6 +270,8 @@ export const rides = pgTable("rides", {
   /** Rider preference: standard, xl, suv, wheelchair */
   requestedVehicleType: varchar("requested_vehicle_type"),
   pickupStops: jsonb("pickup_stops").$type<Array<{lat: number, lng: number, address: string}>>(),
+  /** Extra destinations on the way, in order, between pickup and destination ("Add a stop"). */
+  stops: jsonb("stops").$type<Array<{lat: number, lng: number, address: string}>>(),
   originalFare: decimal("original_fare", { precision: 8, scale: 2 }),
   groupDiscountAmount: decimal("group_discount_amount", { precision: 8, scale: 2 }).default("0.00"),
   promoDiscountApplied: decimal("promo_discount_applied", { precision: 8, scale: 2 }).default("0.00"),

@@ -21,6 +21,7 @@ import { NotificationBell } from "@/components/NotificationBell";
 import { RecurringRebookBanner } from "@/components/RecurringRebookBanner";
 import { RideChat } from "@/components/RideChat";
 import { SheetPortal } from "@/components/SheetPortal";
+import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import type { RideMessagePayload } from "@shared/rideChat";
 import { parseRideMessageWsEvent } from "@shared/rideChat";
 import { MobilityIntentCard, type IntentResolution } from "@/components/MobilityIntentCard";
@@ -107,6 +108,11 @@ export default function RiderDashboard() {
   const [panel, setPanel] = useState<BookingPanel>("idle");
   const [destinationAddress, setDestinationAddress] = useState("");
   const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
+  // "Add a stop": extra destinations on the way, in order. The quote covers
+  // pickup → stops → destination, so the fare re-estimates when they change.
+  const [stops, setStops] = useState<Array<{ address: string; lat: number; lng: number }>>([]);
+  const [stopQuery, setStopQuery] = useState("");
+  const [addingStop, setAddingStop] = useState(false);
   const [selectedDriverId, setSelectedDriverId] = useState<string>("");
   const [fareEstimate, setFareEstimate] = useState<any>(null);
   const [estimatedDistance, setEstimatedDistance] = useState<number | null>(null);
@@ -293,15 +299,30 @@ export default function RiderDashboard() {
     // specific one — a rider can still browse and choose a favorite instead.
     setSelectedDriverId(ANY_DRIVER_ID);
     setFareEstimate(null);
-    const dLat = (s.lat - userLocation.lat) * Math.PI / 180;
-    const dLng = (s.lng - userLocation.lng) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(s.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-    const dist = Math.round(3959 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3 * 10) / 10;
-    const dur = Math.round((dist / 25) * 60);
-    setEstimatedDistance(dist);
-    setEstimatedDuration(dur);
+    const { miles, minutes } = estimateRoute([userLocation, ...stops, s]);
+    setEstimatedDistance(miles);
+    setEstimatedDuration(minutes);
     setPanel("drivers");
+  }, [userLocation.lat, userLocation.lng, stops]);
+
+  const recomputeRoute = useCallback((nextStops: Array<{ lat: number; lng: number }>, dest: { lat: number; lng: number } | null) => {
+    if (!dest) return;
+    const { miles, minutes } = estimateRoute([userLocation, ...nextStops, dest]);
+    setFareEstimate(null);
+    setEstimatedDistance(miles);
+    setEstimatedDuration(minutes);
   }, [userLocation.lat, userLocation.lng]);
+  const { suggestions: stopSuggestions } = useGeocodeSuggest(stopQuery, { enabled: addingStop });
+  const addStop = (s: AddressSuggestion) => {
+    const next = [...stops, { address: s.label, lat: s.lat, lng: s.lng }];
+    setStops(next); setStopQuery(""); setAddingStop(false);
+    recomputeRoute(next, destCoords);
+  };
+  const removeStop = (index: number) => {
+    const next = stops.filter((_, i) => i !== index);
+    setStops(next);
+    recomputeRoute(next, destCoords);
+  };
 
   // ── Calculate fare when driver is selected ──
   useEffect(() => {
@@ -431,6 +452,7 @@ export default function RiderDashboard() {
     setFareEstimate(null);
     setEstimatedDistance(null);
     setEstimatedDuration(null);
+    setStops([]); setStopQuery(""); setAddingStop(false);
     setPickupInstructions("");
     setRideForFriend(false);
     setPassengerName("");
@@ -507,6 +529,7 @@ export default function RiderDashboard() {
       // The route the quote was priced on — shown on the receipt and in history.
       distance: estimatedDistance,
       duration: estimatedDuration,
+      stops: stops.length > 0 ? stops : undefined,
       paymentMethod: 'card',
       bookedForFriend: rideForFriend,
       passengerName: rideForFriend ? passengerName.trim() : undefined,
@@ -808,6 +831,13 @@ export default function RiderDashboard() {
               <div className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0" />
               <span className="truncate">{activeRide.destinationLocation?.address || 'En route...'}</span>
             </div>
+            {Array.isArray(activeRide.stops) && activeRide.stops.length > 0 && (
+              <div className="mt-1 pl-4 text-xs text-gray-500" data-testid="active-ride-stops">
+                {activeRide.stops.map((st: any, i: number) => (
+                  <div key={i} className="truncate">Stop {i + 1}: {st.address}</div>
+                ))}
+              </div>
+            )}
             {/* Car identification — so the rider boards the RIGHT vehicle.
                 Shown once a driver is assigned; uses driver/vehicle data the
                 active-ride endpoint already returns (no server change). */}
@@ -1250,6 +1280,43 @@ export default function RiderDashboard() {
             <div className="flex items-center gap-2 px-4 py-2 bg-green-50 flex-shrink-0">
               <div className="w-2.5 h-2.5 bg-green-500 rounded-full flex-shrink-0" />
               <p className="text-xs text-gray-600 truncate">{userLocation.address}</p>
+            </div>
+
+            {/* Stops on the way ("Add a stop") */}
+            <div className="px-4 py-2 border-b border-gray-100 flex-shrink-0" data-testid="stops-block">
+              {stops.map((st, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs text-gray-700 py-1">
+                  <div className="w-2.5 h-2.5 rounded-full bg-amber-400 flex-shrink-0" />
+                  <span className="truncate flex-1">Stop {i + 1}: {st.address}</span>
+                  <button onClick={() => removeStop(i)} className="w-10 h-10 -mr-2 flex items-center justify-center rounded-full text-gray-500 text-xl leading-none active:bg-gray-100" aria-label="Remove stop" data-testid={`button-remove-stop-${i}`}>×</button>
+                </div>
+              ))}
+              {addingStop ? (
+                <div className="mt-1">
+                  <Input
+                    autoFocus
+                    placeholder="Add a stop — start typing an address"
+                    value={stopQuery}
+                    onChange={(e) => setStopQuery(e.target.value)}
+                    className="h-9 text-xs rounded-xl border-gray-200"
+                    data-testid="input-stop"
+                  />
+                  {stopSuggestions.length > 0 && (
+                    <div className="mt-1 rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                      {stopSuggestions.map((s, i) => (
+                        <button key={i} onClick={() => addStop(s)} className="w-full text-left text-xs px-3 py-2 active:bg-gray-50 border-b last:border-b-0 border-gray-100" data-testid={`stop-suggestion-${i}`}>
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <button onClick={() => { setAddingStop(false); setStopQuery(""); }} className="text-xs text-gray-500 mt-1 py-1">Cancel</button>
+                </div>
+              ) : stops.length < MAX_RIDE_STOPS ? (
+                <button onClick={() => setAddingStop(true)} className="text-xs text-blue-600 font-semibold py-1" data-testid="button-add-stop">
+                  + Add a stop
+                </button>
+              ) : null}
             </div>
 
             {/* Scrollable content */}
