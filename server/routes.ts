@@ -74,6 +74,9 @@ import { recordCertificateProvenance, recordAllActiveCertificateHashes } from ".
 import { allocateGreenBonusForRide, getEvEligibleDrivers, GREEN_BONUS_PER_RIDE } from "./agents/greenBonus";
 import { validateFriendRideInput } from "@shared/rideForFriend";
 import { checkScheduleTime, MIN_SCHEDULE_LEAD_HOURS, MAX_SCHEDULE_DAYS_AHEAD } from "@shared/schedulingPolicy";
+import { normalizePlanDays, planFare, validatePlanSchedule, describePlanDays, describePlanTime, PLAN_TIMEZONE } from "@shared/weeklyPlan";
+import { welcomeCreditFor } from "@shared/farePolicy";
+import { materializeWeeklyPlan, materializeAllWeeklyPlans } from "./weeklyPlans";
 import {
   classifyKeyword,
   friendRideArrivedSms,
@@ -1930,9 +1933,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const rawFare = parseFloat(ride.estimatedFare || "0");
 
-    // Apply $5 promo discount if rider has promo rides remaining
-    const promoRemaining = rider?.promoRidesRemaining ?? 0;
-    const promoDiscount = promoRemaining > 0 ? Math.min(5, rawFare) : 0;
+    // Welcome credit (shared/farePolicy.ts): $5 off while promo rides remain;
+    // never on a weekly-plan ride, which already carries the plan rate.
+    const promoDiscount = welcomeCreditFor(rawFare, rider?.promoRidesRemaining, { planRide: !!ride.planId });
     const chargeAmount = Math.max(0, rawFare - promoDiscount);
 
     let virtualDeducted = 0;
@@ -4582,7 +4585,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/rides/active', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const activeRides = await storage.getActiveRides(userId);
+      const activeRides = await storage.getLiveRides(userId);
       const ridesWithDetails = await Promise.all(activeRides.map(async (ride) => {
         let driver = null;
         let rider = null;
@@ -8961,6 +8964,157 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
     }
   });
 
+
+  // ── Standing weekly ride plans ─────────────────────────────────────────
+  // "Same route, same time, Mon–Fri." The plan books each day's ride ahead
+  // as an ordinary scheduled ride at a locked per-ride fare; every ride
+  // settles on its own at completion. Nothing is prepaid.
+  app.get('/api/rider/weekly-plans', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const plans = await storage.getWeeklyRidePlans(userId);
+      const out = await Promise.all(plans.map(async (p) => ({ ...p, upcoming: await storage.getUpcomingPlanRides(p.id) })));
+      res.json(out);
+    } catch (error) {
+      console.error("weekly plans list error:", error);
+      res.status(500).json({ message: "Failed to fetch weekly plans" });
+    }
+  });
+
+  app.post('/api/rider/weekly-plans', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const rider = await storage.getUser(userId);
+      if (riderNeedsCardOnFile(rider)) {
+        return res.status(400).json({ message: NEEDS_CARD_MESSAGE });
+      }
+      const pickup = req.body.pickup ?? req.body.pickupLocation;
+      const destination = req.body.destination ?? req.body.destinationLocation;
+      if (!pickup?.address || !destination?.address) {
+        return res.status(400).json({ message: "Pickup and destination are required." });
+      }
+      const schedule = {
+        days: normalizePlanDays(req.body.days),
+        departureHour: Number(req.body.departureHour),
+        departureMinute: Number(req.body.departureMinute ?? 0),
+        timezone: typeof req.body.timezone === "string" && req.body.timezone ? req.body.timezone : PLAN_TIMEZONE,
+      };
+      const scheduleCheck = validatePlanSchedule(schedule);
+      if (!scheduleCheck.valid) return res.status(400).json({ message: scheduleCheck.error });
+      try { new Intl.DateTimeFormat("en-US", { timeZone: schedule.timezone }); } catch { schedule.timezone = PLAN_TIMEZONE; }
+
+      // Same stop rules as a one-off booking.
+      const rawStops = Array.isArray(req.body.stops) ? req.body.stops : [];
+      if (rawStops.length > MAX_RIDE_STOPS) {
+        return res.status(400).json({ message: `You can add up to ${MAX_RIDE_STOPS} stops to a ride.` });
+      }
+      const stops = rawStops.map((st: any) => ({ lat: Number(st?.lat), lng: Number(st?.lng), address: String(st?.address ?? "").trim().slice(0, 200) }));
+      if (stops.some((st: { lat: number; lng: number; address: string }) =>
+        !Number.isFinite(st.lat) || !Number.isFinite(st.lng) || Math.abs(st.lat) > 90 || Math.abs(st.lng) > 180 || !st.address)) {
+        return res.status(400).json({ message: "Each stop needs a full address. Pick one from the suggestions." });
+      }
+
+      // Service area, distance limit, county — the same funnel every ride uses.
+      const validation = await validateRideRequest(userId, pickup, destination);
+      if (!validation.valid) {
+        riderAlert("booking_refused", `${userId}:plan:${validation.error?.slice(0, 40)}`, [["Rider", `${rider?.firstName ?? ""} ${rider?.lastName ?? ""}`.trim() || userId], ["Phone", rider?.phone], ["From", pickup.address], ["To", destination.address], ["Reason", validation.error]]);
+        return res.status(400).json({ message: validation.error });
+      }
+
+      // Lock the quote: the same arithmetic as /api/rides/calculate-fare.
+      const routeEstimate = stops.length > 0 ? estimateRoute([pickup, ...stops, destination]) : null;
+      const clientDistance = Number(req.body.distance);
+      const clientDuration = Number(req.body.duration);
+      const quotedMiles = Number.isFinite(clientDistance) && clientDistance > 0 && clientDistance < 500
+        ? clientDistance
+        : routeEstimate?.miles ?? validation.distanceMiles ?? 0;
+      const quotedMinutes = Number.isFinite(clientDuration) && clientDuration > 0 && clientDuration < 1440
+        ? Math.round(clientDuration)
+        : routeEstimate?.minutes ?? validation.durationMinutes ?? 0;
+      const rates = await storage.getPlatformRates();
+      const quote = estimateFare(quotedMiles, quotedMinutes, { rates });
+      const { perRide, savings } = planFare(quote.total);
+
+      const preferredDriverId = typeof req.body.driverId === "string" && req.body.driverId ? req.body.driverId : undefined;
+      const label = typeof req.body.label === "string" && req.body.label.trim() ? req.body.label.trim().slice(0, 60) : "Weekly ride";
+
+      const plan = await storage.createWeeklyRidePlan({
+        riderId: userId,
+        label,
+        pickup,
+        destination,
+        stops: stops.length > 0 ? stops : undefined,
+        pickupInstructions: typeof req.body.pickupInstructions === "string" ? req.body.pickupInstructions.slice(0, 500) : undefined,
+        days: schedule.days,
+        departureHour: schedule.departureHour,
+        departureMinute: schedule.departureMinute,
+        timezone: schedule.timezone,
+        fullFare: quote.total.toFixed(2),
+        perRideFare: perRide.toFixed(2),
+        quotedMiles: quotedMiles > 0 ? quotedMiles.toFixed(2) : undefined,
+        quotedMinutes: quotedMinutes > 0 ? quotedMinutes : undefined,
+        pickupCounty: validation.pickupCounty ?? undefined,
+        preferredDriverId,
+      });
+
+      const booked = await materializeWeeklyPlan(storage, plan);
+      const upcoming = await storage.getUpcomingPlanRides(plan.id);
+
+      // Let drivers covering the county know a standing ride just appeared
+      // on the board (one message, for the first departure).
+      const first = upcoming[0];
+      if (first) {
+        const payload = JSON.stringify({
+          type: 'new_scheduled_ride',
+          rideId: first.id,
+          riderId: userId,
+          riderName: rider ? `${rider.firstName} ${rider.lastName?.[0] || ''}.` : 'Rider',
+          pickupAddress: pickup.address,
+          destinationAddress: destination.address,
+          estimatedFare: perRide.toFixed(2),
+          scheduledAt: first.scheduledAt,
+          pickupCounty: validation.pickupCounty || '',
+          standingRide: true,
+        });
+        activeConnections.forEach((ws, driverId) => {
+          if (preferredDriverId && driverId !== preferredDriverId) return;
+          const counties = driverCountyCache.get(driverId) ?? [];
+          if ((preferredDriverId || driverCoversCounty(counties, validation.pickupCounty ?? null)) && ws.readyState === WebSocket.OPEN) ws.send(payload);
+        });
+      }
+
+      opsAlert(formatOpsAlert("🔁 Weekly ride plan started", [
+        ["Rider", `${rider?.firstName ?? ""} ${rider?.lastName ?? ""}`.trim() || userId],
+        ["From", pickup.address],
+        ["To", destination.address],
+        ["When", `${describePlanDays(schedule.days)} at ${describePlanTime(schedule.departureHour, schedule.departureMinute)} ET`],
+        ["Per ride", `$${perRide.toFixed(2)} (one-off $${quote.total.toFixed(2)})`],
+        ["Booked", `${booked.bookedRideIds.length} ride(s) this week`],
+      ]));
+
+      res.json({ plan, bookedRideIds: booked.bookedRideIds, upcoming, quote: { fullFare: quote.total, perRide, savings } });
+    } catch (error: any) {
+      console.error("weekly plan create error:", error);
+      res.status(500).json({ message: "Could not start your weekly plan. Please try again." });
+    }
+  });
+
+  app.post('/api/rider/weekly-plans/:id/pause', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const result = await storage.pauseWeeklyRidePlan(userId, req.params.id, "Weekly plan paused by rider");
+      if (!result.found) return res.status(404).json({ message: "Weekly plan not found" });
+      for (const rideId of result.cancelledRideIds) {
+        clearAcceptanceTimer(rideId);
+        logRideAudit({ rideId, event: "ride_cancelled", actorId: userId, details: { source: "weekly_plan_pause", planId: req.params.id } }).catch(() => {});
+      }
+      res.json({ ok: true, cancelled: result.cancelledRideIds.length, kept: result.keptRideIds.length });
+    } catch (error) {
+      console.error("weekly plan pause error:", error);
+      res.status(500).json({ message: "Failed to pause weekly plan" });
+    }
+  });
+
   // Admin analytics routes
   app.get('/api/admin/analytics/events', isAdminOrSessionAuth, async (req: any, res) => {
     try {
@@ -9137,6 +9291,15 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
       res.json({ sent, message: `Sent ${sent} supply positioning nudges` });
     } catch (error) {
       res.status(500).json({ message: "Failed to send supply nudges" });
+    }
+  });
+
+  app.post('/api/admin/analytics/materialize-weekly-plans', isAdminOrSessionAuth, async (_req: any, res) => {
+    try {
+      const result = await materializeAllWeeklyPlans(storage);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to book weekly plan rides" });
     }
   });
 
@@ -10280,6 +10443,11 @@ Generate the FAQ list.`;
       const { and: _and, isNotNull: _isNotNull, isNull: _isNull, gte: _gte, lte: _lte, sql: _sql, eq: _eq } = await import("drizzle-orm");
 
       const now = new Date();
+
+      // ── Weekly plans: keep every active plan booked 7 days ahead ──
+      if (now.getMinutes() % 15 === 0) {
+        materializeAllWeeklyPlans(storage, now).catch((err) => console.error("weekly plan sweep failed:", err));
+      }
 
       // ── Midnight cleanup ──
       if (now.getHours() === 0 && now.getMinutes() === 0) {

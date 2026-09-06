@@ -38,6 +38,7 @@ import {
   communityBonusPool,
   bonusAllocations,
   recurringRideSchedules,
+  weeklyRidePlans,
   agentActionProposals,
   complianceRecords,
   smsBookingSessions,
@@ -105,6 +106,8 @@ import {
   type CommunityBonusPool,
   type BonusAllocation,
   type RecurringRideSchedule,
+  type WeeklyRidePlan,
+  type InsertWeeklyRidePlan,
   type AgentActionProposal,
   type ComplianceRecord,
   type SmsBookingSession,
@@ -257,6 +260,14 @@ export interface IStorage {
   updateRide(rideId: string, updates: Partial<InsertRide>): Promise<Ride>;
   getRidesByUser(userId: string, limit?: number): Promise<Ride[]>;
   getActiveRides(userId: string): Promise<Ride[]>;
+  /**
+   * Rides that belong on the home screen right now: anything under way, plus
+   * a scheduled ride once it is within an hour of departure. A ride booked
+   * for tomorrow (or all week, on a plan) is "upcoming", not "active" — it
+   * lives on the Upcoming list, and must not park the home screen on
+   * "Finding your driver".
+   */
+  getLiveRides(userId: string): Promise<Ride[]>;
   getScheduledRides(userId: string): Promise<Ride[]>;
   
   // Rating operations
@@ -533,6 +544,18 @@ export interface IStorage {
   }): Promise<RecurringRideSchedule>;
   getDueRecurringSchedules(): Promise<RecurringRideSchedule[]>;
   markRecurringSchedulePrompted(id: string): Promise<void>;
+
+  // Standing weekly ride plans (shared/weeklyPlan.ts)
+  createWeeklyRidePlan(data: InsertWeeklyRidePlan): Promise<WeeklyRidePlan>;
+  getWeeklyRidePlans(riderId: string): Promise<WeeklyRidePlan[]>;
+  getWeeklyRidePlanById(id: string): Promise<WeeklyRidePlan | undefined>;
+  getActiveWeeklyRidePlans(): Promise<WeeklyRidePlan[]>;
+  updateWeeklyRidePlan(id: string, patch: Partial<InsertWeeklyRidePlan>): Promise<void>;
+  /** Every departure already booked for the plan, any status — a cancelled day stays cancelled. */
+  getPlanRideDepartures(planId: string): Promise<Date[]>;
+  getUpcomingPlanRides(planId: string): Promise<Array<{ id: string; scheduledAt: Date | null; status: string | null; driverId: string | null }>>;
+  /** Pause: the plan stops booking; future rides no driver has confirmed are cancelled. */
+  pauseWeeklyRidePlan(riderId: string, id: string, reason: string): Promise<{ found: boolean; cancelledRideIds: string[]; keptRideIds: string[] }>;
   getDisputeById(disputeId: string): Promise<Dispute | undefined>;
   getAllDisputes(): Promise<Dispute[]>;
   adminResolveDispute(disputeId: string, resolution: string, resolvedBy?: string | null, refundAmount?: number): Promise<Dispute>;
@@ -1093,6 +1116,27 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(rides.createdAt));
   }
 
+  async getLiveRides(userId: string): Promise<Ride[]> {
+    const soon = sql`now() + interval '60 minutes'`;
+    return await db
+      .select()
+      .from(rides)
+      .where(
+        and(
+          or(eq(rides.riderId, userId), eq(rides.driverId, userId)),
+          or(
+            eq(rides.status, "driver_arriving"),
+            eq(rides.status, "in_progress"),
+            and(
+              or(eq(rides.status, "pending"), eq(rides.status, "accepted")),
+              or(isNull(rides.scheduledAt), lte(rides.scheduledAt, soon)),
+            ),
+          ),
+        ),
+      )
+      .orderBy(desc(rides.createdAt));
+  }
+
   async getScheduledRides(userId: string): Promise<Ride[]> {
     return await db
       .select()
@@ -1119,6 +1163,7 @@ export class DatabaseStorage implements IStorage {
         // rider's Upcoming list (pickup order, "everyone's 30% off" copy).
         groupId: rides.groupId,
         rideType: rides.rideType,
+        planId: rides.planId,
         pickupLocation: rides.pickupLocation,
         destinationLocation: rides.destinationLocation,
         stops: rides.stops,
@@ -1179,6 +1224,7 @@ export class DatabaseStorage implements IStorage {
         driverId: rides.driverId,
         groupId: rides.groupId,
         rideType: rides.rideType,
+        planId: rides.planId,
         pickupLocation: rides.pickupLocation,
         destinationLocation: rides.destinationLocation,
         stops: rides.stops,
@@ -4920,6 +4966,83 @@ export class DatabaseStorage implements IStorage {
       .update(recurringRideSchedules)
       .set({ lastPromptAt: new Date() })
       .where(eq(recurringRideSchedules.id, id));
+  }
+
+  // ── Standing weekly ride plans ──────────────────────────────────────────
+
+  async createWeeklyRidePlan(data: InsertWeeklyRidePlan): Promise<WeeklyRidePlan> {
+    const [row] = await db.insert(weeklyRidePlans).values(data).returning();
+    return row;
+  }
+
+  async getWeeklyRidePlans(riderId: string): Promise<WeeklyRidePlan[]> {
+    return db
+      .select()
+      .from(weeklyRidePlans)
+      .where(and(eq(weeklyRidePlans.riderId, riderId), eq(weeklyRidePlans.isActive, true)))
+      .orderBy(asc(weeklyRidePlans.departureHour), asc(weeklyRidePlans.departureMinute));
+  }
+
+  async getWeeklyRidePlanById(id: string): Promise<WeeklyRidePlan | undefined> {
+    const [row] = await db.select().from(weeklyRidePlans).where(eq(weeklyRidePlans.id, id));
+    return row;
+  }
+
+  async getActiveWeeklyRidePlans(): Promise<WeeklyRidePlan[]> {
+    return db.select().from(weeklyRidePlans).where(eq(weeklyRidePlans.isActive, true));
+  }
+
+  async updateWeeklyRidePlan(id: string, patch: Partial<InsertWeeklyRidePlan>): Promise<void> {
+    await db.update(weeklyRidePlans).set({ ...patch, updatedAt: new Date() }).where(eq(weeklyRidePlans.id, id));
+  }
+
+  async getPlanRideDepartures(planId: string): Promise<Date[]> {
+    const rows = await db
+      .select({ scheduledAt: rides.scheduledAt })
+      .from(rides)
+      .where(eq(rides.planId, planId));
+    return rows.map((r) => r.scheduledAt).filter((d): d is Date => d instanceof Date);
+  }
+
+  async getUpcomingPlanRides(planId: string) {
+    return db
+      .select({ id: rides.id, scheduledAt: rides.scheduledAt, status: rides.status, driverId: rides.driverId })
+      .from(rides)
+      .where(and(
+        eq(rides.planId, planId),
+        gt(rides.scheduledAt, sql`now()`),
+        sql`${rides.status} IN ('pending', 'accepted')`,
+      ))
+      .orderBy(asc(rides.scheduledAt));
+  }
+
+  async pauseWeeklyRidePlan(riderId: string, id: string, reason: string) {
+    const [plan] = await db
+      .update(weeklyRidePlans)
+      .set({ isActive: false, pausedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(weeklyRidePlans.id, id), eq(weeklyRidePlans.riderId, riderId), eq(weeklyRidePlans.isActive, true)))
+      .returning({ id: weeklyRidePlans.id });
+    if (!plan) return { found: false, cancelledRideIds: [], keptRideIds: [] };
+    // Rides still 'pending' (nobody has confirmed them) are simply withdrawn.
+    // A ride a driver has already accepted stays on the rider's Upcoming list
+    // so they can cancel it themselves under the normal rules — a driver who
+    // planned their day around it deserves the notice that path sends.
+    const cancelled = await db
+      .update(rides)
+      .set({
+        status: "cancelled",
+        cancellationReason: reason,
+        cancelledBy: riderId,
+        cancelledByRole: "rider",
+        updatedAt: new Date(),
+      })
+      .where(and(eq(rides.planId, id), eq(rides.status, "pending"), gt(rides.scheduledAt, sql`now()`)))
+      .returning({ id: rides.id });
+    const kept = await db
+      .select({ id: rides.id })
+      .from(rides)
+      .where(and(eq(rides.planId, id), eq(rides.status, "accepted"), gt(rides.scheduledAt, sql`now()`)));
+    return { found: true, cancelledRideIds: cancelled.map((r) => r.id), keptRideIds: kept.map((r) => r.id) };
   }
 
   async getDisputeById(disputeId: string): Promise<Dispute | undefined> {

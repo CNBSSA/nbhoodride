@@ -18,11 +18,12 @@ import { parseBookingErrorMessage } from "@shared/userFacingCopy";
 import { checkScheduleTime, MIN_SCHEDULE_LEAD_HOURS } from "@shared/schedulingPolicy";
 import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { useToast } from "@/hooks/use-toast";
-import { Calendar as CalendarIcon, Clock, Search, X, Users } from "lucide-react";
+import { Calendar as CalendarIcon, Clock, Search, X, Users, Repeat } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { format, addDays } from "date-fns";
-import { RecurringWeeklyToggle } from "@/components/RecurringWeeklyToggle";
-import { saveRecurringSchedule } from "@/lib/saveRecurringSchedule";
+import {
+  PLAN_DAY_LABELS, WEEKDAYS, WEEKLY_PLAN_DISCOUNT, planFare, weeklyTotal, nextPlanOccurrence, describePlanDays, describePlanTime,
+} from "@shared/weeklyPlan";
 import { useAnalytics } from "@/hooks/useAnalytics";
 
 interface Driver {
@@ -76,7 +77,10 @@ export default function ScheduleRideModal({
   const [phoneSearch, setPhoneSearch] = useState("");
   const [searchedDrivers, setSearchedDrivers] = useState<Driver[]>([]);
   const [wantsSharedRide, setWantsSharedRide] = useState(false);
-  const [repeatWeekly, setRepeatWeekly] = useState(false);
+  // Standing weekly plan: same route and time on the chosen days, booked
+  // ahead by the server at a locked plan rate (shared/weeklyPlan.ts).
+  const [weeklyPlan, setWeeklyPlan] = useState(false);
+  const [planDays, setPlanDays] = useState<number[]>([...WEEKDAYS]);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { trackRideSearch, trackRideBooked } = useAnalytics();
@@ -141,31 +145,6 @@ export default function ScheduleRideModal({
     },
     onSuccess: async (data) => {
       trackRideBooked();
-      if (bookingType === "schedule" && repeatWeekly && scheduledDate && destCoords) {
-        const hour24 = scheduledPeriod === "PM" && scheduledHour !== "12" 
-          ? parseInt(scheduledHour) + 12 
-          : scheduledPeriod === "AM" && scheduledHour === "12"
-          ? 0
-          : parseInt(scheduledHour);
-        const scheduleDateTime = new Date(scheduledDate);
-        scheduleDateTime.setHours(hour24, parseInt(scheduledMinute), 0, 0);
-        try {
-          await saveRecurringSchedule({
-            label: "Scheduled ride",
-            rideKind: "solo_schedule",
-            departureAt: scheduleDateTime,
-            pickup: { lat: userLocation.lat, lng: userLocation.lng, address: pickupAddress },
-            destination: { lat: destCoords.lat, lng: destCoords.lng, address: destinationAddress },
-            options: {
-              estimatedFare: fareEstimate?.total ?? 0,
-              pickupInstructions,
-              driverId: selectedDriver || null,
-            },
-          });
-        } catch {
-          /* non-fatal — ride already booked */
-        }
-      }
       if (bookingType === "schedule") {
         toast({
           title: "Ride Scheduled!",
@@ -186,6 +165,33 @@ export default function ScheduleRideModal({
       // validation) — the old generic copy hid every real cause.
       toast({
         title: "Booking Failed",
+        description: parseBookingErrorMessage(error.message),
+        variant: "destructive",
+      });
+    }
+  });
+
+  // Start a standing weekly plan: the server books each day's ride ahead.
+  const startPlanMutation = useMutation({
+    mutationFn: async (planData: any) => {
+      const response = await apiRequest('POST', '/api/rider/weekly-plans', planData);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      trackRideBooked();
+      const first = data?.upcoming?.[0]?.scheduledAt ? new Date(data.upcoming[0].scheduledAt) : null;
+      toast({
+        title: "Weekly ride set!",
+        description: `${describePlanDays(planDays)} at ${describePlanTime(planHour24, parseInt(scheduledMinute))}, $${Number(data?.quote?.perRide ?? 0).toFixed(2)} per ride.${first ? ` First ride ${format(first, "EEE, MMM d")}.` : ""} Pause any time from your home screen.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/rides"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rides/scheduled"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rider/weekly-plans"] });
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Could not start your weekly ride",
         description: parseBookingErrorMessage(error.message),
         variant: "destructive",
       });
@@ -274,6 +280,28 @@ export default function ScheduleRideModal({
       return;
     }
 
+    if (bookingType === "schedule" && weeklyPlan) {
+      if (planDays.length === 0) {
+        toast({ title: "Pick your days", description: "Choose at least one day of the week for your plan.", variant: "destructive" });
+        return;
+      }
+      startPlanMutation.mutate({
+        label: "Weekly ride",
+        pickup: { lat: userLocation.lat, lng: userLocation.lng, address: pickupAddress },
+        destination: { lat: destCoords!.lat, lng: destCoords!.lng, address: destinationAddress },
+        stops: stops.length > 0 ? stops : undefined,
+        pickupInstructions,
+        driverId: selectedDriver || undefined,
+        days: planDays,
+        departureHour: planHour24,
+        departureMinute: parseInt(scheduledMinute),
+        timezone: planTimezone,
+        distance: estimatedDistance,
+        duration: estimatedDuration,
+      });
+      return;
+    }
+
     if (bookingType === "schedule" && !scheduledDate) {
       toast({
         title: "Missing Date",
@@ -337,7 +365,21 @@ export default function ScheduleRideModal({
     dt.setHours(hour24, parseInt(scheduledMinute), 0, 0);
     return dt;
   })();
-  const scheduleTimeCheck = selectedScheduleTime ? checkScheduleTime(selectedScheduleTime) : null;
+  const planHour24 = scheduledPeriod === "PM" && scheduledHour !== "12"
+    ? parseInt(scheduledHour) + 12
+    : scheduledPeriod === "AM" && scheduledHour === "12"
+    ? 0
+    : parseInt(scheduledHour);
+  const planPricing = fareEstimate ? planFare(fareEstimate.total) : null;
+  // The rider's own clock decides what "5:30 PM" means; the server books in
+  // that zone (Eastern for everyone in the service area).
+  const planTimezone = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch { return undefined; } })();
+  const planFirstRide = weeklyPlan && planDays.length > 0
+    ? nextPlanOccurrence({ days: planDays, departureHour: planHour24, departureMinute: parseInt(scheduledMinute), timezone: planTimezone })
+    : undefined;
+  const togglePlanDay = (d: number) =>
+    setPlanDays((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d].sort((a, b) => a - b)));
+  const scheduleTimeCheck = selectedScheduleTime && !weeklyPlan ? checkScheduleTime(selectedScheduleTime) : null;
   const scheduleTimeError = scheduleTimeCheck && !scheduleTimeCheck.valid ? scheduleTimeCheck.error : null;
 
   if (!isOpen) return null;
@@ -369,6 +411,7 @@ export default function ScheduleRideModal({
           {bookingType === "schedule" && (
             <Card className="bg-muted/50">
               <CardContent className="p-4 space-y-4">
+                {!weeklyPlan && (
                 <div className="space-y-2">
                   <label className="text-sm font-medium flex items-center gap-2">
                     <CalendarIcon className="w-4 h-4" />
@@ -386,6 +429,7 @@ export default function ScheduleRideModal({
                     Same-day scheduling works — pickup just needs to be at least {MIN_SCHEDULE_LEAD_HOURS} hours from now.
                   </p>
                 </div>
+                )}
 
                 <div className="space-y-2">
                   <label className="text-sm font-medium flex items-center gap-2">
@@ -402,16 +446,60 @@ export default function ScheduleRideModal({
                     hourOptions={Array.from({ length: 12 }, (_, i) => (i + 1).toString().padStart(2, "0"))}
                     testIds={{ hour: "select-hour", minute: "select-minute", period: "select-period" }}
                   />
-                  {scheduledDate && (
+                  {scheduledDate && !weeklyPlan && (
                     <p className="text-sm text-muted-foreground">
                       Pickup scheduled for: <strong>{format(scheduledDate, "MMM dd, yyyy")} at {scheduledHour}:{scheduledMinute} {scheduledPeriod}</strong>
                     </p>
                   )}
-                  <RecurringWeeklyToggle
-                    checked={repeatWeekly}
-                    onCheckedChange={setRepeatWeekly}
-                    description="Same weekday and time every week — we'll nudge you to book."
-                  />
+                  {/* Standing weekly plan — the commuter's ride home */}
+                  <div className="rounded-xl border border-dashed border-primary/30 bg-primary/5 p-3 space-y-2" data-testid="weekly-plan-row">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold flex items-center gap-1.5">
+                          <Repeat className="w-4 h-4 text-primary shrink-0" />
+                          Make this my weekly ride
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Same pickup, same time, every week. We book each day ahead at a locked plan rate — {Math.round(WEEKLY_PLAN_DISCOUNT * 100)}% off. You pay per ride as usual and can pause any time.
+                        </p>
+                      </div>
+                      <Switch checked={weeklyPlan} onCheckedChange={setWeeklyPlan} data-testid="toggle-weekly-plan" />
+                    </div>
+                    {weeklyPlan && (
+                      <>
+                        <div className="flex flex-wrap gap-1.5" data-testid="plan-days">
+                          {PLAN_DAY_LABELS.map((label, d) => {
+                            const on = planDays.includes(d);
+                            return (
+                              <button
+                                key={d}
+                                type="button"
+                                onClick={() => togglePlanDay(d)}
+                                aria-pressed={on}
+                                className={`min-w-[44px] h-10 px-2 rounded-full text-xs font-semibold border transition-colors ${on ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border"}`}
+                                data-testid={`plan-day-${d}`}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {planPricing && fareEstimate ? (
+                          <p className="text-sm" data-testid="text-plan-price">
+                            <strong>${planPricing.perRide.toFixed(2)} per ride</strong>
+                            <span className="text-muted-foreground"> · about ${weeklyTotal(planPricing.perRide, planDays.length).toFixed(2)} a week for {describePlanDays(planDays) || "no days"} (one-off price ${fareEstimate.total.toFixed(2)})</span>
+                          </p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">Pick a destination to see your plan price.</p>
+                        )}
+                        {planFirstRide && (
+                          <p className="text-xs text-muted-foreground" data-testid="text-plan-first-ride">
+                            First ride: <strong>{format(planFirstRide, "EEE, MMM d 'at' h:mm a")}</strong>. Rides are booked a week ahead and you can cancel any single day free until 2 hours before.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -693,7 +781,12 @@ export default function ScheduleRideModal({
         </CardContent>
 
         <div className="p-4 bg-card border-t space-y-2 shrink-0 sticky bottom-0" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
-          {bookingType === "schedule" && scheduledDate && (
+          {bookingType === "schedule" && weeklyPlan ? (
+            <p className="text-sm text-center text-muted-foreground">
+              {describePlanDays(planDays) || "Pick your days"} at {scheduledHour}:{scheduledMinute} {scheduledPeriod}
+              {planPricing ? ` · $${planPricing.perRide.toFixed(2)} per ride` : ""}
+            </p>
+          ) : bookingType === "schedule" && scheduledDate && (
             <p className="text-sm text-center text-muted-foreground">
               Pickup: {format(scheduledDate, "MMM dd")} at {scheduledHour}:{scheduledMinute} {scheduledPeriod}
             </p>
@@ -707,16 +800,20 @@ export default function ScheduleRideModal({
             onClick={handleBookRide}
             disabled={
               bookRideMutation.isPending ||
+              startPlanMutation.isPending ||
               !destinationAddress ||
               !fareEstimate ||
               (bookingType === "now" && !selectedDriver) ||
-              (bookingType === "schedule" && (!scheduledDate || !!scheduleTimeError))
+              (bookingType === "schedule" && weeklyPlan && planDays.length === 0) ||
+              (bookingType === "schedule" && !weeklyPlan && (!scheduledDate || !!scheduleTimeError))
             }
             className="w-full"
             data-testid="button-confirm-booking"
           >
-            {bookRideMutation.isPending
+            {bookRideMutation.isPending || startPlanMutation.isPending
               ? "Booking..."
+              : bookingType === "schedule" && weeklyPlan
+              ? "Start my weekly ride"
               : bookingType === "schedule"
               ? selectedDriver ? "Schedule with Driver" : "Schedule — Open to Drivers"
               : "Book Now"}
