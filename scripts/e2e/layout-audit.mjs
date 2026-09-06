@@ -104,6 +104,9 @@ try {
 
   section("Rider: schedule and book sheets");
   page = await ctx.newPage();
+  // Geocoding is stubbed for both sheets (no egress from the runner).
+  await page.route("**/api/geocode/suggest*", (route) => route.fulfill({ contentType: "application/json",
+    body: JSON.stringify({ suggestions: [{ label: "National Harbor, Oxon Hill, MD", lat: 38.7823, lng: -77.0166 }] }) }));
   await loginAs(page, server.base, FIXTURES.rider.email);
   await page.evaluate(() => localStorage.setItem("pgride:lastMode", "rider"));
   await page.goto(server.base + "/", { waitUntil: "domcontentloaded" });
@@ -111,12 +114,23 @@ try {
   await page.waitForSelector('[data-testid="button-schedule-ride"]', { timeout: 20000 });
   await page.tap('[data-testid="button-schedule-ride"]');
   await assertPrimary(page, "Schedule sheet", "button-confirm-booking");
+  // "Add a stop" on the schedule sheet: pick a destination, add a stop, and
+  // the pinned Confirm must stay on screen with the extra rows.
+  await page.fill('[data-testid="input-destination"]', "National Harbor");
+  await page.waitForSelector('[data-testid="input-destination-option-0"]', { timeout: 10000 });
+  await page.tap('[data-testid="input-destination-option-0"]');
+  await page.tap('[data-testid="button-add-stop-schedule"]');
+  await page.fill('[data-testid="input-stop-schedule"]', "Bowie Town Center");
+  await page.waitForSelector('[data-testid="input-stop-schedule-option-0"]', { timeout: 10000 });
+  await page.tap('[data-testid="input-stop-schedule-option-0"]');
+  await page.waitForSelector('[data-testid="button-remove-stop-schedule-0"]', { timeout: 10000 });
+  check("Schedule: stop added to the route", await page.locator('[data-testid="button-remove-stop-schedule-0"]').isVisible());
+  await assertPrimary(page, "Schedule sheet with a stop", "button-confirm-booking");
+  await assertPrimary(page, "Schedule: remove-stop control", "button-remove-stop-schedule-0");
   await page.tap('[data-testid="button-close-schedule"]');
   await page.waitForSelector('[data-testid="button-book-ride"]', { timeout: 10000 });
   // Book-now is destination-first: type, pick a suggestion, then the driver
   // panel with the pinned Confirm appears. Geocoding is stubbed (no egress).
-  await page.route("**/api/geocode/suggest*", (route) => route.fulfill({ contentType: "application/json",
-    body: JSON.stringify({ suggestions: [{ label: "National Harbor, Oxon Hill, MD", lat: 38.7823, lng: -77.0166 }] }) }));
   await page.tap('[data-testid="button-book-ride"]');
   await page.waitForSelector('[data-testid="input-destination"]', { timeout: 10000 });
   await page.fill('[data-testid="input-destination"]', "National Harbor");
