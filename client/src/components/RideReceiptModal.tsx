@@ -91,6 +91,9 @@ export function RideReceiptModal({
               <div className="space-y-1 text-sm">
                 <p className="font-medium">{receipt.driverName}</p>
                 <p className="text-muted-foreground truncate">{receipt.pickupAddress}</p>
+                {(receipt.stops ?? []).map((s, i) => (
+                  <p key={i} className="text-muted-foreground truncate">↳ Stop {i + 1}: {s}</p>
+                ))}
                 <p className="text-muted-foreground truncate">→ {receipt.destinationAddress}</p>
               </div>
 

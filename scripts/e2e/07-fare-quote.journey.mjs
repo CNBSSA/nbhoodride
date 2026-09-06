@@ -42,6 +42,24 @@ export async function run({ base, db }) {
   check("receipt has a real distance charge", (receipt.json?.distanceCharge ?? 0) > 10, `distanceCharge=${receipt.json?.distanceCharge}`);
   await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [[booked.json.id, noFigures.json?.id].filter(Boolean)]).catch(() => {});
 
+  section("Add a stop: the whole route is quoted and shown");
+  const stopA = { lat: 38.95, lng: -76.93, address: "Hyattsville Pharmacy, MD" };
+  const withStop = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 30, paymentMethod: "card", stops: [stopA] });
+  check("booking with a stop accepted", withStop.status === 200, JSON.stringify(withStop.json?.message ?? withStop.status));
+  check("stop stored on the ride, in order", Array.isArray(withStop.json?.stops) && withStop.json.stops.length === 1 && withStop.json.stops[0].address === stopA.address, JSON.stringify(withStop.json?.stops));
+  check("route miles cover pickup → stop → destination (longer than the direct trip)", Number(withStop.json?.distance) > Number(noFigures.json?.distance), `with stop=${withStop.json?.distance} direct=${noFigures.json?.distance}`);
+  const tooMany = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 30, paymentMethod: "card", stops: [stopA, stopA, stopA] });
+  check("more than two stops is refused with a reason", tooMany.status === 400 && /stops/i.test(tooMany.json?.message ?? ""), JSON.stringify(tooMany.json));
+  const badStop = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 30, paymentMethod: "card", stops: [{ address: "no coordinates" }] });
+  check("a stop without coordinates is refused", badStop.status === 400, `status=${badStop.status}`);
+  const drv = await driver.req("GET", "/api/driver/pending-rides");
+  const pendingWithStop = (drv.json ?? []).find((r) => r.id === withStop.json.id);
+  check("driver's pending request carries the stop", Array.isArray(pendingWithStop?.stops) && pendingWithStop.stops.length === 1, JSON.stringify(pendingWithStop?.stops));
+  await db.query("UPDATE rides SET driver_id=$1, status='completed', actual_fare='30.00', started_at=NOW() - interval '30 minutes', completed_at=NOW() WHERE id=$2", [FIXTURES.driver.id, withStop.json.id]);
+  const stopReceipt = await rider.req("GET", `/api/rides/${withStop.json.id}/receipt`);
+  check("receipt lists the stop between pickup and destination", stopReceipt.status === 200 && Array.isArray(stopReceipt.json?.stops) && stopReceipt.json.stops[0] === stopA.address, JSON.stringify(stopReceipt.json?.stops));
+  await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [[withStop.json.id].filter(Boolean)]).catch(() => {});
+
   section("Normal completion charges the quoted fare");
   const rideA = await seed();
   check("driver starts the ride", (await driver.req("POST", `/api/driver/rides/${rideA}/start`)).status === 200);
