@@ -1,4 +1,4 @@
-import { Session, check, section, FIXTURES, PICKUP, DEST } from "./harness.mjs";
+import { Session, check, section, deleteRides, FIXTURES, PICKUP, DEST } from "./harness.mjs";
 
 /**
  * The fare a rider confirms at booking is the fare they pay. The first real
@@ -31,6 +31,10 @@ export async function run({ base, db }) {
   section("Booking records the quoted route, and the receipt shows it");
   const rider = new Session(base);
   check("rider logs in", (await rider.login(FIXTURES.rider.email)).status === 200);
+  // Booking is rate-limited per rider per hour. Clear anything an earlier
+  // (interrupted) run left behind so reruns on the same database are honest.
+  const { rows: stale } = await db.query("SELECT id FROM rides WHERE rider_id=$1 AND created_at > NOW() - interval '1 hour'", [FIXTURES.rider.id]);
+  await deleteRides(db, stale.map((r) => r.id));
   const booked = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 23.21, paymentMethod: "card", distance: 17.3, duration: 42 });
   check("booking accepted", booked.status === 200, JSON.stringify(booked.json?.message ?? booked.status));
   check("quoted miles and minutes stored on the ride", Number(booked.json?.distance) === 17.3 && booked.json?.duration === 42, `distance=${booked.json?.distance} duration=${booked.json?.duration}`);
@@ -40,7 +44,7 @@ export async function run({ base, db }) {
   const receipt = await rider.req("GET", `/api/rides/${booked.json.id}/receipt`);
   check("receipt shows the quoted 17.3 mi, not the 0.26 mi GPS track", receipt.status === 200 && receipt.json?.distanceMiles === 17.3 && receipt.json?.durationMinutes === 42, JSON.stringify({ d: receipt.json?.distanceMiles, t: receipt.json?.durationMinutes }));
   check("receipt has a real distance charge", (receipt.json?.distanceCharge ?? 0) > 10, `distanceCharge=${receipt.json?.distanceCharge}`);
-  await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [[booked.json.id, noFigures.json?.id].filter(Boolean)]).catch(() => {});
+  await deleteRides(db, [booked.json.id, noFigures.json?.id]);
 
   section("Add a stop: the whole route is quoted and shown");
   const stopA = { lat: 38.95, lng: -76.93, address: "Hyattsville Pharmacy, MD" };
@@ -52,22 +56,34 @@ export async function run({ base, db }) {
   check("more than two stops is refused with a reason", tooMany.status === 400 && /stops/i.test(tooMany.json?.message ?? ""), JSON.stringify(tooMany.json));
   const badStop = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 30, paymentMethod: "card", stops: [{ address: "no coordinates" }] });
   check("a stop without coordinates is refused", badStop.status === 400, `status=${badStop.status}`);
+  // Matching picks whichever driver is online; pin this request to the
+  // fixture driver so the driver-side view is deterministic.
+  await db.query("UPDATE rides SET driver_id=$1 WHERE id=$2", [FIXTURES.driver.id, withStop.json.id]);
   const drv = await driver.req("GET", "/api/driver/pending-rides");
   const pendingWithStop = (drv.json ?? []).find((r) => r.id === withStop.json.id);
   check("driver's pending request carries the stop", Array.isArray(pendingWithStop?.stops) && pendingWithStop.stops.length === 1, JSON.stringify(pendingWithStop?.stops));
   await db.query("UPDATE rides SET driver_id=$1, status='completed', actual_fare='30.00', started_at=NOW() - interval '30 minutes', completed_at=NOW() WHERE id=$2", [FIXTURES.driver.id, withStop.json.id]);
   const stopReceipt = await rider.req("GET", `/api/rides/${withStop.json.id}/receipt`);
   check("receipt lists the stop between pickup and destination", stopReceipt.status === 200 && Array.isArray(stopReceipt.json?.stops) && stopReceipt.json.stops[0] === stopA.address, JSON.stringify(stopReceipt.json?.stops));
-  await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [[withStop.json.id].filter(Boolean)]).catch(() => {});
+  await deleteRides(db, [withStop.json.id]);
 
   section("Normal completion charges the quoted fare");
+  const earningsBefore = await driver.req("GET", "/api/driver/earnings/today");
   const rideA = await seed();
   check("driver starts the ride", (await driver.req("POST", `/api/driver/rides/${rideA}/start`)).status === 200);
   await sparseTrack(rideA);
-  const doneA = await driver.req("POST", `/api/driver/rides/${rideA}/complete`, {});
+  const doneA = await driver.req("POST", `/api/driver/rides/${rideA}/complete`, { tipAmount: 5 });
   check("completion succeeds", doneA.status === 200, JSON.stringify(doneA.json?.message ?? doneA.status));
   check("rider pays the $23.21 quote, not the GPS-metered fare", Number(doneA.json?.actualFare) === 23.21, `actualFare=${doneA.json?.actualFare}`);
   check("GPS distance is still recorded for the records", Number(doneA.json?.driverTraveledDistance) > 0, `traveled=${doneA.json?.driverTraveledDistance}`);
+
+  section("Money split: 85% of the fare to the driver, 15% to PG Ride, 100% of the tip to the driver");
+  check("PG Ride's share of $23.21 is $3.48", Number(doneA.json?.platformFee) === 3.48, `platformFee=${doneA.json?.platformFee}`);
+  check("driver is credited $19.73 fare share + $5 tip = $24.73", Number(doneA.json?.driverEarnings) === 24.73, `driverEarnings=${doneA.json?.driverEarnings}`);
+  const todayEarnings = await driver.req("GET", "/api/driver/earnings/today");
+  const fareDelta = Number(todayEarnings.json?.fare) - Number(earningsBefore.json?.fare ?? 0);
+  const tipDelta = Number(todayEarnings.json?.tips) - Number(earningsBefore.json?.tips ?? 0);
+  check("driver's earnings screen counts the share, not the gross fare", todayEarnings.status === 200 && Math.abs(fareDelta - 19.73) < 0.011 && Math.abs(tipDelta - 5) < 0.011, `fare +${fareDelta.toFixed(2)} tips +${tipDelta.toFixed(2)}`);
 
   section("Promo recorded at accept comes off the quote");
   const rideB = await seed({ promo: "5.00" });
@@ -75,6 +91,7 @@ export async function run({ base, db }) {
   await sparseTrack(rideB);
   const doneB = await driver.req("POST", `/api/driver/rides/${rideB}/complete`, {});
   check("quote minus $5 promo", Number(doneB.json?.actualFare) === 18.21, `actualFare=${doneB.json?.actualFare}`);
+  check("split follows the discounted fare: $2.73 to PG Ride, $15.48 to the driver", Number(doneB.json?.platformFee) === 2.73 && Number(doneB.json?.driverEarnings) === 15.48, `platformFee=${doneB.json?.platformFee} driverEarnings=${doneB.json?.driverEarnings}`);
 
   section("Ride ended early mid-trip is metered, never above the quote");
   const rideC = await seed();
@@ -87,7 +104,5 @@ export async function run({ base, db }) {
   const earlyFare = Number(c?.actual_fare);
   check("early-end fare is metered and at most the quote", earlyFare > 0 && earlyFare <= 23.21, `actualFare=${c?.actual_fare}`);
 
-  const ids = [rideA, rideB, rideC];
-  await db.query("DELETE FROM l4_readiness_events WHERE ride_id = ANY($1::varchar[])", [ids]).catch(() => {});
-  await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [ids]).catch(() => {});
+  await deleteRides(db, [rideA, rideB, rideC]).catch(() => {});
 }

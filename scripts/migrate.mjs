@@ -171,6 +171,8 @@ CREATE TABLE IF NOT EXISTS rides (
   distance DECIMAL(8,2),
   duration INTEGER,
   tip_amount DECIMAL(8,2) DEFAULT 0.00,
+  platform_fee DECIMAL(8,2),
+  driver_earnings DECIMAL(8,2),
   payment_status payment_status DEFAULT 'pending_payment',
   stripe_payment_intent_id VARCHAR,
   virtual_amount_authorized DECIMAL(8,2) DEFAULT 0.00,
@@ -1116,6 +1118,8 @@ END $$;
 ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS vehicle_type VARCHAR DEFAULT 'standard';
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS requested_vehicle_type VARCHAR;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS stops JSONB;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS platform_fee DECIMAL(8,2);
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS driver_earnings DECIMAL(8,2);
 
 CREATE TABLE IF NOT EXISTS community_routes (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

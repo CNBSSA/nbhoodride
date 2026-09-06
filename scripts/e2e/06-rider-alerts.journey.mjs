@@ -1,4 +1,4 @@
-import { Session, check, section, serverLog, FIXTURES, uniqueEmail, PICKUP, DEST } from "./harness.mjs";
+import { Session, check, section, serverLog, deleteRides, FIXTURES, uniqueEmail, PICKUP, DEST } from "./harness.mjs";
 
 /** Every rider-facing failure raises exactly one alert; repeats fold. */
 export async function run({ base, db, server }) {
@@ -45,8 +45,6 @@ export async function run({ base, db, server }) {
     const mine = await r.req("GET", `/api/disputes/ride/${done.id}`);
     check("reports wait for a human (no phantom wallet credit in card-only mode)", mine.status === 200 && (mine.json ?? []).length === 2 && mine.json.every((d) => d.status === "pending"), JSON.stringify((mine.json ?? []).map((d) => d.status)));
   } finally {
-    await db.query("DELETE FROM agent_action_proposals WHERE ride_id=$1", [done.id]).catch(() => {});
-    await db.query("DELETE FROM disputes WHERE ride_id=$1", [done.id]).catch(() => {});
-    await db.query("DELETE FROM rides WHERE id=$1", [done.id]).catch(() => {});
+    await deleteRides(db, [done.id]).catch(() => {});
   }
 }
