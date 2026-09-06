@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveCompletedFare } from "./farePolicy";
+import { resolveCompletedFare, welcomeCreditFor } from "./farePolicy";
 
 describe("resolveCompletedFare", () => {
   it("charges the quoted fare on a normal completion even when the GPS track is short", () => {
@@ -35,5 +35,17 @@ describe("resolveCompletedFare", () => {
   it("returns undefined when there is nothing to price from", () => {
     expect(resolveCompletedFare({})).toBeUndefined();
     expect(resolveCompletedFare({ quotedFare: "not a number" })).toBeUndefined();
+  });
+});
+
+describe("welcomeCreditFor", () => {
+  it("takes $5 off while promo rides remain, never more than the fare", () => {
+    expect(welcomeCreditFor(23.21, 4)).toBe(5);
+    expect(welcomeCreditFor(3.5, 1)).toBe(3.5);
+    expect(welcomeCreditFor(23.21, 0)).toBe(0);
+    expect(welcomeCreditFor(23.21, null)).toBe(0);
+  });
+  it("is not stacked on a weekly-plan ride (one promotion per ride)", () => {
+    expect(welcomeCreditFor(20.89, 4, { planRide: true })).toBe(0);
   });
 });

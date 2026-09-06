@@ -27,5 +27,17 @@ export async function run({ base }) {
   const signedIn = await fetch(base + "/", { headers: { Accept: "text/html", Cookie: s.cookieHeader() } });
   check("a signed-in rider at / gets the app", (await signedIn.text()).includes('id="root"'));
   const about = await fetch(base + "/about", html);
-  check("/about still serves the business page", about.status === 200 && (await about.text()).includes("Refunds, cancellations"));
+  const aboutBody = await about.text();
+  check("/about still serves the business page", about.status === 200 && aboutBody.includes("Refunds, cancellations"));
+  check("business page links to the driver page", aboutBody.includes('href="/drive"'));
+
+  // Driver recruiting page: leads with the split, no sign-in needed.
+  section("Driver page leads with 85%");
+  const drive = await fetch(base + "/drive", html);
+  const driveBody = await drive.text();
+  check("/drive serves without a session", drive.status === 200 && !driveBody.includes('id="root"'), `status=${drive.status}`);
+  for (const must of ["85%", "100% of every tip", "$19.73", "card-processing fees", "Standing rides", "/signup", "Contact us"]) {
+    check(`driver page states: ${must}`, driveBody.includes(must));
+  }
+  check("driver page never promises surge or bonuses it doesn't pay", !/surge bonus|guaranteed earnings/i.test(driveBody));
 }

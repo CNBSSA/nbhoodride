@@ -786,6 +786,9 @@ export default function DriverDashboard() {
                     {ride.rideType === "shared_schedule" && (
                       <Badge variant="secondary" className="text-[10px]">Coworker group · claim all seats</Badge>
                     )}
+                    {ride.planId && (
+                      <Badge variant="secondary" className="text-[10px] bg-violet-100 text-violet-800" data-testid={`badge-standing-ride-${ride.id}`}>Standing ride · same rider every week</Badge>
+                    )}
                   </div>
                   {ride.pickupInstructions && (
                     <p className="text-xs text-gray-500 italic">"{ride.pickupInstructions}"</p>
