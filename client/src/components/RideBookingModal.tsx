@@ -249,6 +249,8 @@ export default function RideBookingModal({
       pickupInstructions,
       driverId: selectedDriver,
       estimatedFare: fareEstimate?.total || 0,
+      distance: estimatedDistance,
+      duration: estimatedDuration,
       paymentMethod: 'card',
       wantsSharedRide,
     };

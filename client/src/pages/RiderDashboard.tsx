@@ -504,6 +504,9 @@ export default function RiderDashboard() {
       pickupInstructions,
       driverId: selectedDriverId === ANY_DRIVER_ID ? undefined : selectedDriverId,
       estimatedFare: fareEstimate?.total || 0,
+      // The route the quote was priced on — shown on the receipt and in history.
+      distance: estimatedDistance,
+      duration: estimatedDuration,
       paymentMethod: 'card',
       bookedForFriend: rideForFriend,
       passengerName: rideForFriend ? passengerName.trim() : undefined,
