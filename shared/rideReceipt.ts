@@ -12,6 +12,8 @@ export interface RideReceipt {
   date: string;
   driverName: string;
   pickupAddress: string;
+  /** Extra destinations on the way, in order. */
+  stops: string[];
   destinationAddress: string;
   distanceMiles: number | null;
   durationMinutes: number | null;
@@ -49,6 +51,7 @@ export interface RideReceiptInput {
   paymentStatus: string | null;
   pickupLocation: { address: string } | null;
   destinationLocation: { address: string } | null;
+  stops?: Array<{ address: string }> | null;
   riderRating: number | null;
   driverRating: number | null;
   bookedForFriend?: boolean | null;
@@ -119,6 +122,7 @@ export function buildRideReceipt(ride: RideReceiptInput, driverName: string, opt
       : "Unknown",
     driverName,
     pickupAddress: ride.pickupLocation?.address ?? "Pickup location",
+    stops: (Array.isArray(ride.stops) ? ride.stops : []).map((s) => s?.address).filter((a): a is string => typeof a === "string" && a.length > 0),
     destinationAddress: ride.destinationLocation?.address ?? "Destination",
     distanceMiles,
     durationMinutes,
@@ -151,6 +155,7 @@ export function formatReceiptAsText(receipt: RideReceipt): string {
     `Driver: ${receipt.driverName}`,
     "",
     `From: ${receipt.pickupAddress}`,
+    ...receipt.stops.map((s, i) => `Stop ${i + 1}: ${s}`),
     `To: ${receipt.destinationAddress}`,
   ];
   if (receipt.bookedForFriend && receipt.passengerName) {

@@ -156,6 +156,7 @@ import {
 import { opsAlert, formatOpsAlert } from "./telegramOps";
 import { riderAlert } from "./riderAlerts";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
+import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
@@ -3817,17 +3818,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // is the quote, so the receipt and history must show the miles the
       // quote was built from — not the GPS breadcrumbs, which read ~0 on the
       // first real trip and made the receipt look like a time-only charge.
+      // "Add a stop": extra destinations on the way, in order. The quote (and
+      // so the fare) covers the whole route pickup → stops → destination.
+      const rawStops = Array.isArray(req.body.stops) ? req.body.stops : [];
+      if (rawStops.length > MAX_RIDE_STOPS) {
+        return res.status(400).json({ message: `You can add up to ${MAX_RIDE_STOPS} stops to a ride.` });
+      }
+      const stops = rawStops.map((s: any) => ({
+        lat: Number(s?.lat),
+        lng: Number(s?.lng),
+        address: String(s?.address ?? "").trim().slice(0, 200),
+      }));
+      if (stops.some((s: { lat: number; lng: number; address: string }) =>
+        !Number.isFinite(s.lat) || !Number.isFinite(s.lng) || Math.abs(s.lat) > 90 || Math.abs(s.lng) > 180 || !s.address)) {
+        return res.status(400).json({ message: "Each stop needs a full address. Pick one from the suggestions." });
+      }
+      const routeEstimate = stops.length > 0 ? estimateRoute([pickup, ...stops, destination]) : null;
+
       const clientDistance = Number(req.body.distance);
       const clientDuration = Number(req.body.duration);
       const quotedMiles = Number.isFinite(clientDistance) && clientDistance > 0 && clientDistance < 500
         ? clientDistance
-        : validation.distanceMiles ?? 0; // already road miles (straight-line × 1.3)
+        : routeEstimate?.miles ?? validation.distanceMiles ?? 0; // validation figure is already road miles
       const quotedMinutes = Number.isFinite(clientDuration) && clientDuration > 0 && clientDuration < 1440
         ? Math.round(clientDuration)
-        : validation.durationMinutes ?? 0;
+        : routeEstimate?.minutes ?? validation.durationMinutes ?? 0;
 
       const dataToValidate = {
         ...bodyData,
+        stops: stops.length > 0 ? stops : undefined,
         distance: quotedMiles > 0 ? quotedMiles.toFixed(2) : undefined,
         duration: quotedMinutes > 0 ? quotedMinutes : undefined,
         riderId: userId,

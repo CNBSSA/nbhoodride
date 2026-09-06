@@ -746,6 +746,9 @@ export default function DriverDashboard() {
                     <MapPin className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
                     <div>
                       <p className="font-medium">{ride.pickupLocation?.address || 'Pickup'}</p>
+                      {Array.isArray(ride.stops) && ride.stops.length > 0 && (
+                        <p className="text-amber-600 text-xs">{ride.stops.length} stop{ride.stops.length > 1 ? "s" : ""} on the way</p>
+                      )}
                       <p className="text-gray-500">→ {ride.destinationLocation?.address || 'Destination'}</p>
                     </div>
                   </div>

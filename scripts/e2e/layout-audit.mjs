@@ -124,6 +124,17 @@ try {
   await page.tap('[data-testid="suggestion-0"]');
   await assertPrimary(page, "Book-now driver panel", "button-confirm-booking");
 
+  // "Add a stop": the stop row and its remove button appear, the route is
+  // re-quoted, and the pinned Confirm stays on screen with the extra rows.
+  await page.tap('[data-testid="button-add-stop"]');
+  await page.fill('[data-testid="input-stop"]', "Bowie Town Center");
+  await page.waitForSelector('[data-testid="stop-suggestion-0"]', { timeout: 10000 });
+  await page.tap('[data-testid="stop-suggestion-0"]');
+  await page.waitForSelector('[data-testid="button-remove-stop-0"]', { timeout: 10000 });
+  check("Book-now: stop added to the route", await page.locator('[data-testid="button-remove-stop-0"]').isVisible());
+  await assertPrimary(page, "Book-now with a stop", "button-confirm-booking");
+  await assertPrimary(page, "Book-now: remove-stop control", "button-remove-stop-0");
+
   // Cancel dialogs. These sit ON TOP of the home bottom sheet, which is the
   // exact case that shipped broken: the question was visible, the buttons
   // were under the sheet. Seed one live ride per role straight into the DB.

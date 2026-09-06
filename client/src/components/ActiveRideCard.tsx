@@ -29,6 +29,8 @@ interface ActiveRideCardProps {
       lat: number;
       lng: number;
     };
+    /** Extra destinations on the way, in order ("Add a stop"). */
+    stops?: Array<{ address: string; lat: number; lng: number }> | null;
     pickupInstructions?: string;
     bookedForFriend?: boolean;
     passengerName?: string;
@@ -235,9 +237,11 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
     onSettled: () => { setIsUpdating(false); setShowDriverCancelConfirm(false); },
   });
 
-  const openNavigation = (lat: number, lng: number, label: string) => {
-    const encodedLabel = encodeURIComponent(label);
-    const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&destination_place_id=&travelmode=driving`;
+  const openNavigation = (lat: number, lng: number, _label: string, waypoints: Array<{ lat: number; lng: number }> = []) => {
+    // Stops ride along as Google Maps waypoints, in order, so one tap
+    // navigates the whole route rather than just the final destination.
+    const wp = waypoints.length > 0 ? `&waypoints=${waypoints.map((w) => `${w.lat},${w.lng}`).join("|")}` : "";
+    const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}${wp}&travelmode=driving`;
     window.open(googleMapsUrl, '_blank');
   };
 
@@ -437,12 +441,12 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
             {ride.destinationLocation?.lat && ride.destinationLocation?.lng && (
               <Button 
                 variant="outline"
-                onClick={() => openNavigation(ride.destinationLocation.lat, ride.destinationLocation.lng, ride.destinationLocation.address)}
+                onClick={() => openNavigation(ride.destinationLocation.lat, ride.destinationLocation.lng, ride.destinationLocation.address, Array.isArray(ride.stops) ? ride.stops : [])}
                 className="w-full border-blue-200 text-blue-700 hover:bg-blue-50"
                 data-testid={`button-navigate-destination-${ride.id}`}
               >
                 <ExternalLink className="w-4 h-4 mr-2" />
-                Open in Google Maps
+                {Array.isArray(ride.stops) && ride.stops.length > 0 ? `Open in Google Maps (${ride.stops.length} stop${ride.stops.length > 1 ? "s" : ""} + destination)` : "Open in Google Maps"}
               </Button>
             )}
             
@@ -513,6 +517,18 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
               )}
             </div>
           </div>
+
+          {Array.isArray(ride.stops) && ride.stops.length > 0 && (
+            <div className="flex items-start space-x-3" data-testid={`text-stops-${ride.id}`}>
+              <MapPin className="w-5 h-5 text-amber-500 mt-0.5" />
+              <div>
+                <p className="font-medium text-amber-600">{ride.stops.length === 1 ? "Stop on the way" : "Stops on the way (in order)"}</p>
+                {ride.stops.map((st: any, i: number) => (
+                  <p key={i} className="text-sm text-muted-foreground">{i + 1}. {st.address}</p>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="flex items-start space-x-3">
             <MapPin className="w-5 h-5 text-red-600 mt-0.5" />
