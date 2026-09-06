@@ -83,13 +83,20 @@ export function buildRideReceipt(ride: RideReceiptInput, driverName: string, opt
   const sharedDiscount = parseFloat(ride.sharedFareDiscount ?? "0");
   const totalCharged = Math.max(0, fare + tip);
 
-  const distanceMiles = ride.driverTraveledDistance
-    ? parseFloat(ride.driverTraveledDistance)
-    : ride.distance
-      ? parseFloat(ride.distance)
+  // The fare is the QUOTE, so the breakdown shows the route the quote was
+  // priced on (stored at booking). The GPS track is only a fallback for
+  // rides booked before that was recorded: a phone in a car mount stops
+  // reporting once the screen locks, so the track under-reads badly.
+  const quotedMiles = ride.distance ? parseFloat(ride.distance) : NaN;
+  const distanceMiles = Number.isFinite(quotedMiles) && quotedMiles > 0
+    ? quotedMiles
+    : ride.driverTraveledDistance
+      ? parseFloat(ride.driverTraveledDistance)
       : null;
 
-  const durationMinutes = ride.driverTraveledTime ?? ride.duration ?? null;
+  const durationMinutes = ride.duration && ride.duration > 0
+    ? ride.duration
+    : ride.driverTraveledTime ?? null;
 
   const timeCharge = durationMinutes
     ? round2(RECEIPT_FARE_RATES.perMinuteRate * durationMinutes)

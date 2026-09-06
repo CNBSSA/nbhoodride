@@ -80,3 +80,32 @@ describe("formatReceiptAsText", () => {
     expect(text).toContain("Total charged: $10.00");
   });
 });
+
+describe("receipt route figures", () => {
+  const base = {
+    id: "ride-2",
+    completedAt: "2026-09-05T23:06:00Z",
+    actualFare: "23.21",
+    estimatedFare: "23.21",
+    tipAmount: "0",
+    promoDiscountApplied: "0",
+    sharedFareDiscount: "0",
+    paymentMethod: "card",
+    paymentStatus: "paid_card",
+    pickupLocation: { address: "Suitland" },
+    destinationLocation: { address: "Largo" },
+    riderRating: null,
+    driverRating: null,
+  };
+  it("shows the quoted route, not the GPS track, when both exist", () => {
+    const receipt = buildRideReceipt({ ...base, distance: "17.30", duration: 42, driverTraveledDistance: "0.26", driverTraveledTime: 45 } as any, "Festus A.");
+    expect(receipt.distanceMiles).toBe(17.3);
+    expect(receipt.durationMinutes).toBe(42);
+    expect(receipt.distanceCharge).toBeGreaterThan(10);
+  });
+  it("falls back to the GPS track for rides booked before the route was recorded", () => {
+    const receipt = buildRideReceipt({ ...base, distance: null, duration: null, driverTraveledDistance: "0.26", driverTraveledTime: 45 } as any, "Festus A.");
+    expect(receipt.distanceMiles).toBe(0.26);
+    expect(receipt.durationMinutes).toBe(45);
+  });
+});
