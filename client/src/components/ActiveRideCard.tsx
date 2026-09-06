@@ -381,7 +381,7 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
             <div className="bg-blue-50 dark:bg-blue-950 p-3 rounded-lg border border-blue-200 dark:border-blue-800">
               <div className="flex items-center text-sm text-blue-900 dark:text-blue-100">
                 <Route className="w-4 h-4 mr-2 flex-shrink-0" />
-                <span>GPS tracking active - Real-time distance and fare calculation</span>
+                <span>Keep PG Ride open while you drive — your rider's map follows this screen. If you switch to Google Maps, their map pauses until you come back.</span>
               </div>
             </div>
 
