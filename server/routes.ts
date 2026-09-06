@@ -155,6 +155,7 @@ import {
 } from "./rideWorkflowService";
 import { opsAlert, formatOpsAlert } from "./telegramOps";
 import { riderAlert } from "./riderAlerts";
+import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
@@ -5108,12 +5109,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/disputes', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const disputeData = insertDisputeSchema.parse({
+      // The app used to send "fare-dispute" style ids while the schema only
+      // knew "fare_dispute", so every report ever filed from a phone was
+      // rejected with "Failed to create dispute". Accept both spellings so a
+      // phone that has not self-updated yet can still reach us.
+      const parsed = insertDisputeSchema.safeParse({
         ...req.body,
+        issueType: normalizeDisputeIssueType(req.body?.issueType),
         reporterId: userId
       });
-      
+      if (!parsed.success) {
+        const first = parsed.error.issues[0];
+        return res.status(400).json({ message: `${first?.path?.join(".") || "report"}: ${first?.message || "invalid"}` });
+      }
+      const disputeData = parsed.data;
+
       const dispute = await storage.createDispute(disputeData);
+
+      // A report IS a rider (or driver) with a problem — the founder wants to
+      // hear about it the moment it happens, not find it in an admin tab.
+      storage.getUser(userId).then((reporter) => {
+        riderAlert("dispute_filed", dispute.id, [
+          ["Reporter", `${reporter?.firstName ?? ""} ${reporter?.lastName ?? ""}`.trim() || userId],
+          ["Phone", reporter?.phone ?? "—"],
+          ["Issue", disputeData.issueType],
+          ["Says", String(disputeData.description).slice(0, 200)],
+          ["Ride", String(disputeData.rideId).slice(0, 8)],
+          ["Where", "Admin → Disputes"],
+        ]);
+      }).catch(console.error);
 
       tryAutoResolveDispute(storage, dispute.id)
         .then((result) => {

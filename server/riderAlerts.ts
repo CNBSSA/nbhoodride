@@ -27,7 +27,8 @@ export type RiderAlertKind =
   | "no_driver_found"
   | "server_error"
   | "client_error"
-  | "push_subscribe_failed";
+  | "push_subscribe_failed"
+  | "dispute_filed";
 
 const TITLES: Record<RiderAlertKind, string> = {
   login_pending_approval: "⏳ Rider waiting on approval — tried to log in",
@@ -42,6 +43,7 @@ const TITLES: Record<RiderAlertKind, string> = {
   server_error: "🔥 Server error hit by a user",
   client_error: "📱 App error on a rider's phone",
   push_subscribe_failed: "🔔 Notifications failed to enable",
+  dispute_filed: "🧾 Rider filed a report",
 };
 
 /** Seconds during which repeats of the same (kind,key) are folded together. */
