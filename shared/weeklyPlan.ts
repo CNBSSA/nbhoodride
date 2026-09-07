@@ -87,7 +87,7 @@ export function describePlanTime(hour: number, minute: number): string {
 // given wall-clock time in a zone refers to (DST-correct, because the offset
 // is measured at the target instant itself).
 
-function partsInZone(instant: Date, timeZone: string): { y: number; m: number; d: number; h: number; min: number; weekday: number } {
+export function zonedParts(instant: Date, timeZone: string = PLAN_TIMEZONE): { y: number; m: number; d: number; h: number; min: number; weekday: number } {
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone, hourCycle: "h23",
     year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", weekday: "short",
@@ -104,7 +104,7 @@ export function zonedDateTime(y: number, m: number, d: number, h: number, min: n
   // offset at that guess; a second pass settles the DST edge.
   let guess = Date.UTC(y, m - 1, d, h, min, 0, 0);
   for (let i = 0; i < 2; i++) {
-    const p = partsInZone(new Date(guess), timeZone);
+    const p = zonedParts(new Date(guess), timeZone);
     const asUtc = Date.UTC(p.y, p.m - 1, p.d, p.h, p.min, 0, 0);
     guess += Date.UTC(y, m - 1, d, h, min, 0, 0) - asUtc;
   }
@@ -127,7 +127,7 @@ export function planOccurrences(
   const tz = schedule.timezone || PLAN_TIMEZONE;
   const earliest = from.getTime() + leadHours * 3_600_000;
   const out: Date[] = [];
-  const start = partsInZone(from, tz);
+  const start = zonedParts(from, tz);
   // Step by calendar day using UTC-noon anchors (immune to DST hour shifts).
   const anchor = Date.UTC(start.y, start.m - 1, start.d, 12, 0, 0, 0);
   const dayCount = Math.ceil((until.getTime() - from.getTime()) / 86_400_000) + 1;

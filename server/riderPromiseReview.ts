@@ -1,0 +1,151 @@
+/**
+ * Rider Promise Review — the 4:00 AM Eastern Telegram report on whether
+ * riders got where they were going yesterday (shared/riderPromise.ts has
+ * the definitions and the message format).
+ *
+ * Runs inside the server, from the minute sweep, so it needs nothing the
+ * app doesn't already have: the rides table and the Telegram ops hook.
+ * Sends once per local day — the first sweep at or after the review hour
+ * claims the day through the same claim-once table the webhook handlers
+ * use, so restarts and multiple instances can't send it twice. Nothing is
+ * created on days the review does not run; a missed 4:00 sweep sends at
+ * 4:01.
+ */
+
+import { sql } from "drizzle-orm";
+import { db } from "./db";
+import type { IStorage } from "./storage";
+import { opsAlert } from "./telegramOps";
+import {
+  DANGER_WINDOW_HOURS,
+  LATE_PICKUP_MINUTES,
+  formatRiderPromiseReview,
+  isReviewDue,
+  localDayKey,
+  reviewWindow,
+  type RiderPromiseMetrics,
+  type ReviewWindow,
+} from "@shared/riderPromise";
+
+const CLAIM_PROVIDER = "rider_promise_review";
+
+const n = (v: unknown): number => {
+  const x = typeof v === "number" ? v : parseFloat(String(v ?? "0"));
+  return Number.isFinite(x) ? x : 0;
+};
+
+/** The numbers for a window, straight from the rides table. */
+export async function collectRiderPromiseMetrics(window: ReviewWindow, now: Date = new Date()): Promise<RiderPromiseMetrics> {
+  const { start, end } = window;
+
+  // A ride's service time: the scheduled departure, or when it was
+  // requested for ride-now.
+  const yesterday = await db.execute(sql`
+    SELECT
+      count(*)::int AS booked,
+      count(*) FILTER (WHERE status = 'completed')::int AS delivered,
+      count(*) FILTER (
+        WHERE (status IN ('cancelled', 'no_show') AND COALESCE(cancelled_by_role, '') IN ('driver', 'system'))
+           OR (status IN ('pending', 'accepted', 'driver_arriving', 'in_progress'))
+      )::int AS failed,
+      count(*) FILTER (WHERE status = 'cancelled' AND cancelled_by_role = 'rider')::int AS rider_cancelled,
+      count(*) FILTER (
+        WHERE scheduled_at IS NOT NULL AND reminder_stamps ? 'w5' AND status <> 'completed'
+      )::int AS strandings,
+      count(*) FILTER (
+        WHERE scheduled_at IS NOT NULL AND reminder_stamps ? 'w5' AND status = 'completed'
+      )::int AS near_misses,
+      count(*) FILTER (
+        WHERE scheduled_at IS NOT NULL AND arrived_at IS NOT NULL
+          AND arrived_at > scheduled_at + make_interval(mins => ${LATE_PICKUP_MINUTES})
+      )::int AS late_pickups,
+      COALESCE(max(
+        CASE WHEN scheduled_at IS NOT NULL AND arrived_at IS NOT NULL
+             THEN EXTRACT(EPOCH FROM (arrived_at - scheduled_at)) / 60 END
+      ), 0)::float AS worst_late_minutes
+    FROM rides
+    WHERE COALESCE(scheduled_at, created_at) >= ${start} AND COALESCE(scheduled_at, created_at) < ${end}
+  `);
+  const y = (yesterday.rows?.[0] ?? {}) as Record<string, unknown>;
+
+  // Fare accuracy: what was charged versus the quote less any promo. A ride
+  // the driver or rider ended early is metered on purpose and excluded.
+  const deviations = await db.execute(sql`
+    SELECT id, estimated_fare, actual_fare, COALESCE(promo_discount_applied, 0) AS promo
+    FROM rides
+    WHERE status = 'completed'
+      AND cancelled_by IS NULL
+      AND actual_fare IS NOT NULL AND estimated_fare IS NOT NULL AND estimated_fare > 0
+      AND ABS(actual_fare - GREATEST(0, estimated_fare - COALESCE(promo_discount_applied, 0))) > 0.01
+      AND COALESCE(scheduled_at, created_at) >= ${start} AND COALESCE(scheduled_at, created_at) < ${end}
+    ORDER BY COALESCE(scheduled_at, created_at)
+    LIMIT 20
+  `);
+
+  const horizon = new Date(now.getTime() + 24 * 3_600_000);
+  const danger = new Date(now.getTime() + DANGER_WINDOW_HOURS * 3_600_000);
+  const ahead = await db.execute(sql`
+    SELECT
+      count(*)::int AS unclaimed_24h,
+      count(*) FILTER (WHERE scheduled_at <= ${danger})::int AS unclaimed_danger,
+      count(*) FILTER (WHERE plan_id IS NOT NULL)::int AS unclaimed_plan
+    FROM rides
+    WHERE status = 'pending' AND driver_id IS NULL
+      AND scheduled_at IS NOT NULL AND scheduled_at > ${now} AND scheduled_at <= ${horizon}
+  `);
+  const a = (ahead.rows?.[0] ?? {}) as Record<string, unknown>;
+  const plans = await db.execute(sql`SELECT count(*)::int AS n FROM weekly_ride_plans WHERE is_active`);
+
+  return {
+    booked: n(y.booked),
+    delivered: n(y.delivered),
+    failed: n(y.failed),
+    riderCancelled: n(y.rider_cancelled),
+    strandings: n(y.strandings),
+    nearMisses: n(y.near_misses),
+    fareDeviations: (deviations.rows ?? []).map((r: any) => ({
+      rideId: String(r.id),
+      quoted: Math.round(Math.max(0, n(r.estimated_fare) - n(r.promo)) * 100) / 100,
+      charged: n(r.actual_fare),
+    })),
+    latePickups: n(y.late_pickups),
+    worstLateMinutes: Math.round(n(y.worst_late_minutes)),
+    ahead: {
+      unclaimedNext24h: n(a.unclaimed_24h),
+      unclaimedInDangerWindow: n(a.unclaimed_danger),
+      unclaimedPlanRides: n(a.unclaimed_plan),
+      activePlans: n((plans.rows?.[0] as any)?.n),
+    },
+  };
+}
+
+export async function buildRiderPromiseReview(now: Date = new Date()): Promise<{ window: ReviewWindow; metrics: RiderPromiseMetrics; text: string }> {
+  const window = reviewWindow(now);
+  const metrics = await collectRiderPromiseMetrics(window, now);
+  return { window, metrics, text: formatRiderPromiseReview(window, metrics) };
+}
+
+export type SendResult =
+  | { sent: true; dayKey: string; text: string; metrics: RiderPromiseMetrics }
+  | { sent: false; reason: "not_due" | "already_sent"; dayKey: string };
+
+/**
+ * Send today's review if it is due and has not gone out yet. Safe to call
+ * every minute from any number of instances.
+ */
+export async function maybeSendRiderPromiseReview(storage: IStorage, now: Date = new Date()): Promise<SendResult> {
+  const dayKey = localDayKey(now);
+  if (!isReviewDue(now)) return { sent: false, reason: "not_due", dayKey };
+  const claimed = await storage.claimWebhookEvent(CLAIM_PROVIDER, dayKey, "daily");
+  if (!claimed) return { sent: false, reason: "already_sent", dayKey };
+  try {
+    const { window, metrics, text } = await buildRiderPromiseReview(now);
+    opsAlert(text);
+    console.log(`[rider-promise-review] sent for ${window.dayKey}: booked=${metrics.booked} delivered=${metrics.delivered} failed=${metrics.failed} strandings=${metrics.strandings} fareMismatches=${metrics.fareDeviations.length}`);
+    return { sent: true, dayKey, text, metrics };
+  } catch (err) {
+    // Give the next sweep another go rather than swallowing the day.
+    await storage.releaseWebhookEvent(CLAIM_PROVIDER, dayKey).catch(() => {});
+    throw err;
+  }
+}
