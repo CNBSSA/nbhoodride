@@ -77,6 +77,7 @@ import { checkScheduleTime, MIN_SCHEDULE_LEAD_HOURS, MAX_SCHEDULE_DAYS_AHEAD } f
 import { normalizePlanDays, planFare, validatePlanSchedule, describePlanDays, describePlanTime, PLAN_TIMEZONE } from "@shared/weeklyPlan";
 import { welcomeCreditFor } from "@shared/farePolicy";
 import { materializeWeeklyPlan, materializeAllWeeklyPlans } from "./weeklyPlans";
+import { buildRiderPromiseReview, maybeSendRiderPromiseReview } from "./riderPromiseReview";
 import {
   classifyKeyword,
   friendRideArrivedSms,
@@ -9294,6 +9295,30 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
     }
   });
 
+  // Rider Promise Review (shared/riderPromise.ts): the numbers behind
+  // "reliable". GET builds it for any moment; POST { send: true } runs the
+  // real once-a-day send path (claims the day, posts to Telegram).
+  app.get('/api/admin/analytics/rider-promise-review', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const at = typeof req.query.at === "string" && req.query.at ? new Date(req.query.at) : new Date();
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ message: "at must be an ISO timestamp" });
+      res.json(await buildRiderPromiseReview(at));
+    } catch (error) {
+      console.error("rider promise review error:", error);
+      res.status(500).json({ message: "Failed to build the Rider Promise Review" });
+    }
+  });
+  app.post('/api/admin/analytics/rider-promise-review', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const at = typeof req.body?.at === "string" && req.body.at ? new Date(req.body.at) : new Date();
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ message: "at must be an ISO timestamp" });
+      res.json(await maybeSendRiderPromiseReview(storage, at));
+    } catch (error) {
+      console.error("rider promise review send error:", error);
+      res.status(500).json({ message: "Failed to send the Rider Promise Review" });
+    }
+  });
+
   app.post('/api/admin/analytics/materialize-weekly-plans', isAdminOrSessionAuth, async (_req: any, res) => {
     try {
       const result = await materializeAllWeeklyPlans(storage);
@@ -10448,6 +10473,9 @@ Generate the FAQ list.`;
       if (now.getMinutes() % 15 === 0) {
         materializeAllWeeklyPlans(storage, now).catch((err) => console.error("weekly plan sweep failed:", err));
       }
+
+      // ── Rider Promise Review: 4:00 AM Eastern, once a day, to Telegram ──
+      maybeSendRiderPromiseReview(storage, now).catch((err) => console.error("rider promise review failed:", err));
 
       // ── Midnight cleanup ──
       if (now.getHours() === 0 && now.getMinutes() === 0) {

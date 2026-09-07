@@ -17,3 +17,6 @@ Corporation-wide workflow and audits: `autonomusFV/CLAUDE.md`. Product positioni
 Develop on `develop`; promote to `main` only with Festus's explicit approval after testing. Planning → change-impact audit → implement → test → post-implementation audit.
 
 **Promotion timing (standing instruction, Festus 2026-09-01):** promotions to `main` are batched to the daily quiet window (~03:30 ET / 07:30 UTC) so deploy restarts never blip riders during riding hours. Merge reviewed work to `develop` any time; it ships to `main` in the next window. Exception: urgent rider-blocking fixes promote immediately.
+
+
+**Rider Promise Review (Festus 2026-09-07):** "reliable" means a rider who books a ride gets picked up, on time, at the quoted price — every time. The numbers are defined in `shared/riderPromise.ts` (rides delivered, strandings, fare accuracy, late pickups, plus what is unclaimed in the next 24h) and computed in `server/riderPromiseReview.ts`. The server posts it to the ops Telegram chat once a day at 4:00 AM Eastern; it is separate from, and named differently to, the GitHub "Daily Reliability Report" (code health). Admin: `GET/POST /api/admin/analytics/rider-promise-review`.
