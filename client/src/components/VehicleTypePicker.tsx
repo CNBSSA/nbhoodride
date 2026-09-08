@@ -1,4 +1,8 @@
-import { VEHICLE_TYPE_DESCRIPTIONS, VEHICLE_TYPE_LABELS, VEHICLE_TYPES, type VehicleType } from "@shared/vehicleTypes";
+import { useQuery } from "@tanstack/react-query";
+import {
+  VEHICLE_TYPE_DESCRIPTIONS, VEHICLE_TYPE_LABELS, VEHICLE_TYPES, describeVehicleFare, vehicleFareRuleSentence,
+  type VehicleType, type VehicleRateOptions,
+} from "@shared/vehicleTypes";
 import { Car, Users, Accessibility } from "lucide-react";
 
 interface VehicleTypePickerProps {
@@ -14,8 +18,16 @@ const TYPE_ICONS: Record<VehicleType, typeof Car> = {
   wheelchair: Accessibility,
 };
 
-/** Rider selects vehicle class before confirming a ride. */
+/**
+ * Rider selects vehicle class before confirming a ride. Each option says
+ * what it costs relative to Standard (XL and SUV are priced higher — the
+ * multipliers come from the rate card), and one line states the rule.
+ */
 export function VehicleTypePicker({ value, onChange, disabled }: VehicleTypePickerProps) {
+  const { data: rates } = useQuery<VehicleRateOptions & { vehicleRule?: string }>({
+    queryKey: ["/api/fares/rates"],
+    staleTime: 5 * 60_000,
+  });
   return (
     <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-3 space-y-2" data-testid="vehicle-type-picker">
       <p className="text-sm font-medium text-gray-800">Vehicle type</p>
@@ -23,6 +35,7 @@ export function VehicleTypePicker({ value, onChange, disabled }: VehicleTypePick
         {VEHICLE_TYPES.map((type) => {
           const Icon = TYPE_ICONS[type];
           const selected = value === type;
+          const fare = describeVehicleFare(type, rates ?? {});
           return (
             <button
               key={type}
@@ -43,10 +56,16 @@ export function VehicleTypePicker({ value, onChange, disabled }: VehicleTypePick
               <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">
                 {VEHICLE_TYPE_DESCRIPTIONS[type]}
               </p>
+              <p className={`text-[10px] mt-0.5 font-semibold ${type === "xl" || type === "suv" ? "text-amber-700" : "text-green-700"}`} data-testid={`vehicle-fare-${type}`}>
+                {fare}
+              </p>
             </button>
           );
         })}
       </div>
+      <p className="text-[11px] text-muted-foreground leading-snug" data-testid="text-vehicle-fare-rule">
+        {rates?.vehicleRule ?? vehicleFareRuleSentence(rates ?? {})}
+      </p>
     </div>
   );
 }

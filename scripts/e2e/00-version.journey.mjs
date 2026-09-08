@@ -15,7 +15,7 @@ export async function run({ base }) {
   const root = await fetch(base + "/", html);
   const rootBody = await root.text();
   check("logged-out visit to / gets the business page", root.status === 200 && !rootBody.includes('id="root"') && rootBody.includes("Rideshare"), `status=${root.status}`);
-  for (const must of ["Thrynova Insights LLC", "Refunds, cancellations", "$3.50", "Promotions", "30% off", "coworker group rate holds while at least 2 seats", "Contact us", "/privacy", "/terms"]) {
+  for (const must of ["Thrynova Insights LLC", "Refunds, cancellations", "$3.50", "Promotions", "30% off", "coworker group rate holds while at least 2 seats", "XL rides are priced at", "SUV rides at", "wheelchair-accessible rides cost the same as Standard", "Contact us", "/privacy", "/terms"]) {
     check(`business page states: ${must}`, rootBody.includes(must));
   }
   const pwa = await fetch(base + "/?source=pwa", html);
