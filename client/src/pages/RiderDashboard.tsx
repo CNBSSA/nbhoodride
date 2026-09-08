@@ -118,6 +118,8 @@ export default function RiderDashboard() {
   const [fareEstimate, setFareEstimate] = useState<any>(null);
   const [estimatedDistance, setEstimatedDistance] = useState<number | null>(null);
   const [estimatedDuration, setEstimatedDuration] = useState<number | null>(null);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [quoteAttempt, setQuoteAttempt] = useState(0);
   const [pickupInstructions, setPickupInstructions] = useState("");
   const [rideForFriend, setRideForFriend] = useState(false);
   const [passengerName, setPassengerName] = useState("");
@@ -360,29 +362,27 @@ export default function RiderDashboard() {
   useEffect(() => {
     if (!selectedDriverId || !estimatedDistance || !estimatedDuration) return;
     setCalculatingFare(true);
-    // Build a client-side fallback fare so the rider can always confirm
-    const roadMiles = estimatedDistance * 1.3;
-    const baseFare = 4.00;
-    const timeCharge = parseFloat((0.29 * estimatedDuration).toFixed(2));
-    const distanceCharge = parseFloat((0.90 * roadMiles).toFixed(2));
-    const total = parseFloat(Math.max(7.65, Math.min(100, baseFare + timeCharge + distanceCharge)).toFixed(2));
-    const fallbackFare = { baseFare, timeCharge, distanceCharge, total };
-
+    setQuoteError(null);
+    // The quote comes from the server's rate card, or not at all. The old
+    // fallback priced the ride on the phone with numbers of its own (and
+    // doubled the road factor), and the server trusted that number at
+    // booking — exactly the class of mistake that charged $7 for a $23 ride.
     apiRequest('POST', '/api/rides/calculate-fare', {
       distance: estimatedDistance,
       duration: estimatedDuration,
       driverId: selectedDriverId === ANY_DRIVER_ID ? undefined : selectedDriverId,
       vehicleType: requestedVehicleType,
     }).then(r => r.json()).then(data => {
+      if (!Number.isFinite(Number(data?.total))) throw new Error("no quote");
       setFareEstimate(data);
     }).catch(() => {
-      // Use client-side estimate if API fails — booking still proceeds
-      setFareEstimate(fallbackFare);
+      setFareEstimate(null);
+      setQuoteError("We couldn't get a fare quote. Check your connection and tap Retry.");
     }).finally(() => {
       setCalculatingFare(false);
       setPanel("confirm");
     });
-  }, [selectedDriverId, estimatedDistance, estimatedDuration, requestedVehicleType]);
+  }, [selectedDriverId, estimatedDistance, estimatedDuration, requestedVehicleType, quoteAttempt]);
 
   // ── Mutations ──
   const bookRideMutation = useMutation({
@@ -1574,6 +1574,12 @@ export default function RiderDashboard() {
                 className="px-4 pt-2 border-t border-gray-100 bg-white flex-shrink-0"
                 style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom, 1.5rem))' }}
               >
+                {quoteError && !calculatingFare && (
+                  <div className="mb-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700 flex items-center justify-between gap-2" data-testid="quote-error">
+                    <span>{quoteError}</span>
+                    <button type="button" onClick={() => setQuoteAttempt((n) => n + 1)} className="shrink-0 h-9 px-3 rounded-full bg-white border border-red-300 font-semibold" data-testid="button-retry-quote">Retry</button>
+                  </div>
+                )}
                 {fareEstimate && selectedDriverId && (
                   <div className="flex items-center justify-between text-xs text-gray-500 mb-2 px-1">
                     <span>{walletEnabled ? PG_CARD.payLine : "Charged to your card"}</span>
@@ -1584,7 +1590,7 @@ export default function RiderDashboard() {
                 )}
                 <Button
                   onClick={handleConfirmRide}
-                  disabled={!selectedDriverId || !destinationAddress || bookRideMutation.isPending || calculatingFare}
+                  disabled={!selectedDriverId || !destinationAddress || bookRideMutation.isPending || calculatingFare || !fareEstimate}
                   className="w-full h-14 text-base font-bold rounded-2xl shadow-lg shadow-blue-600/25"
                   data-testid="button-confirm-booking"
                 >
