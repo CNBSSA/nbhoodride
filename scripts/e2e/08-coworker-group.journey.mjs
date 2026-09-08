@@ -93,7 +93,42 @@ export async function run({ base, db }) {
     const up = await bola.session.req("GET", "/api/rides/scheduled");
     const mine = (up.json ?? []).find((r) => r.groupId === cleanup.groupId);
     check("joiner now sees the driver on their upcoming ride", !!mine?.driverId && mine.driverId === FIXTURES.driver.id, `driverId=${mine?.driverId}`);
+
+    // Group rate policy (shared/groupRatePolicy.ts): 30% holds at two or
+    // more seats; below that, unconfirmed seats go back to the solo fare
+    // with a free-cancel window, and everyone left is told either way.
+    section("A coworker leaves: the two left keep the rate and are told");
+    const rideOf = async (riderId) => (await db.query("SELECT id, estimated_fare, original_fare, group_discount_amount, free_cancel_until, status FROM rides WHERE group_id=$1 AND rider_id=$2", [cleanup.groupId, riderId])).rows[0];
+    const noticesFor = async (riderId) => (await db.query("SELECT title, body FROM in_app_notifications WHERE user_id=$1 AND type='group_seat_released' ORDER BY created_at", [riderId])).rows;
+    const bolaRide = await rideOf(bola.id);
+    const leave1 = await bola.session.req("POST", `/api/rides/${bolaRide.id}/cancel`, { reason: "e2e: coworker leaves" });
+    check("first coworker cancels free (scheduled, hours out)", leave1.status === 200 && Number(leave1.json?.cancellationFee ?? 0) === 0, JSON.stringify(leave1.json?.message ?? leave1.json?.cancellationFee ?? leave1.status));
+    const orgAfter1 = await rideOf(FIXTURES.rider.id);
+    const chidiAfter1 = await rideOf(chidi.id);
+    check("with two riders left the group rate still holds", Number(orgAfter1.estimated_fare) === 14 && Math.abs(Number(chidiAfter1.estimated_fare) - Number(chidiAfter1.original_fare) * 0.7) < 0.011, `org=${orgAfter1.estimated_fare} chidi=${chidiAfter1.estimated_fare}`);
+    const { rows: [gAfter1] } = await db.query("SELECT filled_slots, discount_active FROM ride_groups WHERE id=$1", [cleanup.groupId]);
+    check("seat released, rate still on", gAfter1.filled_slots === 2 && gAfter1.discount_active === true, JSON.stringify(gAfter1));
+    await new Promise((r) => setTimeout(r, 300));
+    const orgNotices1 = await noticesFor(FIXTURES.rider.id);
+    check("remaining riders are told, and that their fare is unchanged", orgNotices1.length >= 1 && /unchanged/.test(orgNotices1.at(-1).body) && /2 riders/.test(orgNotices1.at(-1).body), JSON.stringify(orgNotices1.at(-1)));
+
+    section("Down to one before the driver confirms: re-quoted, told, free to cancel");
+    const chidiRide = await rideOf(chidi.id);
+    const leave2 = await chidi.session.req("POST", `/api/rides/${chidiRide.id}/cancel`, { reason: "e2e: coworker leaves" });
+    check("second coworker cancels", leave2.status === 200, JSON.stringify(leave2.json?.message ?? leave2.status));
+    const orgAfter2 = await rideOf(FIXTURES.rider.id);
+    check("the last rider is back at the solo fare ($14 → $20)", Number(orgAfter2.estimated_fare) === 20 && Number(orgAfter2.group_discount_amount) === 0, `fare=${orgAfter2.estimated_fare} discount=${orgAfter2.group_discount_amount}`);
+    const { rows: [gAfter2] } = await db.query("SELECT filled_slots, discount_active FROM ride_groups WHERE id=$1", [cleanup.groupId]);
+    check("group rate switched off", gAfter2.filled_slots === 1 && gAfter2.discount_active === false, JSON.stringify(gAfter2));
+    const untilMs = orgAfter2.free_cancel_until ? new Date(orgAfter2.free_cancel_until).getTime() - Date.now() : 0;
+    check("a ~30-minute free-cancel window is open", untilMs > 25 * 60_000 && untilMs <= 30 * 60_000 + 5000, `window=${Math.round(untilMs / 60_000)} min`);
+    await new Promise((r) => setTimeout(r, 300));
+    const orgNotices2 = await noticesFor(FIXTURES.rider.id);
+    check("the last rider is told the rate is gone, the new fare, and that cancelling is free", orgNotices2.length >= 2 && /solo rate, \$20\.00/.test(orgNotices2.at(-1).body) && /cancel free/.test(orgNotices2.at(-1).body), JSON.stringify(orgNotices2.at(-1)));
+    const requotePreview = await organizer.req("GET", `/api/rides/${orgAfter2.id}/cancel-preview`);
+    check("cancel preview honours the window with the reason", requotePreview.status === 200 && Number(requotePreview.json?.fee) === 0 && /re-quoted/.test(requotePreview.json?.reason ?? ""), JSON.stringify(requotePreview.json));
   } finally {
+    await db.query("DELETE FROM in_app_notifications WHERE type='group_seat_released' AND user_id = ANY($1::varchar[])", [[FIXTURES.rider.id, bola.id, chidi.id, dara.id]]).catch(() => {});
     if (cleanup.groupId) {
       const { rows } = await db.query("SELECT id FROM rides WHERE group_id=$1", [cleanup.groupId]).catch(() => ({ rows: [] }));
       await deleteRides(db, rows.map((r) => r.id)).catch(() => {});

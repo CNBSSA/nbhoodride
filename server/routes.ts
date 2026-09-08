@@ -77,6 +77,7 @@ import { checkScheduleTime, MIN_SCHEDULE_LEAD_HOURS, MAX_SCHEDULE_DAYS_AHEAD } f
 import { normalizePlanDays, planFare, validatePlanSchedule, describePlanDays, describePlanTime, PLAN_TIMEZONE } from "@shared/weeklyPlan";
 import { welcomeCreditFor } from "@shared/farePolicy";
 import { emergencyShareLinkOpen, EMERGENCY_SHARE_EXPIRED_MESSAGE } from "@shared/emergencyPolicy";
+import { GROUP_REQUOTE_FREE_CANCEL_MINUTES, groupRateHolds, seatChangeNotice } from "@shared/groupRatePolicy";
 import { materializeWeeklyPlan, materializeAllWeeklyPlans } from "./weeklyPlans";
 import { buildRiderPromiseReview, maybeSendRiderPromiseReview } from "./riderPromiseReview";
 import {
@@ -4434,6 +4435,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
             if (group && group.status === "active" &&
                 group.scheduledAt && new Date(group.scheduledAt) > new Date()) {
               await storage.updateRideGroup(ride.groupId, { status: "open" } as any);
+            }
+
+            // Coworker group rate (shared/groupRatePolicy.ts): the 30% holds
+            // while at least two seats are taken. Below that, seats the driver
+            // has not yet confirmed go back to the solo fare with a free-cancel
+            // window; confirmed seats keep their locked fare. Everyone left is
+            // told either way.
+            if (ride.rideType === "shared_schedule") {
+              const remaining = (await storage.getActiveGroupRides(ride.groupId)).filter((r) => r.id !== rideId);
+              let requotedIds: string[] = [];
+              let freeCancelUntil: Date | null = null;
+              if (remaining.length > 0 && !groupRateHolds(remaining.length) && group?.discountActive) {
+                requotedIds = await storage.revertGroupDiscount(ride.groupId);
+                if (requotedIds.length > 0) {
+                  freeCancelUntil = new Date(Date.now() + GROUP_REQUOTE_FREE_CANCEL_MINUTES * 60_000);
+                  for (const id of requotedIds) await storage.setFreeCancelUntil(id, freeCancelUntil);
+                }
+              }
+              for (const other of remaining) {
+                const requoted = requotedIds.includes(other.id);
+                const fare = requoted ? (other.originalFare ?? other.estimatedFare ?? "0") : (other.estimatedFare ?? "0");
+                const notice = seatChangeNotice({
+                  remaining: remaining.length,
+                  requoted,
+                  fare,
+                  locked: !requoted && !groupRateHolds(remaining.length),
+                });
+                const otherWs = activeConnections.get(other.riderId);
+                if (otherWs?.readyState === WebSocket.OPEN) {
+                  otherWs.send(JSON.stringify({
+                    type: 'group_seat_released',
+                    rideId: other.id,
+                    groupId: ride.groupId,
+                    remaining: remaining.length,
+                    requoted,
+                    fare: Number(fare).toFixed(2),
+                    freeCancelUntil: requoted && freeCancelUntil ? freeCancelUntil.toISOString() : null,
+                    title: notice.title,
+                    message: notice.body,
+                  }));
+                }
+                deliverUserNotification(other.riderId, {
+                  type: 'group_seat_released',
+                  title: notice.title,
+                  body: notice.body,
+                  tag: `group-${ride.groupId}`,
+                  url: '/',
+                  data: { rideId: other.id, groupId: ride.groupId, remaining: remaining.length, requoted },
+                }).catch((err) => console.error("group seat notice failed:", err));
+              }
+              if (requotedIds.length > 0) {
+                await logRideAudit({
+                  rideId,
+                  event: "group_rate_reverted",
+                  actorId: userId,
+                  details: { groupId: ride.groupId, requotedRideIds: requotedIds, freeCancelUntil: freeCancelUntil?.toISOString() },
+                });
+              }
             }
           } catch (seatErr) {
             console.error(`Failed to release group seat on cancel of ride ${rideId}:`, seatErr);
