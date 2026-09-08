@@ -76,6 +76,7 @@ import { validateFriendRideInput } from "@shared/rideForFriend";
 import { checkScheduleTime, MIN_SCHEDULE_LEAD_HOURS, MAX_SCHEDULE_DAYS_AHEAD } from "@shared/schedulingPolicy";
 import { normalizePlanDays, planFare, validatePlanSchedule, describePlanDays, describePlanTime, PLAN_TIMEZONE } from "@shared/weeklyPlan";
 import { welcomeCreditFor } from "@shared/farePolicy";
+import { emergencyShareLinkOpen, EMERGENCY_SHARE_EXPIRED_MESSAGE } from "@shared/emergencyPolicy";
 import { materializeWeeklyPlan, materializeAllWeeklyPlans } from "./weeklyPlans";
 import { buildRiderPromiseReview, maybeSendRiderPromiseReview } from "./riderPromiseReview";
 import {
@@ -5868,6 +5869,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!incident) {
         return res.status(404).json({ message: "Emergency incident not found" });
       }
+      // The share link is a capability to watch someone's location. It
+      // outlives the incident by a grace period only (shared/emergencyPolicy.ts).
+      if (!emergencyShareLinkOpen(incident)) {
+        return res.status(410).json({ message: EMERGENCY_SHARE_EXPIRED_MESSAGE });
+      }
       
       res.json(incident);
     } catch (error) {
@@ -6244,6 +6250,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(409).json({ message: "Incident already resolved", incident: found });
       }
       await storage.logAdminAction(req.adminUser.id, 'resolve_emergency', 'emergency_incident', id, {});
+      // Guardians watching the share link learn it is over, and the live
+      // location stream to them stops here — not whenever they close the tab.
+      sendToIncidentWatchers(id, { type: 'emergency_resolved', incidentId: id });
+      incidentWatchers.delete(id);
       res.json({ success: true, incident });
     } catch (error) {
       console.error("Error resolving emergency incident:", error);
@@ -10312,6 +10322,10 @@ Generate the FAQ list.`;
               const watchedIncident = await storage.getEmergencyIncidentByToken(message.shareToken);
               if (!watchedIncident) {
                 ws.send(JSON.stringify({ type: 'error', message: 'Invalid share token' }));
+                break;
+              }
+              if (!emergencyShareLinkOpen(watchedIncident)) {
+                ws.send(JSON.stringify({ type: 'error', message: EMERGENCY_SHARE_EXPIRED_MESSAGE }));
                 break;
               }
               let watchers = incidentWatchers.get(watchedIncident.id);

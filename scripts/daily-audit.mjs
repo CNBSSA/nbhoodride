@@ -63,6 +63,30 @@ if (parity.status === 0 && parity.stdout?.trim()) {
 
 run("npm run check", "npm", ["run", "check"]);
 run("npm test", "npm", ["test"]);
+
+// On a push to main the gate starts within seconds, but Railway takes a few
+// minutes to build and deploy that commit. Probing production before the
+// deploy lands judges the OLD build against the NEW expectations (which is
+// how a green promotion produced a red gate on 2026-09-08). When the
+// workflow tells us which commit should be live, wait for /api/version to
+// report it — up to a bounded time — before the production probes.
+const expectSha = (process.env.EXPECT_BUILD_SHA || "").trim().slice(0, 12);
+if (expectSha) {
+  console.log(`\n▶ waiting for production to serve build ${expectSha}`);
+  const deadline = Date.now() + Number(process.env.DEPLOY_WAIT_SECONDS || 720) * 1000;
+  let live = "";
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${baseUrl}/api/version`, { redirect: "follow", cache: "no-store" });
+      if (res.ok) live = String((await res.json())?.id ?? "");
+    } catch {}
+    if (live === expectSha) break;
+    await new Promise((r) => setTimeout(r, 15_000));
+  }
+  if (live === expectSha) console.log(`  production is on ${live}`);
+  else warnings.push(`production still serving build ${live || "unknown"} after the deploy wait (expected ${expectSha}) — probes below judge the previous build`);
+}
+
 run("smoke:production", "npm", ["run", "smoke:production"], {
   env: { ...process.env, BASE_URL: baseUrl },
 });
