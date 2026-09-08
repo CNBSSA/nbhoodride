@@ -36,7 +36,7 @@ import { getCountyFromCoords, driverCoversCounty } from "./countyService";
 import { storage } from "./storage";
 import { getDriverTrustContext, filterDriversByTrustPreferences } from "./agents/trust";
 import { rankDriversByTrustAndEta } from "@shared/trustScore";
-import { normalizeVehicleType, vehicleTypeMatches } from "@shared/vehicleTypes";
+import { normalizeVehicleType, vehicleTypeMatches, vehicleFareMultiplier, formatMultiplier, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 import { isAllowedPickup, isAllowedDestination, PICKUP_OUTSIDE_MD_MESSAGE, DESTINATION_OUTSIDE_AREA_MESSAGE } from "@shared/serviceArea";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -85,6 +85,13 @@ export interface FareEstimate {
   distanceMiles: number;
   durationMinutes: number;
   formula: string;
+  /** Vehicle-class pricing (shared/vehicleTypes.ts). */
+  vehicleType: string;
+  vehicleMultiplier: number;
+  /** What the vehicle class adds on top of the standard fare. */
+  vehicleAdjustment: number;
+  /** The standard-vehicle fare the multiplier was applied to. */
+  standardTotal: number;
 }
 
 export interface DriverMatch {
@@ -250,6 +257,8 @@ const SUGGESTED_RATES = {
   perMinuteRate: 0.29,
   perMileRate: 0.9,
   surgeAdjustment: 0,
+  xlMultiplier: 1.5,
+  suvMultiplier: 1.8,
 };
 
 /**
@@ -263,6 +272,7 @@ export function estimateFare(
     promoRidesRemaining?: number;
     wantsSharedRide?: boolean;
     sharedDiscountPct?: number;
+    vehicleType?: string | null;
   } = {}
 ): FareEstimate {
   const rates = options.rates ?? SUGGESTED_RATES;
@@ -271,7 +281,12 @@ export function estimateFare(
   const distanceCharge = rates.perMileRate * distanceMiles;
   const surgeAdjustment = rates.surgeAdjustment;
   const subtotal = baseFare + timeCharge + distanceCharge + surgeAdjustment;
-  const total = Math.max(rates.minimumFare, Math.min(100, subtotal));
+  const standardTotal = Math.max(rates.minimumFare, Math.min(100, subtotal));
+  // Vehicle class multiplies the standard fare; the $100 cap still applies.
+  const vehicleType = normalizeVehicleType(options.vehicleType ?? undefined);
+  const vehicleMultiplier = vehicleFareMultiplier(vehicleType, rates);
+  const total = Math.min(100, round2(standardTotal * vehicleMultiplier));
+  const vehicleAdjustment = round2(total - standardTotal);
 
   const promoDiscount =
     (options.promoRidesRemaining ?? 0) > 0 ? Math.min(5, total) : 0;
@@ -298,7 +313,11 @@ export function estimateFare(
     totalAfterDiscounts: round2(totalAfterDiscounts),
     distanceMiles: round2(distanceMiles),
     durationMinutes,
-    formula: `Base $${rates.baseFare.toFixed(2)} + ($${rates.perMinuteRate}/min × ${durationMinutes} min) + ($${rates.perMileRate}/mi × ${distanceMiles.toFixed(2)} mi)`,
+    formula: `Base $${rates.baseFare.toFixed(2)} + ($${rates.perMinuteRate}/min × ${durationMinutes} min) + ($${rates.perMileRate}/mi × ${distanceMiles.toFixed(2)} mi)${vehicleMultiplier !== 1 ? ` × ${formatMultiplier(vehicleMultiplier)} ${VEHICLE_TYPE_LABELS[vehicleType]}` : ""}`,
+    vehicleType,
+    vehicleMultiplier,
+    vehicleAdjustment,
+    standardTotal: round2(standardTotal),
   };
 }
 

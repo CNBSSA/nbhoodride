@@ -76,3 +76,49 @@ export function filterDriversByVehicleType<T extends { vehicles: Array<{ vehicle
     d.vehicles.some((v) => vehicleTypeMatches(req, v.vehicleType)),
   );
 }
+
+// ── Vehicle-class pricing ────────────────────────────────────────────────
+// XL and SUV rides cost more than the standard fare: the whole standard
+// fare (base + time + distance, after the minimum) is multiplied. The
+// multipliers live on the platform rate card (admin-editable); these are
+// the defaults and the fallback. Wheelchair-accessible rides are priced the
+// same as Standard on purpose — accessibility is not an upgrade.
+
+export const DEFAULT_VEHICLE_FARE_MULTIPLIERS: Record<VehicleType, number> = {
+  standard: 1,
+  xl: 1.5,
+  suv: 1.8,
+  wheelchair: 1,
+};
+
+export interface VehicleRateOptions {
+  xlMultiplier?: number | null;
+  suvMultiplier?: number | null;
+}
+
+const sane = (v: number | null | undefined, fallback: number) =>
+  typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 5 ? v : fallback;
+
+export function vehicleFareMultiplier(type: VehicleType | string | null | undefined, rates: VehicleRateOptions = {}): number {
+  const t = normalizeVehicleType(type ?? undefined);
+  if (t === "xl") return sane(rates.xlMultiplier, DEFAULT_VEHICLE_FARE_MULTIPLIERS.xl);
+  if (t === "suv") return sane(rates.suvMultiplier, DEFAULT_VEHICLE_FARE_MULTIPLIERS.suv);
+  return 1;
+}
+
+/** "1.5×" — trims trailing zeros. */
+export function formatMultiplier(m: number): string {
+  return `${Number(m.toFixed(2))}×`;
+}
+
+/** Short fare label for a picker option. */
+export function describeVehicleFare(type: VehicleType, rates: VehicleRateOptions = {}): string {
+  if (type === "standard") return "Standard fare";
+  if (type === "wheelchair") return "Same fare as Standard";
+  return `${formatMultiplier(vehicleFareMultiplier(type, rates))} the standard fare`;
+}
+
+/** One sentence for the picker, the business page and the Terms. */
+export function vehicleFareRuleSentence(rates: VehicleRateOptions = {}): string {
+  return `XL rides are priced at ${formatMultiplier(vehicleFareMultiplier("xl", rates))} the standard fare and SUV rides at ${formatMultiplier(vehicleFareMultiplier("suv", rates))}; wheelchair-accessible rides cost the same as Standard. The fare shown before you confirm already includes this.`;
+}

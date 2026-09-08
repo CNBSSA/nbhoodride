@@ -49,7 +49,7 @@ export const TERMS_SECTIONS: LegalSection[] = [
   {
     heading: "3. Payments",
     paragraphs: [
-      "Riders pay a per-ride fare charged to their payment card, processed securely by Stripe. When a driver accepts, the fare is authorized as a hold on the card and captured when the ride completes, or released if the ride is cancelled. There is no stored-value balance or prepaid wallet. No surge pricing is applied on PG Ride — fares are calculated transparently using distance and time only, and the fare shown before you confirm is the fare charged.",
+      "Riders pay a per-ride fare charged to their payment card, processed securely by Stripe. When a driver accepts, the fare is authorized as a hold on the card and captured when the ride completes, or released if the ride is cancelled. There is no stored-value balance or prepaid wallet. No surge pricing is applied on PG Ride — fares are calculated transparently using distance and time only, and the fare shown before you confirm is the fare charged. XL and SUV vehicles are priced at a multiple of the standard fare, shown before you confirm; wheelchair-accessible rides cost the same as Standard.",
     ],
   },
   {

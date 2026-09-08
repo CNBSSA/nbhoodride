@@ -130,6 +130,12 @@ export function RideReceiptModal({
                     <span>Subtotal</span>
                     <span>${receipt.subtotal.toFixed(2)}</span>
                   </div>
+                  {(receipt.vehicleMultiplier ?? 1) !== 1 && (
+                    <div className="flex justify-between text-amber-700">
+                      <span>{(receipt.requestedVehicleType ?? "vehicle").toUpperCase()} vehicle (×{Number(Number(receipt.vehicleMultiplier).toFixed(2))})</span>
+                      <span>+${Number(receipt.vehicleAdjustment ?? 0).toFixed(2)}</span>
+                    </div>
+                  )}
                   {receipt.promoDiscount > 0 && (
                     <div className="flex justify-between text-green-700">
                       <span>Promo credit</span>

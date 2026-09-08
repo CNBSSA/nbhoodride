@@ -372,6 +372,7 @@ export default function RiderDashboard() {
       distance: estimatedDistance,
       duration: estimatedDuration,
       driverId: selectedDriverId === ANY_DRIVER_ID ? undefined : selectedDriverId,
+      vehicleType: requestedVehicleType,
     }).then(r => r.json()).then(data => {
       setFareEstimate(data);
     }).catch(() => {
@@ -381,7 +382,7 @@ export default function RiderDashboard() {
       setCalculatingFare(false);
       setPanel("confirm");
     });
-  }, [selectedDriverId, estimatedDistance, estimatedDuration]);
+  }, [selectedDriverId, estimatedDistance, estimatedDuration, requestedVehicleType]);
 
   // ── Mutations ──
   const bookRideMutation = useMutation({
@@ -1537,6 +1538,12 @@ export default function RiderDashboard() {
                     <div className="flex justify-between"><span>Base fare</span><span className="font-medium">${fareEstimate.baseFare?.toFixed(2)}</span></div>
                     <div className="flex justify-between"><span>Time ({estimatedDuration} min)</span><span className="font-medium">${fareEstimate.timeCharge?.toFixed(2)}</span></div>
                     <div className="flex justify-between"><span>Distance ({estimatedDistance} mi)</span><span className="font-medium">${fareEstimate.distanceCharge?.toFixed(2)}</span></div>
+                    {(fareEstimate.vehicleMultiplier ?? 1) !== 1 && (
+                      <div className="flex justify-between text-amber-700 font-semibold" data-testid="row-vehicle-adjustment">
+                        <span>{VEHICLE_TYPE_LABELS[(fareEstimate.vehicleType as VehicleType) ?? requestedVehicleType]} vehicle (×{Number(Number(fareEstimate.vehicleMultiplier).toFixed(2))})</span>
+                        <span>+${Number(fareEstimate.vehicleAdjustment ?? 0).toFixed(2)}</span>
+                      </div>
+                    )}
                     {(fareEstimate.promoDiscount ?? 0) > 0 && (
                       <div className="flex justify-between text-orange-600 font-semibold">
                         <span>🎉 PG Welcome Credit ({fareEstimate.promoRidesRemaining} left)</span>

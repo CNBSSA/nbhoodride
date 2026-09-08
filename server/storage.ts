@@ -3011,7 +3011,7 @@ export class DatabaseStorage implements IStorage {
   // one price app-wide; drivers do not set their own). Reads the admin-set
   // platform_rate_card row, falling back to sensible defaults if it's unset.
   async getPlatformRates() {
-    const SUGGESTED = { minimumFare: 7.65, baseFare: 4.00, perMinuteRate: 0.29, perMileRate: 0.90, surgeAdjustment: 0 };
+    const SUGGESTED = { minimumFare: 7.65, baseFare: 4.00, perMinuteRate: 0.29, perMileRate: 0.90, surgeAdjustment: 0, xlMultiplier: 1.5, suvMultiplier: 1.8 };
     const [card] = await db.select().from(platformRateCard).limit(1);
     if (!card) return SUGGESTED;
     return {
@@ -3020,6 +3020,8 @@ export class DatabaseStorage implements IStorage {
       perMinuteRate: parseFloat(card.perMinuteRate || "0.2900"),
       perMileRate: parseFloat(card.perMileRate || "0.9000"),
       surgeAdjustment: parseFloat(card.surgeAdjustment || "0.00"),
+      xlMultiplier: parseFloat(card.xlMultiplier || "1.50"),
+      suvMultiplier: parseFloat(card.suvMultiplier || "1.80"),
     };
   }
 

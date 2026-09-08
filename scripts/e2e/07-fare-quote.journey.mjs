@@ -46,6 +46,31 @@ export async function run({ base, db }) {
   check("receipt has a real distance charge", (receipt.json?.distanceCharge ?? 0) > 10, `distanceCharge=${receipt.json?.distanceCharge}`);
   await deleteRides(db, [booked.json.id, noFigures.json?.id]);
 
+  section("XL and SUV cost more; Standard and wheelchair do not");
+  const std = await rider.req("POST", "/api/rides/calculate-fare", { distance: 17.3, duration: 42 });
+  const suv = await rider.req("POST", "/api/rides/calculate-fare", { distance: 17.3, duration: 42, vehicleType: "suv" });
+  const xl = await rider.req("POST", "/api/rides/calculate-fare", { distance: 17.3, duration: 42, vehicleType: "xl" });
+  const wav = await rider.req("POST", "/api/rides/calculate-fare", { distance: 17.3, duration: 42, vehicleType: "wheelchair" });
+  const ratesR = await rider.req("GET", "/api/fares/rates");
+  check("rate card exposes the vehicle multipliers and the rule sentence", ratesR.status === 200 && ratesR.json?.xlMultiplier >= 1 && ratesR.json?.suvMultiplier >= 1 && /XL rides are priced at/.test(ratesR.json?.vehicleRule ?? ""), JSON.stringify(ratesR.json));
+  const xm = ratesR.json.xlMultiplier, sm = ratesR.json.suvMultiplier;
+  check("SUV quote is the standard fare × the SUV multiplier", suv.status === 200 && Math.abs(suv.json.total - Math.round(std.json.total * sm * 100) / 100) < 0.011 && suv.json.vehicleMultiplier === sm, `std=${std.json?.total} suv=${suv.json?.total} m=${sm}`);
+  check("XL quote is the standard fare × the XL multiplier", xl.status === 200 && Math.abs(xl.json.total - Math.round(std.json.total * xm * 100) / 100) < 0.011, `std=${std.json?.total} xl=${xl.json?.total} m=${xm}`);
+  check("the SUV quote breaks out what the vehicle class added", Math.abs(suv.json.vehicleAdjustment - (suv.json.total - std.json.total)) < 0.011 && /SUV/.test(suv.json.formula), `adj=${suv.json?.vehicleAdjustment} formula=${suv.json?.formula}`);
+  check("wheelchair-accessible costs the same as Standard", wav.status === 200 && wav.json.total === std.json.total && wav.json.vehicleMultiplier === 1, `wav=${wav.json?.total}`);
+  const bogus = await rider.req("POST", "/api/rides/calculate-fare", { distance: 17.3, duration: 42, vehicleType: "limo" });
+  check("an unknown vehicle class is refused", bogus.status === 400);
+  // An app that sends the standard fare for an SUV request does not get an SUV at the standard price.
+  const lowball = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: std.json.total, paymentMethod: "card", distance: 17.3, duration: 42, requestedVehicleType: "suv" });
+  check("SUV booking accepted", lowball.status === 200, JSON.stringify(lowball.json?.message ?? lowball.status));
+  check("server raised the lowballed SUV fare to its own SUV quote and recorded the multiplier", Number(lowball.json?.estimatedFare) === suv.json.total && Number(lowball.json?.vehicleFareMultiplier) === sm, `fare=${lowball.json?.estimatedFare} mult=${lowball.json?.vehicleFareMultiplier}`);
+  await db.query("UPDATE rides SET driver_id=$1, status='completed', actual_fare=$3, started_at=NOW() - interval '45 minutes', completed_at=NOW() WHERE id=$2", [FIXTURES.driver.id, lowball.json.id, String(suv.json.total)]);
+  const suvReceipt = await rider.req("GET", `/api/rides/${lowball.json.id}/receipt`);
+  check("receipt shows the SUV line and what it added", suvReceipt.status === 200 && suvReceipt.json?.vehicleMultiplier === sm && suvReceipt.json?.vehicleAdjustment > 0, JSON.stringify({ m: suvReceipt.json?.vehicleMultiplier, adj: suvReceipt.json?.vehicleAdjustment }));
+  const honest = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: suv.json.total, paymentMethod: "card", distance: 17.3, duration: 42, requestedVehicleType: "suv" });
+  check("an app that already priced the SUV correctly is left alone", honest.status === 200 && Number(honest.json?.estimatedFare) === suv.json.total, `fare=${honest.json?.estimatedFare}`);
+  await deleteRides(db, [lowball.json?.id, honest.json?.id]);
+
   section("Add a stop: the whole route is quoted and shown");
   const stopA = { lat: 38.95, lng: -76.93, address: "Hyattsville Pharmacy, MD" };
   const withStop = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 30, paymentMethod: "card", stops: [stopA] });

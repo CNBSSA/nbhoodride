@@ -200,6 +200,7 @@ CREATE TABLE IF NOT EXISTS rides (
   stops JSONB,
   plan_id VARCHAR,
   free_cancel_until TIMESTAMP,
+  vehicle_fare_multiplier DECIMAL(4,2) DEFAULT 1.00,
   original_fare DECIMAL(8,2),
   group_discount_amount DECIMAL(8,2) DEFAULT 0.00,
   promo_discount_applied DECIMAL(8,2) DEFAULT 0.00,
@@ -572,11 +573,16 @@ CREATE TABLE IF NOT EXISTS platform_rate_card (
   per_minute_rate DECIMAL(8,4) DEFAULT 0.2900,
   per_mile_rate DECIMAL(8,4) DEFAULT 0.9000,
   surge_adjustment DECIMAL(8,2) DEFAULT 0.00,
+  xl_multiplier DECIMAL(4,2) DEFAULT 1.50,
+  suv_multiplier DECIMAL(4,2) DEFAULT 1.80,
   updated_by VARCHAR REFERENCES users(id),
   updated_at TIMESTAMP DEFAULT NOW()
 );
 -- Seed the single row with defaults so the admin screen always has a rate to edit.
 INSERT INTO platform_rate_card (id) VALUES ('platform') ON CONFLICT (id) DO NOTHING;
+-- Vehicle-class pricing: XL and SUV multiply the standard fare (shared/vehicleTypes.ts).
+ALTER TABLE platform_rate_card ADD COLUMN IF NOT EXISTS xl_multiplier DECIMAL(4,2) DEFAULT 1.50;
+ALTER TABLE platform_rate_card ADD COLUMN IF NOT EXISTS suv_multiplier DECIMAL(4,2) DEFAULT 1.80;
 
 -- ── Event tracking ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS event_tracking (
@@ -1162,6 +1168,8 @@ ALTER TABLE rides ADD COLUMN IF NOT EXISTS plan_id VARCHAR;
 -- Coworker group shrank below two before the driver confirmed: the rider was
 -- re-quoted at the solo fare and may cancel free until this moment.
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS free_cancel_until TIMESTAMP;
+-- The vehicle-class multiplier the quote was priced with (1.00 = standard).
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS vehicle_fare_multiplier DECIMAL(4,2) DEFAULT 1.00;
 -- One booked ride per plan per departure: the rolling sweep can never double-book.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rides_plan_departure ON rides (plan_id, scheduled_at) WHERE plan_id IS NOT NULL;
 
