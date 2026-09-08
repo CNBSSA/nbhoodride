@@ -31,6 +31,18 @@ export async function run({ base }) {
   check("/about still serves the business page", about.status === 200 && aboutBody.includes("Refunds, cancellations"));
   check("business page links to the driver page", aboutBody.includes('href="/drive"'));
 
+  // Terms and Privacy: a crawler with no JavaScript reads the policy itself.
+  section("Legal pages are readable without JavaScript");
+  for (const [path, must] of [["/privacy", ["Privacy Policy", "Information We Collect", "We do not sell your personal information", "Delete Your Account"]], ["/terms", ["Terms of Service", "Cancellation Policy", "$3.50", "$7.00", "more than 2 hours before departure"]]]) {
+    const res = await fetch(base + path, html);
+    const body = await res.text();
+    check(`${path} served as a static page for a visitor with no session`, res.status === 200 && !body.includes('id="root"'), `status=${res.status}`);
+    for (const m of must) check(`${path} states: ${m}`, body.includes(m));
+    check(`${path} names the operator and a way to reach it`, body.includes("Thrynova Insights LLC") && body.includes("mailto:"));
+  }
+  const signedInTerms = await fetch(base + "/terms", { headers: { Accept: "text/html", Cookie: s.cookieHeader() } });
+  check("a signed-in rider opening /terms gets the app (with its Back button)", (await signedInTerms.text()).includes('id="root"'));
+
   // Driver recruiting page: leads with the split, no sign-in needed.
   section("Driver page leads with 85%");
   const drive = await fetch(base + "/drive", html);
