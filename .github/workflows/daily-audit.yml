@@ -40,7 +40,7 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout (full history for develop↔main parity check)
         uses: actions/checkout@v4
@@ -60,4 +60,7 @@ jobs:
         env:
           # The script also accepts BASE_URL; honour a manual override.
           BASE_URL: ${{ github.event.inputs.base_url || 'https://nbhoodride-production.up.railway.app' }}
+          # On a push, wait for Railway to deploy this exact commit before
+          # probing production (scripts/daily-audit.mjs); empty on schedule.
+          EXPECT_BUILD_SHA: ${{ github.event_name == 'push' && github.sha || '' }}
         run: npm run audit:daily
