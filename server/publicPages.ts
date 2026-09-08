@@ -21,6 +21,9 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { BRAND } from "@shared/branding";
 import { SUPPORT_CONTACTS } from "@shared/supportContacts";
 import { LEGAL_LAST_UPDATED, LEGAL_PAGES, type LegalPageKind, type LegalSection } from "@shared/legalContent";
+import { GROUP_RATE_POLICY_SENTENCE } from "@shared/groupRatePolicy";
+import { vehicleFareRuleSentence, type VehicleRateOptions } from "@shared/vehicleTypes";
+import { storage } from "./storage";
 import { featureFlags } from "./featureFlags";
 
 const LEGAL_ENTITY = "Thrynova Insights LLC";
@@ -70,7 +73,7 @@ const PAGE_CSS = `<style>
   }
 </style>`;
 
-function renderAboutPage(): string {
+function renderAboutPage(vehicleRates: VehicleRateOptions = {}): string {
   const year = 2026; // Date.* is unavailable in some sandboxes; a static year is fine for a footer.
   // Lean mode: describe a plain per-ride card-charge rideshare — no stored-value
   // wallet ("prepaid balance"), no marketplace/driver-payout language, no
@@ -148,7 +151,7 @@ ${PAGE_CSS}
     <section>
       <h2>How it works</h2>
       <div class="cards">
-        <div class="card"><h3>1. Book a ride</h3><p>Enter your pickup and destination. See a transparent fare up front — no surge pricing.</p></div>
+        <div class="card"><h3>1. Book a ride</h3><p>Enter your pickup and destination. See a transparent fare up front — no surge pricing. ${esc(vehicleFareRuleSentence(vehicleRates))}</p></div>
         <div class="card"><h3>2. Match with a driver</h3><p>A background-checked neighborhood driver accepts and picks you up.</p></div>
         <div class="card"><h3>3. Ride &amp; pay</h3><p>${rideAndPay}</p></div>
       </div>
@@ -198,7 +201,7 @@ ${PAGE_CSS}
       <h2>Promotions</h2>
       <ul>
         <li><strong>New riders:</strong> 4 promotional rides at $5 off each, applied automatically at booking.</li>
-        <li><strong>Coworker rides:</strong> when 2 or 3 coworkers share one scheduled ride using a PG-code, every seat in that car is 30% off.</li>
+        <li><strong>Coworker rides:</strong> when 2 or 3 coworkers share one scheduled ride using a PG-code, every seat in that car is 30% off. ${esc(GROUP_RATE_POLICY_SENTENCE)}</li>
       </ul>
       <p>One promotion per ride. Promotions have no cash value and may be changed or ended at any time. The price shown before you confirm already includes any promotion.</p>
     </section>
@@ -472,13 +475,16 @@ ${PAGE_CSS}
  */
 export function registerPublicPages(app: Express): void {
   const hasSession = (req: Request) => /(?:^|;\s*)connect\.sid=/.test(req.headers.cookie ?? "");
-  const serveAbout = (_req: Request, res: Response) => {
+  const serveAbout = async (_req: Request, res: Response) => {
+    // The vehicle-class multipliers are admin-editable, so read the rate
+    // card; fall back to the defaults if the database is unreachable.
+    const vehicleRates = await storage.getPlatformRates().catch(() => ({}));
     res
       .status(200)
       .type("html")
       // Cacheable but revalidated — content is static but rarely changes.
       .set("Cache-Control", "public, max-age=300, must-revalidate")
-      .send(renderAboutPage());
+      .send(renderAboutPage(vehicleRates));
   };
 
   app.get("/about", serveAbout);
@@ -523,7 +529,7 @@ export function registerPublicPages(app: Express): void {
     const accept = req.headers.accept ?? "";
     const wantsHtml = !accept || accept.includes("text/html");
     const bare = !req.originalUrl.includes("?");
-    if (wantsHtml && bare && !hasSession(req)) return serveAbout(req, res);
+    if (wantsHtml && bare && !hasSession(req)) return void serveAbout(req, res);
     next();
   });
 }

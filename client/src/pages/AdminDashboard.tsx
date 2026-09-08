@@ -1131,6 +1131,8 @@ function PricingPanel() {
         perMinuteRate: String(rates.perMinuteRate ?? ""),
         minimumFare: String(rates.minimumFare ?? ""),
         surgeAdjustment: String(rates.surgeAdjustment ?? ""),
+        xlMultiplier: String(rates.xlMultiplier ?? "1.5"),
+        suvMultiplier: String(rates.suvMultiplier ?? "1.8"),
       });
     }
   }, [rates, seeded]);
@@ -1153,6 +1155,8 @@ function PricingPanel() {
     { key: "perMinuteRate", label: "Per minute ($)", hint: "Charged for each minute of the trip", step: "0.01" },
     { key: "minimumFare", label: "Minimum fare ($)", hint: "The lowest a ride can ever cost", step: "0.01" },
     { key: "surgeAdjustment", label: "Flat adjustment ($)", hint: "Added to every fare (leave 0 normally)", step: "0.01" },
+    { key: "xlMultiplier", label: "XL multiplier (×)", hint: "An XL ride costs this many times the standard fare (1 = same price)", step: "0.1" },
+    { key: "suvMultiplier", label: "SUV multiplier (×)", hint: "An SUV ride costs this many times the standard fare; wheelchair-accessible rides always cost the same as Standard", step: "0.1" },
   ];
 
   // Example fare preview for a typical 5-mile, 15-minute trip.

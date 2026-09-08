@@ -33,6 +33,9 @@ export interface RideReceipt {
   bookedForFriend?: boolean;
   passengerName?: string | null;
   requestedVehicleType?: string | null;
+  /** Vehicle-class pricing: multiplier applied to the standard fare, and what it added. */
+  vehicleMultiplier: number;
+  vehicleAdjustment: number;
 }
 
 export interface RideReceiptInput {
@@ -56,6 +59,7 @@ export interface RideReceiptInput {
   driverRating: number | null;
   bookedForFriend?: boolean | null;
   passengerName?: string | null;
+  vehicleFareMultiplier?: string | number | null;
   requestedVehicleType?: string | null;
 }
 
@@ -108,6 +112,12 @@ export function buildRideReceipt(ride: RideReceiptInput, driverName: string, opt
     ? round2(RECEIPT_FARE_RATES.perMileRate * distanceMiles)
     : 0;
   const subtotal = round2(RECEIPT_FARE_RATES.baseFare + timeCharge + distanceCharge);
+  // Vehicle class (XL / SUV) multiplied the standard fare at booking.
+  const rawMultiplier = parseFloat(String(ride.vehicleFareMultiplier ?? "1"));
+  const vehicleMultiplier = Number.isFinite(rawMultiplier) && rawMultiplier >= 1 ? round2(rawMultiplier) : 1;
+  const vehicleAdjustment = vehicleMultiplier !== 1
+    ? round2(Math.max(RECEIPT_FARE_RATES.minimumFare, subtotal) * (vehicleMultiplier - 1))
+    : 0;
 
   const completedAt = ride.completedAt ? new Date(ride.completedAt) : null;
 
@@ -142,6 +152,8 @@ export function buildRideReceipt(ride: RideReceiptInput, driverName: string, opt
     bookedForFriend: ride.bookedForFriend ?? false,
     passengerName: ride.passengerName,
     requestedVehicleType: ride.requestedVehicleType,
+    vehicleMultiplier,
+    vehicleAdjustment,
   };
 }
 
@@ -174,6 +186,9 @@ export function formatReceiptAsText(receipt: RideReceipt): string {
     `Distance: $${receipt.distanceCharge.toFixed(2)}`,
     `Subtotal: $${receipt.subtotal.toFixed(2)}`,
   );
+  if (receipt.vehicleMultiplier !== 1) {
+    lines.push(`${(receipt.requestedVehicleType ?? "vehicle").toUpperCase()} vehicle (×${Number(receipt.vehicleMultiplier.toFixed(2))}): +$${receipt.vehicleAdjustment.toFixed(2)}`);
+  }
   if (receipt.promoDiscount > 0) {
     lines.push(`Promo credit: -$${receipt.promoDiscount.toFixed(2)}`);
   }

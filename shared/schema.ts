@@ -273,6 +273,8 @@ export const rides = pgTable("rides", {
   passengerPhone: varchar("passenger_phone"),
   /** Rider preference: standard, xl, suv, wheelchair */
   requestedVehicleType: varchar("requested_vehicle_type"),
+  /** Vehicle-class multiplier the quote was priced with (1.00 for standard / wheelchair). */
+  vehicleFareMultiplier: decimal("vehicle_fare_multiplier", { precision: 4, scale: 2 }).default("1.00"),
   pickupStops: jsonb("pickup_stops").$type<Array<{lat: number, lng: number, address: string}>>(),
   /** Extra destinations on the way, in order, between pickup and destination ("Add a stop"). */
   stops: jsonb("stops").$type<Array<{lat: number, lng: number, address: string}>>(),
@@ -298,6 +300,11 @@ export const rides = pgTable("rides", {
   cancelledBy: varchar("cancelled_by"),
   /** rider | driver | system | admin — drives reliability stats. */
   cancelledByRole: varchar("cancelled_by_role"),
+  /**
+   * Set when the rider was re-quoted after their coworker group shrank
+   * (shared/groupRatePolicy.ts): cancelling is free until this moment.
+   */
+  freeCancelUntil: timestamp("free_cancel_until"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
@@ -782,6 +789,9 @@ export const platformRateCard = pgTable("platform_rate_card", {
   perMinuteRate: decimal("per_minute_rate", { precision: 8, scale: 4 }).default("0.2900"),
   perMileRate: decimal("per_mile_rate", { precision: 8, scale: 4 }).default("0.9000"),
   surgeAdjustment: decimal("surge_adjustment", { precision: 8, scale: 2 }).default("0.00"),
+  /** Vehicle-class pricing (shared/vehicleTypes.ts): XL and SUV multiply the standard fare. */
+  xlMultiplier: decimal("xl_multiplier", { precision: 4, scale: 2 }).default("1.50"),
+  suvMultiplier: decimal("suv_multiplier", { precision: 4, scale: 2 }).default("1.80"),
   updatedBy: varchar("updated_by").references(() => users.id),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

@@ -77,6 +77,8 @@ import { checkScheduleTime, MIN_SCHEDULE_LEAD_HOURS, MAX_SCHEDULE_DAYS_AHEAD } f
 import { normalizePlanDays, planFare, validatePlanSchedule, describePlanDays, describePlanTime, PLAN_TIMEZONE } from "@shared/weeklyPlan";
 import { welcomeCreditFor } from "@shared/farePolicy";
 import { emergencyShareLinkOpen, EMERGENCY_SHARE_EXPIRED_MESSAGE } from "@shared/emergencyPolicy";
+import { GROUP_REQUOTE_FREE_CANCEL_MINUTES, groupRateHolds, seatChangeNotice } from "@shared/groupRatePolicy";
+import { vehicleFareMultiplier, formatMultiplier, VEHICLE_TYPE_LABELS as VEHICLE_LABELS, vehicleFareRuleSentence } from "@shared/vehicleTypes";
 import { materializeWeeklyPlan, materializeAllWeeklyPlans } from "./weeklyPlans";
 import { buildRiderPromiseReview, maybeSendRiderPromiseReview } from "./riderPromiseReview";
 import {
@@ -3853,6 +3855,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ? Math.round(clientDuration)
         : routeEstimate?.minutes ?? validation.durationMinutes ?? 0;
 
+      // Vehicle-class pricing (shared/vehicleTypes.ts): record the multiplier
+      // the quote was priced with, and never let an XL/SUV request come in
+      // under the server's own quote for that class — the app trusts the
+      // client's number for the standard route figures, but the class
+      // premium is enforced here.
+      const bookingRates = await storage.getPlatformRates();
+      const bookingMultiplier = vehicleFareMultiplier(requestedVehicleType ?? "standard", bookingRates);
+      if (bookingMultiplier !== 1 && quotedMiles > 0 && quotedMinutes > 0) {
+        const classQuote = estimateFare(quotedMiles, quotedMinutes, { rates: bookingRates, vehicleType: requestedVehicleType }).total;
+        const clientFare = Number(bodyData.estimatedFare);
+        if (!Number.isFinite(clientFare) || clientFare + 0.01 < classQuote) {
+          console.log(`[fare] ${requestedVehicleType} request quoted $${Number.isFinite(clientFare) ? clientFare.toFixed(2) : "?"} by the app; server class quote $${classQuote.toFixed(2)} applied`);
+          bodyData.estimatedFare = classQuote.toFixed(2);
+        }
+      }
+
       const dataToValidate = {
         ...bodyData,
         stops: stops.length > 0 ? stops : undefined,
@@ -3860,6 +3878,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         duration: quotedMinutes > 0 ? quotedMinutes : undefined,
         riderId: userId,
         pickupCounty: validation.pickupCounty ?? undefined,
+        vehicleFareMultiplier: bookingMultiplier.toFixed(2),
       };
 
       const rideData = insertRideSchema.parse(dataToValidate);
@@ -4434,6 +4453,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
             if (group && group.status === "active" &&
                 group.scheduledAt && new Date(group.scheduledAt) > new Date()) {
               await storage.updateRideGroup(ride.groupId, { status: "open" } as any);
+            }
+
+            // Coworker group rate (shared/groupRatePolicy.ts): the 30% holds
+            // while at least two seats are taken. Below that, seats the driver
+            // has not yet confirmed go back to the solo fare with a free-cancel
+            // window; confirmed seats keep their locked fare. Everyone left is
+            // told either way.
+            if (ride.rideType === "shared_schedule") {
+              const remaining = (await storage.getActiveGroupRides(ride.groupId)).filter((r) => r.id !== rideId);
+              let requotedIds: string[] = [];
+              let freeCancelUntil: Date | null = null;
+              if (remaining.length > 0 && !groupRateHolds(remaining.length) && group?.discountActive) {
+                requotedIds = await storage.revertGroupDiscount(ride.groupId);
+                if (requotedIds.length > 0) {
+                  freeCancelUntil = new Date(Date.now() + GROUP_REQUOTE_FREE_CANCEL_MINUTES * 60_000);
+                  for (const id of requotedIds) await storage.setFreeCancelUntil(id, freeCancelUntil);
+                }
+              }
+              for (const other of remaining) {
+                const requoted = requotedIds.includes(other.id);
+                const fare = requoted ? (other.originalFare ?? other.estimatedFare ?? "0") : (other.estimatedFare ?? "0");
+                const notice = seatChangeNotice({
+                  remaining: remaining.length,
+                  requoted,
+                  fare,
+                  locked: !requoted && !groupRateHolds(remaining.length),
+                });
+                const otherWs = activeConnections.get(other.riderId);
+                if (otherWs?.readyState === WebSocket.OPEN) {
+                  otherWs.send(JSON.stringify({
+                    type: 'group_seat_released',
+                    rideId: other.id,
+                    groupId: ride.groupId,
+                    remaining: remaining.length,
+                    requoted,
+                    fare: Number(fare).toFixed(2),
+                    freeCancelUntil: requoted && freeCancelUntil ? freeCancelUntil.toISOString() : null,
+                    title: notice.title,
+                    message: notice.body,
+                  }));
+                }
+                deliverUserNotification(other.riderId, {
+                  type: 'group_seat_released',
+                  title: notice.title,
+                  body: notice.body,
+                  tag: `group-${ride.groupId}`,
+                  url: '/',
+                  data: { rideId: other.id, groupId: ride.groupId, remaining: remaining.length, requoted },
+                }).catch((err) => console.error("group seat notice failed:", err));
+              }
+              if (requotedIds.length > 0) {
+                await logRideAudit({
+                  rideId,
+                  event: "group_rate_reverted",
+                  actorId: userId,
+                  details: { groupId: ride.groupId, requotedRideIds: requotedIds, freeCancelUntil: freeCancelUntil?.toISOString() },
+                });
+              }
             }
           } catch (seatErr) {
             console.error(`Failed to release group seat on cancel of ride ${rideId}:`, seatErr);
@@ -5594,7 +5671,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const rider = await storage.getUser(userId);
       const promoRidesRemaining = rider?.promoRidesRemaining ?? 0;
 
+      const estimateVehicle = validateVehicleTypeInput(req.body.vehicleType ?? req.body.requestedVehicleType);
       const estimate = estimateFare(distanceMiles, durationMinutes, {
+        vehicleType: estimateVehicle.valid ? estimateVehicle.type : "standard",
         rates,
         promoRidesRemaining,
         wantsSharedRide: !!wantsSharedRide,
@@ -5755,6 +5834,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Fare calculation endpoint
+  // The rate card as the rider's picker and the driver's vehicle settings
+  // need it: what XL and SUV cost relative to Standard.
+  app.get('/api/fares/rates', isAuthenticated, async (_req: any, res) => {
+    try {
+      const rates = await storage.getPlatformRates();
+      res.json({ ...rates, vehicleRule: vehicleFareRuleSentence(rates) });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to load fare rates" });
+    }
+  });
+
   app.post('/api/rides/calculate-fare', isAuthenticated, async (req: any, res) => {
     try {
       const { distance, duration, driverId } = req.body;
@@ -5763,6 +5853,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!distance || !duration) {
         return res.status(400).json({ message: "Distance and duration required" });
       }
+      const vehicleCheck = validateVehicleTypeInput(req.body.vehicleType ?? req.body.requestedVehicleType);
+      if (!vehicleCheck.valid) return res.status(400).json({ message: vehicleCheck.error });
+      const vehicleType = vehicleCheck.type ?? "standard";
 
       // Central platform rate — one price app-wide, regardless of driver.
       const rates = await storage.getPlatformRates();
@@ -5772,7 +5865,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const distanceCharge = rates.perMileRate * distance;
       const surgeAdjustment = rates.surgeAdjustment;
       const subtotal = baseFare + timeCharge + distanceCharge + surgeAdjustment;
-      const total = Math.max(rates.minimumFare, Math.min(100, subtotal));
+      const standardTotal = Math.max(rates.minimumFare, Math.min(100, subtotal));
+      // Vehicle class (shared/vehicleTypes.ts): XL and SUV multiply the
+      // standard fare; the $100 cap still applies.
+      const vehicleMultiplier = vehicleFareMultiplier(vehicleType, rates);
+      const total = Math.min(100, Math.round(standardTotal * vehicleMultiplier * 100) / 100);
+      const vehicleAdjustment = Math.round((total - standardTotal) * 100) / 100;
       
       // Check if rider has promo rides remaining
       let promoDiscount = 0;
@@ -5797,14 +5895,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         promoDiscount: parseFloat(promoDiscount.toFixed(2)),
         promoRidesRemaining,
         totalAfterPromo: parseFloat(Math.max(0, total - promoDiscount).toFixed(2)),
+        vehicleType,
+        vehicleMultiplier,
+        vehicleAdjustment,
+        standardTotal: parseFloat(standardTotal.toFixed(2)),
         rates: {
           minimumFare: rates.minimumFare,
           baseFare: rates.baseFare,
           perMinuteRate: rates.perMinuteRate,
           perMileRate: rates.perMileRate,
           surgeAdjustment: rates.surgeAdjustment,
+          xlMultiplier: rates.xlMultiplier,
+          suvMultiplier: rates.suvMultiplier,
         },
-        formula: `Base $${rates.baseFare.toFixed(2)} + ($${rates.perMinuteRate}/min × ${duration} min) + ($${rates.perMileRate}/mi × ${distance} mi)`
+        formula: `Base $${rates.baseFare.toFixed(2)} + ($${rates.perMinuteRate}/min × ${duration} min) + ($${rates.perMileRate}/mi × ${distance} mi)${vehicleMultiplier !== 1 ? ` × ${formatMultiplier(vehicleMultiplier)} ${VEHICLE_LABELS[vehicleType]}` : ""}`
       });
     } catch (error) {
       console.error("Error calculating fare:", error);
@@ -6001,6 +6105,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         perMinuteRate: num(req.body.perMinuteRate),
         perMileRate: num(req.body.perMileRate),
         surgeAdjustment: num(req.body.surgeAdjustment),
+        xlMultiplier: num(req.body.xlMultiplier),
+        suvMultiplier: num(req.body.suvMultiplier),
       };
       // Bounds keep every value inside its DECIMAL(8,x) column (so an over-large
       // number returns a clean 400, not a Postgres-overflow 500) AND preserve the
@@ -6012,6 +6118,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         perMileRate: { min: 0, max: 50 },
         perMinuteRate: { min: 0, max: 20 },
         surgeAdjustment: { min: -50, max: 50 },
+        // Vehicle classes can't be cheaper than Standard, and 5× is already absurd.
+        xlMultiplier: { min: 1, max: 5 },
+        suvMultiplier: { min: 1, max: 5 },
       };
       for (const [k, v] of Object.entries(fields)) {
         if (v === undefined) continue;
@@ -6026,6 +6135,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (fields.perMinuteRate !== undefined) patch.perMinuteRate = fields.perMinuteRate.toFixed(4);
       if (fields.perMileRate !== undefined) patch.perMileRate = fields.perMileRate.toFixed(4);
       if (fields.surgeAdjustment !== undefined) patch.surgeAdjustment = fields.surgeAdjustment.toFixed(2);
+      if (fields.xlMultiplier !== undefined) patch.xlMultiplier = fields.xlMultiplier.toFixed(2);
+      if (fields.suvMultiplier !== undefined) patch.suvMultiplier = fields.suvMultiplier.toFixed(2);
       const card = await storage.upsertPlatformRateCard(patch, req.adminUser.id);
       await storage.logAdminAction(req.adminUser.id, 'update_platform_rate', 'platform_rate_card', card.id, patch);
       res.json({ card, rates: await storage.getPlatformRates() });

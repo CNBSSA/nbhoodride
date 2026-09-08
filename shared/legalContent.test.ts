@@ -7,7 +7,7 @@ const text = (sections: typeof TERMS_SECTIONS) =>
 describe("legal content", () => {
   it("terms state the cancellation ladder the server actually charges", () => {
     const t = text(TERMS_SECTIONS);
-    for (const must of ["free while your request is still waiting", "3 minutes after a driver accepts", "$3.50", "$5.00", "$7.00", "more than 2 hours before departure", "you are never charged"]) {
+    for (const must of ["free while your request is still waiting", "3 minutes after a driver accepts", "$3.50", "$5.00", "$7.00", "more than 2 hours before departure", "you are never charged", "coworker group rate holds while at least 2 seats", "once the driver has confirmed, every fare is locked"]) {
       expect(t).toContain(must);
     }
   });

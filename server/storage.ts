@@ -643,6 +643,16 @@ export interface IStorage {
   updateRideGroup(id: string, updates: Partial<RideGroup>): Promise<RideGroup>;
   getRidesInGroup(groupId: string): Promise<Ride[]>;
   applyGroupDiscount(groupId: string, discountPct: number): Promise<void>;
+  /** Rides in the group that are still going (not completed / cancelled / no-show). */
+  getActiveGroupRides(groupId: string): Promise<Ride[]>;
+  /**
+   * Group dropped below the minimum before the driver confirmed: put every
+   * still-pending seat back to its solo fare and switch the group rate off.
+   * Seats already authorized on a card (accepted or later) are left alone —
+   * that fare is locked. Returns the ids of the rides re-quoted.
+   */
+  revertGroupDiscount(groupId: string): Promise<string[]>;
+  setFreeCancelUntil(rideId: string, until: Date | null): Promise<void>;
   createL4ReadinessEvent(data: {
     rideId: string;
     driverId: string;
@@ -3001,7 +3011,7 @@ export class DatabaseStorage implements IStorage {
   // one price app-wide; drivers do not set their own). Reads the admin-set
   // platform_rate_card row, falling back to sensible defaults if it's unset.
   async getPlatformRates() {
-    const SUGGESTED = { minimumFare: 7.65, baseFare: 4.00, perMinuteRate: 0.29, perMileRate: 0.90, surgeAdjustment: 0 };
+    const SUGGESTED = { minimumFare: 7.65, baseFare: 4.00, perMinuteRate: 0.29, perMileRate: 0.90, surgeAdjustment: 0, xlMultiplier: 1.5, suvMultiplier: 1.8 };
     const [card] = await db.select().from(platformRateCard).limit(1);
     if (!card) return SUGGESTED;
     return {
@@ -3010,6 +3020,8 @@ export class DatabaseStorage implements IStorage {
       perMinuteRate: parseFloat(card.perMinuteRate || "0.2900"),
       perMileRate: parseFloat(card.perMileRate || "0.9000"),
       surgeAdjustment: parseFloat(card.surgeAdjustment || "0.00"),
+      xlMultiplier: parseFloat(card.xlMultiplier || "1.50"),
+      suvMultiplier: parseFloat(card.suvMultiplier || "1.80"),
     };
   }
 
@@ -4698,6 +4710,34 @@ export class DatabaseStorage implements IStorage {
       })
     );
     await db.update(rideGroups).set({ discountActive: true }).where(eq(rideGroups.id, groupId));
+  }
+
+  async getActiveGroupRides(groupId: string): Promise<Ride[]> {
+    return db
+      .select()
+      .from(rides)
+      .where(and(eq(rides.groupId, groupId), sql`${rides.status} NOT IN ('completed', 'cancelled', 'no_show')`));
+  }
+
+  async revertGroupDiscount(groupId: string): Promise<string[]> {
+    const active = await this.getActiveGroupRides(groupId);
+    const reverted: string[] = [];
+    for (const ride of active) {
+      const original = parseFloat(ride.originalFare || "0");
+      if (ride.status !== "pending" || original <= 0) continue;
+      await db.update(rides).set({
+        estimatedFare: original.toFixed(2),
+        groupDiscountAmount: "0.00",
+        updatedAt: new Date(),
+      }).where(eq(rides.id, ride.id));
+      reverted.push(ride.id);
+    }
+    await db.update(rideGroups).set({ discountActive: false }).where(eq(rideGroups.id, groupId));
+    return reverted;
+  }
+
+  async setFreeCancelUntil(rideId: string, until: Date | null): Promise<void> {
+    await db.update(rides).set({ freeCancelUntil: until, updatedAt: new Date() }).where(eq(rides.id, rideId));
   }
 
   async upsertDemandForecast(data: {

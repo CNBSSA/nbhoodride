@@ -372,6 +372,7 @@ export default function RiderDashboard() {
       distance: estimatedDistance,
       duration: estimatedDuration,
       driverId: selectedDriverId === ANY_DRIVER_ID ? undefined : selectedDriverId,
+      vehicleType: requestedVehicleType,
     }).then(r => r.json()).then(data => {
       setFareEstimate(data);
     }).catch(() => {
@@ -381,7 +382,7 @@ export default function RiderDashboard() {
       setCalculatingFare(false);
       setPanel("confirm");
     });
-  }, [selectedDriverId, estimatedDistance, estimatedDuration]);
+  }, [selectedDriverId, estimatedDistance, estimatedDuration, requestedVehicleType]);
 
   // ── Mutations ──
   const bookRideMutation = useMutation({
@@ -676,6 +677,17 @@ export default function RiderDashboard() {
         description: lastMessage.message || "Your driver had to cancel. Your fare is unchanged.",
       });
       navigator.vibrate?.([300, 100, 300]);
+    } else if (lastMessage.type === 'group_seat_released') {
+      // A coworker left the group: fare may have changed (re-quoted to solo)
+      // and a free-cancel window may be open — say so plainly.
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
+      toast({
+        title: lastMessage.title || "A coworker cancelled",
+        description: lastMessage.message,
+        variant: lastMessage.requoted ? "destructive" : undefined,
+        duration: lastMessage.requoted ? 15000 : 8000,
+      });
+      navigator.vibrate?.([200, 100, 200]);
     } else if (lastMessage.type === 'ride_no_show') {
       refetchActiveRides();
       queryClient.invalidateQueries({ queryKey: ['/api/virtual-card/balance'] });
@@ -1526,6 +1538,12 @@ export default function RiderDashboard() {
                     <div className="flex justify-between"><span>Base fare</span><span className="font-medium">${fareEstimate.baseFare?.toFixed(2)}</span></div>
                     <div className="flex justify-between"><span>Time ({estimatedDuration} min)</span><span className="font-medium">${fareEstimate.timeCharge?.toFixed(2)}</span></div>
                     <div className="flex justify-between"><span>Distance ({estimatedDistance} mi)</span><span className="font-medium">${fareEstimate.distanceCharge?.toFixed(2)}</span></div>
+                    {(fareEstimate.vehicleMultiplier ?? 1) !== 1 && (
+                      <div className="flex justify-between text-amber-700 font-semibold" data-testid="row-vehicle-adjustment">
+                        <span>{VEHICLE_TYPE_LABELS[(fareEstimate.vehicleType as VehicleType) ?? requestedVehicleType]} vehicle (×{Number(Number(fareEstimate.vehicleMultiplier).toFixed(2))})</span>
+                        <span>+${Number(fareEstimate.vehicleAdjustment ?? 0).toFixed(2)}</span>
+                      </div>
+                    )}
                     {(fareEstimate.promoDiscount ?? 0) > 0 && (
                       <div className="flex justify-between text-orange-600 font-semibold">
                         <span>🎉 PG Welcome Credit ({fareEstimate.promoRidesRemaining} left)</span>

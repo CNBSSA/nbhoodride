@@ -1042,6 +1042,9 @@ export default function DriverDashboard() {
                   </div>
                   <div className="mt-3 pt-2 border-t space-y-2">
                     <p className="text-sm font-medium">Vehicle type for riders</p>
+                    <p className="text-xs text-muted-foreground" data-testid="text-driver-vehicle-rule">
+                      Riders pay more for XL and SUV rides, and expect that kind of car at the curb. Tag your car XL or SUV only if it truly is one; Standard still receives every ordinary request.
+                    </p>
                     <div className="flex flex-wrap gap-1.5">
                       {VEHICLE_TYPES.map((type) => {
                         const active = (driverVehicles[0].vehicleType ?? "standard") === type;
