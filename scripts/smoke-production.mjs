@@ -21,14 +21,24 @@ const manifest = JSON.parse(readFileSync(join(root, "client", "public", "manifes
 const failures = [];
 const warnings = [];
 
-async function check(name, url, { expectStatus = 200, optional = false } = {}) {
+async function check(name, url, { expectStatus = 200, optional = false, expectText = [] } = {}) {
   try {
-    const res = await fetch(url, { redirect: "follow" });
+    const res = await fetch(url, { redirect: "follow", headers: { Accept: "text/html,*/*" } });
     if (res.status !== expectStatus) {
       const msg = `${name}: expected HTTP ${expectStatus}, got ${res.status} (${url})`;
       if (optional) warnings.push(msg);
       else failures.push(msg);
       return null;
+    }
+    if (expectText.length > 0) {
+      const body = await res.text();
+      const missing = expectText.filter((t) => !body.includes(t));
+      if (missing.length > 0) {
+        const msg = `${name}: page is missing ${missing.map((m) => JSON.stringify(m)).join(", ")} — a reader without JavaScript would not see it (${url})`;
+        if (optional) warnings.push(msg);
+        else failures.push(msg);
+        return null;
+      }
     }
     console.log(`✓ ${name}`);
     return res;
@@ -69,8 +79,12 @@ async function main() {
 
   await check("GET /login", `${baseUrl}/login`);
   await check("GET /signup", `${baseUrl}/signup`);
-  await check("GET /privacy", `${baseUrl}/privacy`);
-  await check("GET /terms", `${baseUrl}/terms`);
+  // Legal pages must be readable by a crawler that runs no JavaScript
+  // (Stripe's website review, search engines): assert the policy text is in
+  // the HTML itself, not just that the app shell answered 200.
+  await check("GET /privacy (readable without JavaScript)", `${baseUrl}/privacy`, { expectText: ["Privacy Policy", "Information We Collect", "Thrynova Insights LLC"] });
+  await check("GET /terms (readable without JavaScript)", `${baseUrl}/terms`, { expectText: ["Terms of Service", "Cancellation Policy", "Thrynova Insights LLC"] });
+  await check("GET /about (business page)", `${baseUrl}/about`, { expectText: ["Refunds, cancellations", "Thrynova Insights LLC"] });
   await check("GET /admin/setup", `${baseUrl}/admin/setup`);
   await check("GET /api/csrf", `${baseUrl}/api/csrf`);
   await check("GET /manifest.json", `${baseUrl}/manifest.json`);

@@ -151,12 +151,15 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
     });
   }
 
+  // Terms and Privacy are served by the server as plain HTML for anyone
+  // without a session (server/publicPages.ts) — readable without JavaScript,
+  // and the daily production smoke asserts their content, not just a 200.
   checks.push({
     id: "0.4-legal",
-    label: "Privacy + Terms routes (verify externally)",
-    status: "warn",
+    label: "Privacy + Terms pages",
+    status: "pass",
     owner: "track_a",
-    detail: "Run npm run smoke:production — SPA serves /privacy and /terms",
+    detail: "Served as static HTML at /privacy and /terms (readable without JavaScript); content verified daily by smoke:production",
   });
 
   // Reports the SENDER too, not just the key: the usual cause of silently
@@ -253,12 +256,15 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
       : "Optional for cash/virtual-only launch — set Stripe keys before marketing card payments",
   });
 
+  // The ride loop is exercised automatically: the journey suite
+  // (scripts/e2e) runs signup → approve → book → accept → complete → receipt
+  // against a production build on every pull request and every promotion.
   checks.push({
     id: "0.6-smoke",
-    label: "End-to-end ride smoke test",
-    status: "warn",
+    label: "End-to-end ride loop",
+    status: "pass",
     owner: "both",
-    detail: "Manual: signup → admin approve → book → accept → complete → receipt",
+    detail: "Automated: journey suite runs signup → approve → book → accept → complete → receipt on every pull request and promotion (CI)",
   });
 
   checks.push({

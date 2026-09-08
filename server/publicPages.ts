@@ -20,6 +20,7 @@
 import type { Express, NextFunction, Request, Response } from "express";
 import { BRAND } from "@shared/branding";
 import { SUPPORT_CONTACTS } from "@shared/supportContacts";
+import { LEGAL_LAST_UPDATED, LEGAL_PAGES, type LegalPageKind, type LegalSection } from "@shared/legalContent";
 import { featureFlags } from "./featureFlags";
 
 const LEGAL_ENTITY = "Thrynova Insights LLC";
@@ -390,11 +391,87 @@ ${PAGE_CSS}
 </html>`;
 }
 
+
+/**
+ * Terms of Service and Privacy Policy as plain HTML, from the same wording
+ * the app renders (shared/legalContent.ts). A reviewer's crawler that does
+ * not run JavaScript followed the business page's links here and met the
+ * empty app shell; now it reads the policy.
+ */
+function renderLegalSection(s: LegalSection): string {
+  const parts: string[] = [`<h2>${esc(s.heading)}</h2>`];
+  for (const p of s.paragraphs ?? []) parts.push(`<p>${esc(p)}</p>`);
+  if (s.bullets) {
+    parts.push("<ul>");
+    for (const b of s.bullets) parts.push(`<li>${b.label ? `<strong>${esc(b.label)}</strong> ` : ""}${esc(b.text)}</li>`);
+    parts.push("</ul>");
+  }
+  if (s.after) parts.push(`<p>${esc(s.after)}</p>`);
+  if (s.contact) {
+    parts.push(`<ul>
+        <li><strong>Phone / text:</strong> <a href="tel:${esc(SUPPORT_CONTACTS.phoneTel)}">${esc(SUPPORT_CONTACTS.phoneDisplay)}</a>
+          (<a href="${esc(SUPPORT_CONTACTS.phoneSms)}">text us</a>)</li>
+        <li><strong>Email:</strong> <a href="mailto:${esc(SUPPORT_CONTACTS.email)}">${esc(SUPPORT_CONTACTS.email)}</a></li>
+      </ul>`);
+  }
+  return `<section>${parts.join("\n")}</section>`;
+}
+
+function renderLegalPage(kind: LegalPageKind): string {
+  const page = LEGAL_PAGES[kind];
+  const year = 2026;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>${esc(page.title)} — ${esc(BRAND.appName)}</title>
+<meta name="description" content="${esc(page.title)} for ${esc(BRAND.appName)}, the rideshare service in Prince George's County, Maryland, operated by ${esc(LEGAL_ENTITY)}." />
+<meta name="robots" content="index,follow" />
+<link rel="canonical" href="https://${esc(BRAND.companyDomain)}${esc(page.path)}" />
+${PAGE_CSS}
+<style>
+  main h2 { font-size: 1.1rem; margin: 26px 0 6px; }
+  main p, main li { font-size: .97rem; }
+  .updated { color: #6b7178; font-size: .9rem; margin-top: -4px; }
+  @media (prefers-color-scheme: dark) { .updated { color: #99a0a8; } }
+</style>
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <p class="brand">${esc(BRAND.appName)} · Prince George's County, Maryland</p>
+      <h1>${esc(page.title)}</h1>
+      <p class="tagline">Operated by ${esc(LEGAL_ENTITY)}. Last updated ${esc(LEGAL_LAST_UPDATED)}.</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    ${page.sections.map(renderLegalSection).join("\n\n    ")}
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>${esc(BRAND.foundedNote)}</p>
+      <p>
+        <a href="/about">About</a> ·
+        <a href="/terms">Terms of Service</a> ·
+        <a href="/privacy">Privacy Policy</a> ·
+        <a href="/drive">Drive with ${esc(BRAND.appName)}</a>
+      </p>
+      <p>&copy; ${year} ${esc(LEGAL_ENTITY)}. All rights reserved.</p>
+    </div>
+  </footer>
+</body>
+</html>`;
+}
+
 /**
  * Mount the public, no-JS pages. Call this early in registerRoutes so these
  * routes win over the SPA catch-all mounted later.
  */
 export function registerPublicPages(app: Express): void {
+  const hasSession = (req: Request) => /(?:^|;\s*)connect\.sid=/.test(req.headers.cookie ?? "");
   const serveAbout = (_req: Request, res: Response) => {
     res
       .status(200)
@@ -418,6 +495,20 @@ export function registerPublicPages(app: Express): void {
   app.get("/drive", serveDrive);
   app.get("/drivers", serveDrive);
 
+  // Terms and Privacy: static HTML for anyone without a session (crawlers,
+  // reviewers, a sign-up form's "open in new tab"); the app keeps its own
+  // in-app version, with the Back button, for signed-in users.
+  const serveLegal = (kind: LegalPageKind) => (req: Request, res: Response, next: NextFunction) => {
+    const accept = req.headers.accept ?? "";
+    const wantsHtml = !accept || accept.includes("text/html");
+    if (!wantsHtml || hasSession(req)) return next();
+    res
+      .status(200)
+      .type("html")
+      .set("Cache-Control", "public, max-age=300, must-revalidate")
+      .send(renderLegalPage(kind));
+  };
+
   // The bare root, for a visitor with no session, is the business page —
   // not the app's sign-in screen. Stripe's reviewer fetched
   // www.peoplegoverned.com, met the login form, and recorded the site as
@@ -425,7 +516,9 @@ export function registerPublicPages(app: Express): void {
   // that identifies itself as the app keeps the SPA: a logged-in session,
   // the installed PWA (start_url carries ?source=pwa), QR install links
   // (?qr=1), and any other query string.
-  const hasSession = (req: Request) => /(?:^|;\s*)connect\.sid=/.test(req.headers.cookie ?? "");
+  app.get("/terms", serveLegal("terms"));
+  app.get("/privacy", serveLegal("privacy"));
+
   app.get("/", (req: Request, res: Response, next: NextFunction) => {
     const accept = req.headers.accept ?? "";
     const wantsHtml = !accept || accept.includes("text/html");
