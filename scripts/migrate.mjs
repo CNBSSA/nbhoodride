@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS rides (
   pickup_stops JSONB,
   stops JSONB,
   plan_id VARCHAR,
+  free_cancel_until TIMESTAMP,
   original_fare DECIMAL(8,2),
   group_discount_amount DECIMAL(8,2) DEFAULT 0.00,
   promo_discount_applied DECIMAL(8,2) DEFAULT 0.00,
@@ -1158,6 +1159,9 @@ CREATE TABLE IF NOT EXISTS weekly_ride_plans (
 );
 CREATE INDEX IF NOT EXISTS idx_weekly_ride_plans_rider ON weekly_ride_plans (rider_id) WHERE is_active;
 ALTER TABLE rides ADD COLUMN IF NOT EXISTS plan_id VARCHAR;
+-- Coworker group shrank below two before the driver confirmed: the rider was
+-- re-quoted at the solo fare and may cancel free until this moment.
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS free_cancel_until TIMESTAMP;
 -- One booked ride per plan per departure: the rolling sweep can never double-book.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rides_plan_departure ON rides (plan_id, scheduled_at) WHERE plan_id IS NOT NULL;
 

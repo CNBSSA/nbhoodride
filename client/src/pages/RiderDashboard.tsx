@@ -676,6 +676,17 @@ export default function RiderDashboard() {
         description: lastMessage.message || "Your driver had to cancel. Your fare is unchanged.",
       });
       navigator.vibrate?.([300, 100, 300]);
+    } else if (lastMessage.type === 'group_seat_released') {
+      // A coworker left the group: fare may have changed (re-quoted to solo)
+      // and a free-cancel window may be open — say so plainly.
+      queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });
+      toast({
+        title: lastMessage.title || "A coworker cancelled",
+        description: lastMessage.message,
+        variant: lastMessage.requoted ? "destructive" : undefined,
+        duration: lastMessage.requoted ? 15000 : 8000,
+      });
+      navigator.vibrate?.([200, 100, 200]);
     } else if (lastMessage.type === 'ride_no_show') {
       refetchActiveRides();
       queryClient.invalidateQueries({ queryKey: ['/api/virtual-card/balance'] });

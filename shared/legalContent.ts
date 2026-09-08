@@ -12,6 +12,7 @@
  */
 
 import { BRAND } from "./branding";
+import { GROUP_RATE_POLICY_SENTENCE } from "./groupRatePolicy";
 
 export const LEGAL_LAST_UPDATED = "September 8, 2026";
 export const LEGAL_ENTITY_NAME = "Thrynova Insights LLC";
@@ -67,6 +68,7 @@ export const TERMS_SECTIONS: LegalSection[] = [
     heading: "6. Cancellation Policy",
     paragraphs: [
       "Cancelling is free while your request is still waiting for a driver, and for 3 minutes after a driver accepts. After that a small fee compensates the driver for their time and fuel: $3.50 if you cancel 3 to 5 minutes after the driver accepted, $5.00 after 5 minutes, and $7.00 once the driver has arrived and is waiting. Scheduled rides cancel free more than 2 hours before departure. If the driver or PG Ride cancels, you are never charged.",
+      GROUP_RATE_POLICY_SENTENCE,
     ],
   },
   {

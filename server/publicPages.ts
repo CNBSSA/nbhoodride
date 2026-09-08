@@ -21,6 +21,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { BRAND } from "@shared/branding";
 import { SUPPORT_CONTACTS } from "@shared/supportContacts";
 import { LEGAL_LAST_UPDATED, LEGAL_PAGES, type LegalPageKind, type LegalSection } from "@shared/legalContent";
+import { GROUP_RATE_POLICY_SENTENCE } from "@shared/groupRatePolicy";
 import { featureFlags } from "./featureFlags";
 
 const LEGAL_ENTITY = "Thrynova Insights LLC";
@@ -198,7 +199,7 @@ ${PAGE_CSS}
       <h2>Promotions</h2>
       <ul>
         <li><strong>New riders:</strong> 4 promotional rides at $5 off each, applied automatically at booking.</li>
-        <li><strong>Coworker rides:</strong> when 2 or 3 coworkers share one scheduled ride using a PG-code, every seat in that car is 30% off.</li>
+        <li><strong>Coworker rides:</strong> when 2 or 3 coworkers share one scheduled ride using a PG-code, every seat in that car is 30% off. ${esc(GROUP_RATE_POLICY_SENTENCE)}</li>
       </ul>
       <p>One promotion per ride. Promotions have no cash value and may be changed or ended at any time. The price shown before you confirm already includes any promotion.</p>
     </section>

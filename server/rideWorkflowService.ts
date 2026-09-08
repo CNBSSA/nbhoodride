@@ -15,6 +15,7 @@
  */
 
 import { db } from "./db";
+import { freeCancelWindowOpen } from "@shared/groupRatePolicy";
 import {
   rides,
   users,
@@ -825,6 +826,7 @@ export function calculateCancellationFee(
     status?: string | null;
     acceptedAt?: Date | string | null;
     scheduledAt?: Date | string | null;
+    freeCancelUntil?: Date | string | null;
   },
   now: Date = new Date(),
   options?: {
@@ -839,6 +841,12 @@ export function calculateCancellationFee(
   }
 ): CancellationFeeResult {
   const status = ride.status ?? "pending";
+
+  // Re-quoted after their coworker group shrank (shared/groupRatePolicy.ts):
+  // the rider was promised a free way out for a short window.
+  if (freeCancelWindowOpen(ride, now)) {
+    return { fee: 0, reason: "No fee — your group changed and you were re-quoted; cancelling is free for now" };
+  }
 
   if (status !== "accepted" && status !== "driver_arriving") {
     return { fee: 0, reason: "No fee — no driver committed to this ride yet" };

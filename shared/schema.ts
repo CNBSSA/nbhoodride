@@ -298,6 +298,11 @@ export const rides = pgTable("rides", {
   cancelledBy: varchar("cancelled_by"),
   /** rider | driver | system | admin — drives reliability stats. */
   cancelledByRole: varchar("cancelled_by_role"),
+  /**
+   * Set when the rider was re-quoted after their coworker group shrank
+   * (shared/groupRatePolicy.ts): cancelling is free until this moment.
+   */
+  freeCancelUntil: timestamp("free_cancel_until"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
