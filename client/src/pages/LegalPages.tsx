@@ -1,9 +1,12 @@
 import { useLocation } from "wouter";
 import { ArrowLeft, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { BRAND } from "@shared/branding";
-import { SUPPORT_CONTACTS } from "@shared/supportContacts";
 import { SupportContactLinks } from "@/components/SupportContactLinks";
+import { LEGAL_LAST_UPDATED, LEGAL_PAGES, type LegalPageKind, type LegalSection } from "@shared/legalContent";
+
+// The wording lives in shared/legalContent.ts and is rendered here for the
+// app (with a Back button) and by the server as static HTML for visitors
+// and reviewers whose browsers do not run JavaScript.
 
 function BackButton() {
   const [, navigate] = useLocation();
@@ -15,198 +18,59 @@ function BackButton() {
   );
 }
 
-export function TermsOfService() {
+function Section({ s, muted }: { s: LegalSection; muted: boolean }) {
+  const body = muted ? "text-muted-foreground" : "";
+  return (
+    <section>
+      <h2 className="font-semibold text-base mb-2">{s.heading}</h2>
+      {s.paragraphs?.map((p, i) => (
+        <p key={i} className={body}>{p}</p>
+      ))}
+      {s.bullets && (
+        <ul className={`list-disc list-inside ${s.paragraphs ? "mt-2 " : ""}space-y-1 ${body}`}>
+          {s.bullets.map((b, i) => (
+            <li key={i}>
+              {b.label && <strong className="text-foreground">{b.label}</strong>}{b.label ? " " : ""}{b.text}
+            </li>
+          ))}
+        </ul>
+      )}
+      {s.after && <p className={`${body} mt-2`}>{s.after}</p>}
+      {s.contact && (
+        <div className="mt-2">
+          <SupportContactLinks className="!justify-start" />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function LegalPage({ kind }: { kind: LegalPageKind }) {
+  const page = LEGAL_PAGES[kind];
+  const muted = kind === "privacy";
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-2xl mx-auto px-4 py-8">
         <BackButton />
         <div className="flex items-center gap-3 mb-6">
           <Shield className="w-7 h-7 text-primary" />
-          <h1 className="text-2xl font-bold">Terms of Service</h1>
+          <h1 className="text-2xl font-bold">{page.title}</h1>
         </div>
-        <p className="text-sm text-muted-foreground mb-6">Last updated: April 13, 2026</p>
-
-        <div className="prose prose-sm dark:prose-invert space-y-6 text-sm leading-relaxed">
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">1. About PG Ride</h2>
-            <p>
-              PG Ride ("PG Ride," "we," "us," or "our") is a rideshare service operated by
-              Thrynova Insights LLC in Prince George's County, Maryland. We connect verified
-              riders with background-checked drivers for local trips, and riders pay a per-ride
-              fare by card. {BRAND.foundedNote} By creating an account or using our services, you
-              agree to these Terms of Service.
-            </p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">2. Eligibility</h2>
-            <p>You must be at least 18 years old and a resident of or have a valid reason to travel within Maryland. Accounts require administrator approval before becoming active. You must provide accurate information during registration.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">3. Payments</h2>
-            <p>Riders pay a per-ride fare charged to their payment card, processed securely by Stripe. When a driver accepts, the fare is authorized as a hold on the card and captured when the ride completes, or released if the ride is cancelled. There is no stored-value balance or prepaid wallet. No surge pricing is applied on PG Ride — fares are calculated transparently using distance and time only.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">4. Promotional Ride Discounts</h2>
-            <p>New riders receive up to 4 promotional ride discounts of $5 each, applied automatically to eligible fares after account approval. These discounts are for personal use only, are non-transferable, and expire 12 months from account creation. We reserve the right to revoke them for abuse or fraudulent activity.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">5. Driver Requirements</h2>
-            <p>Drivers must submit valid identification, a driver's license, vehicle registration, and proof of insurance for verification. Drivers must comply with all applicable Maryland traffic laws and maintain a valid license at all times while driving on the platform. Driver accounts may be suspended or permanently banned for safety violations, low ratings, or fraudulent conduct.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">6. Cancellation Policy</h2>
-            <p>Riders may cancel a ride request at any time before the driver has traveled significant distance toward pickup. Cancellation fees may apply as follows: $3.50 if the driver traveled at least 1.5 miles and 3 minutes; $5.00 if the driver traveled at least 3 miles and 5 minutes. These fees compensate drivers for their time and fuel.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">7. SOS & Safety Features</h2>
-            <p>PG Ride provides an SOS emergency feature for in-ride emergencies. This feature should only be used in genuine emergencies. Misuse of the SOS feature may result in account suspension. We are not a 911 service and are not responsible for emergency response times.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">8. Prohibited Conduct</h2>
-            <p>You may not: use the platform for illegal activity; harass or threaten other users or drivers; create fraudulent accounts; attempt to circumvent fare or payment systems; reverse-engineer the platform; or resell access to the platform.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">9. Limitation of Liability</h2>
-            <p>PG Ride is a technology platform connecting riders and drivers. We are not a transportation carrier. Drivers are independent contractors. To the maximum extent permitted by law, PG Ride is not liable for personal injury, property damage, or other losses arising from rides facilitated through our platform. Our maximum liability to you for any claim is limited to the amount paid through your account in the 30 days preceding the claim.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">10. Dispute Resolution</h2>
-            <p>Disputes between riders and drivers should first be reported through the in-app dispute system. We will review disputes within 5 business days. Our decision is final for amounts under $100. For larger disputes, parties may pursue mediation under Maryland law.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">11. Changes to These Terms</h2>
-            <p>We may update these Terms at any time. We will notify you of material changes via email or in-app notification. Continued use of the platform after changes constitutes acceptance of the new Terms.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">12. Contact</h2>
-            <p>For support, questions and enquiries, contact Thrynova Insights LLC any of these ways:</p>
-            <div className="mt-2">
-              <SupportContactLinks className="!justify-start" />
-            </div>
-          </section>
-
+        <p className="text-sm text-muted-foreground mb-6">Last updated: {LEGAL_LAST_UPDATED}</p>
+        <div className="space-y-6 text-sm leading-relaxed">
+          {page.sections.map((s) => (
+            <Section key={s.heading} s={s} muted={muted} />
+          ))}
         </div>
       </div>
     </div>
   );
 }
 
+export function TermsOfService() {
+  return <LegalPage kind="terms" />;
+}
+
 export function PrivacyPolicy() {
-  return (
-    <div className="min-h-screen bg-background">
-      <div className="max-w-2xl mx-auto px-4 py-8">
-        <BackButton />
-        <div className="flex items-center gap-3 mb-6">
-          <Shield className="w-7 h-7 text-primary" />
-          <h1 className="text-2xl font-bold">Privacy Policy</h1>
-        </div>
-        <p className="text-sm text-muted-foreground mb-6">Last updated: April 13, 2026</p>
-
-        <div className="space-y-6 text-sm leading-relaxed">
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">1. Information We Collect</h2>
-            <p className="text-muted-foreground">We collect the following information when you use PG Ride:</p>
-            <ul className="list-disc list-inside mt-2 space-y-1 text-muted-foreground">
-              <li><strong className="text-foreground">Account information:</strong> Name, email, phone number, and password (hashed)</li>
-              <li><strong className="text-foreground">Location data:</strong> GPS coordinates during active rides and route tracking</li>
-              <li><strong className="text-foreground">Payment information:</strong> Payment card on file and ride transaction history (card details handled by Stripe)</li>
-              <li><strong className="text-foreground">Driver documents:</strong> License, registration, and insurance uploads for verification</li>
-              <li><strong className="text-foreground">Ride data:</strong> Origin, destination, timestamps, fare, and driver/rider feedback</li>
-              <li><strong className="text-foreground">Usage data:</strong> App interactions, feature usage, and in-app AI assistant conversations</li>
-            </ul>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">2. How We Use Your Information</h2>
-            <ul className="list-disc list-inside space-y-1 text-muted-foreground">
-              <li>To match riders with nearby drivers</li>
-              <li>To process card payments for your rides</li>
-              <li>To verify driver identities and credentials</li>
-              <li>To provide real-time GPS tracking during rides</li>
-              <li>To operate the SOS emergency feature and contact emergency services if needed</li>
-              <li>To improve the platform and resolve disputes</li>
-              <li>To send service notifications (not marketing without consent)</li>
-            </ul>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">3. Location Data</h2>
-            <p className="text-muted-foreground">We collect your precise location only during active rides. For drivers, location is shared with matched riders in real time so they can track their pickup. Location data is not collected when the app is closed. We retain ride route data for 90 days for dispute resolution, then anonymize it.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">4. Data Sharing</h2>
-            <p className="text-muted-foreground">We share your information only as follows:</p>
-            <ul className="list-disc list-inside mt-2 space-y-1 text-muted-foreground">
-              <li><strong className="text-foreground">Drivers & Riders:</strong> First name, profile photo, and vehicle info are shared between matched parties during rides</li>
-              <li><strong className="text-foreground">Stripe:</strong> Payment processing (Stripe Privacy Policy applies)</li>
-              <li><strong className="text-foreground">Emergency services:</strong> Location and contact info shared if SOS is triggered</li>
-              <li><strong className="text-foreground">Legal requirements:</strong> If required by law or court order</li>
-            </ul>
-            <p className="text-muted-foreground mt-2">We do not sell your personal information. Ever.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">5. AI Assistant</h2>
-            <p className="text-muted-foreground">Conversations with our in-app AI assistant are used to provide responses and may be reviewed to improve safety and service quality. Do not share sensitive personal information (e.g., full SSN, financial account numbers) in AI conversations.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">6. Data Security</h2>
-            <p className="text-muted-foreground">We use industry-standard security including encrypted connections (HTTPS/TLS), bcrypt password hashing, and secure cloud storage for driver documents. Despite these measures, no system is 100% secure. Please use a strong, unique password.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">7. Data Retention</h2>
-            <p className="text-muted-foreground">We retain your account data as long as your account is active. Ride history is retained for 3 years for tax and legal purposes. You may request account deletion at any time — we will delete personal data within 30 days, except data we are legally required to retain.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">8. Your Rights</h2>
-            <p className="text-muted-foreground">Under Maryland and applicable U.S. law, you have the right to: access your personal data, correct inaccurate data, request deletion of your data, opt out of non-essential communications, and receive a copy of your data in a portable format. To exercise these rights, contact us at <a href={`mailto:${SUPPORT_CONTACTS.email}`} className="text-primary underline">{SUPPORT_CONTACTS.email}</a>.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">9. Delete Your Account</h2>
-            <p className="text-muted-foreground">
-              You can permanently delete your PG Ride account at any time: open the app,
-              go to <strong className="text-foreground">Profile → Delete account</strong>, and confirm with your
-              password. Deletion removes your personal information (name, email, phone,
-              photos, documents, and saved payment method). Ride and payment records are
-              retained in anonymized form as required for legal and financial
-              record-keeping. If you can't access the app, email us at the address in the
-              Contact section from your account email and we'll process the deletion for you.
-            </p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">10. Children's Privacy</h2>
-            <p className="text-muted-foreground">PG Ride is not intended for users under 18. We do not knowingly collect personal information from minors.</p>
-          </section>
-
-          <section>
-            <h2 className="font-semibold text-base mb-2">11. Contact</h2>
-            <p className="text-muted-foreground">Questions about your privacy? Reach us any of these ways:</p>
-            <div className="mt-2">
-              <SupportContactLinks className="!justify-start" />
-            </div>
-          </section>
-
-        </div>
-      </div>
-    </div>
-  );
+  return <LegalPage kind="privacy" />;
 }

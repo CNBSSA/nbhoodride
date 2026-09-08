@@ -66,11 +66,10 @@ const recentCommits = sh("git", ["log", "origin/main", "--oneline", "-15"]);
 const checkRes = sh("npm", ["run", "check"]);
 const testRes = sh("npm", ["test"]);
 
-// Phase 0 public + legal-route smoke against production. This is the check the
-// 0.4-legal / 0.6-smoke readiness warns used to say "run manually" — it's
-// read-only (GET /privacy, /terms, /login, /signup, /health, CSRF, manifest,
-// icons) so it's safe to run on every scheduled report, making the legal-route
-// and public-route status deterministic daily instead of manual-only.
+// Phase 0 public + legal-route smoke against production: read-only (GET
+// /privacy, /terms, /about, /login, /signup, /health, CSRF, manifest, icons),
+// and it asserts the legal pages' text is in the HTML itself — what a
+// reviewer's crawler without JavaScript actually reads.
 const smokeRes = sh("npm", ["run", "smoke:production"]);
 
 const health = await tryFetch("/health/ready");
