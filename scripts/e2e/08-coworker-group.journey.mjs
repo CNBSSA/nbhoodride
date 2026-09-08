@@ -55,6 +55,13 @@ export async function run({ base, db }) {
     const b = afterTwo.find((r) => r.rider_id === bola.id);
     check("organizer's fare drops 30% once a coworker joins ($20 → $14)", Number(org?.estimated_fare) === 14 && Number(org?.original_fare) === 20, `fare=${org?.estimated_fare} original=${org?.original_fare}`);
     check("joiner is 30% off their own route (not stacked)", b && Math.abs(Number(b.estimated_fare) - Number(b.original_fare) * 0.7) < 0.011, `fare=${b?.estimated_fare} original=${b?.original_fare}`);
+    // The joiner's full fare must be the rate card's quote for their route —
+    // the same number /api/rides/calculate-fare gives for the same figures.
+    const { rows: [bRoute] } = await db.query("SELECT distance, duration FROM rides WHERE group_id=$1 AND rider_id=$2", [cleanup.groupId, bola.id]);
+    const bQuote = await bola.session.req("POST", "/api/rides/calculate-fare", { distance: Number(bRoute.distance), duration: bRoute.duration });
+    check("joiner's route is recorded and their full fare is the rate card's quote for it", Number(bRoute.distance) > 0 && bRoute.duration > 0 && bQuote.status === 200 && Math.abs(Number(b.original_fare) - bQuote.json.total) < 0.011, `original=${b?.original_fare} quote=${bQuote.json?.total} route=${bRoute.distance}mi/${bRoute.duration}min`);
+    const { rows: [bPay] } = await db.query("SELECT payment_method FROM rides WHERE group_id=$1 AND rider_id=$2", [cleanup.groupId, bola.id]);
+    check("joiner's seat is a card ride regardless of what the app sent", bPay.payment_method === "card");
 
     const j2 = await chidi.session.req("POST", "/api/rides/join-schedule", { scheduleCode: code, pickupLocation: joinerPickup, destinationLocation: DEST });
     check("third rider fills the car", j2.status === 200, JSON.stringify(j2.json?.message ?? j2.status));

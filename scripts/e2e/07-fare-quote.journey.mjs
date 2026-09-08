@@ -92,6 +92,19 @@ export async function run({ base, db }) {
   check("receipt lists the stop between pickup and destination", stopReceipt.status === 200 && Array.isArray(stopReceipt.json?.stops) && stopReceipt.json.stops[0] === stopA.address, JSON.stringify(stopReceipt.json?.stops));
   await deleteRides(db, [withStop.json.id]);
 
+  section("A driver's phone cannot set the fare, or a tip on a card ride");
+  const { rows: [cardRideRow] } = await db.query(
+    `INSERT INTO rides (rider_id, driver_id, status, pickup_location, destination_location, estimated_fare, payment_method, started_at)
+     VALUES ($1, $2, 'in_progress', $3, $4, '23.21', 'card', NOW() - interval '20 minutes') RETURNING id`,
+    [FIXTURES.rider.id, FIXTURES.driver.id, loc(PICKUP), loc(DEST)]);
+  const setFare = await driver.req("POST", `/api/driver/rides/${cardRideRow.id}/complete`, { actualFare: 80 });
+  check("completing with an explicit fare is refused with a reason", setFare.status === 400 && /quoted at booking/.test(setFare.json?.message ?? ""), JSON.stringify(setFare.json));
+  const cardTip = await driver.req("POST", `/api/driver/rides/${cardRideRow.id}/complete`, { tipAmount: 50 });
+  check("a driver-entered tip on a card ride is refused", cardTip.status === 400 && /added by the rider/.test(cardTip.json?.message ?? ""), JSON.stringify(cardTip.json));
+  const { rows: [stillOpen] } = await db.query("SELECT status, actual_fare, tip_amount FROM rides WHERE id=$1", [cardRideRow.id]);
+  check("the ride is untouched by the refused attempts", stillOpen.status === "in_progress" && stillOpen.actual_fare === null && Number(stillOpen.tip_amount) === 0, JSON.stringify(stillOpen));
+  await deleteRides(db, [cardRideRow.id]);
+
   section("Normal completion charges the quoted fare");
   const earningsBefore = await driver.req("GET", "/api/driver/earnings/today");
   const rideA = await seed();

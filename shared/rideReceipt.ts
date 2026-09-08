@@ -74,6 +74,12 @@ export interface PaymentLabelOptions {
    * rider's history read "PG Card (virtual wallet)" for a plain card charge.
    */
   walletEnabled?: boolean;
+  /**
+   * The live rate card the breakdown lines are priced on. Without it the
+   * receipt fell back to constants that stop matching the moment an admin
+   * edits a rate — the total was right but the lines did not add up to it.
+   */
+  rates?: { baseFare: number; perMinuteRate: number; perMileRate: number; minimumFare: number };
 }
 
 export function formatPaymentMethodLabel(method: string | null | undefined, opts: PaymentLabelOptions = {}): string {
@@ -105,18 +111,19 @@ export function buildRideReceipt(ride: RideReceiptInput, driverName: string, opt
     ? ride.duration
     : ride.driverTraveledTime ?? null;
 
+  const rates = opts.rates ?? RECEIPT_FARE_RATES;
   const timeCharge = durationMinutes
-    ? round2(RECEIPT_FARE_RATES.perMinuteRate * durationMinutes)
+    ? round2(rates.perMinuteRate * durationMinutes)
     : 0;
   const distanceCharge = distanceMiles
-    ? round2(RECEIPT_FARE_RATES.perMileRate * distanceMiles)
+    ? round2(rates.perMileRate * distanceMiles)
     : 0;
-  const subtotal = round2(RECEIPT_FARE_RATES.baseFare + timeCharge + distanceCharge);
+  const subtotal = round2(rates.baseFare + timeCharge + distanceCharge);
   // Vehicle class (XL / SUV) multiplied the standard fare at booking.
   const rawMultiplier = parseFloat(String(ride.vehicleFareMultiplier ?? "1"));
   const vehicleMultiplier = Number.isFinite(rawMultiplier) && rawMultiplier >= 1 ? round2(rawMultiplier) : 1;
   const vehicleAdjustment = vehicleMultiplier !== 1
-    ? round2(Math.max(RECEIPT_FARE_RATES.minimumFare, subtotal) * (vehicleMultiplier - 1))
+    ? round2(Math.max(rates.minimumFare, subtotal) * (vehicleMultiplier - 1))
     : 0;
 
   const completedAt = ride.completedAt ? new Date(ride.completedAt) : null;
@@ -136,7 +143,7 @@ export function buildRideReceipt(ride: RideReceiptInput, driverName: string, opt
     destinationAddress: ride.destinationLocation?.address ?? "Destination",
     distanceMiles,
     durationMinutes,
-    baseFare: RECEIPT_FARE_RATES.baseFare,
+    baseFare: rates.baseFare,
     timeCharge,
     distanceCharge,
     subtotal,

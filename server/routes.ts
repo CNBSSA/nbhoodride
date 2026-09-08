@@ -3108,13 +3108,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
       
-      // Validate request body - actualFare is now optional to allow automatic calculation
+      // The fare is the quote (shared/farePolicy.ts). A driver's phone never
+      // sends one, and this route no longer accepts one: an explicit fare
+      // would win over the quote and be charged to the rider's card. A tip
+      // is accepted only on a cash ride, where the driver is reporting cash
+      // they were handed; on a card ride a tip would be charged to the
+      // rider's card on the driver's say-so.
       const completeRideSchema = z.object({
-        actualFare: z.number().positive("Actual fare must be a positive number").optional(),
-        tipAmount: z.number().min(0).optional()
+        actualFare: z.number().optional(),
+        tipAmount: z.number().min(0).max(500).optional()
       });
-      
-      const { actualFare, tipAmount } = completeRideSchema.parse(req.body);
+      const parsed = completeRideSchema.parse(req.body);
+      if (parsed.actualFare !== undefined) {
+        return res.status(400).json({ message: "The fare is the amount quoted at booking; it can't be set at completion." });
+      }
+      const preCheck = await storage.getRide(rideId);
+      if (parsed.tipAmount !== undefined && parsed.tipAmount > 0 && preCheck?.paymentMethod === 'card') {
+        return res.status(400).json({ message: "Tips on card rides are added by the rider, not entered by the driver." });
+      }
+      const actualFare: number | undefined = undefined;
+      const tipAmount = parsed.tipAmount;
 
       let ride: Ride;
       try {
@@ -5718,7 +5731,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ? `${driverUser.firstName || ''} ${driverUser.lastName?.[0] || ''}.`.trim()
         : "Your driver";
 
-      const receipt = buildRideReceipt(ride as any, driverName, { walletEnabled: featureFlags.walletEnabled });
+      const receipt = buildRideReceipt(ride as any, driverName, { walletEnabled: featureFlags.walletEnabled, rates: await storage.getPlatformRates() });
       res.json(receipt);
     } catch (error) {
       console.error("Error fetching ride receipt:", error);
@@ -7542,6 +7555,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } as any);
 
       // Create organizer's ride linked to the group
+      // Route figures the organizer's quote was priced on (receipt + history);
+      // the app's numbers when plausible, the shared road estimate otherwise.
+      const orgRoute = estimateRoute([pickupLocation, destinationLocation]);
+      const orgDistance = Number(req.body.distance), orgDuration = Number(req.body.duration);
+      const orgMiles = Number.isFinite(orgDistance) && orgDistance > 0 && orgDistance < 500 ? orgDistance : orgRoute.miles;
+      const orgMinutes = Number.isFinite(orgDuration) && orgDuration > 0 && orgDuration < 1440 ? Math.round(orgDuration) : orgRoute.minutes;
       const ride = await storage.createRide({
         riderId: userId,
         driverId: driverId || null,
@@ -7550,6 +7569,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         pickupInstructions,
         estimatedFare: String(estimatedFare),
         originalFare: String(estimatedFare),
+        distance: orgMiles.toFixed(2),
+        duration: orgMinutes,
         paymentMethod: "card",
         rideType: "shared_schedule",
         groupId: group.id,
@@ -7640,7 +7661,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     userId: string,
     pickupLocation: { lat: number; lng: number; address: string },
     destinationLocation: { lat: number; lng: number; address: string },
-    paymentMethod?: string,
+    _paymentMethod?: string,
+    routeHint?: { distance?: unknown; duration?: unknown },
   ): Promise<{ ok: true; ride: Ride } | { ok: false; status: number; message: string }> {
     if (group.status !== "open") return { ok: false, status: 410, message: "This schedule is no longer accepting riders" };
     if ((group.filledSlots ?? 0) >= (group.maxSlots ?? 3)) return { ok: false, status: 409, message: "This schedule is full" };
@@ -7660,16 +7682,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!claimedGroup) return { ok: false, status: 409, message: "This schedule is full" };
 
     // Estimate fare for the joiner's route
-    const { lat: pLat, lng: pLng } = pickupLocation;
-    const { lat: dLat, lng: dLng } = destinationLocation;
-    const R = 3958.8;
-    const dLatR = ((dLat - pLat) * Math.PI) / 180;
-    const dLngR = ((dLng - pLng) * Math.PI) / 180;
-    const a = Math.sin(dLatR / 2) ** 2 + Math.cos((pLat * Math.PI) / 180) * Math.cos((dLat * Math.PI) / 180) * Math.sin(dLngR / 2) ** 2;
-    const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3;
-    const duration = Math.round((dist / 25) * 60);
-    const fullFare = Math.max(5, 2.5 + dist * 1.5 + duration * 0.3);
-    const discountedFare = fullFare * 0.7;
+    // The joiner's own route, priced on the platform rate card — the same
+    // quote every other ride gets. (This used to carry a tariff of its own:
+    // $2.50 + $1.50/mi + $0.30/min, min $5, which no longer matched the
+    // rate card and ignored admin changes to it.)
+    const joinRoute = estimateRoute([pickupLocation, destinationLocation]);
+    const hintDistance = Number(routeHint?.distance), hintDuration = Number(routeHint?.duration);
+    const dist = Number.isFinite(hintDistance) && hintDistance > 0 && hintDistance < 500 ? hintDistance : joinRoute.miles;
+    const duration = Number.isFinite(hintDuration) && hintDuration > 0 && hintDuration < 1440 ? Math.round(hintDuration) : joinRoute.minutes;
+    const fullFare = estimateFare(dist, duration, { rates: await storage.getPlatformRates() }).total;
+    const discountedFare = Math.round(fullFare * 0.7 * 100) / 100;
 
     // Only pre-apply the 30% discount here if the group discount is ALREADY
     // active (this joiner is the 3rd+ member). If this join is the one that
@@ -7692,7 +7714,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         estimatedFare: initialFare.toFixed(2),
         originalFare: fullFare.toFixed(2),
         groupDiscountAmount: initialDiscountAmount.toFixed(2),
-        paymentMethod: (paymentMethod as any) || "card",
+        distance: dist.toFixed(2),
+        duration,
+        // Card only, like every other booking — the client's choice is not honoured.
+        paymentMethod: "card",
         rideType: "shared_schedule",
         groupId: group.id,
         scheduledAt: group.scheduledAt ?? undefined,
@@ -7732,7 +7757,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const group = await storage.getRideGroupByCode(scheduleCode.toUpperCase());
       if (!group) return res.status(404).json({ message: "Schedule code not found" });
 
-      const result = await joinSharedGroupAsRider(group, userId, pickupLocation, destinationLocation, paymentMethod);
+      const result = await joinSharedGroupAsRider(group, userId, pickupLocation, destinationLocation, paymentMethod, { distance: req.body.distance, duration: req.body.duration });
       if (!result.ok) return res.status(result.status).json({ message: result.message });
 
       res.json({ ...result.ride, scheduleCode, discountApplied: true });

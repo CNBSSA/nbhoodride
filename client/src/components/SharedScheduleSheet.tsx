@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { parseBookingErrorMessage } from "@shared/userFacingCopy";
 import { checkScheduleTime } from "@shared/schedulingPolicy";
+import { estimateRoute } from "@shared/routeEstimate";
 import { useToast } from "@/hooks/use-toast";
 import { X, Copy, CheckCircle, Users, Loader2, DollarSign, Shield, Star, Share2, Calendar as CalendarIcon, Clock, MapPin } from "lucide-react";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
@@ -36,14 +37,15 @@ interface SharedScheduleSheetProps {
 }
 
 
-function estimateFare(pickupLat: number, pickupLng: number, destLat: number, destLng: number): number {
-  const R = 3958.8;
-  const dLat = ((destLat - pickupLat) * Math.PI) / 180;
-  const dLng = ((destLng - pickupLng) * Math.PI) / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos((pickupLat * Math.PI) / 180) * Math.cos((destLat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
-  const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3;
-  const duration = Math.round((dist / 25) * 60);
-  return Math.max(5, 2.5 + dist * 1.5 + duration * 0.3);
+// The fare comes from the server's rate card, never from arithmetic on the
+// phone: this sheet used to carry a tariff of its own ($2.50 + $1.50/mi +
+// $0.30/min) that no longer matched what every other ride was quoted.
+async function quoteFromServer(distance: number, duration: number): Promise<number> {
+  const res = await apiRequest("POST", "/api/rides/calculate-fare", { distance, duration });
+  const data = await res.json();
+  const total = Number(data?.total);
+  if (!Number.isFinite(total) || total <= 0) throw new Error("No fare quote returned");
+  return total;
 }
 
 export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLocation }: SharedScheduleSheetProps) {
@@ -53,6 +55,8 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
   const [pickupInstructions, setPickupInstructions] = useState("");
   const [selectedDriver, setSelectedDriver] = useState("");
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
+  const [routeFigures, setRouteFigures] = useState<{ miles: number; minutes: number } | null>(null);
+  const [quoting, setQuoting] = useState(false);
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
   const [scheduledDate, setScheduledDate] = useState<Date | undefined>();
@@ -176,9 +180,18 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
       toast({ title: "Pick shift end time", description: "Select a date and time when you leave work.", variant: "destructive" });
       return;
     }
-    const fare = estimateFare(userLocation.lat, userLocation.lng, destCoords.lat, destCoords.lng);
-    setFareEstimate(fare);
-    setStep(2);
+    const route = estimateRoute([userLocation, destCoords]);
+    setQuoting(true);
+    quoteFromServer(route.miles, route.minutes)
+      .then((fare) => {
+        setRouteFigures(route);
+        setFareEstimate(fare);
+        setStep(2);
+      })
+      .catch(() => {
+        toast({ title: "Couldn't get a fare quote", description: "Check your connection and try again.", variant: "destructive" });
+      })
+      .finally(() => setQuoting(false));
   };
 
   const buildScheduledAt = (): string | null => {
@@ -212,6 +225,9 @@ export default function SharedScheduleSheet({ isOpen, onClose, drivers, userLoca
       pickupInstructions,
       driverId: selectedDriver || null,
       estimatedFare: fareEstimate?.toFixed(2),
+      // The route the quote was priced on — recorded on the ride for the receipt.
+      distance: routeFigures?.miles,
+      duration: routeFigures?.minutes,
       paymentMethod: "card",
       rideType: "shared_schedule",
       scheduledAt,

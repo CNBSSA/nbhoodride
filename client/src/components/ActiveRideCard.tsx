@@ -55,6 +55,10 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
   const [isUpdating, setIsUpdating] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { data: fareRates } = useQuery<{ baseFare: number; perMinuteRate: number; perMileRate: number; minimumFare: number }>({
+    queryKey: ["/api/fares/rates"],
+    staleTime: 5 * 60_000,
+  });
   const { trackRideCompleted } = useAnalytics();
 
   // Get real-time ride stats for in-progress rides
@@ -432,8 +436,10 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
               </div>
             </div>
 
-            <p className="text-xs text-muted-foreground text-center">
-              Base $4.00 + $0.29/min + $0.90/mi ($7.65 min, $100 max)
+            <p className="text-xs text-muted-foreground text-center" data-testid="text-rate-card">
+              {fareRates
+                ? `Base $${Number(fareRates.baseFare).toFixed(2)} + $${Number(fareRates.perMinuteRate).toFixed(2)}/min + $${Number(fareRates.perMileRate).toFixed(2)}/mi ($${Number(fareRates.minimumFare).toFixed(2)} min, $100 max)`
+                : "One transparent rate, set by PG Ride"}
             </p>
 
             <RideChat rideId={ride.id} role="driver" incomingMessage={incomingRideMessage ?? null} />
