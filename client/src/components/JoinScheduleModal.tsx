@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { X, Search, Users, CheckCircle, Loader2, MapPin, DollarSign } from "lucide-react";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
+import { estimateRoute } from "@shared/routeEstimate";
 import { PG_CARD } from "@shared/userFacingCopy";
 
 interface JoinScheduleModalProps {
@@ -17,14 +18,14 @@ interface JoinScheduleModalProps {
 }
 
 
-function estimateFare(pickupLat: number, pickupLng: number, destLat: number, destLng: number): number {
-  const R = 3958.8;
-  const dLat = ((destLat - pickupLat) * Math.PI) / 180;
-  const dLng = ((destLng - pickupLng) * Math.PI) / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos((pickupLat * Math.PI) / 180) * Math.cos((destLat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
-  const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3;
-  const duration = Math.round((dist / 25) * 60);
-  return Math.max(5, 2.5 + dist * 1.5 + duration * 0.3);
+// Quote from the server's rate card, on the joiner's own route. This screen
+// used to carry its own tariff, which no longer matched the rest of the app.
+async function quoteFromServer(distance: number, duration: number): Promise<number> {
+  const res = await apiRequest("POST", "/api/rides/calculate-fare", { distance, duration });
+  const data = await res.json();
+  const total = Number(data?.total);
+  if (!Number.isFinite(total) || total <= 0) throw new Error("No fare quote returned");
+  return total;
 }
 
 export default function JoinScheduleModal({ isOpen, onClose, userLocation }: JoinScheduleModalProps) {
@@ -34,6 +35,7 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
   const [pickupAddress, setPickupAddress] = useState(userLocation.address);
   const [destinationAddress, setDestinationAddress] = useState("");
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
+  const [routeFigures, setRouteFigures] = useState<{ miles: number; minutes: number } | null>(null);
   const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [joined, setJoined] = useState(false);
 
@@ -88,9 +90,16 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
       toast({ title: "Pick a destination", description: "Choose an address from the suggestions.", variant: "destructive" });
       return;
     }
-    const fare = estimateFare(userLocation.lat, userLocation.lng, destCoords.lat, destCoords.lng);
-    setFareEstimate(fare);
-    setStep(3);
+    const route = estimateRoute([userLocation, destCoords]);
+    quoteFromServer(route.miles, route.minutes)
+      .then((fare) => {
+        setRouteFigures(route);
+        setFareEstimate(fare);
+        setStep(3);
+      })
+      .catch(() => {
+        toast({ title: "Couldn't get a fare quote", description: "Check your connection and try again.", variant: "destructive" });
+      });
   };
 
   const handleJoin = async () => {
@@ -99,6 +108,8 @@ export default function JoinScheduleModal({ isOpen, onClose, userLocation }: Joi
       scheduleCode: code.trim().toUpperCase(),
       pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: pickupAddress },
       destinationLocation: { lat: destCoords.lat, lng: destCoords.lng, address: destinationAddress },
+      distance: routeFigures?.miles,
+      duration: routeFigures?.minutes,
       paymentMethod: "card",
     });
   };
