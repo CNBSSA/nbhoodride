@@ -58,6 +58,8 @@ export interface RiderPromiseMetrics {
     serverErrors: number;
     /** Distinct signed-in users who hit any of the above. */
     peopleAffected: number;
+    /** Dependency outages (database, Stripe) the server's own watch saw. */
+    outages: Array<{ name: string; minutes: number | null }>;
   };
   /** Rides the watch paged ops about before departure (o120 / o15 / o10 stamps). */
   pagedAhead: {
@@ -126,6 +128,12 @@ export function reviewVerdict(m: RiderPromiseMetrics): ReviewVerdict {
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 
+/** "none" or "Stripe 12 min, Database (still down)". */
+export function describeOutages(outages: RiderPromiseMetrics["appHealth"]["outages"]): string {
+  if (outages.length === 0) return "none";
+  return outages.map((o) => `${o.name} ${o.minutes === null ? "(still down)" : `${o.minutes} min`}`).join(", ");
+}
+
 /** "no errors reached anyone" or "2 app errors (1 crash), 1 server error · 2 people affected". */
 export function describeAppHealth(h: RiderPromiseMetrics["appHealth"]): string {
   if (h.appErrors === 0 && h.serverErrors === 0) return "no errors reached anyone";
@@ -162,6 +170,7 @@ export function formatRiderPromiseReview(window: ReviewWindow, m: RiderPromiseMe
   lines.push(
     `On time: ${m.latePickups === 0 ? `every pickup within ${LATE_PICKUP_MINUTES} min` : `${m.latePickups} late pickup${m.latePickups === 1 ? "" : "s"}, worst ${m.worstLateMinutes} min`}`,
     `App health: ${describeAppHealth(m.appHealth)}`,
+    `Outages: ${describeOutages(m.appHealth.outages)}`,
     `Paged ahead: ${m.pagedAhead.paged === 0 ? "no ride needed a page before departure" : `${m.pagedAhead.paged} ride${m.pagedAhead.paged === 1 ? "" : "s"} flagged before departure, ${m.pagedAhead.delivered} still delivered`}`,
     "",
     "Next 24 hours:",

@@ -1,4 +1,5 @@
 import { Session, check, section, serverLog, deleteRides, FIXTURES, PICKUP, DEST } from "./harness.mjs";
+import { spawnSync } from "node:child_process";
 
 /**
  * Proactive reliability: the operator is paged about a ride in trouble
@@ -107,7 +108,41 @@ export async function run({ base, db, server }) {
     check("review counts rides paged before departure", pa.paged >= 3, JSON.stringify(pa));
     check("review text carries the app-health line", /App health: \d+ app errors?/.test(rv.json?.text ?? ""), (rv.json?.text ?? "").split("\n").find((l) => l.startsWith("App health")));
     check("review text carries the paged-ahead line", /Paged ahead: \d+ rides? flagged before departure/.test(rv.json?.text ?? ""));
+
+    section("The server watches its own lifelines");
+    // Stripe is armed with a fake key and unreachable here, so the first check
+    // must page "Stripe unreachable" exactly once, and a check ten minutes later
+    // must stay quiet; the database is fine throughout.
+    const d1 = await admin.req("POST", "/api/admin/analytics/dependency-check", { at: now.toISOString() });
+    check("dependency check runs", d1.status === 200 && d1.json?.report?.deps?.database, JSON.stringify(d1.json?.message ?? d1.status));
+    check("database answers", d1.json?.report?.deps?.database?.ok === true, JSON.stringify(d1.json?.report?.deps?.database));
+    check("stripe is configured and unreachable here", d1.json?.report?.deps?.stripe?.configured === true && d1.json?.report?.deps?.stripe?.ok === false, JSON.stringify(d1.json?.report?.deps?.stripe));
+    check("stripe failure never leaks the key", !/sk_test_e2e_fake/.test(JSON.stringify(d1.json)));
+    const d2 = await admin.req("POST", "/api/admin/analytics/dependency-check", { at: inMin(10).toISOString() });
+    check("still down ten minutes later pages nothing new", (d2.json?.paged ?? []).length === 0, JSON.stringify(d2.json?.paged));
+    const d3 = await admin.req("POST", "/api/admin/analytics/dependency-check", { at: inMin(70).toISOString() });
+    check("still down after an hour reminds once", (d3.json?.paged ?? []).some((p) => p.dep === "stripe" && p.event === "still_down" && p.minutes >= 60), JSON.stringify(d3.json?.paged));
+    await new Promise((r) => setTimeout(r, 300));
+    check("the down page is logged", /\[dependency-watch\] stripe down ::/.test(serverLog(server)));
+    const { rows: down } = await db.query("SELECT count(*)::int AS n FROM reliability_events WHERE kind='dependency_down' AND page='stripe'");
+    check("the outage is recorded once", down[0].n >= 1, `n=${down[0].n}`);
+    const depsPage = await fetch(`${base}/health/deps`);
+    const depsJson = await depsPage.json();
+    check("/health/deps is public, 503 while Stripe is down, and names it", depsPage.status === 503 && (depsJson.down ?? []).includes("stripe"), JSON.stringify(depsJson.down));
+    const rv2 = await admin.req("GET", `/api/admin/analytics/rider-promise-review?at=${encodeURIComponent(at.toISOString())}`);
+    const outages = rv2.json?.metrics?.appHealth?.outages ?? [];
+    check("review lists the Stripe outage as still down", outages.some((o) => o.name === "Stripe" && o.minutes === null), JSON.stringify(outages));
+    check("review text carries the outages line", /Outages: Stripe \(still down\)/.test(rv2.json?.text ?? ""));
+
+    section("The outside watch can use this server");
+    const probe = spawnSync("node", ["scripts/production-watch.mjs"], { env: { ...process.env, BASE_URL: base }, encoding: "utf8" });
+    const lastLine = (probe.stdout ?? "").trim().split("\n").pop() ?? "";
+    check("outside probe passes against a healthy app shell and pages", probe.status === 0, `${probe.status}: ${lastLine} ${probe.stderr}`);
+    check("outside probe carries the server's own view instead of paging twice", /server reports down: stripe \(already paged by the server\)/.test(lastLine), lastLine);
+    const probeDown = spawnSync("node", ["scripts/production-watch.mjs"], { env: { ...process.env, BASE_URL: "http://127.0.0.1:1" }, encoding: "utf8" });
+    check("outside probe fails red when nothing answers", probeDown.status === 1 && /^DOWN — Process/.test((probeDown.stdout ?? "").trim().split("\n").pop() ?? ""), (probeDown.stdout ?? "").trim().split("\n").pop());
   } finally {
+    await db.query("DELETE FROM reliability_events WHERE kind IN ('dependency_down','dependency_up')").catch(() => {});
     await parkDriver(null);
     await deleteRides(db, seeded).catch(() => {});
     await db.query("DELETE FROM reliability_events WHERE user_id=$1 OR page = ANY($2)", [FIXTURES.rider.id, seeded]).catch(() => {});
