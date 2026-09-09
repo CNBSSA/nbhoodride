@@ -306,6 +306,13 @@ async function notifyRideMessageRecipient(
 export async function registerRoutes(app: Express): Promise<Server> {
   // Every rider alert also lands in reliability_events for the daily review.
   setRiderAlertRecorder(reliabilityEventRecorder);
+
+  /** An Anthropic SDK connection/API failure: an outage to report as 503, not a bug to report as 500. */
+  const aiUnavailable = (error: unknown): boolean => {
+    const name = (error as any)?.constructor?.name ?? "";
+    const msg = String((error as any)?.message ?? error);
+    return /^API(Connection|Timeout)?Error|^(Authentication|PermissionDenied|RateLimit|InternalServer)Error$/.test(name) || /fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|api\.anthropic\.com|Could not resolve authentication method/i.test(msg);
+  };
   // Public, no-JavaScript pages (business description for crawlers / reviewers).
   // Mounted first so they win over the SPA catch-all added later in serveStatic.
   registerPublicPages(app);
@@ -9993,6 +10000,7 @@ Generate the FAQ list.`;
       });
     } catch (error) {
       console.error("Error generating FAQs:", error);
+      if (aiUnavailable(error)) return void res.status(503).json({ message: "The AI service is unreachable right now. Try again in a few minutes." });
       res.status(500).json({ message: "Failed to generate FAQs" });
     }
   });
@@ -10003,6 +10011,7 @@ Generate the FAQ list.`;
       res.json({ indexed });
     } catch (error) {
       console.error("Error reindexing knowledge:", error);
+      if (aiUnavailable(error)) return void res.status(503).json({ message: "The AI service is unreachable right now. Try again in a few minutes." });
       res.status(500).json({ message: "Failed to reindex knowledge base" });
     }
   });
