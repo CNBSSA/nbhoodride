@@ -105,7 +105,10 @@ function watch(page) {
   const s = { pageErrors: [], consoleErrors: [], serverErrors: [] };
   const onPageError = (e) => s.pageErrors.push(String(e?.message ?? e).slice(0, 200));
   const onConsole = (m) => { if (m.type() === "error") { const t = m.text(); if (!/favicon|manifest|sw\.js|service worker|401|403|404|Failed to load resource/i.test(t)) s.consoleErrors.push(t.slice(0, 200)); } };
-  const onResponse = (r) => { if (r.status() >= 500 && r.url().includes("/api/")) s.serverErrors.push(`${r.status()} ${r.request().method()} ${new URL(r.url()).pathname}`); };
+  // 503 is the server saying "a dependency is down" in plain words (Stripe is
+  // unreachable wherever this audit runs); that is an outage answer, not a
+  // dead button. 500/502/504 are.
+  const onResponse = (r) => { if (r.status() >= 500 && r.status() !== 503 && r.url().includes("/api/")) s.serverErrors.push(`${r.status()} ${r.request().method()} ${new URL(r.url()).pathname}`); };
   page.on("pageerror", onPageError); page.on("console", onConsole); page.on("response", onResponse);
   s.stop = () => { page.off("pageerror", onPageError); page.off("console", onConsole); page.off("response", onResponse); };
   return s;
@@ -163,9 +166,16 @@ async function pressOne(page, base, screen, opts, target, path) {
   if (!testid && NEVER.test(target.text)) { skipped.set(target.key, "never pressed"); return null; }
   const loc = locatorFor(page, target.key);
   if (!(await loc.isVisible().catch(() => false))) return null;
+  const hit = await loc.evaluate((el) => {
+    el.scrollIntoView({ block: "center", inline: "center" });
+    const r = el.getBoundingClientRect();
+    const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!at && (el.contains(at) || at.contains(el));
+  }).catch(() => false);
+  if (!hit) { covered.add(label); return null; }
   const s = watch(page);
   try {
-    await loc.click({ timeout: 2000 });
+    await loc.click({ timeout: 4000 });
   } catch (e) {
     s.stop();
     // Covered by another layer (a sheet over the map's zoom control, the
@@ -182,11 +192,20 @@ async function pressOne(page, base, screen, opts, target, path) {
   return { label, problems };
 }
 
-async function auditScreen(browser, base, screen) {
+const contexts = new Map();
+/** One signed-in context per role, shared by its screens: three logins per run, not one per screen. */
+async function contextFor(browser, base, role) {
+  if (contexts.has(role)) return contexts.get(role);
   const context = await browser.newContext({ viewport: VIEWPORT, isMobile: true, hasTouch: true });
+  if (role === "driver") await context.addInitScript(() => localStorage.setItem("pgride:lastMode", "driver"));
   const page = await context.newPage();
-  if (screen.role === "driver") await context.addInitScript(() => localStorage.setItem("pgride:lastMode", "driver"));
-  if (screen.role !== "visitor") await loginAs(page, base, ROLE_USER[screen.role]);
+  if (role !== "visitor") await loginAs(page, base, ROLE_USER[role]);
+  contexts.set(role, { context, page });
+  return contexts.get(role);
+}
+
+async function auditScreen(browser, base, screen) {
+  const { page } = await contextFor(browser, base, screen.role);
   const opts = {};
   const load = watch(page);
   await page.goto(base + screen.path, { waitUntil: "domcontentloaded" });
@@ -210,11 +229,18 @@ async function auditScreen(browser, base, screen) {
     // Named buttons first: they are the ones the coverage rule tracks, and a
     // sheet's day chips or list rows would otherwise crowd them out of the cap.
     const children = now.filter((c) => !baseKeys.has(c.key)).sort((a, b) => (b.testid ? 1 : 0) - (a.testid ? 1 : 0));
+    let open = true;
     for (const child of children.slice(0, 30)) {
-      await restore(page, base, screen, opts);
-      const again = await pressOne(page, base, screen, opts, target, []);
-      if (!again) break;
+      // Most presses inside a sheet leave it open (a chip, a toggle, a tab);
+      // only reopen it when the last press closed it or navigated away.
+      const stillHere = open && new URL(page.url()).pathname === screen.path && (await locatorFor(page, child.key).isVisible().catch(() => false));
+      if (!stillHere) {
+        await restore(page, base, screen, opts);
+        const again = await pressOne(page, base, screen, opts, target, []);
+        if (!again) break;
+      }
       const rc = await pressOne(page, base, screen, opts, child, [target.text || target.key]);
+      open = !!rc;
       if (!rc) continue;
       pressedHere += 1;
       if (rc.problems.length) broken.push(rc);
@@ -222,7 +248,6 @@ async function auditScreen(browser, base, screen) {
     await restore(page, base, screen, opts);
   }
   results.push([`${name}: ${pressedHere} presses, every button answered`, broken.length === 0, broken.map((b) => `${b.label}: ${b.problems.join("; ")}`).join(" | ")]);
-  await context.close();
   section(name);
   for (const [label, ok, detail] of results) check(label, ok, detail);
   return pressedHere;
@@ -237,7 +262,7 @@ await seedFixtures(db);
 const server = await startServer({ DRIVER_MARKETPLACE_ENABLED: "true", E2E_INSECURE_COOKIES: "1" });
 const browser = await chromium.launch({ executablePath, args: ["--no-sandbox", "--no-proxy-server"] });
 let total = 0;
-const PARALLEL = Number(process.env.BUTTON_AUDIT_PARALLEL || 3);
+const PARALLEL = Number(process.env.BUTTON_AUDIT_PARALLEL || 1);
 try {
   // Each screen has its own browser context and its own signed-in session, so
   // screens can run side by side; results are printed as each one finishes.
@@ -250,6 +275,7 @@ try {
     }
   }));
 } finally {
+  for (const { context } of contexts.values()) await context.close().catch(() => {});
   await browser.close();
   stopServer(server);
   await db.end();
