@@ -207,8 +207,10 @@ async function auditScreen(browser, base, screen) {
     if (r.problems.length) broken.push(r);
     // Depth 2: anything that appeared because of this press.
     const now = await visibleClickables(page);
-    const children = now.filter((c) => !baseKeys.has(c.key));
-    for (const child of children.slice(0, 20)) {
+    // Named buttons first: they are the ones the coverage rule tracks, and a
+    // sheet's day chips or list rows would otherwise crowd them out of the cap.
+    const children = now.filter((c) => !baseKeys.has(c.key)).sort((a, b) => (b.testid ? 1 : 0) - (a.testid ? 1 : 0));
+    for (const child of children.slice(0, 30)) {
       await restore(page, base, screen, opts);
       const again = await pressOne(page, base, screen, opts, target, []);
       if (!again) break;

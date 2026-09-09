@@ -9030,6 +9030,7 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
       const projections = await getOwnershipProjections(storage, userId);
       res.json(projections);
     } catch (error) {
+      console.error("ownership projections failed:", error);
       res.status(500).json({ message: "Failed to fetch ownership projections" });
     }
   });
