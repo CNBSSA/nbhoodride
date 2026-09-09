@@ -98,12 +98,9 @@ jobs:
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
             echo "Telegram secrets not set; skipping the page (the red run is the notification)."; exit 0; fi
           if [ "$NOW" = "down" ]; then
-            text="🔴 PG Ride production is DOWN from the outside
-$SUMMARY
-Checked from GitHub every 10 min. $RUN_URL"
+            text=$(printf '🔴 PG Ride production is DOWN from the outside\n%s\nChecked from GitHub every 10 min. %s' "$SUMMARY" "$RUN_URL")
           else
-            text="🟢 PG Ride production is back
-$SUMMARY"
+            text=$(printf '🟢 PG Ride production is back\n%s' "$SUMMARY")
           fi
           curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H 'Content-Type: application/json' \
