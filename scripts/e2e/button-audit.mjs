@@ -160,7 +160,7 @@ async function restore(page, base, screen, opts) {
 }
 
 async function dismissGreetings(page) {
-  for (const sel of ['[data-testid="welcome-dismiss"]', '[data-testid="button-close-push-prompt"]', '[data-testid="button-ios-hint-done"]', '[data-testid="button-close-ios-hint"]']) {
+  for (const sel of ['[data-testid="welcome-dismiss"]', '[data-testid="button-dismiss-push"]', '[data-testid="button-close-push-prompt"]', '[data-testid="button-ios-hint-done"]', '[data-testid="button-close-ios-hint"]', '[data-testid="install-gate-dev-skip"]']) {
     try { await page.locator(sel).first().click({ timeout: 300 }); } catch {}
   }
 }
@@ -203,7 +203,7 @@ async function pressOne(page, base, screen, opts, target, path) {
       const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
       return !!at && (el.contains(at) || at.contains(el));
     }).catch(() => false);
-    if (!again) { covered.add(label); return null; }
+    if (!again) { covered.add(label); return "covered"; }
   }
   const s = watch(page);
   try {
@@ -214,7 +214,7 @@ async function pressOne(page, base, screen, opts, target, path) {
     // navigation under a full-screen chat): not a dead button, just not
     // pressable from here. Counted, reported, never failed.
     covered.add(`${label}`);
-    return null;
+    return "covered";
   }
   await settle(page);
   const problems = await screenVerdict(page, s);
@@ -260,8 +260,16 @@ async function auditScreen(browser, base, screen) {
       await page.goto(base + screen.path, { waitUntil: "domcontentloaded" }).catch(() => {});
       await afterLoad(page, opts);
     }
-    const r = await pressOne(page, base, screen, opts, target, []);
-    if (!r) continue;
+    let r = await pressOne(page, base, screen, opts, target, []);
+    if (r === "covered") {
+      // Something is still drawn over the screen (a sheet that ignores
+      // Escape). Reload the screen and try this one once more.
+      await page.goto(base + screen.path, { waitUntil: "domcontentloaded" }).catch(() => {});
+      await afterLoad(page, opts);
+      covered.delete([target.text || target.key].join(" → "));
+      r = await pressOne(page, base, screen, opts, target, []);
+    }
+    if (!r || r === "covered") continue;
     pressedHere += 1;
     if (r.problems.length) broken.push(r);
     // Depth 2: anything that appeared because of this press. A sheet takes a
@@ -280,11 +288,11 @@ async function auditScreen(browser, base, screen) {
       if (!stillHere) {
         await restore(page, base, screen, opts);
         const again = await pressOne(page, base, screen, opts, target, []);
-        if (!again) break;
+        if (!again || again === "covered") break;
       }
       const rc = await pressOne(page, base, screen, opts, child, [target.text || target.key]);
-      open = !!rc;
-      if (!rc) continue;
+      open = !!rc && rc !== "covered";
+      if (!rc || rc === "covered") continue;
       pressedHere += 1;
       if (rc.problems.length) broken.push(rc);
     }
