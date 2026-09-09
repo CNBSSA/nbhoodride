@@ -312,6 +312,28 @@ async function auditScreen(browser, base, screen) {
 // ── main ──
 const db = await connectDb();
 await seedFixtures(db);
+// The rider home changes with history: "Book again" needs a destination the
+// rider has gone to more than once, the receipt and report buttons need
+// completed rides, and the driver's upcoming card needs a scheduled ride the
+// driver has claimed. Seed a small standard past so the audit sees the same
+// screens on a fresh CI database as on a used one.
+{
+  const { rows } = await db.query("SELECT 1 FROM rides WHERE rider_id=$1 AND status='completed' LIMIT 1", [FIXTURES.rider.id]);
+  if (rows.length === 0) {
+    const pickup = JSON.stringify({ lat: 38.9073, lng: -76.7781, address: "Bowie, MD" });
+    const dest = JSON.stringify({ lat: 38.7823, lng: -77.0166, address: "National Harbor, MD" });
+    for (const daysAgo of [2, 5, 9]) {
+      await db.query(
+        `INSERT INTO rides (rider_id, driver_id, status, pickup_location, destination_location, estimated_fare, actual_fare, payment_method, created_at, completed_at)
+         VALUES ($1, $2, 'completed', $3, $4, 23.21, 23.21, 'card', NOW() - ($5 || ' days')::interval, NOW() - ($5 || ' days')::interval + interval '25 minutes')`,
+        [FIXTURES.rider.id, FIXTURES.driver.id, pickup, dest, String(daysAgo)]);
+    }
+    await db.query(
+      `INSERT INTO rides (rider_id, driver_id, status, pickup_location, destination_location, estimated_fare, payment_method, scheduled_at)
+       VALUES ($1, $2, 'pending', $3, $4, 23.21, 'card', NOW() + interval '3 hours')`,
+      [FIXTURES.rider.id, FIXTURES.driver.id, pickup, dest]);
+  }
+}
 // Production build over plain http: Chromium keeps Secure cookies on loopback but
 // the flag is what the layout audit relies on too; the marketplace is on so the
 // driver's claim board is a screen, not an empty state.
