@@ -23,6 +23,7 @@
     "test:watch": "vitest",
     "test:journeys": "node scripts/e2e/run.mjs",
     "test:layout": "node scripts/e2e/layout-audit.mjs",
+    "test:buttons": "node scripts/e2e/button-audit.mjs",
     "db:push": "node scripts/migrate.mjs"
   },
   "dependencies": {

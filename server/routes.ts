@@ -5126,8 +5126,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultPaymentMethodId,
       });
     } catch (error: any) {
+      // Everything after the user lookup is a Stripe call: when Stripe is
+      // unreachable this is an outage, not a bug. Say so (503) instead of a
+      // 500 that pages ops as a server error and shows the rider nothing.
       console.error("Error fetching payment methods:", error);
-      res.status(500).json({ message: "Failed to fetch payment methods" });
+      res.status(503).json({ message: "Payments are temporarily unavailable. Please try again in a few minutes." });
     }
   });
 
