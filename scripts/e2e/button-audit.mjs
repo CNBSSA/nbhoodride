@@ -312,6 +312,18 @@ async function auditScreen(browser, base, screen) {
 // ── main ──
 const db = await connectDb();
 await seedFixtures(db);
+// The rider home changes with history: "Book again", the receipt and the
+// re-book confirm only exist once the rider has completed a ride. Seed one so
+// the audit sees the same screens on a fresh CI database as on a used one.
+{
+  const { rows } = await db.query("SELECT 1 FROM rides WHERE rider_id=$1 AND status='completed' LIMIT 1", [FIXTURES.rider.id]);
+  if (rows.length === 0) {
+    await db.query(
+      `INSERT INTO rides (rider_id, driver_id, status, pickup_location, destination_location, estimated_fare, actual_fare, payment_method, created_at, completed_at)
+       VALUES ($1, $2, 'completed', $3, $4, 23.21, 23.21, 'card', NOW() - interval '2 days', NOW() - interval '2 days' + interval '25 minutes')`,
+      [FIXTURES.rider.id, FIXTURES.driver.id, JSON.stringify({ lat: 38.9073, lng: -76.7781, address: "Bowie, MD" }), JSON.stringify({ lat: 38.7823, lng: -77.0166, address: "National Harbor, MD" })]);
+  }
+}
 // Production build over plain http: Chromium keeps Secure cookies on loopback but
 // the flag is what the layout audit relies on too; the marketplace is on so the
 // driver's claim board is a screen, not an empty state.
