@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { reportClientError } from "@/lib/reportClientError";
 
 interface Props {
   children: ReactNode;
@@ -22,6 +23,14 @@ export default class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo) {
     // Keep the real error in the console for diagnosis even in production.
     console.error("Unhandled UI error:", error, info.componentStack);
+    // React does not re-raise errors a boundary catches (no window "error"
+    // event in production), so this is the only place the operator can hear
+    // about a white screen. Name the component that blew up.
+    const where = (info.componentStack ?? "")
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l.startsWith("at ") || l.startsWith("in "));
+    reportClientError({ kind: "client_crash", message: `${error?.message ?? String(error)}${where ? ` ${where}` : ""}` });
   }
 
   handleReload = () => {

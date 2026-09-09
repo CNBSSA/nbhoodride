@@ -74,6 +74,17 @@ app.get('/api/version', (_req, res) => {
   res.json(buildInfo);
 });
 
+// What the server can see of its own lifelines (database, Stripe): the
+// last dependency-watch result. No secrets, cached, cheap to poll from the
+// outside watch. 503 while anything configured is down.
+app.get('/health/deps', async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  const { lastDependencyReport } = await import('./dependencyWatch');
+  const report = lastDependencyReport();
+  if (!report) return res.status(200).json({ checkedAt: null, deps: {}, down: [], note: "first check pending" });
+  res.status(report.down.length === 0 ? 200 : 503).json(report);
+});
+
 app.get('/health/ready', async (_req, res) => {
   try {
     const { getPhase0Readiness } = await import('./phase0Readiness');
@@ -147,7 +158,7 @@ app.use((req, res, next) => {
     res.status(status).json({ message });
     console.error("Unhandled error:", err.stack || err);
     if (status >= 500 && req.path.startsWith("/api/")) {
-      riderAlert("server_error", `${req.method} ${req.path}`, [["Route", `${req.method} ${req.path}`], ["Error", String(message).slice(0, 200)]]);
+      riderAlert("server_error", `${req.method} ${req.path}`, [["Route", `${req.method} ${req.path}`], ["User id", (req as any).session?.userId], ["Error", String(message).slice(0, 200)]]);
     }
   });
 
@@ -166,6 +177,10 @@ app.use((req, res, next) => {
     log(`serving on port ${port}`);
     // Self-verifying: the operator gets a Telegram message on every deploy,
     // proving the bot token + chat id wiring end-to-end.
+    // First dependency check shortly after boot, then every 10 minutes from the sweep.
+    setTimeout(() => {
+      import('./dependencyWatch').then(({ runDependencyWatch }) => runDependencyWatch()).catch((err) => console.error("dependency watch failed:", err));
+    }, 20_000).unref();
     if (telegramOpsEnabled()) {
       opsAlert("✅ PG Ride server deployed — ops alerts are connected. You'll get SOS alerts, bookings, completions, signups, and driver applications here.");
     }

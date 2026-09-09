@@ -1,0 +1,121 @@
+# PG Ride — production watch (proactive reliability, outside half).
+#
+# Every ten minutes: can a rider use PG Ride right now? Runs
+# scripts/production-watch.mjs (no dependencies, no secrets) against
+# production. The in-server dependency watch (server/dependencyWatch.ts)
+# pages when Stripe or the database fails; this catches what the server
+# cannot report on its own — the server being down, the app shell not
+# served, a deploy that answers 5xx.
+#
+# Telegram: set repository secrets TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
+# (the same values Railway has) and every DOWN and the following RECOVERED
+# are pushed to the ops chat. Without them the run still fails red and
+# GitHub emails the failure.
+#
+# Only transitions page: the previous result is carried between runs in
+# the Actions cache, so a ten-minute outage is one DOWN page and one
+# RECOVERED page, not six.
+
+name: Production Watch
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Base URL to watch"
+        required: false
+        default: "https://nbhoodride-production.up.railway.app"
+
+concurrency:
+  group: production-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (the probe script only)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/production-watch.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Previous result
+        id: state
+        uses: actions/cache/restore@v4
+        with:
+          path: .watch-state
+          key: production-watch-state-${{ github.run_id }}
+          restore-keys: |
+            production-watch-state-
+
+      - name: Probe production
+        id: probe
+        continue-on-error: true
+        env:
+          BASE_URL: ${{ github.event.inputs.base_url || 'https://nbhoodride-production.up.railway.app' }}
+        run: |
+          set +e
+          node scripts/production-watch.mjs > probe.out
+          code=$?
+          cat probe.out
+          echo "summary=$(tail -n 1 probe.out)" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit $code
+
+      - name: Decide what changed
+        id: change
+        run: |
+          prev="up"; [ -f .watch-state/status ] && prev="$(cat .watch-state/status)"
+          now="up"; [ "${{ steps.probe.outputs.code }}" != "0" ] && now="down"
+          echo "prev=$prev now=$now"
+          echo "prev=$prev" >> "$GITHUB_OUTPUT"
+          echo "now=$now" >> "$GITHUB_OUTPUT"
+          mkdir -p .watch-state && echo "$now" > .watch-state/status
+
+      - name: Page Telegram on a change
+        if: steps.change.outputs.prev != steps.change.outputs.now
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SUMMARY: ${{ steps.probe.outputs.summary }}
+          NOW: ${{ steps.change.outputs.now }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets not set; skipping the page (the red run is the notification)."; exit 0; fi
+          if [ "$NOW" = "down" ]; then
+            text="🔴 PG Ride production is DOWN from the outside
+$SUMMARY
+Checked from GitHub every 10 min. $RUN_URL"
+          else
+            text="🟢 PG Ride production is back
+$SUMMARY"
+          fi
+          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H 'Content-Type: application/json' \
+            --data "$(node -e 'process.stdout.write(JSON.stringify({chat_id: process.env.TELEGRAM_CHAT_ID, text: process.argv[1], disable_web_page_preview: true}))' "$text")" \
+            > /dev/null && echo "paged: $NOW"
+
+      - name: Remember this result
+        uses: actions/cache/save@v4
+        with:
+          path: .watch-state
+          key: production-watch-state-${{ github.run_id }}
+
+      - name: Fail the run when production is down
+        if: steps.probe.outputs.code != '0'
+        run: exit 1

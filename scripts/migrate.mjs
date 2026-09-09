@@ -718,6 +718,17 @@ CREATE TABLE IF NOT EXISTS safety_alerts (
 );
 
 -- ── Agent audit log (explainable dispatch / agent actions) ───────────────────
+CREATE TABLE IF NOT EXISTS reliability_events (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind VARCHAR NOT NULL,
+  user_id VARCHAR,
+  page VARCHAR,
+  message TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_reliability_events_created ON reliability_events (created_at);
+CREATE INDEX IF NOT EXISTS idx_reliability_events_kind ON reliability_events (kind);
+
 CREATE TABLE IF NOT EXISTS agent_audit_log (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
   agent VARCHAR NOT NULL,

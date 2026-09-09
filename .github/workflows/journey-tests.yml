@@ -3,9 +3,12 @@
 # Boots the PRODUCTION BUNDLE against a real Postgres and walks the flows a
 # real person takes: signup → approval → login → card wall → book → schedule,
 # lockout → admin reset, driver document saves, announcements, SMS opt-out,
-# rider-trouble alerts. Runs on every pull request into develop or main and
-# on every push to main, so "it worked yesterday" regressions are caught
-# before they reach a rider — not after one texts about it.
+# rider-trouble alerts. Then the mobile layout audit and the every-button
+# audit (every screen, every safe button, as rider, driver, admin and
+# visitor: no crash, blank screen, red toast or 5xx). Runs on every pull
+# request into develop or main and on every push to main, so "it worked
+# yesterday" regressions are caught before they reach a rider — not after
+# one texts about it.
 name: Journey Tests
 
 on:
@@ -25,7 +28,7 @@ permissions:
 jobs:
   journeys:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -63,6 +66,8 @@ jobs:
         env:
           PW_BROWSER: webkit
         run: npm run test:layout
+      - name: Every-button audit (rider, driver, admin, visitor)
+        run: npm run test:buttons
       - name: Server log (on failure)
         if: failure()
         run: tail -n 200 /tmp/pgride-e2e-*.log || true

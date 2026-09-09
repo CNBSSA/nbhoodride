@@ -16,6 +16,8 @@ import { sql } from "drizzle-orm";
 import { db } from "./db";
 import type { IStorage } from "./storage";
 import { opsAlert } from "./telegramOps";
+import { APP_ERROR_KINDS, SERVER_ERROR_KINDS } from "./reliabilityEvents";
+import { RISK_STAMPS } from "@shared/rideRisk";
 import {
   DANGER_WINDOW_HOURS,
   LATE_PICKUP_MINUTES,
@@ -28,6 +30,9 @@ import {
 } from "@shared/riderPromise";
 
 const CLAIM_PROVIDER = "rider_promise_review";
+
+/** `a, b, c` as bound parameters (drizzle expands a bare array into a row, not a list). */
+const list = (values: readonly string[]) => sql.join(values.map((v) => sql`${v}`), sql`, `);
 
 const n = (v: unknown): number => {
   const x = typeof v === "number" ? v : parseFloat(String(v ?? "0"));
@@ -96,6 +101,51 @@ export async function collectRiderPromiseMetrics(window: ReviewWindow, now: Date
   const a = (ahead.rows?.[0] ?? {}) as Record<string, unknown>;
   const plans = await db.execute(sql`SELECT count(*)::int AS n FROM weekly_ride_plans WHERE is_active`);
 
+  // "All features, menus and buttons work": what reached a person yesterday.
+  const health = await db.execute(sql`
+    SELECT
+      count(*) FILTER (WHERE kind IN (${list(APP_ERROR_KINDS)}))::int AS app_errors,
+      count(*) FILTER (WHERE kind = 'client_crash')::int AS crashes,
+      count(*) FILTER (WHERE kind IN (${list(SERVER_ERROR_KINDS)}))::int AS server_errors,
+      count(DISTINCT user_id) FILTER (WHERE user_id IS NOT NULL AND kind IN (${list([...APP_ERROR_KINDS, ...SERVER_ERROR_KINDS])}))::int AS people
+    FROM reliability_events
+    WHERE created_at >= ${start} AND created_at < ${end}
+  `);
+  const hh = (health.rows?.[0] ?? {}) as Record<string, unknown>;
+
+  // Outages the server's own dependency watch saw: each "down" paired with
+  // the next "up" for the same dependency; unpaired means still down at the
+  // window's end (or the server restarted before it recovered).
+  const outageRows = await db.execute(sql`
+    SELECT kind, page AS name, message, created_at
+    FROM reliability_events
+    WHERE kind IN ('dependency_down', 'dependency_up') AND created_at >= ${start} AND created_at < ${end}
+    ORDER BY created_at
+  `);
+  const outages: RiderPromiseMetrics["appHealth"]["outages"] = [];
+  const open = new Map<string, number>();
+  const label = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
+  for (const r of (outageRows.rows ?? []) as any[]) {
+    const name = String(r.name ?? "unknown");
+    if (r.kind === "dependency_down") {
+      if (!open.has(name)) open.set(name, outages.push({ name: label(name), minutes: null }) - 1);
+    } else {
+      const idx = open.get(name);
+      const mins = Number((String(r.message ?? "").match(/after (\d+) min/) ?? [])[1]);
+      if (idx !== undefined) { outages[idx].minutes = Number.isFinite(mins) ? mins : null; open.delete(name); }
+      else outages.push({ name: label(name), minutes: Number.isFinite(mins) ? mins : null });
+    }
+  }
+
+  // Rides the watch paged ops about before departure, and whether they still happened.
+  const paged = await db.execute(sql`
+    SELECT count(*)::int AS paged, count(*) FILTER (WHERE status = 'completed')::int AS delivered
+    FROM rides
+    WHERE scheduled_at >= ${start} AND scheduled_at < ${end}
+      AND reminder_stamps ?| ARRAY[${list([...RISK_STAMPS])}]::text[]
+  `);
+  const pg = (paged.rows?.[0] ?? {}) as Record<string, unknown>;
+
   return {
     booked: n(y.booked),
     delivered: n(y.delivered),
@@ -110,6 +160,14 @@ export async function collectRiderPromiseMetrics(window: ReviewWindow, now: Date
     })),
     latePickups: n(y.late_pickups),
     worstLateMinutes: Math.round(n(y.worst_late_minutes)),
+    appHealth: {
+      appErrors: n(hh.app_errors),
+      crashes: n(hh.crashes),
+      serverErrors: n(hh.server_errors),
+      peopleAffected: n(hh.people),
+      outages,
+    },
+    pagedAhead: { paged: n(pg.paged), delivered: n(pg.delivered) },
     ahead: {
       unclaimedNext24h: n(a.unclaimed_24h),
       unclaimedInDangerWindow: n(a.unclaimed_danger),

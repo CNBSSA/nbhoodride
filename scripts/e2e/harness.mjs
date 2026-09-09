@@ -51,6 +51,9 @@ export async function seedFixtures(db) {
     VALUES ($1,$2,$3,'Sam','Driver',true,true,'+12405550003',NOW())
     ON CONFLICT (id) DO UPDATE SET password=$3,is_driver=true,is_approved=true,is_suspended=false`, [FIXTURES.driver.id, FIXTURES.driver.email, hash]);
   await db.query(`INSERT INTO driver_profiles (user_id, approval_status, is_online) VALUES ($1,'approved',false) ON CONFLICT DO NOTHING`, [FIXTURES.driver.id]);
+  // A previous run (the every-button audit as admin, a journey that left the
+  // driver online) must not decide whether this driver can go online.
+  await db.query(`UPDATE driver_profiles SET approval_status='approved', is_suspended=false, is_online=false, current_location=NULL WHERE user_id=$1`, [FIXTURES.driver.id]);
   const { rows: [prof] } = await db.query("SELECT id FROM driver_profiles WHERE user_id=$1", [FIXTURES.driver.id]);
   await db.query(`INSERT INTO vehicles (driver_profile_id, make, model, year, color, license_plate)
     SELECT $1::varchar,'Toyota','Camry',2020,'Blue','E2E0001' WHERE NOT EXISTS (SELECT 1 FROM vehicles WHERE driver_profile_id=$1::varchar)`, [prof.id]);

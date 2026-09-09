@@ -161,7 +161,10 @@ import {
   MAX_ASSIGNMENT_ATTEMPTS,
 } from "./rideWorkflowService";
 import { opsAlert, formatOpsAlert } from "./telegramOps";
-import { riderAlert } from "./riderAlerts";
+import { riderAlert, setRiderAlertRecorder } from "./riderAlerts";
+import { reliabilityEventRecorder } from "./reliabilityEvents";
+import { pageAtRiskRides } from "./rideRiskWatch";
+import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
@@ -301,6 +304,15 @@ async function notifyRideMessageRecipient(
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Every rider alert also lands in reliability_events for the daily review.
+  setRiderAlertRecorder(reliabilityEventRecorder);
+
+  /** An Anthropic SDK connection/API failure: an outage to report as 503, not a bug to report as 500. */
+  const aiUnavailable = (error: unknown): boolean => {
+    const name = (error as any)?.constructor?.name ?? "";
+    const msg = String((error as any)?.message ?? error);
+    return /^API(Connection|Timeout)?Error|^(Authentication|PermissionDenied|RateLimit|InternalServer)Error$/.test(name) || /fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|api\.anthropic\.com|Could not resolve authentication method/i.test(msg);
+  };
   // Public, no-JavaScript pages (business description for crawlers / reviewers).
   // Mounted first so they win over the SPA catch-all added later in serveStatic.
   registerPublicPages(app);
@@ -332,7 +344,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // chat/guardian endpoints keep their own much tighter limiters.
   const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 2000,
+    // GENERAL_RATE_LIMIT_MAX: the every-button audit presses hundreds of
+    // buttons against one account in minutes and would trip this; the e2e
+    // harness raises it. Never set it on Railway.
+    max: Number(process.env.GENERAL_RATE_LIMIT_MAX) || 2000,
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) =>
@@ -5121,8 +5136,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultPaymentMethodId,
       });
     } catch (error: any) {
+      // Everything after the user lookup is a Stripe call: when Stripe is
+      // unreachable this is an outage, not a bug. Say so (503) instead of a
+      // 500 that pages ops as a server error and shows the rider nothing.
       console.error("Error fetching payment methods:", error);
-      res.status(500).json({ message: "Failed to fetch payment methods" });
+      res.status(503).json({ message: "Payments are temporarily unavailable. Please try again in a few minutes." });
     }
   });
 
@@ -6287,7 +6305,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const clientErrorLimiter = rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false });
   app.post('/api/client-errors', clientErrorLimiter, async (req: any, res) => {
     try {
-      const kind = req.body?.kind === "push_subscribe_failed" ? "push_subscribe_failed" : "client_error";
+      const kind = req.body?.kind === "push_subscribe_failed" ? "push_subscribe_failed" : req.body?.kind === "client_crash" ? "client_crash" : "client_error";
       const message = String(req.body?.message ?? "").slice(0, 300);
       const page = String(req.body?.page ?? "").slice(0, 120);
       if (!message) return res.status(400).json({ message: "message required" });
@@ -6295,6 +6313,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const who = userId ? await storage.getUser(userId).catch(() => undefined) : undefined;
       riderAlert(kind, `${userId ?? req.ip}:${message.slice(0, 40)}`, [
         ["User", who ? `${who.firstName ?? ""} ${who.lastName ?? ""}`.trim() || userId : "not signed in"],
+        ["User id", userId],
         ["Phone", who?.phone],
         ["Page", page],
         ["Error", message],
@@ -9021,6 +9040,7 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
       const projections = await getOwnershipProjections(storage, userId);
       res.json(projections);
     } catch (error) {
+      console.error("ownership projections failed:", error);
       res.status(500).json({ message: "Failed to fetch ownership projections" });
     }
   });
@@ -9462,6 +9482,30 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
     } catch (error) {
       console.error("rider promise review send error:", error);
       res.status(500).json({ message: "Failed to send the Rider Promise Review" });
+    }
+  });
+
+  // Ride-risk watch: one pass of the pager, for journeys and for a manual check.
+  app.post('/api/admin/analytics/ride-risk-sweep', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const at = typeof req.body?.at === "string" && req.body.at ? new Date(req.body.at) : new Date();
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ message: "at must be an ISO timestamp" });
+      res.json({ at: at.toISOString(), pages: await pageAtRiskRides(at) });
+    } catch (error) {
+      console.error("ride risk sweep error:", error);
+      res.status(500).json({ message: "Failed to run the ride-risk sweep" });
+    }
+  });
+
+  // Dependency watch: one check now, alerting on transitions exactly as the sweep does.
+  app.post('/api/admin/analytics/dependency-check', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const at = typeof req.body?.at === "string" && req.body.at ? new Date(req.body.at) : new Date();
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ message: "at must be an ISO timestamp" });
+      res.json(await runDependencyWatch(at));
+    } catch (error) {
+      console.error("dependency check error:", error);
+      res.status(500).json({ message: "Failed to run the dependency check" });
     }
   });
 
@@ -9956,6 +10000,7 @@ Generate the FAQ list.`;
       });
     } catch (error) {
       console.error("Error generating FAQs:", error);
+      if (aiUnavailable(error)) return void res.status(503).json({ message: "The AI service is unreachable right now. Try again in a few minutes." });
       res.status(500).json({ message: "Failed to generate FAQs" });
     }
   });
@@ -9966,6 +10011,7 @@ Generate the FAQ list.`;
       res.json({ indexed });
     } catch (error) {
       console.error("Error reindexing knowledge:", error);
+      if (aiUnavailable(error)) return void res.status(503).json({ message: "The AI service is unreachable right now. Try again in a few minutes." });
       res.status(500).json({ message: "Failed to reindex knowledge base" });
     }
   });
@@ -10626,6 +10672,12 @@ Generate the FAQ list.`;
 
       // ── Rider Promise Review: 4:00 AM Eastern, once a day, to Telegram ──
       maybeSendRiderPromiseReview(storage, now).catch((err) => console.error("rider promise review failed:", err));
+
+      // ── Ride-risk watch: page ops before the rider finds out ──
+      pageAtRiskRides(now).catch((err) => console.error("ride risk watch failed:", err));
+
+      // ── Dependency watch: database and Stripe, every 10 minutes ──
+      if (dependencyCheckDue(now)) runDependencyWatch(now).catch((err) => console.error("dependency watch failed:", err));
 
       // ── Midnight cleanup ──
       if (now.getHours() === 0 && now.getMinutes() === 0) {
