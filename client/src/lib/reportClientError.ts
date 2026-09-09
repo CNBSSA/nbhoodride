@@ -9,7 +9,9 @@ const MAX_PER_SESSION = 5;
 let sent = 0;
 const seen = new Set<string>();
 
-export function reportClientError(input: { kind?: "client_error" | "push_subscribe_failed"; message: string }): void {
+export type ClientErrorKind = "client_error" | "client_crash" | "push_subscribe_failed";
+
+export function reportClientError(input: { kind?: ClientErrorKind; message: string }): void {
   try {
     const message = String(input.message ?? "").slice(0, 300);
     if (!message || sent >= MAX_PER_SESSION || seen.has(message)) return;
