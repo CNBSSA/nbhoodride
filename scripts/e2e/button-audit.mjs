@@ -28,8 +28,13 @@ const SETTLE_MS = 450;
 const ROOT = new URL("../../", import.meta.url).pathname;
 const BASELINE_PATH = join(ROOT, "scripts/e2e/button-audit-baseline.json");
 
-/** Never pressed: leaves the account, calls for help, destroys data, or reloads the page. */
-const NEVER = /logout|sign-?out|delete|remove-account|sos|emergency|panic|911|error-reload|call-|dial|share-native|open-maps|navigate-external|install-app/i;
+/**
+ * Never pressed: leaves the account, calls for help, destroys data, reloads
+ * the page, or (as admin) changes another person's standing — the audit once
+ * suspended the fixture driver from the admin screen and the next journey
+ * could not go online.
+ */
+const NEVER = /logout|sign-?out|delete|remove-account|sos|emergency|panic|911|error-reload|call-|dial|share-native|open-maps|navigate-external|install-app|suspend|unsuspend|ban|reject|revoke|deactivate|disable|refund|payout|reset-password|force-/i;
 
 /** What a rider can tap. Order matters: testid keys are stable, text keys are the fallback. */
 const CLICKABLE = [
