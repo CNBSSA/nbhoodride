@@ -46,6 +46,9 @@ const SCREENS = [
   { role: "admin", path: "/admin" }, { role: "admin", path: "/" },
 ];
 
+/** BUTTON_AUDIT_ONLY="rider /" runs one screen; BUTTON_AUDIT_VERBOSE=1 prints every press. */
+const ONLY = process.env.BUTTON_AUDIT_ONLY || "";
+const VERBOSE = process.env.BUTTON_AUDIT_VERBOSE === "1";
 const ROLE_USER = { rider: FIXTURES.rider.email, driver: FIXTURES.driver.email, admin: FIXTURES.admin.email };
 
 // ── source inventory: every static button testid, and every templated prefix ──
@@ -93,6 +96,16 @@ async function visibleClickables(page) {
   }, CLICKABLE);
 }
 
+/** "notification-item-<uuid>" and "button-confirm-scheduled-<uuid>" are one button each, not fifty. */
+function family(item) {
+  const id = item.testid || item.key;
+  return id.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "*").replace(/-\d+$/, "-*");
+}
+function oneOfEach(items) {
+  const seen = new Set();
+  return items.filter((it) => { const f = family(it); if (seen.has(f)) return false; seen.add(f); return true; });
+}
+
 function locatorFor(page, key) {
   if (key.startsWith("testid:")) return page.locator(`[data-testid="${key.slice(7)}"]`).first();
   if (key.startsWith("href:")) return page.locator(`a[href="${key.slice(5)}"]`).first();
@@ -136,7 +149,8 @@ async function settle(page) { await page.waitForTimeout(SETTLE_MS); }
 async function restore(page, base, screen, opts) {
   // Close whatever opened, then make sure we are back on the screen.
   for (let i = 0; i < 2; i++) { await page.keyboard.press("Escape").catch(() => {}); }
-  await page.waitForTimeout(150);
+  // A drawer takes ~300 ms to slide away; its overlay would fail the next hit-test.
+  await page.waitForTimeout(450);
   const here = new URL(page.url()).pathname;
   const dialogOpen = await page.locator('[role="dialog"]').first().isVisible().catch(() => false);
   if (here !== screen.path || dialogOpen) {
@@ -145,12 +159,20 @@ async function restore(page, base, screen, opts) {
   }
 }
 
+async function dismissGreetings(page) {
+  for (const sel of ['[data-testid="welcome-dismiss"]', '[data-testid="button-close-push-prompt"]', '[data-testid="button-ios-hint-done"]', '[data-testid="button-close-ios-hint"]']) {
+    try { await page.locator(sel).first().click({ timeout: 300 }); } catch {}
+  }
+}
+
 async function afterLoad(page, opts) {
   // The app is client-rendered: wait until something is on screen (up to 10s), then a beat for data.
   await page.waitForFunction(() => (document.body?.innerText ?? "").replace(/\s+/g, "").length > 20, null, { timeout: 10_000 }).catch(() => {});
   await page.waitForLoadState("networkidle", { timeout: 4_000 }).catch(() => {});
   await page.waitForTimeout(300);
-  try { await page.locator('[data-testid="welcome-dismiss"]').first().click({ timeout: 800 }); } catch {}
+  // Sheets that greet a returning user sit over the navigation; put them away
+  // first (they are pressed on their own when the audit meets them).
+  await dismissGreetings(page);
   if (opts?.tab) { try { await page.locator(`[data-testid="${opts.tab}"]`).first().click({ timeout: 800 }); await page.waitForTimeout(300); } catch {} }
 }
 
@@ -172,7 +194,17 @@ async function pressOne(page, base, screen, opts, target, path) {
     const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
     return !!at && (el.contains(at) || at.contains(el));
   }).catch(() => false);
-  if (!hit) { covered.add(label); return null; }
+  if (!hit) {
+    // A greeting sheet (push prompt, install hint) can arrive after the screen
+    // settled and sit over the navigation; put it away and look once more.
+    await dismissGreetings(page);
+    const again = await loc.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !!at && (el.contains(at) || at.contains(el));
+    }).catch(() => false);
+    if (!again) { covered.add(label); return null; }
+  }
   const s = watch(page);
   try {
     await loc.click({ timeout: 4000 });
@@ -188,6 +220,7 @@ async function pressOne(page, base, screen, opts, target, path) {
   const problems = await screenVerdict(page, s);
   s.stop();
   pressCount += 1;
+  if (VERBOSE) console.log(`    · ${label}${problems.length ? ` ⚠ ${problems.join("; ")}` : ""}`);
   if (testid) pressed.add(testid);
   return { label, problems };
 }
@@ -216,19 +249,29 @@ async function auditScreen(browser, base, screen) {
   const results = [[`${name}: screen loads clean`, loadProblems.length === 0, loadProblems.join("; ")]];
 
   const broken = [];
-  const baseline = await visibleClickables(page);
+  const baseline = oneOfEach(await visibleClickables(page));
+  if (VERBOSE) console.log(`  ${name}: ${baseline.length} on screen: ${baseline.map((b) => b.testid || b.text || b.key).join(" | ")}`);
   const baseKeys = new Set(baseline.map((b) => b.key));
   let pressedHere = 0;
   for (const target of baseline) {
+    // A base press can change the whole screen (a mode switch, a tab). If
+    // the next target is no longer there, reload the screen and look again.
+    if (!(await locatorFor(page, target.key).isVisible().catch(() => false))) {
+      await page.goto(base + screen.path, { waitUntil: "domcontentloaded" }).catch(() => {});
+      await afterLoad(page, opts);
+    }
     const r = await pressOne(page, base, screen, opts, target, []);
     if (!r) continue;
     pressedHere += 1;
     if (r.problems.length) broken.push(r);
-    // Depth 2: anything that appeared because of this press.
+    // Depth 2: anything that appeared because of this press. A sheet takes a
+    // moment to fill, so give it one before looking.
+    if (await page.locator('[role="dialog"]').first().isVisible().catch(() => false)) await page.waitForTimeout(500);
     const now = await visibleClickables(page);
     // Named buttons first: they are the ones the coverage rule tracks, and a
     // sheet's day chips or list rows would otherwise crowd them out of the cap.
-    const children = now.filter((c) => !baseKeys.has(c.key)).sort((a, b) => (b.testid ? 1 : 0) - (a.testid ? 1 : 0));
+    const children = oneOfEach(now.filter((c) => !baseKeys.has(c.key))).sort((a, b) => (b.testid ? 1 : 0) - (a.testid ? 1 : 0));
+    if (VERBOSE && children.length) console.log(`      opened ${children.length}: ${children.slice(0, 30).map((c) => c.testid || c.text || c.key).join(" | ")}`);
     let open = true;
     for (const child of children.slice(0, 30)) {
       // Most presses inside a sheet leave it open (a chip, a toggle, a tab);
@@ -259,14 +302,14 @@ await seedFixtures(db);
 // Production build over plain http: Chromium keeps Secure cookies on loopback but
 // the flag is what the layout audit relies on too; the marketplace is on so the
 // driver's claim board is a screen, not an empty state.
-const server = await startServer({ DRIVER_MARKETPLACE_ENABLED: "true", E2E_INSECURE_COOKIES: "1" });
+const server = await startServer({ DRIVER_MARKETPLACE_ENABLED: "true", E2E_INSECURE_COOKIES: "1", GENERAL_RATE_LIMIT_MAX: "1000000" });
 const browser = await chromium.launch({ executablePath, args: ["--no-sandbox", "--no-proxy-server"] });
 let total = 0;
 const PARALLEL = Number(process.env.BUTTON_AUDIT_PARALLEL || 1);
 try {
   // Each screen has its own browser context and its own signed-in session, so
   // screens can run side by side; results are printed as each one finishes.
-  const queue = [...SCREENS];
+  const queue = SCREENS.filter((sc) => !ONLY || `${sc.role} ${sc.path}` === ONLY);
   await Promise.all(Array.from({ length: PARALLEL }, async () => {
     while (queue.length) {
       const screen = queue.shift();
@@ -291,7 +334,9 @@ const baselineFile = existsSync(BASELINE_PATH) ? JSON.parse(readFileSync(BASELIN
 if (covered.size) console.log(`  not pressable from where the audit stood (covered by another layer), ${covered.size}: ${[...covered].slice(0, 12).join(", ")}${covered.size > 12 ? ", …" : ""}`);
 if (skipped.size) console.log(`  never pressed by rule, ${skipped.size}: ${[...skipped.keys()].join(", ")}`);
 console.log(`  buttons in source: ${staticIds.size} static + ${templatePrefixes.size} templated · pressed ${pressed.size} distinct testids in ${pressCount} presses across ${SCREENS.length} screens · ${neverPressed} never pressed by rule`);
-if (!baselineFile) {
+if (ONLY) {
+  console.log("  (single-screen run: coverage not judged)");
+} else if (!baselineFile) {
   writeFileSync(BASELINE_PATH, JSON.stringify({
     note: "Buttons the every-button audit cannot reach today. Each entry is a debt: reach it or remove it. A button not listed here and not pressed fails the audit.",
     unreachable: Object.fromEntries([...unpressedStatic, ...unpressedTemplates.map((p) => `${p}*`)].map((id) => [id, "not reachable from the audited screens yet"])),

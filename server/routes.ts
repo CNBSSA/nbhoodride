@@ -337,7 +337,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // chat/guardian endpoints keep their own much tighter limiters.
   const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 2000,
+    // GENERAL_RATE_LIMIT_MAX: the every-button audit presses hundreds of
+    // buttons against one account in minutes and would trip this; the e2e
+    // harness raises it. Never set it on Railway.
+    max: Number(process.env.GENERAL_RATE_LIMIT_MAX) || 2000,
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) =>
