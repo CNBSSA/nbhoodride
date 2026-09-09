@@ -10,7 +10,7 @@ import {
 } from "./riderPromise";
 
 const quietAhead = { unclaimedNext24h: 0, unclaimedInDangerWindow: 0, unclaimedPlanRides: 0, activePlans: 0 };
-const healthy = { appErrors: 0, crashes: 0, serverErrors: 0, peopleAffected: 0 };
+const healthy = { appErrors: 0, crashes: 0, serverErrors: 0, peopleAffected: 0, outages: [] };
 const base: RiderPromiseMetrics = {
   booked: 4, delivered: 4, failed: 0, riderCancelled: 0, strandings: 0, nearMisses: 0,
   fareDeviations: [], latePickups: 0, worstLateMinutes: 0, ahead: quietAhead,
@@ -62,16 +62,18 @@ describe("verdict and message", () => {
     expect(text).toContain("every pickup within 5 min");
     expect(text).toContain("App health: no errors reached anyone");
     expect(text).toContain("Paged ahead: no ride needed a page before departure");
+    expect(text).toContain("Outages: none");
   });
 
   it("an app error on a day every ride was delivered is amber, not green", () => {
-    const m = { ...base, appHealth: { appErrors: 2, crashes: 1, serverErrors: 1, peopleAffected: 2 }, pagedAhead: { paged: 1, delivered: 1 } };
+    const m = { ...base, appHealth: { appErrors: 2, crashes: 1, serverErrors: 1, peopleAffected: 2, outages: [{ name: "Stripe", minutes: 12 }, { name: "Database", minutes: null }] }, pagedAhead: { paged: 1, delivered: 1 } };
     expect(reviewVerdict(m)).toBe("kept");
     const text = formatRiderPromiseReview(window, m);
     expect(text).toContain("🟡 Every ride promise kept, but 3 app errors reached people.");
     expect(text).toContain("App health: 2 app errors (1 crash), 1 server error · 2 people affected");
     expect(text).toContain("Paged ahead: 1 ride flagged before departure, 1 still delivered");
-    expect(describeAppHealth({ appErrors: 1, crashes: 0, serverErrors: 0, peopleAffected: 0 })).toBe("1 app error · nobody signed in was affected");
+    expect(text).toContain("Outages: Stripe 12 min, Database (still down)");
+    expect(describeAppHealth({ appErrors: 1, crashes: 0, serverErrors: 0, peopleAffected: 0, outages: [] })).toBe("1 app error · nobody signed in was affected");
   });
 
   it("a quiet day is not a green day", () => {

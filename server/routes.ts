@@ -164,6 +164,7 @@ import { opsAlert, formatOpsAlert } from "./telegramOps";
 import { riderAlert, setRiderAlertRecorder } from "./riderAlerts";
 import { reliabilityEventRecorder } from "./reliabilityEvents";
 import { pageAtRiskRides } from "./rideRiskWatch";
+import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
@@ -9482,6 +9483,18 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
     }
   });
 
+  // Dependency watch: one check now, alerting on transitions exactly as the sweep does.
+  app.post('/api/admin/analytics/dependency-check', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const at = typeof req.body?.at === "string" && req.body.at ? new Date(req.body.at) : new Date();
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ message: "at must be an ISO timestamp" });
+      res.json(await runDependencyWatch(at));
+    } catch (error) {
+      console.error("dependency check error:", error);
+      res.status(500).json({ message: "Failed to run the dependency check" });
+    }
+  });
+
   app.post('/api/admin/analytics/materialize-weekly-plans', isAdminOrSessionAuth, async (_req: any, res) => {
     try {
       const result = await materializeAllWeeklyPlans(storage);
@@ -10646,6 +10659,9 @@ Generate the FAQ list.`;
 
       // ── Ride-risk watch: page ops before the rider finds out ──
       pageAtRiskRides(now).catch((err) => console.error("ride risk watch failed:", err));
+
+      // ── Dependency watch: database and Stripe, every 10 minutes ──
+      if (dependencyCheckDue(now)) runDependencyWatch(now).catch((err) => console.error("dependency watch failed:", err));
 
       // ── Midnight cleanup ──
       if (now.getHours() === 0 && now.getMinutes() === 0) {
