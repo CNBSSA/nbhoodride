@@ -147,7 +147,7 @@ app.use((req, res, next) => {
     res.status(status).json({ message });
     console.error("Unhandled error:", err.stack || err);
     if (status >= 500 && req.path.startsWith("/api/")) {
-      riderAlert("server_error", `${req.method} ${req.path}`, [["Route", `${req.method} ${req.path}`], ["Error", String(message).slice(0, 200)]]);
+      riderAlert("server_error", `${req.method} ${req.path}`, [["Route", `${req.method} ${req.path}`], ["User id", (req as any).session?.userId], ["Error", String(message).slice(0, 200)]]);
     }
   });
 

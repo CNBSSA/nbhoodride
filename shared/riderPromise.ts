@@ -45,6 +45,26 @@ export interface RiderPromiseMetrics {
   latePickups: number;
   /** Worst late pickup in the window, minutes past the scheduled time. */
   worstLateMinutes: number;
+  /**
+   * "All features, menus and buttons work": errors that reached a person in
+   * the window (from reliability_events), and how many people hit one.
+   */
+  appHealth: {
+    /** JavaScript errors reported from the app, crashes included. */
+    appErrors: number;
+    /** Of those, render crashes that showed the error screen. */
+    crashes: number;
+    /** 5xx responses a user actually received. */
+    serverErrors: number;
+    /** Distinct signed-in users who hit any of the above. */
+    peopleAffected: number;
+  };
+  /** Rides the watch paged ops about before departure (o120 / o15 / o10 stamps). */
+  pagedAhead: {
+    paged: number;
+    /** Of those, still delivered. */
+    delivered: number;
+  };
   /** Looking ahead from now. */
   ahead: {
     unclaimedNext24h: number;
@@ -106,14 +126,25 @@ export function reviewVerdict(m: RiderPromiseMetrics): ReviewVerdict {
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 
+/** "no errors reached anyone" or "2 app errors (1 crash), 1 server error · 2 people affected". */
+export function describeAppHealth(h: RiderPromiseMetrics["appHealth"]): string {
+  if (h.appErrors === 0 && h.serverErrors === 0) return "no errors reached anyone";
+  const parts: string[] = [];
+  if (h.appErrors > 0) parts.push(`${h.appErrors} app error${h.appErrors === 1 ? "" : "s"}${h.crashes > 0 ? ` (${h.crashes} crash${h.crashes === 1 ? "" : "es"})` : ""}`);
+  if (h.serverErrors > 0) parts.push(`${h.serverErrors} server error${h.serverErrors === 1 ? "" : "s"}`);
+  const who = h.peopleAffected === 0 ? "nobody signed in was affected" : `${h.peopleAffected} ${h.peopleAffected === 1 ? "person" : "people"} affected`;
+  return `${parts.join(", ")} · ${who}`;
+}
+
 /**
  * The Telegram message: a verdict line, the four numbers, and what is at
  * risk in the coming day. Plain text, under Telegram's 4096-char cap.
  */
 export function formatRiderPromiseReview(window: ReviewWindow, m: RiderPromiseMetrics): string {
   const verdict = reviewVerdict(m);
+  const appIssues = m.appHealth.appErrors + m.appHealth.serverErrors;
   const head =
-    verdict === "kept" ? "🟢 Every promise kept."
+    verdict === "kept" ? (appIssues === 0 ? "🟢 Every promise kept." : `🟡 Every ride promise kept, but ${appIssues} app error${appIssues === 1 ? "" : "s"} reached ${m.appHealth.peopleAffected === 1 ? "someone" : "people"}.`)
     : verdict === "quiet" ? "⚪ No rides. Nothing to judge."
     : `🔴 ${m.failed + m.strandings + m.fareDeviations.length} promise${m.failed + m.strandings + m.fareDeviations.length === 1 ? "" : "s"} broken.`;
 
@@ -130,6 +161,8 @@ export function formatRiderPromiseReview(window: ReviewWindow, m: RiderPromiseMe
   }
   lines.push(
     `On time: ${m.latePickups === 0 ? `every pickup within ${LATE_PICKUP_MINUTES} min` : `${m.latePickups} late pickup${m.latePickups === 1 ? "" : "s"}, worst ${m.worstLateMinutes} min`}`,
+    `App health: ${describeAppHealth(m.appHealth)}`,
+    `Paged ahead: ${m.pagedAhead.paged === 0 ? "no ride needed a page before departure" : `${m.pagedAhead.paged} ride${m.pagedAhead.paged === 1 ? "" : "s"} flagged before departure, ${m.pagedAhead.delivered} still delivered`}`,
     "",
     "Next 24 hours:",
     `  ${m.ahead.unclaimedNext24h} scheduled ride${m.ahead.unclaimedNext24h === 1 ? "" : "s"} still need a driver` +

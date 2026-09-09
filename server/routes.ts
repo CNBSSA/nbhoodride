@@ -161,7 +161,9 @@ import {
   MAX_ASSIGNMENT_ATTEMPTS,
 } from "./rideWorkflowService";
 import { opsAlert, formatOpsAlert } from "./telegramOps";
-import { riderAlert } from "./riderAlerts";
+import { riderAlert, setRiderAlertRecorder } from "./riderAlerts";
+import { reliabilityEventRecorder } from "./reliabilityEvents";
+import { pageAtRiskRides } from "./rideRiskWatch";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
@@ -301,6 +303,8 @@ async function notifyRideMessageRecipient(
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Every rider alert also lands in reliability_events for the daily review.
+  setRiderAlertRecorder(reliabilityEventRecorder);
   // Public, no-JavaScript pages (business description for crawlers / reviewers).
   // Mounted first so they win over the SPA catch-all added later in serveStatic.
   registerPublicPages(app);
@@ -6287,7 +6291,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const clientErrorLimiter = rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false });
   app.post('/api/client-errors', clientErrorLimiter, async (req: any, res) => {
     try {
-      const kind = req.body?.kind === "push_subscribe_failed" ? "push_subscribe_failed" : "client_error";
+      const kind = req.body?.kind === "push_subscribe_failed" ? "push_subscribe_failed" : req.body?.kind === "client_crash" ? "client_crash" : "client_error";
       const message = String(req.body?.message ?? "").slice(0, 300);
       const page = String(req.body?.page ?? "").slice(0, 120);
       if (!message) return res.status(400).json({ message: "message required" });
@@ -6295,6 +6299,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const who = userId ? await storage.getUser(userId).catch(() => undefined) : undefined;
       riderAlert(kind, `${userId ?? req.ip}:${message.slice(0, 40)}`, [
         ["User", who ? `${who.firstName ?? ""} ${who.lastName ?? ""}`.trim() || userId : "not signed in"],
+        ["User id", userId],
         ["Phone", who?.phone],
         ["Page", page],
         ["Error", message],
@@ -9465,6 +9470,18 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
     }
   });
 
+  // Ride-risk watch: one pass of the pager, for journeys and for a manual check.
+  app.post('/api/admin/analytics/ride-risk-sweep', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const at = typeof req.body?.at === "string" && req.body.at ? new Date(req.body.at) : new Date();
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ message: "at must be an ISO timestamp" });
+      res.json({ at: at.toISOString(), pages: await pageAtRiskRides(at) });
+    } catch (error) {
+      console.error("ride risk sweep error:", error);
+      res.status(500).json({ message: "Failed to run the ride-risk sweep" });
+    }
+  });
+
   app.post('/api/admin/analytics/materialize-weekly-plans', isAdminOrSessionAuth, async (_req: any, res) => {
     try {
       const result = await materializeAllWeeklyPlans(storage);
@@ -10626,6 +10643,9 @@ Generate the FAQ list.`;
 
       // ── Rider Promise Review: 4:00 AM Eastern, once a day, to Telegram ──
       maybeSendRiderPromiseReview(storage, now).catch((err) => console.error("rider promise review failed:", err));
+
+      // ── Ride-risk watch: page ops before the rider finds out ──
+      pageAtRiskRides(now).catch((err) => console.error("ride risk watch failed:", err));
 
       // ── Midnight cleanup ──
       if (now.getHours() === 0 && now.getMinutes() === 0) {

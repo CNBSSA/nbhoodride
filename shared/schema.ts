@@ -878,6 +878,23 @@ export const inAppNotifications = pgTable("in_app_notifications", {
   index("idx_in_app_notif_created").on(table.createdAt),
 ]);
 
+// Reliability events — every error that reached a person (app error, crash,
+// server 5xx, failed push enable) and every ride-risk page, as rows, so the
+// Rider Promise Review can count "how many people hit an error yesterday"
+// instead of relying on Telegram history. Written fire-and-forget by
+// server/riderAlerts.ts through server/reliabilityEvents.ts.
+export const reliabilityEvents = pgTable("reliability_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  kind: varchar("kind").notNull(),
+  userId: varchar("user_id"),
+  page: varchar("page"),
+  message: text("message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_reliability_events_created").on(table.createdAt),
+  index("idx_reliability_events_kind").on(table.kind),
+]);
+
 export const agentAuditLog = pgTable("agent_audit_log", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   agent: varchar("agent").notNull(),

@@ -28,6 +28,9 @@ export type RiderAlertKind =
   | "server_error"
   | "client_error"
   | "push_subscribe_failed"
+  | "client_crash"
+  | "ride_unclaimed"
+  | "driver_far_from_pickup"
   | "dispute_filed";
 
 const TITLES: Record<RiderAlertKind, string> = {
@@ -43,6 +46,9 @@ const TITLES: Record<RiderAlertKind, string> = {
   server_error: "🔥 Server error hit by a user",
   client_error: "📱 App error on a rider's phone",
   push_subscribe_failed: "🔔 Notifications failed to enable",
+  client_crash: "💥 App crashed to the error screen",
+  ride_unclaimed: "🕑 Scheduled ride still has no driver",
+  driver_far_from_pickup: "📍 Driver not near the pickup — ride leaves soon",
   dispute_filed: "🧾 Rider filed a report",
 };
 
@@ -55,6 +61,19 @@ const recent = new Map<string, DedupEntry>();
 /** Exposed for tests. */
 export function _resetRiderAlertState(): void {
   recent.clear();
+  recorder = null;
+}
+
+export type RiderAlertRecorder = (event: { kind: RiderAlertKind; key: string; fields: Array<[string, string | number | null | undefined]> }) => void;
+let recorder: RiderAlertRecorder | null = null;
+
+/**
+ * Register a sink that sees EVERY occurrence, folded repeats included, so
+ * the daily review counts what actually happened rather than what was sent.
+ * The server registers a reliability_events writer at boot.
+ */
+export function setRiderAlertRecorder(fn: RiderAlertRecorder | null): void {
+  recorder = fn;
 }
 
 /**
@@ -82,6 +101,11 @@ export function riderAlert(
   key: string,
   fields: Array<[label: string, value: string | number | null | undefined]>,
 ): void {
+  try {
+    recorder?.({ kind, key, fields });
+  } catch (err) {
+    console.error("[rider-alert] recorder failed:", err);
+  }
   const suppressed = shouldSend(kind, key);
   if (suppressed === null) return;
   const extra: typeof fields = suppressed > 0 ? [["Repeats since last alert", suppressed]] : [];
