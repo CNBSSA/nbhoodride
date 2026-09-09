@@ -16,16 +16,15 @@
     "button-close-report": "not reachable from the audited screens yet",
     "button-close-ride-details": "not reachable from the audited screens yet",
     "button-close-safety-privacy": "not reachable from the audited screens yet",
+    "button-confirm-booking": "not reachable from the audited screens yet",
     "button-confirm-join": "not reachable from the audited screens yet",
     "button-copy-schedule-code": "not reachable from the audited screens yet",
-    "button-county-cancel": "not reachable from the audited screens yet",
     "button-create-referral": "not reachable from the audited screens yet",
     "button-dismiss-push": "not reachable from the audited screens yet",
     "button-download-receipt": "not reachable from the audited screens yet",
     "button-driver-documents": "not reachable from the audited screens yet",
     "button-email-receipt": "not reachable from the audited screens yet",
     "button-enable-push": "not reachable from the audited screens yet",
-    "button-go-online-confirm": "not reachable from the audited screens yet",
     "button-help-support": "not reachable from the audited screens yet",
     "button-install-gate-android": "not reachable from the audited screens yet",
     "button-ios-hint-done": "not reachable from the audited screens yet",
@@ -62,7 +61,6 @@
     "button-signup": "not reachable from the audited screens yet",
     "button-submit-documents": "not reachable from the audited screens yet",
     "button-submit-lost-found": "not reachable from the audited screens yet",
-    "button-submit-payout": "not reachable from the audited screens yet",
     "button-submit-report": "not reachable from the audited screens yet",
     "button-test-call": "not reachable from the audited screens yet",
     "button-test-sms": "not reachable from the audited screens yet",
@@ -91,9 +89,9 @@
     "button-remove-stop-*": "not reachable from the audited screens yet",
     "button-remove-stop-schedule-*": "not reachable from the audited screens yet",
     "button-start-ride-*": "not reachable from the audited screens yet",
-    "button-submit-rating-*": "not reachable from the audited screens yet",
     "button-subscribe-*": "not reachable from the audited screens yet",
     "button-topup-*": "not reachable from the audited screens yet",
-    "button-upload-vehicle-*": "not reachable from the audited screens yet"
+    "button-upload-vehicle-*": "not reachable from the audited screens yet",
+    "button-view-receipt-*": "not reachable from the audited screens yet"
   }
 }
