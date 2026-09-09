@@ -134,6 +134,18 @@ export async function run({ base, db, server }) {
     check("review lists the Stripe outage as still down", outages.some((o) => o.name === "Stripe" && o.minutes === null), JSON.stringify(outages));
     check("review text carries the outages line", /Outages: Stripe \(still down\)/.test(rv2.json?.text ?? ""));
 
+    section("Found by the every-button audit");
+    // A new driver's first visit to Ownership fires two requests at once;
+    // both used to insert the ownership row and one answered 500.
+    await db.query("DELETE FROM driver_ownership WHERE driver_id=$1", [FIXTURES.driver.id]);
+    const drv = new Session(base); await drv.login(FIXTURES.driver.email);
+    const [own1, own2] = await Promise.all([drv.req("GET", "/api/driver/ownership/projections"), drv.req("GET", "/api/driver/ownership")]);
+    check("a new driver opening Ownership twice at once gets two answers, not a 500", own1.status === 200 && own2.status === 200, `${own1.status} ${own2.status}`);
+    // With Stripe unreachable, the saved-cards list is an outage (503 with a
+    // plain message), not a server error that pages ops and shows nothing.
+    const cards = await rider.req("GET", "/api/payment/methods");
+    check("saved cards during a Stripe outage answer 503 with a message, not 500", cards.status === 503 && /temporarily unavailable/.test(cards.json?.message ?? ""), `${cards.status} ${JSON.stringify(cards.json)}`);
+
     section("The outside watch can use this server");
     const probe = spawnSync("node", ["scripts/production-watch.mjs"], { env: { ...process.env, BASE_URL: base }, encoding: "utf8" });
     const lastLine = (probe.stdout ?? "").trim().split("\n").pop() ?? "";

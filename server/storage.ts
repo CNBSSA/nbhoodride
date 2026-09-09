@@ -3323,13 +3323,18 @@ export class DatabaseStorage implements IStorage {
   async getOrCreateOwnership(driverId: string): Promise<DriverOwnership> {
     const [existing] = await db.select().from(driverOwnership)
       .where(eq(driverOwnership.driverId, driverId));
-
     if (existing) return existing;
 
-    const [created] = await db.insert(driverOwnership)
+    // A driver's first visit to Ownership fires two requests at once (the
+    // status and the projections); both used to see no row, both inserted,
+    // and the second hit the unique driver_id and answered 500. Insert
+    // tolerantly, then read whichever request won.
+    await db.insert(driverOwnership)
       .values({ driverId, status: "none", totalQualifyingWeeks: 0, totalLifetimeMinutes: 0 })
-      .returning();
-    return created;
+      .onConflictDoNothing({ target: driverOwnership.driverId });
+    const [row] = await db.select().from(driverOwnership)
+      .where(eq(driverOwnership.driverId, driverId));
+    return row;
   }
 
   async getDriverOwnershipStatus(driverId: string): Promise<DriverOwnership | undefined> {

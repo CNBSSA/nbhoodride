@@ -306,6 +306,13 @@ async function notifyRideMessageRecipient(
 export async function registerRoutes(app: Express): Promise<Server> {
   // Every rider alert also lands in reliability_events for the daily review.
   setRiderAlertRecorder(reliabilityEventRecorder);
+
+  /** An Anthropic SDK connection/API failure: an outage to report as 503, not a bug to report as 500. */
+  const aiUnavailable = (error: unknown): boolean => {
+    const name = (error as any)?.constructor?.name ?? "";
+    const msg = String((error as any)?.message ?? error);
+    return /^API(Connection|Timeout)?Error|^(Authentication|PermissionDenied|RateLimit|InternalServer)Error$/.test(name) || /fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|api\.anthropic\.com|Could not resolve authentication method/i.test(msg);
+  };
   // Public, no-JavaScript pages (business description for crawlers / reviewers).
   // Mounted first so they win over the SPA catch-all added later in serveStatic.
   registerPublicPages(app);
@@ -337,7 +344,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // chat/guardian endpoints keep their own much tighter limiters.
   const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 2000,
+    // GENERAL_RATE_LIMIT_MAX: the every-button audit presses hundreds of
+    // buttons against one account in minutes and would trip this; the e2e
+    // harness raises it. Never set it on Railway.
+    max: Number(process.env.GENERAL_RATE_LIMIT_MAX) || 2000,
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) =>
@@ -5126,8 +5136,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultPaymentMethodId,
       });
     } catch (error: any) {
+      // Everything after the user lookup is a Stripe call: when Stripe is
+      // unreachable this is an outage, not a bug. Say so (503) instead of a
+      // 500 that pages ops as a server error and shows the rider nothing.
       console.error("Error fetching payment methods:", error);
-      res.status(500).json({ message: "Failed to fetch payment methods" });
+      res.status(503).json({ message: "Payments are temporarily unavailable. Please try again in a few minutes." });
     }
   });
 
@@ -9027,6 +9040,7 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
       const projections = await getOwnershipProjections(storage, userId);
       res.json(projections);
     } catch (error) {
+      console.error("ownership projections failed:", error);
       res.status(500).json({ message: "Failed to fetch ownership projections" });
     }
   });
@@ -9986,6 +10000,7 @@ Generate the FAQ list.`;
       });
     } catch (error) {
       console.error("Error generating FAQs:", error);
+      if (aiUnavailable(error)) return void res.status(503).json({ message: "The AI service is unreachable right now. Try again in a few minutes." });
       res.status(500).json({ message: "Failed to generate FAQs" });
     }
   });
@@ -9996,6 +10011,7 @@ Generate the FAQ list.`;
       res.json({ indexed });
     } catch (error) {
       console.error("Error reindexing knowledge:", error);
+      if (aiUnavailable(error)) return void res.status(503).json({ message: "The AI service is unreachable right now. Try again in a few minutes." });
       res.status(500).json({ message: "Failed to reindex knowledge base" });
     }
   });
