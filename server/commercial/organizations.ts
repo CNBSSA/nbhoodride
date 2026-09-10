@@ -72,6 +72,7 @@ export async function listOrganizations(): Promise<OrganizationSummary[]> {
     id: r.id, name: r.name, category: r.category, status: r.status, billingMode: r.billing_mode,
     facilityFee: r.facility_fee, contactName: r.contact_name, contactEmail: r.contact_email, contactPhone: r.contact_phone,
     address: r.address, notes: r.notes, stripeCustomerId: r.stripe_customer_id, terms: r.terms,
+    defaultPaymentMethodId: r.default_payment_method_id, defaultPaymentMethodKind: r.default_payment_method_kind,
     createdAt: r.created_at, updatedAt: r.updated_at,
     memberCount: Number(r.member_count ?? 0), jobCount: Number(r.job_count ?? 0),
   }));

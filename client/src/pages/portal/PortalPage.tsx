@@ -26,10 +26,11 @@ import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { JobsMap } from "@/components/portal/JobsMap";
 import { StandingOrdersView } from "@/components/portal/StandingOrdersView";
+import { BillingView } from "@/components/portal/BillingView";
 import { CATEGORY_LABELS, ORG_ROLES, canBook, canManageMembers, canSeeStatement, currentMonthKey, formatJobNumber, type CommercialCategory, type OrgRole } from "@shared/commercial";
 import { VEHICLE_TYPES, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 import { BRAND } from "@shared/branding";
-import { CalendarDays, ListChecks, Receipt, Users, Plus, Download, Printer, ArrowLeft, Repeat } from "lucide-react";
+import { CalendarDays, ListChecks, Receipt, Users, Plus, Download, Printer, ArrowLeft, Repeat, Landmark } from "lucide-react";
 
 interface Org { id: string; name: string; category: CommercialCategory; status: string; facilityFee: string; billingMode: string }
 interface Membership { organization: Org; role: OrgRole }
@@ -43,7 +44,7 @@ interface Member { userId: string; role: OrgRole; firstName: string | null; last
 interface StatementLine { jobNumber: number; at: string; passenger: string; from: string; to: string; status: string; fare: string | null; facilityFee: string; waitFee: string; cancellationFee: string }
 interface Statement { window: { label: string; monthKey: string }; lines: StatementLine[]; totals: { completed: number; cancelled: number; fares: number; facilityFees: number; waitFees: number; cancellationFees: number; total: number } }
 
-type View = "today" | "jobs" | "standing" | "statement" | "people";
+type View = "today" | "jobs" | "standing" | "statement" | "billing" | "people";
 
 const money = (n: number | string | null | undefined) => `$${Number(n ?? 0).toFixed(2)}`;
 const eastern = (iso: string | null | undefined, opts: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) =>
@@ -99,6 +100,7 @@ export default function PortalPage() {
     { id: "jobs", label: "All jobs", icon: ListChecks, show: true },
     { id: "standing", label: "Standing orders", icon: Repeat, show: true },
     { id: "statement", label: "Statement", icon: Receipt, show: canSeeStatement(role) },
+    { id: "billing", label: "Billing", icon: Landmark, show: canSeeStatement(role) },
     { id: "people", label: "People", icon: Users, show: canManageMembers(role) },
   ];
 
@@ -158,6 +160,7 @@ export default function PortalPage() {
           {view === "jobs" && <JobsList org={org} canCancel={canBook(role)} />}
           {view === "standing" && <StandingOrdersView orgId={org.id} canBook={canBook(role)} />}
           {view === "statement" && canSeeStatement(role) && <StatementView org={org} />}
+          {view === "billing" && canSeeStatement(role) && <BillingView orgId={org.id} />}
           {view === "people" && canManageMembers(role) && <PeopleView org={org} />}
         </main>
       </div>

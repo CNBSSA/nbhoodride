@@ -731,6 +731,8 @@ CREATE TABLE IF NOT EXISTS organizations (
   address JSONB,
   notes TEXT,
   stripe_customer_id VARCHAR,
+  default_payment_method_id VARCHAR,
+  default_payment_method_kind VARCHAR,
   terms JSONB,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -770,6 +772,26 @@ ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS leg VARCHAR NOT NULL DEFAUL
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS return_of VARCHAR;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_commercial_job_standing ON commercial_jobs (standing_order_id, service_date, leg);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_commercial_job_return_of ON commercial_jobs (return_of);
+
+CREATE TABLE IF NOT EXISTS commercial_statements (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id),
+  period_key VARCHAR NOT NULL,
+  period_label VARCHAR NOT NULL,
+  period_start TIMESTAMP NOT NULL,
+  period_end TIMESTAMP NOT NULL,
+  job_count INTEGER NOT NULL DEFAULT 0,
+  total DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  status VARCHAR NOT NULL DEFAULT 'open',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  stripe_payment_intent_id VARCHAR,
+  issued_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  paid_at TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_commercial_statement_period ON commercial_statements (organization_id, period_key);
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS default_payment_method_id VARCHAR;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS default_payment_method_kind VARCHAR;
 
 CREATE TABLE IF NOT EXISTS commercial_standing_orders (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

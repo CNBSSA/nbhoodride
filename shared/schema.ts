@@ -925,6 +925,10 @@ export const organizations = pgTable("organizations", {
   address: jsonb("address").$type<{ lat?: number; lng?: number; address?: string }>(),
   notes: text("notes"),
   stripeCustomerId: varchar("stripe_customer_id"),
+  /** The bank account or card the weekly debit is taken from. */
+  defaultPaymentMethodId: varchar("default_payment_method_id"),
+  /** us_bank_account | card — what the desk attached, for the words shown. */
+  defaultPaymentMethodKind: varchar("default_payment_method_kind"),
   /** Cancellation / no-show terms, per agreement (slice 3). */
   terms: jsonb("terms").$type<Record<string, unknown>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -979,6 +983,31 @@ export const commercialJobs = pgTable("commercial_jobs", {
   uniqueIndex("uq_commercial_job_standing").on(table.standingOrderId, table.serviceDate, table.leg),
   uniqueIndex("uq_commercial_job_return_of").on(table.returnOf),
 ]);
+
+// One week's work, priced and collected: issued the following Monday and
+// charged to the organization's bank account (shared/billingCycle.ts). Jobs
+// carry the statement id once issued, so a job is billed exactly once.
+export const commercialStatements = pgTable("commercial_statements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  /** The Eastern date of the week's Monday, "YYYY-MM-DD". */
+  periodKey: varchar("period_key").notNull(),
+  periodLabel: varchar("period_label").notNull(),
+  periodStart: timestamp("period_start").notNull(),
+  periodEnd: timestamp("period_end").notNull(),
+  jobCount: integer("job_count").notNull().default(0),
+  total: decimal("total", { precision: 10, scale: 2 }).notNull().default("0.00"),
+  /** open | charging | paid | failed | void */
+  status: varchar("status").notNull().default("open"),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+  issuedAt: timestamp("issued_at").defaultNow().notNull(),
+  paidAt: timestamp("paid_at"),
+}, (table) => [
+  uniqueIndex("uq_commercial_statement_period").on(table.organizationId, table.periodKey),
+]);
+export type CommercialStatement = typeof commercialStatements.$inferSelect;
 
 // A facility's recurring instruction: "Monday, Wednesday, Friday at 6:10 AM,
 // return when the patient is ready". Jobs are booked from it a week ahead

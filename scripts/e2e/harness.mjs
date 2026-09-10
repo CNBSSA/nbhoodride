@@ -119,6 +119,8 @@ export async function deleteOrgs(db, orgIds) {
   orgIds = (orgIds || []).filter(Boolean);
   if (orgIds.length === 0) return;
   const { rows } = await db.query("SELECT ride_id FROM commercial_jobs WHERE organization_id = ANY($1::varchar[])", [orgIds]);
+  await db.query("UPDATE commercial_jobs SET statement_id = NULL WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+  await db.query("DELETE FROM commercial_statements WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
   await db.query("DELETE FROM commercial_jobs WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
   await deleteRides(db, rows.map((r) => r.ride_id)).catch(() => {});
   await db.query("DELETE FROM commercial_standing_orders WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
