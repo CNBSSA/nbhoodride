@@ -25,6 +25,8 @@ import {
 import { bookJob, jobForRide, listJobs } from "./jobs";
 import { buildStatement, statementToCsv, statementToHtml } from "./statements";
 import { cancelJob } from "./cancel";
+import { bookWillCallReturn, createStandingOrder, listStandingOrders, materializeAllStandingOrders, materializeStandingOrder, setStandingOrderActive, standingOrderJobCounts } from "./standingOrders";
+import { describeTerms, orgTerms } from "@shared/commercialTerms";
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown;
 
@@ -184,7 +186,8 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       const org = await getOrganization(req.orgId);
       if (!org) return res.status(404).json({ message: "Organization not found." });
       const { stripeCustomerId: _s, notes: _n, ...safe } = org;
-      res.json({ ...safe, role: req.orgRole });
+      const terms = orgTerms(org.terms);
+      res.json({ ...safe, terms, termsText: describeTerms(terms), role: req.orgRole });
     } catch (err) { fail(res, err, "Could not load the organization"); }
   });
   app.post("/api/org/:orgId/members", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
@@ -213,8 +216,54 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
         });
       }
       opsAlert(formatOpsAlert("🏢 Commercial job cancelled", [["Account", org?.name ?? req.orgId], ["Job", label], ["Fee", `$${result.cancellationFee}`], ["Reason", String(req.body?.reason ?? "").slice(0, 120)]]));
-      res.json({ ride: result.ride, cancellationFee: result.cancellationFee });
+      res.json({ ride: result.ride, cancellationFee: result.cancellationFee, reason: result.reason });
     } catch (err) { fail(res, err, "Could not cancel the job"); }
+  });
+
+  // ── Standing orders and will-call returns ──
+  app.get("/api/org/:orgId/standing-orders", gate, isAuthenticated, requireMember(), async (req: any, res) => {
+    try {
+      const [orders, counts] = await Promise.all([listStandingOrders(req.orgId), standingOrderJobCounts(req.orgId)]);
+      res.json(orders.map((o) => ({ ...o, jobCount: counts[o.id] ?? 0 })));
+    } catch (err) { fail(res, err, "Could not list standing orders"); }
+  });
+  app.post("/api/org/:orgId/standing-orders", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try {
+      const order = await createStandingOrder({ ...(req.body ?? {}), organizationId: req.orgId, createdBy: userIdOf(req)! });
+      // Book its first week now, so the desk sees the jobs it just asked for.
+      const booked = await materializeStandingOrder(storage, order, new Date(), (b) => deps.notifyDriversOfScheduledRide(b.ride, b.pickupCounty));
+      const org = await getOrganization(req.orgId);
+      console.log(`[commercial] standing order created :: Account: ${org?.name ?? req.orgId} | order ${order.id} | ${booked} job${booked === 1 ? "" : "s"} booked`);
+      opsAlert(formatOpsAlert("🗓 Standing order created", [["Account", org?.name ?? req.orgId], ["Passenger", order.passengerName], ["Jobs booked", booked]]));
+      res.status(201).json({ ...order, booked });
+    } catch (err) { fail(res, err, "Could not create the standing order"); }
+  });
+  for (const [path, active] of [["pause", false], ["resume", true]] as Array<[string, boolean]>) {
+    app.post(`/api/org/:orgId/standing-orders/:id/${path}`, gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+      try {
+        const order = await setStandingOrderActive(req.orgId, req.params.id, active);
+        const booked = active ? await materializeStandingOrder(storage, order, new Date(), (b) => deps.notifyDriversOfScheduledRide(b.ride, b.pickupCounty)) : 0;
+        res.json({ ...order, booked });
+      } catch (err) { fail(res, err, `Could not ${path} the standing order`); }
+    });
+  }
+  app.post("/api/org/:orgId/jobs/:jobId/return", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try {
+      const booked = await bookWillCallReturn(storage, req.orgId, req.params.jobId, userIdOf(req)!, req.body?.readyInMinutes);
+      deps.notifyDriversOfScheduledRide(booked.ride, booked.pickupCounty);
+      const org = await getOrganization(req.orgId);
+      const label = formatJobNumber(booked.job.jobNumber);
+      const leaves = booked.ride.scheduledAt ? new Date(booked.ride.scheduledAt).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }) : "";
+      console.log(`[commercial] will-call return :: Account: ${org?.name ?? req.orgId} | Job: ${label} | leaves ${leaves}`);
+      opsAlert(formatOpsAlert("🔔 Will-call return — passenger ready", [["Account", org?.name ?? req.orgId], ["Job", label], ["Leaves", leaves], ["Pickup", booked.ride.pickupLocation?.address?.split(",").slice(0, 2).join(",")]]));
+      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: label } });
+    } catch (err) { fail(res, err, "Could not book the return"); }
+  });
+
+  // Operator: run the standing-order sweep now (the minute sweep runs it too).
+  app.post("/api/admin/analytics/materialize-standing-orders", gate, isAdminOrSessionAuth, async (_req, res) => {
+    try { res.json(await materializeAllStandingOrders(storage, new Date(), (b) => deps.notifyDriversOfScheduledRide(b.ride, b.pickupCounty))); }
+    catch (err) { fail(res, err, "Could not run the standing-order sweep"); }
   });
 
   async function sendStatement(res: Response, organizationId: string, query: any) {

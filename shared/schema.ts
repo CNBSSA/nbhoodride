@@ -956,13 +956,56 @@ export const commercialJobs = pgTable("commercial_jobs", {
   cancellationFee: decimal("cancellation_fee", { precision: 8, scale: 2 }).notNull().default("0.00"),
   /** Proof of delivery / signature (later slices). */
   proof: jsonb("proof").$type<Record<string, unknown>>(),
+  /** The standing order this job came from, if any (slice 3). */
+  standingOrderId: varchar("standing_order_id"),
+  /** Eastern service date "YYYY-MM-DD": one job per order, date and leg. */
+  serviceDate: varchar("service_date"),
+  /** out | return */
+  leg: varchar("leg").notNull().default("out"),
+  /** For a will-call return: the outbound job it belongs to. */
+  returnOf: varchar("return_of"),
   /** open | statement | paid */
   billedStatus: varchar("billed_status").notNull().default("open"),
   statementId: varchar("statement_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("idx_commercial_jobs_org").on(table.organizationId),
+  // One job per standing order, service date and leg: the sweep can run as
+  // often as it likes and never books the same trip twice.
+  uniqueIndex("uq_commercial_job_standing").on(table.standingOrderId, table.serviceDate, table.leg),
+  uniqueIndex("uq_commercial_job_return_of").on(table.returnOf),
 ]);
+
+// A facility's recurring instruction: "Monday, Wednesday, Friday at 6:10 AM,
+// return when the patient is ready". Jobs are booked from it a week ahead
+// (server/commercial/standingOrders.ts); rules in shared/commercialTerms.ts.
+export const commercialStandingOrders = pgTable("commercial_standing_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  passengerName: varchar("passenger_name").notNull(),
+  passengerPhone: varchar("passenger_phone"),
+  pickup: jsonb("pickup").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  destination: jsonb("destination").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  /** 0 = Sunday … 6 = Saturday. */
+  days: jsonb("days").$type<number[]>().notNull(),
+  departureHour: integer("departure_hour").notNull(),
+  departureMinute: integer("departure_minute").notNull().default(0),
+  /** none | fixed | will_call */
+  returnMode: varchar("return_mode").notNull().default("none"),
+  returnHour: integer("return_hour"),
+  returnMinute: integer("return_minute"),
+  vehicleType: varchar("vehicle_type").notNull().default("standard"),
+  notes: text("notes"),
+  poNumber: varchar("po_number"),
+  isActive: boolean("is_active").notNull().default(true),
+  pausedAt: timestamp("paused_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_commercial_standing_orders_org").on(table.organizationId),
+]);
+export type CommercialStandingOrder = typeof commercialStandingOrders.$inferSelect;
 export type Organization = typeof organizations.$inferSelect;
 export type OrganizationMember = typeof organizationMembers.$inferSelect;
 export type CommercialJob = typeof commercialJobs.$inferSelect;

@@ -37,6 +37,12 @@ export interface BookJobInput {
   vehicleType?: string | null;
   notes?: string | null;
   poNumber?: string | null;
+  /** Booked from a standing order: one job per order, service date and leg. */
+  standing?: { orderId: string; serviceDate?: string | null; leg: "out" | "return" };
+  /** A will-call return: the outbound job it belongs to. */
+  returnOf?: string;
+  /** Will-call returns are dispatched minutes out, not the usual 3 hours. */
+  allowShortLead?: boolean;
 }
 
 export interface BookedJob {
@@ -57,8 +63,12 @@ export async function bookJob(storage: IStorage, input: BookJobInput, now: Date 
   if (!passengerName) throw new CommercialError("Who is riding? A passenger name is needed.");
   if (!isLocation(input.pickup) || !isLocation(input.destination)) throw new CommercialError("Pickup and destination need an address with coordinates.");
   if (!input.scheduledAt) throw new CommercialError("Commercial jobs are booked ahead: a pickup time is needed.");
-  const schedule = checkScheduleTime(input.scheduledAt, now);
-  if (!schedule.valid) throw new CommercialError(schedule.error ?? "That pickup time is not allowed.");
+  if (!input.allowShortLead) {
+    const schedule = checkScheduleTime(input.scheduledAt, now);
+    if (!schedule.valid) throw new CommercialError(schedule.error ?? "That pickup time is not allowed.");
+  } else if (new Date(input.scheduledAt).getTime() < now.getTime() - 60_000) {
+    throw new CommercialError("That pickup time has already passed.");
+  }
   const vehicleType = (input.vehicleType ?? "standard").toString();
   if (!(VEHICLE_TYPES as readonly string[]).includes(vehicleType)) throw new CommercialError("Vehicle type must be standard, xl, suv or wheelchair.");
 
@@ -100,6 +110,10 @@ export async function bookJob(storage: IStorage, input: BookJobInput, now: Date 
     facilityFee: org.facilityFee,
     poNumber: input.poNumber ? String(input.poNumber).trim().slice(0, 60) : null,
     notes: input.notes ? String(input.notes).trim().slice(0, 2000) : null,
+    standingOrderId: input.standing?.orderId ?? null,
+    serviceDate: input.standing?.serviceDate ?? null,
+    leg: input.standing?.leg ?? (input.returnOf ? "return" : "out"),
+    returnOf: input.returnOf ?? null,
   }).returning();
 
   return { ride, job, pickupCounty: validation.pickupCounty ?? null };
@@ -128,6 +142,11 @@ export interface JobRow {
   poNumber: string | null;
   notes: string | null;
   driverName: string | null;
+  standingOrderId: string | null;
+  serviceDate: string | null;
+  leg: string;
+  returnOf: string | null;
+  waitMinutes: number;
   /** What the organization is billed for it in its current state. */
   total: number;
 }
@@ -178,6 +197,11 @@ export async function listJobs(organizationId: string, opts: ListJobsOptions = {
       poNumber: job.poNumber,
       notes: job.notes,
       driverName: driverFirst ? `${driverFirst} ${(driverLast ?? "").charAt(0)}${driverLast ? "." : ""}`.trim() : null,
+      standingOrderId: job.standingOrderId,
+      serviceDate: job.serviceDate,
+      leg: job.leg,
+      returnOf: job.returnOf,
+      waitMinutes: job.waitMinutes,
       total: jobTotal(status, { fare: ride.actualFare ?? ride.estimatedFare, facilityFee: job.facilityFee, waitFee: job.waitFee, cancellationFee }),
     };
   });
