@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { loadStripe } from '@stripe/stripe-js';
 import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { Link } from 'wouter';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { CreditCard, CheckCircle, AlertCircle, ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
+import { STRIPE_LOAD_FAILED_MESSAGE, STRIPE_PUBLISHABLE_KEY, useStripeLoader } from '@/lib/stripeLoader';
 import { useStripeConfig } from '@/hooks/useStripeConfig';
 import {
   formatCardBrandLabel,
@@ -35,8 +35,6 @@ function CardSetupHeader() {
   );
 }
 
-const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY as string | undefined;
-const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
 interface PaymentMethodsResponse {
   hasPaymentMethod: boolean;
@@ -259,7 +257,8 @@ export function CardSetupPage() {
     queryKey: ['/api/payment/methods'],
   });
   const { data: stripeConfig } = useStripeConfig();
-  const stripeReady = stripeConfig?.cardOnFileEnabled ?? !!stripePublishableKey;
+  const stripeReady = stripeConfig?.cardOnFileEnabled ?? !!STRIPE_PUBLISHABLE_KEY;
+  const stripeLoad = useStripeLoader();
 
   const methods = paymentMethods?.methods ?? [];
   const safeIndex = methods.length > 0 ? Math.min(selectedIndex, methods.length - 1) : 0;
@@ -380,8 +379,15 @@ export function CardSetupPage() {
               <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 dark:border-amber-900 p-4 text-sm text-amber-900 dark:text-amber-100">
                 Card payments are being activated. You can still ride using your Virtual PG Card balance.
               </div>
-            ) : stripePromise ? (
-              <Elements stripe={stripePromise}>
+            ) : stripeLoad.status === 'failed' ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-950 dark:border-red-900 p-4 text-sm text-red-900 dark:text-red-100 space-y-3" data-testid="stripe-load-failed">
+                <p>{STRIPE_LOAD_FAILED_MESSAGE}</p>
+                <Button variant="outline" size="sm" onClick={stripeLoad.retry} data-testid="button-retry-stripe">Try again</Button>
+              </div>
+            ) : stripeLoad.status === 'loading' ? (
+              <Skeleton className="h-12 w-full" data-testid="stripe-loading" />
+            ) : stripeLoad.stripe ? (
+              <Elements stripe={stripeLoad.stripe}>
                 <CardSetupForm />
               </Elements>
             ) : null}

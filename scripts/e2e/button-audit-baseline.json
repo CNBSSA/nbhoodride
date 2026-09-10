@@ -105,6 +105,7 @@
     "button-request-payout",
     "button-reset",
     "button-retry-quote",
+    "button-retry-stripe",
     "button-safety-contact",
     "button-safety-privacy",
     "button-save-card",
@@ -237,6 +238,7 @@
     "button-subscribe-*": "not reachable from the audited screens yet",
     "button-topup-*": "not reachable from the audited screens yet",
     "button-upload-vehicle-*": "not reachable from the audited screens yet",
-    "button-view-receipt-*": "not reachable from the audited screens yet"
+    "button-view-receipt-*": "not reachable from the audited screens yet",
+    "button-retry-stripe": "only shown when Stripe.js fails to download; the audit runs without a Stripe key"
   }
 }
