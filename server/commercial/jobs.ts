@@ -21,6 +21,7 @@ import { checkScheduleTime } from "@shared/schedulingPolicy";
 import { estimateRoute } from "@shared/routeEstimate";
 import { DEFAULT_VEHICLE_FARE_MULTIPLIERS, VEHICLE_TYPES } from "@shared/vehicleTypes";
 import { jobTotal } from "@shared/commercial";
+import { deliverySummary } from "./deliveries";
 import { estimateFare, validateRideRequest, type Location } from "../rideWorkflowService";
 import type { IStorage } from "../storage";
 import { CommercialError, getOrganization } from "./organizations";
@@ -43,6 +44,8 @@ export interface BookJobInput {
   returnOf?: string;
   /** Will-call returns are dispatched minutes out, not the usual 3 hours. */
   allowShortLead?: boolean;
+  /** Deliveries carry their own tariff (shared/deliveries.ts), not the ride one. */
+  fareOverride?: number;
 }
 
 export interface BookedJob {
@@ -82,11 +85,15 @@ export async function bookJob(storage: IStorage, input: BookJobInput, now: Date 
   const minutes = route.minutes > 0 ? route.minutes : (validation.durationMinutes ?? 0);
   const quote = estimateFare(miles, minutes, { rates, vehicleType });
 
+  const fare = input.fareOverride !== undefined && Number.isFinite(input.fareOverride) && input.fareOverride > 0
+    ? Number(input.fareOverride)
+    : quote.total;
+
   const ride = await storage.createRide({
     riderId: input.requesterId,
     pickupLocation: input.pickup,
     destinationLocation: input.destination,
-    estimatedFare: quote.total.toFixed(2),
+    estimatedFare: fare.toFixed(2),
     paymentMethod: "invoice",
     status: "pending",
     scheduledAt: new Date(input.scheduledAt),
@@ -143,6 +150,8 @@ export interface JobRow {
   notes: string | null;
   driverName: string | null;
   proof: Record<string, unknown> | null;
+  /** For a delivery: what it is, who takes it and the window, in one line. */
+  delivery: string | null;
   standingOrderId: string | null;
   serviceDate: string | null;
   leg: string;
@@ -199,6 +208,7 @@ export async function listJobs(organizationId: string, opts: ListJobsOptions = {
       notes: job.notes,
       driverName: driverFirst ? `${driverFirst} ${(driverLast ?? "").charAt(0)}${driverLast ? "." : ""}`.trim() : null,
       proof: (job.proof ?? null) as Record<string, unknown> | null,
+      delivery: deliverySummary(job),
       standingOrderId: job.standingOrderId,
       serviceDate: job.serviceDate,
       leg: job.leg,
@@ -207,6 +217,13 @@ export async function listJobs(organizationId: string, opts: ListJobsOptions = {
       total: jobTotal(status, { fare: ride.actualFare ?? ride.estimatedFare, facilityFee: job.facilityFee, waitFee: job.waitFee, cancellationFee }),
     };
   });
+}
+
+/** The job id and organization behind a ride, for routes that hold only a ride. */
+export async function commercialJobForRide(rideId: string): Promise<{ jobId: string; organizationId: string } | null> {
+  const [row] = await db.select({ jobId: commercialJobs.id, organizationId: commercialJobs.organizationId })
+    .from(commercialJobs).where(eq(commercialJobs.rideId, rideId));
+  return row ?? null;
 }
 
 /** For paging and notifications: which organization a ride belongs to, if any. */

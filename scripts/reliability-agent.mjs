@@ -72,7 +72,9 @@ const testRes = sh("npm", ["test"]);
 // reviewer's crawler without JavaScript actually reads.
 const smokeRes = sh("npm", ["run", "smoke:production"]);
 
-const health = await tryFetch("/health/ready");
+// `probe` marks this run in the server's heartbeat log, so the 4 AM review
+// can say whether the daily reliability report actually ran.
+const health = await tryFetch("/health/ready?probe=daily-reliability");
 const payCfg = await tryFetch("/api/payment/config");
 
 const auditRaw = sh("npm", ["audit", "--json"]);

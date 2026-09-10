@@ -89,6 +89,8 @@ export interface ProofInput {
   /** Who received the passenger, or took the parcel, at the far end. */
   receivedBy: string;
   note?: string | null;
+  /** A delivery's photo of the handover. */
+  photoUrl?: string | null;
 }
 
 /**
@@ -107,6 +109,7 @@ export async function recordProof(rideId: string, driverUserId: string, input: P
   const proof = {
     ...(row.job.proof ?? {}),
     receivedBy,
+    photoUrl: input.photoUrl ? String(input.photoUrl).trim().slice(0, 500) : (row.job.proof as any)?.photoUrl,
     note: input.note ? String(input.note).trim().slice(0, 300) : undefined,
     signedAt: now.toISOString(),
     signedBy: driverUserId,

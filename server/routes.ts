@@ -169,8 +169,12 @@ import { registerCommercialRoutes } from "./commercial/routes";
 import { materializeAllStandingOrders } from "./commercial/standingOrders";
 import { runWeeklyBilling } from "./commercial/billing";
 import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
+import { noteWatchRan } from "./watchHeartbeat";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
+import { cancelJob as cancelCommercialJob } from "./commercial/cancel";
+import { commercialJobForRide, jobForRide } from "./commercial/jobs";
+import { formatJobNumber } from "@shared/commercial";
 import { CommercialError } from "./commercial/organizations";
 import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadges";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
@@ -4315,6 +4319,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const role: "rider" | "driver" = userId === ride.riderId ? "rider" : "driver";
 
+      // ── A commercial job is the organization's, not this person's ──
+      // The requester is the rider of record, so this route is reachable from
+      // their own ride history. Cancelling here must use the ACCOUNT's terms
+      // and put the fee on the ACCOUNT's statement — never take it from the
+      // requester's wallet, which the rider fee ladder below would do.
+      if (role === "rider" && ride.paymentMethod === "invoice") {
+        const job = await commercialJobForRide(rideId);
+        if (job) {
+          try {
+            const result = await cancelCommercialJob(job.organizationId, job.jobId, userId, reason || "Cancelled by the organization");
+            console.log(`[commercial] job cancelled from the app :: ride ${rideId} | fee ${result.cancellationFee} | ${result.reason}`);
+            if (result.driverId) {
+              const ws = activeConnections.get(result.driverId);
+              if (ws?.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "ride_cancelled", rideId, message: "This job was cancelled by the organization." }));
+              }
+            }
+            return res.json({
+              success: true,
+              ride: result.ride,
+              cancellationFee: Number(result.cancellationFee),
+              feeReason: result.reason,
+              billedTo: "organization",
+              message: Number(result.cancellationFee) > 0
+                ? `Cancelled. A $${Number(result.cancellationFee).toFixed(2)} fee goes on your organization's statement.`
+                : "Cancelled at no charge.",
+            });
+          } catch (commercialErr: any) {
+            const status = commercialErr?.status ?? 500;
+            return res.status(status).json({ message: commercialErr?.message ?? "Could not cancel this job." });
+          }
+        }
+      }
+
       // ── Status guards: terminal rides can't be re-cancelled ──
       if (["completed", "cancelled", "no_show"].includes(ride.status ?? "")) {
         return res.status(400).json({ message: `Ride is already ${ride.status} and can't be cancelled.` });
@@ -5539,8 +5577,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const incident = await storage.createEmergencyIncidentWithSharing(incidentData);
 
+      // A facility's patient may be in the car. Name the account and the job
+      // so the operator can ring the facility at once; the passenger's own
+      // name still never leaves the app.
+      const sosJob = rideId ? await jobForRide(rideId).catch(() => null) : null;
+      // Mirrored to the server log like every rider alert: an SOS must be on
+      // record even when Telegram is unreachable.
+      console.warn(`[sos] ${incidentType} :: incident on ride ${rideId ?? "none"}${sosJob ? ` | Account: ${sosJob.organizationName} | Job: ${formatJobNumber(sosJob.jobNumber)} | commercial passenger aboard` : ""}`);
       opsAlert(formatOpsAlert("🚨 SOS ALERT", [
         ["Type", incidentType],
+        ...(sosJob ? [["Account", sosJob.organizationName] as [string, string], ["Job", formatJobNumber(sosJob.jobNumber)] as [string, string], ["Contact the facility", "yes — a commercial passenger is aboard"] as [string, string]] : []),
         ["Details", description],
         ["Map", location?.lat != null && location?.lng != null ? `https://maps.google.com/?q=${Number(location.lat)},${Number(location.lng)}` : null],
         ["Admin", `${resolveAppUrl()}/admin`],
@@ -10795,6 +10841,9 @@ Generate the FAQ list.`;
       if (now.getMinutes() % 15 === 0) {
         materializeAllWeeklyPlans(storage, now).catch((err) => console.error("weekly plan sweep failed:", err));
       }
+
+      // ── Heartbeats: prove to tomorrow's review that these ran ──
+      noteWatchRan("minute-sweep", now);
 
       // ── Rider Promise Review: 4:00 AM Eastern, once a day, to Telegram ──
       maybeSendRiderPromiseReview(storage, now).catch((err) => console.error("rider promise review failed:", err));

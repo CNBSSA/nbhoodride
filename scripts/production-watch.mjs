@@ -69,7 +69,9 @@ await probe("Terms page", "/terms", { expectText: ["Terms of Service"] });
 
 // The server's own lifelines. A 503 here means the in-server watch has
 // already paged; we add it to the summary so the page reads whole.
-const deps = await get("/health/deps");
+// `probe` marks this run in the server's heartbeat log, so the 4 AM review
+// can say whether the outside watch actually ran overnight.
+const deps = await get("/health/deps?probe=production-watch");
 let depsDown = [];
 try {
   const d = JSON.parse(deps.body || "{}");

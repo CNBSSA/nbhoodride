@@ -14,7 +14,7 @@ const healthy = { appErrors: 0, crashes: 0, serverErrors: 0, peopleAffected: 0, 
 const base: RiderPromiseMetrics = {
   booked: 4, delivered: 4, failed: 0, riderCancelled: 0, strandings: 0, nearMisses: 0,
   fareDeviations: [], latePickups: 0, worstLateMinutes: 0, ahead: quietAhead,
-  appHealth: healthy, pagedAhead: { paged: 0, delivered: 0 },
+  appHealth: healthy, overnight: [{ label: "Minute sweep", beats: 24, ran: true }, { label: "Production watch (outside)", beats: 24, ran: true }], pagedAhead: { paged: 0, delivered: 0 },
 };
 
 describe("reviewWindow", () => {
@@ -63,6 +63,15 @@ describe("verdict and message", () => {
     expect(text).toContain("App health: no errors reached anyone");
     expect(text).toContain("Paged ahead: no ride needed a page before departure");
     expect(text).toContain("Outages: none");
+    expect(text).toContain("Overnight checks: all 2 ran");
+  });
+
+  it("a check that stopped overnight is the headline, even on a perfect day", () => {
+    const m = { ...base, overnight: [{ label: "Minute sweep", beats: 24, ran: true }, { label: "Production watch (outside)", beats: 0, ran: false }] };
+    expect(reviewVerdict(m)).toBe("kept");
+    const text = formatRiderPromiseReview(window, m);
+    expect(text).toContain("🟡 Every ride promise kept, but 1 overnight check did not run.");
+    expect(text).toContain("Overnight checks: Production watch (outside) DID NOT RUN ⚠️ (1 of 2 ran)");
   });
 
   it("an app error on a day every ride was delivered is amber, not green", () => {

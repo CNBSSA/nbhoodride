@@ -16,6 +16,7 @@ import { riderAlert } from "./riderAlerts";
 import { PLAN_TIMEZONE, zonedParts } from "@shared/weeklyPlan";
 import { describeDriverRisk, driverPickupCheck, unclaimedPageDue } from "@shared/rideRisk";
 import { commercialPagingFields } from "@shared/commercial";
+import { noteWatchRan } from "./watchHeartbeat";
 
 export interface RiskPage {
   rideId: string;
@@ -64,6 +65,7 @@ export async function pageAtRiskRides(now: Date = new Date()): Promise<RiskPage[
     ORDER BY r.scheduled_at
   `);
 
+  noteWatchRan("ride-risk", now);
   const out: RiskPage[] = [];
   for (const r of (rows.rows ?? []) as any[]) {
     const departure = new Date(r.scheduled_at);

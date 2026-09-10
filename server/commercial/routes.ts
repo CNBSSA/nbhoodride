@@ -23,6 +23,7 @@ import {
   listMembers, listOrganizations, membershipRole, organizationsForUser, removeMember, updateOrganization,
 } from "./organizations";
 import { bookJob, jobForRide, listJobs } from "./jobs";
+import { bookDelivery } from "./deliveries";
 import { buildStatement, statementToCsv, statementToHtml } from "./statements";
 import { cancelJob } from "./cancel";
 import { bookWillCallReturn, createStandingOrder, listStandingOrders, materializeAllStandingOrders, materializeStandingOrder, setStandingOrderActive, standingOrderJobCounts } from "./standingOrders";
@@ -225,6 +226,23 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       opsAlert(formatOpsAlert("🏢 Commercial job cancelled", [["Account", org?.name ?? req.orgId], ["Job", label], ["Fee", `$${result.cancellationFee}`], ["Reason", String(req.body?.reason ?? "").slice(0, 120)]]));
       res.json({ ride: result.ride, cancellationFee: result.cancellationFee, reason: result.reason });
     } catch (err) { fail(res, err, "Could not cancel the job"); }
+  });
+
+  // ── Deliveries: a job with no passenger ──
+  app.post("/api/org/:orgId/deliveries", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try {
+      const booked = await bookDelivery(storage, { ...(req.body ?? {}), organizationId: req.orgId, requesterId: userIdOf(req)! });
+      deps.notifyDriversOfScheduledRide(booked.ride, booked.pickupCounty);
+      const org = await getOrganization(req.orgId);
+      opsAlert(formatOpsAlert("📦 Delivery booked", [
+        ["Account", org?.name ?? req.orgId],
+        ["Job", formatJobNumber(booked.job.jobNumber)],
+        ["Parcel", booked.job.parcelSize],
+        ["To", booked.job.dropContact?.name],
+        ["Fare", `$${Number(booked.ride.estimatedFare ?? 0).toFixed(2)}`],
+      ]));
+      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: formatJobNumber(booked.job.jobNumber) } });
+    } catch (err) { fail(res, err, "Could not book the delivery"); }
   });
 
   // ── Standing orders and will-call returns ──

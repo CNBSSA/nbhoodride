@@ -962,7 +962,13 @@ export const commercialJobs = pgTable("commercial_jobs", {
   waitMinutes: integer("wait_minutes").notNull().default(0),
   waitFee: decimal("wait_fee", { precision: 8, scale: 2 }).notNull().default("0.00"),
   cancellationFee: decimal("cancellation_fee", { precision: 8, scale: 2 }).notNull().default("0.00"),
-  /** Proof of delivery / signature (later slices). */
+  /** Deliveries (slice 6): a job with no passenger. */
+  parcelSize: varchar("parcel_size"),
+  pickupContact: jsonb("pickup_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
+  dropContact: jsonb("drop_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
+  windowStart: timestamp("window_start"),
+  windowEnd: timestamp("window_end"),
+  /** Who received the passenger or the parcel, and the photo if there is one. */
   proof: jsonb("proof").$type<Record<string, unknown>>(),
   /** The standing order this job came from, if any (slice 3). */
   standingOrderId: varchar("standing_order_id"),

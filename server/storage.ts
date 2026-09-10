@@ -1261,6 +1261,9 @@ export class DatabaseStorage implements IStorage {
         scheduledAt: rides.scheduledAt,
         pickupCounty: rides.pickupCounty,
         createdAt: rides.createdAt,
+        // medical | business | food when this is commercial work, so the
+        // driver's card can say what it is before they claim it.
+        commercialKind: sql<string | null>`(SELECT cj.category FROM commercial_jobs cj WHERE cj.ride_id = ${rides.id})`,
         rider: {
           id: riderAlias.id,
           firstName: riderAlias.firstName,

@@ -85,6 +85,9 @@ export interface PaymentLabelOptions {
 export function formatPaymentMethodLabel(method: string | null | undefined, opts: PaymentLabelOptions = {}): string {
   if (method === "card") return opts.walletEnabled ? "PG Card (virtual wallet)" : "Card on file";
   if (method === "cash") return "Cash";
+  // A commercial job is billed to the organization on its weekly statement;
+  // the person who booked it is never charged.
+  if (method === "invoice") return "Billed to the organization";
   return method ?? (opts.walletEnabled ? "PG Card" : "Card");
 }
 

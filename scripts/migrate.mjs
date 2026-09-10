@@ -759,6 +759,11 @@ CREATE TABLE IF NOT EXISTS commercial_jobs (
   wait_minutes INTEGER NOT NULL DEFAULT 0,
   wait_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00,
   cancellation_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+  parcel_size VARCHAR,
+  pickup_contact JSONB,
+  drop_contact JSONB,
+  window_start TIMESTAMP,
+  window_end TIMESTAMP,
   proof JSONB,
   billed_status VARCHAR NOT NULL DEFAULT 'open',
   statement_id VARCHAR,
@@ -770,6 +775,11 @@ ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS standing_order_id VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS service_date VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS leg VARCHAR NOT NULL DEFAULT 'out';
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS return_of VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS parcel_size VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS pickup_contact JSONB;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS drop_contact JSONB;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS window_start TIMESTAMP;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS window_end TIMESTAMP;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_commercial_job_standing ON commercial_jobs (standing_order_id, service_date, leg);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_commercial_job_return_of ON commercial_jobs (return_of);
 
