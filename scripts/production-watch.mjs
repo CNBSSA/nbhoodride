@@ -80,7 +80,8 @@ try {
   if (health) failures.push(`Dependencies (/health/deps): ${deps.status === 0 ? deps.error : `HTTP ${deps.status}, not JSON`}`);
 }
 
-const sha = version && typeof version === "object" ? String(version.sha ?? version.buildId ?? version.commit ?? "").slice(0, 7) : "";
+// /api/version answers { id, builtAt } (scripts/write-build-id.mjs): the id is the commit on Railway.
+const sha = version && typeof version === "object" ? String(version.id ?? version.sha ?? version.buildId ?? version.commit ?? "").slice(0, 7) : "";
 const summary = failures.length === 0
   ? `OK — PG Ride is up${sha ? ` on ${sha}` : ""}${notes.length ? ` (${notes.join("; ")})` : ""}`
   : `DOWN — ${failures.join(" · ")}${notes.length ? ` (${notes.join("; ")})` : ""}`;
