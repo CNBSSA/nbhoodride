@@ -25,10 +25,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { JobsMap } from "@/components/portal/JobsMap";
+import { StandingOrdersView } from "@/components/portal/StandingOrdersView";
 import { CATEGORY_LABELS, ORG_ROLES, canBook, canManageMembers, canSeeStatement, currentMonthKey, formatJobNumber, type CommercialCategory, type OrgRole } from "@shared/commercial";
 import { VEHICLE_TYPES, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 import { BRAND } from "@shared/branding";
-import { CalendarDays, ListChecks, Receipt, Users, Plus, Download, Printer, ArrowLeft } from "lucide-react";
+import { CalendarDays, ListChecks, Receipt, Users, Plus, Download, Printer, ArrowLeft, Repeat } from "lucide-react";
 
 interface Org { id: string; name: string; category: CommercialCategory; status: string; facilityFee: string; billingMode: string }
 interface Membership { organization: Org; role: OrgRole }
@@ -42,7 +43,7 @@ interface Member { userId: string; role: OrgRole; firstName: string | null; last
 interface StatementLine { jobNumber: number; at: string; passenger: string; from: string; to: string; status: string; fare: string | null; facilityFee: string; waitFee: string; cancellationFee: string }
 interface Statement { window: { label: string; monthKey: string }; lines: StatementLine[]; totals: { completed: number; cancelled: number; fares: number; facilityFees: number; waitFees: number; cancellationFees: number; total: number } }
 
-type View = "today" | "jobs" | "statement" | "people";
+type View = "today" | "jobs" | "standing" | "statement" | "people";
 
 const money = (n: number | string | null | undefined) => `$${Number(n ?? 0).toFixed(2)}`;
 const eastern = (iso: string | null | undefined, opts: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) =>
@@ -96,6 +97,7 @@ export default function PortalPage() {
   const nav: Array<{ id: View; label: string; icon: any; show: boolean }> = [
     { id: "today", label: "Next 48 hours", icon: CalendarDays, show: true },
     { id: "jobs", label: "All jobs", icon: ListChecks, show: true },
+    { id: "standing", label: "Standing orders", icon: Repeat, show: true },
     { id: "statement", label: "Statement", icon: Receipt, show: canSeeStatement(role) },
     { id: "people", label: "People", icon: Users, show: canManageMembers(role) },
   ];
@@ -148,11 +150,13 @@ export default function PortalPage() {
             ))}
           </ul>
           <p className="hidden md:block px-4 py-3 text-xs text-muted-foreground">{CATEGORY_LABELS[org.category] ?? org.category}. Facility fee {money(org.facilityFee)} per completed job. Press <kbd className="px-1 border rounded">N</kbd> to book.</p>
+          <TermsNote orgId={org.id} />
         </nav>
 
         <main className="p-4 md:p-6 space-y-6 min-w-0">
           {view === "today" && <TodayBoard org={org} onBook={() => setBooking(true)} canBook={canBook(role)} />}
           {view === "jobs" && <JobsList org={org} canCancel={canBook(role)} />}
+          {view === "standing" && <StandingOrdersView orgId={org.id} canBook={canBook(role)} />}
           {view === "statement" && canSeeStatement(role) && <StatementView org={org} />}
           {view === "people" && canManageMembers(role) && <PeopleView org={org} />}
         </main>
@@ -161,6 +165,13 @@ export default function PortalPage() {
       {booking && <BookJobDrawer org={org} onClose={() => setBooking(false)} />}
     </div>
   );
+}
+
+/** The organization's own cancellation, no-show and waiting terms, in words. */
+function TermsNote({ orgId }: { orgId: string }) {
+  const { data } = useQuery<{ termsText?: string }>({ queryKey: ["/api/org", orgId, "detail"], queryFn: () => json("GET", `/api/org/${orgId}`) });
+  if (!data?.termsText) return null;
+  return <p className="hidden md:block px-4 pb-4 text-xs text-muted-foreground" data-testid="text-portal-terms">{data.termsText}</p>;
 }
 
 function useJobs(orgId: string, from: Date, to: Date, refetchMs?: number) {

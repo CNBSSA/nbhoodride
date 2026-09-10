@@ -11,6 +11,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import { commercialJobs, organizationMembers, organizations, users, type Organization } from "@shared/schema";
 import { DEFAULT_FACILITY_FEE, isCategory, isOrgRole, type CommercialCategory, type OrgRole } from "@shared/commercial";
+import { orgTerms, sanitizeTermsPatch } from "@shared/commercialTerms";
 
 export class CommercialError extends Error {
   constructor(message: string, public status = 400) {
@@ -81,7 +82,7 @@ export async function getOrganization(id: string): Promise<Organization | undefi
   return row;
 }
 
-export async function updateOrganization(id: string, patch: Partial<OrganizationInput> & { status?: string; billingMode?: string }): Promise<Organization> {
+export async function updateOrganization(id: string, patch: Partial<OrganizationInput> & { status?: string; billingMode?: string; terms?: unknown }): Promise<Organization> {
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (patch.name !== undefined) { const n = clean(patch.name, 120); if (!n) throw new CommercialError("The organization needs a name."); set.name = n; }
   if (patch.category !== undefined) { if (!isCategory(patch.category)) throw new CommercialError("Category must be medical, business or food."); set.category = patch.category; }
@@ -93,6 +94,12 @@ export async function updateOrganization(id: string, patch: Partial<Organization
   if (patch.contactPhone !== undefined) set.contactPhone = clean(patch.contactPhone, 40);
   if (patch.notes !== undefined) set.notes = clean(patch.notes, 2000);
   if (patch.address !== undefined) set.address = patch.address;
+  if (patch.terms !== undefined) {
+    // Only the known keys, clamped; the agreement's numbers, not free JSON.
+    const current = await getOrganization(id);
+    if (!current) throw new CommercialError("Organization not found.", 404);
+    set.terms = { ...orgTerms(current.terms), ...sanitizeTermsPatch(patch.terms) };
+  }
   const [row] = await db.update(organizations).set(set as any).where(eq(organizations.id, id)).returning();
   if (!row) throw new CommercialError("Organization not found.", 404);
   return row;

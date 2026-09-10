@@ -763,6 +763,36 @@ CREATE TABLE IF NOT EXISTS commercial_jobs (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_commercial_jobs_org ON commercial_jobs (organization_id);
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS standing_order_id VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS service_date VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS leg VARCHAR NOT NULL DEFAULT 'out';
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS return_of VARCHAR;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_commercial_job_standing ON commercial_jobs (standing_order_id, service_date, leg);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_commercial_job_return_of ON commercial_jobs (return_of);
+
+CREATE TABLE IF NOT EXISTS commercial_standing_orders (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id),
+  created_by VARCHAR NOT NULL REFERENCES users(id),
+  passenger_name VARCHAR NOT NULL,
+  passenger_phone VARCHAR,
+  pickup JSONB NOT NULL,
+  destination JSONB NOT NULL,
+  days JSONB NOT NULL,
+  departure_hour INTEGER NOT NULL,
+  departure_minute INTEGER NOT NULL DEFAULT 0,
+  return_mode VARCHAR NOT NULL DEFAULT 'none',
+  return_hour INTEGER,
+  return_minute INTEGER,
+  vehicle_type VARCHAR NOT NULL DEFAULT 'standard',
+  notes TEXT,
+  po_number VARCHAR,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  paused_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_commercial_standing_orders_org ON commercial_standing_orders (organization_id);
 
 CREATE TABLE IF NOT EXISTS reliability_events (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -96,9 +96,13 @@
     "button-portal-book-inline",
     "button-portal-cancel-job-*",
     "button-portal-close-book",
+    "button-portal-close-standing-order",
     "button-portal-install",
+    "button-portal-new-standing-order",
     "button-portal-remove-member-*",
     "button-portal-submit-job",
+    "button-portal-submit-standing-order",
+    "button-portal-toggle-standing-order-*",
     "button-preset-*",
     "button-preset-max",
     "button-prev-card",
@@ -263,6 +267,8 @@
     "button-portal-install": "only offered when the browser fires beforeinstallprompt; headless Chromium never does",
     "button-portal-submit-job": "disabled until passenger, addresses and time are filled",
     "button-portal-cancel-job-*": "needs a cancellable job in the list; journeys create and clean their own",
-    "button-portal-remove-member-*": "shown for other members only; the seeded organization has one"
+    "button-portal-remove-member-*": "shown for other members only; the seeded organization has one",
+    "button-portal-submit-standing-order": "disabled until passenger, addresses, days and time are filled",
+    "button-portal-toggle-standing-order-*": "one per standing order; journeys create and clean their own"
   }
 }

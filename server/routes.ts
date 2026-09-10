@@ -166,6 +166,8 @@ import { reliabilityEventRecorder } from "./reliabilityEvents";
 import { pageAtRiskRides } from "./rideRiskWatch";
 import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
 import { registerCommercialRoutes } from "./commercial/routes";
+import { materializeAllStandingOrders } from "./commercial/standingOrders";
+import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
@@ -2683,9 +2685,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Collect the flat no-show fee from the rider's authorization (or
       // wallet on cash rides) and split it with the fairness fund.
-      const collected = await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE);
+      // A commercial job's no-show costs the ORGANIZATION what its agreement
+      // says, on the statement; nothing is taken from anyone's card, so there
+      // is nothing to collect or split here.
+      const commercialNoShowFee = ride.paymentMethod === 'invoice'
+        ? await recordNoShowForRide(rideId).catch((err) => { console.error(`[no-show] commercial fee failed for ride ${rideId}:`, err); return null; })
+        : null;
+      const noShowFee = commercialNoShowFee ?? RIDER_NO_SHOW_FEE;
+      const collected = commercialNoShowFee === null ? await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE) : 0;
       const split = await routeFeeWithFairnessSplit(collected, userId, rideId);
-      const updated = await storage.markRideNoShow(rideId, RIDER_NO_SHOW_FEE, "Rider did not appear at pickup");
+      const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
 
       await logRideAudit({
@@ -3198,6 +3207,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       } catch (auditErr) {
         console.error(`[complete] audit log failed for ride ${rideId}:`, auditErr);
+      }
+
+      // A commercial job's waiting at the door is priced by the organization's
+      // own terms and lands on the job for the statement. Never blocks the
+      // completion response.
+      if (ride.paymentMethod === 'invoice') {
+        await recordWaitingForCompletedRide(rideId).catch((err) => console.error(`[complete] waiting charge failed for ride ${rideId}:`, err));
       }
 
       // If ride uses card payment, settle against the auth taken at accept time.
@@ -10711,6 +10727,12 @@ Generate the FAQ list.`;
 
       // ── Rider Promise Review: 4:00 AM Eastern, once a day, to Telegram ──
       maybeSendRiderPromiseReview(storage, now).catch((err) => console.error("rider promise review failed:", err));
+
+      // ── Standing orders: book the next week's commercial jobs ──
+      // Every 5 minutes; booking is idempotent per (order, service date, leg).
+      if (featureFlags.commercialEnabled && now.getMinutes() % 5 === 0) {
+        materializeAllStandingOrders(storage, now).catch((err) => console.error("standing order sweep failed:", err));
+      }
 
       // ── Ride-risk watch: page ops before the rider finds out ──
       pageAtRiskRides(now).catch((err) => console.error("ride risk watch failed:", err));
