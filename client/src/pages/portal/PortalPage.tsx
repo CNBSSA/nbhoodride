@@ -183,29 +183,30 @@ function TodayBoard({ org, onBook, canBook: mayBook }: { org: Org; onBook: () =>
         </div>
         {mayBook && <Button variant="outline" size="sm" onClick={onBook} data-testid="button-portal-book-inline"><Plus className="h-4 w-4 mr-1" /> Book a job</Button>}
       </div>
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-4">
+      <div className="grid grid-cols-1 2xl:grid-cols-[1fr_380px] gap-4">
         <div className="rounded-lg border bg-card overflow-x-auto">
           {isLoading ? <p className="p-4 text-sm text-muted-foreground">Loading…</p> : upcoming.length === 0 ? (
             <p className="p-6 text-sm text-muted-foreground" data-testid="text-portal-no-jobs">Nothing booked for the next two days.{mayBook ? " Press N to book a job." : ""}</p>
           ) : (
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed min-w-[640px]">
+              <colgroup><col className="w-[110px]" /><col className="w-[84px]" /><col className="w-[130px]" /><col /><col className="w-[150px]" /><col className="w-[96px]" /></colgroup>
               <thead className="text-xs uppercase text-muted-foreground bg-muted/40"><tr><th className="text-left px-3 py-2">When</th><th className="text-left px-3 py-2">Job</th><th className="text-left px-3 py-2">Passenger</th><th className="text-left px-3 py-2">Trip</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Driver</th></tr></thead>
               <tbody>
                 {upcoming.map((j) => (
                   <tr key={j.id} className="border-t" data-testid={`row-portal-job-${j.id}`}>
                     <td className="px-3 py-2 whitespace-nowrap tabular-nums">{eastern(j.scheduledAt ?? j.createdAt, { weekday: "short", hour: "numeric", minute: "2-digit" })}</td>
-                    <td className="px-3 py-2 font-mono">{formatJobNumber(j.jobNumber)}</td>
-                    <td className="px-3 py-2">{j.passengerName}</td>
-                    <td className="px-3 py-2 max-w-[18rem]"><div className="truncate">{j.pickup?.address}</div><div className="truncate text-muted-foreground">to {j.destination?.address}</div></td>
+                    <td className="px-3 py-2 font-mono whitespace-nowrap">{formatJobNumber(j.jobNumber)}</td>
+                    <td className="px-3 py-2 truncate">{j.passengerName}</td>
+                    <td className="px-3 py-2"><div className="truncate">{j.pickup?.address}</div><div className="truncate text-muted-foreground">to {j.destination?.address}</div></td>
                     <td className="px-3 py-2"><Badge variant={tone[j.status] ?? "outline"} className="whitespace-nowrap">{STATUS_WORDS[j.status] ?? j.status}</Badge></td>
-                    <td className="px-3 py-2">{j.driverName ?? "—"}</td>
+                    <td className="px-3 py-2 truncate">{j.driverName ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
         </div>
-        <JobsMap jobs={upcoming} height="360px" />
+        <JobsMap jobs={upcoming} height="300px" />
       </div>
     </section>
   );
@@ -240,15 +241,16 @@ function JobsList({ org, canCancel }: { org: Org; canCancel: boolean }) {
       </div>
       <div className="rounded-lg border bg-card overflow-x-auto">
         {isLoading ? <p className="p-4 text-sm text-muted-foreground">Loading…</p> : jobs.length === 0 ? <p className="p-6 text-sm text-muted-foreground">No jobs in this range.</p> : (
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed min-w-[820px]">
+            <colgroup><col className="w-[170px]" /><col className="w-[96px]" /><col className="w-[140px]" /><col /><col className="w-[150px]" /><col className="w-[96px]" /><col className="w-[90px]" /><col className="w-[84px]" /></colgroup>
             <thead className="text-xs uppercase text-muted-foreground bg-muted/40"><tr><th className="text-left px-3 py-2">When</th><th className="text-left px-3 py-2">Job</th><th className="text-left px-3 py-2">Passenger</th><th className="text-left px-3 py-2">Trip</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Driver</th><th className="text-right px-3 py-2">Billed</th><th className="px-3 py-2"></th></tr></thead>
             <tbody>
               {jobs.map((j) => (
                 <tr key={j.id} className="border-t" data-testid={`row-portal-job-${j.id}`}>
                   <td className="px-3 py-2 whitespace-nowrap tabular-nums">{eastern(j.scheduledAt ?? j.createdAt)}</td>
-                  <td className="px-3 py-2 font-mono">{formatJobNumber(j.jobNumber)}{j.poNumber ? <div className="text-xs text-muted-foreground">{j.poNumber}</div> : null}</td>
-                  <td className="px-3 py-2">{j.passengerName}</td>
-                  <td className="px-3 py-2 max-w-[18rem]"><div className="truncate">{j.pickup?.address}</div><div className="truncate text-muted-foreground">to {j.destination?.address}</div></td>
+                  <td className="px-3 py-2 font-mono whitespace-nowrap">{formatJobNumber(j.jobNumber)}{j.poNumber ? <div className="text-xs text-muted-foreground truncate">{j.poNumber}</div> : null}</td>
+                  <td className="px-3 py-2 truncate">{j.passengerName}</td>
+                  <td className="px-3 py-2"><div className="truncate">{j.pickup?.address}</div><div className="truncate text-muted-foreground">to {j.destination?.address}</div></td>
                   <td className="px-3 py-2"><Badge variant={tone[j.status] ?? "outline"} className="whitespace-nowrap">{STATUS_WORDS[j.status] ?? j.status}</Badge></td>
                   <td className="px-3 py-2">{j.driverName ?? "—"}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{money(j.total)}</td>
