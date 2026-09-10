@@ -97,6 +97,25 @@ export async function run({ base, db, server }) {
     const { rows: pg } = await db.query("SELECT count(*)::int AS n FROM reliability_events WHERE kind='ride_unclaimed' AND page=$1", [unclaimed2h]);
     check("ride pages are recorded too", pg[0].n >= 1, `n=${pg[0].n}`);
 
+    section("The review is a watchdog on the watchdogs");
+    // A check that dies quietly is worse than no check. The heartbeats say
+    // which ran; the production watch marks itself on the health endpoint it
+    // already calls, so no secret or extra endpoint is involved.
+    const beat = await fetch(`${base}/health/deps?probe=production-watch`);
+    check("the outside watch can mark itself on the health endpoint", beat.status === 200 || beat.status === 503);
+    await new Promise((r) => setTimeout(r, 400));
+    const { rows: beats } = await db.query("SELECT page, message FROM reliability_events WHERE kind='watch_ran' ORDER BY created_at DESC LIMIT 5");
+    check("the heartbeat is recorded under a known watch name", beats.some((b) => b.page === "production-watch" && /Production watch/.test(b.message ?? "")), JSON.stringify(beats.map((b) => b.page)));
+    await admin.req("POST", "/api/admin/analytics/dependency-check", {});
+    await new Promise((r) => setTimeout(r, 400));
+    const { rows: beats2 } = await db.query("SELECT DISTINCT page FROM reliability_events WHERE kind='watch_ran'");
+    check("a watch run by hand leaves the same heartbeat as the nightly one", beats2.some((b) => b.page === "dependency-watch"), JSON.stringify(beats2.map((b) => b.page)));
+    const junk = await fetch(`${base}/health/deps?probe=not-a-real-watch`);
+    check("an unknown probe name records nothing", (junk.status === 200 || junk.status === 503));
+    await new Promise((r) => setTimeout(r, 300));
+    const { rows: [junkRow] } = await db.query("SELECT count(*)::int AS n FROM reliability_events WHERE kind='watch_ran' AND page='not-a-real-watch'");
+    check("only the watches we know about can leave a heartbeat", junkRow.n === 0, `n=${junkRow.n}`);
+
     section("The morning review counts what reached people");
     // Review "tomorrow at 4 AM Eastern": its window is today, where every event above landed.
     const at = new Date(now.getTime() + 24 * 3_600_000);
@@ -108,6 +127,10 @@ export async function run({ base, db, server }) {
     check("review counts rides paged before departure", pa.paged >= 3, JSON.stringify(pa));
     check("review text carries the app-health line", /App health: \d+ app errors?/.test(rv.json?.text ?? ""), (rv.json?.text ?? "").split("\n").find((l) => l.startsWith("App health")));
     check("review text carries the paged-ahead line", /Paged ahead: \d+ rides? flagged before departure/.test(rv.json?.text ?? ""));
+    const overnight = rv.json?.metrics?.overnight ?? [];
+    check("the review names every overnight check and whether each one ran", overnight.length === 3 && overnight.every((w) => typeof w.ran === "boolean") && overnight.some((w) => /Production watch/.test(w.label) && w.ran === true) && overnight.some((w) => /Database and Stripe/.test(w.label) && w.ran === true), JSON.stringify(overnight));
+    check("a check that has not run is named, not hidden", /Minute sweep/.test(JSON.stringify(overnight)), JSON.stringify(overnight.map((w) => w.label)));
+    check("review text carries the overnight line", /Overnight checks: (all \d+ ran|.*DID NOT RUN)/.test(rv.json?.text ?? ""), (rv.json?.text ?? "").split("\n").find((l) => l.startsWith("Overnight")));
 
     section("The server watches its own lifelines");
     // Stripe is armed with a fake key and unreachable here, so the first check

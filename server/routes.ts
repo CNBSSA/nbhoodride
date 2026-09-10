@@ -169,6 +169,7 @@ import { registerCommercialRoutes } from "./commercial/routes";
 import { materializeAllStandingOrders } from "./commercial/standingOrders";
 import { runWeeklyBilling } from "./commercial/billing";
 import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
+import { noteWatchRan } from "./watchHeartbeat";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
 import { cancelJob as cancelCommercialJob } from "./commercial/cancel";
@@ -10840,6 +10841,9 @@ Generate the FAQ list.`;
       if (now.getMinutes() % 15 === 0) {
         materializeAllWeeklyPlans(storage, now).catch((err) => console.error("weekly plan sweep failed:", err));
       }
+
+      // ── Heartbeats: prove to tomorrow's review that these ran ──
+      noteWatchRan("minute-sweep", now);
 
       // ── Rider Promise Review: 4:00 AM Eastern, once a day, to Telegram ──
       maybeSendRiderPromiseReview(storage, now).catch((err) => console.error("rider promise review failed:", err));
