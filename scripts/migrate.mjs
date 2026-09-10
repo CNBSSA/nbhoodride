@@ -763,6 +763,7 @@ CREATE TABLE IF NOT EXISTS commercial_jobs (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_commercial_jobs_org ON commercial_jobs (organization_id);
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS badges TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS standing_order_id VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS service_date VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS leg VARCHAR NOT NULL DEFAULT 'out';

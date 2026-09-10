@@ -1,3 +1,4 @@
+import { normalizeBadges } from "@shared/driverBadges";
 import {
   users,
   driverProfiles,
@@ -375,7 +376,7 @@ export interface IStorage {
   getDriverDailySession(userId: string): Promise<{ dailyCounties: string[] | null, dailySessionStart: Date | null } | null>;
 
   // Scheduled ride operations
-  getOpenScheduledRides(driverCounties?: string[]): Promise<any[]>;
+  getOpenScheduledRides(driverCounties?: string[], driverBadges?: string[]): Promise<any[]>;
   updateRideCounty(rideId: string, county: string): Promise<void>;
   getScheduledRidesWithDriver(userId: string): Promise<any[]>;
   claimScheduledRide(rideId: string, driverId: string): Promise<Ride>;
@@ -1205,8 +1206,23 @@ export class DatabaseStorage implements IStorage {
       .orderBy(asc(rides.scheduledAt));
   }
 
-  async getOpenScheduledRides(driverCounties?: string[]): Promise<any[]> {
+  async getOpenScheduledRides(driverCounties?: string[], driverBadges?: string[]): Promise<any[]> {
     const riderAlias = alias(users, 'rider_user');
+    // Commercial work is shown only to drivers cleared for it
+    // (shared/driverBadges.ts): medical jobs need the medical badge, both
+    // kinds of delivery share one. An ordinary ride has no category and is
+    // shown to everyone.
+    // Each badge is bound as its own parameter: drizzle expands a JS array
+    // into a row, not a text[], so `= ANY(...)` cannot be used here.
+    const badges = normalizeBadges(driverBadges);
+    const badgeWhere = badges.length === 0
+      ? sql`NOT EXISTS (SELECT 1 FROM commercial_jobs cj WHERE cj.ride_id = ${rides.id})`
+      : sql`NOT EXISTS (
+          SELECT 1 FROM commercial_jobs cj
+          WHERE cj.ride_id = ${rides.id}
+            AND (CASE WHEN cj.category = 'medical' THEN 'medical' ELSE 'delivery' END)
+                NOT IN (${sql.join(badges.map((b) => sql`${b}`), sql`, `)})
+        )`;
     const baseWhere = and(
       eq(rides.status, "pending"),
       isNotNull(rides.scheduledAt),
@@ -1215,7 +1231,8 @@ export class DatabaseStorage implements IStorage {
       // Circuit seats are claimed as a whole RUN via the circuit-runs claim
       // board — listing them individually here would let one driver claim a
       // single seat and split the run.
-      or(isNull(rides.rideType), sql`${rides.rideType} <> 'circuit'`)
+      or(isNull(rides.rideType), sql`${rides.rideType} <> 'circuit'`),
+      badgeWhere
     );
 
     // If driver has specific county preferences, filter to rides in those counties.

@@ -168,6 +168,9 @@ import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
 import { registerCommercialRoutes } from "./commercial/routes";
 import { materializeAllStandingOrders } from "./commercial/standingOrders";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
+import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
+import { CommercialError } from "./commercial/organizations";
+import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadges";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
@@ -2156,6 +2159,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/driver/rides/:rideId/accept', isAuthenticated, async (req: any, res) => {
     try {
+      // Commercial work: only a driver cleared for it (the board hides these
+      // jobs anyway; this is the belt to that pair of braces).
+      try {
+        await assertDriverMayTakeRide(
+          req.session?.userId || req.session?.testUserId || req.user?.claims?.sub,
+          req.params.rideId,
+        );
+      } catch (badgeErr) {
+        if (badgeErr instanceof CommercialError) return res.status(badgeErr.status).json({ message: badgeErr.message });
+        throw badgeErr;
+      }
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
 
@@ -4771,7 +4785,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const profile = await storage.getDriverProfile(userId);
       const driverCounties = profile?.acceptedCounties ?? [];
       const [open, mine] = await Promise.all([
-        storage.getOpenScheduledRides(driverCounties.length > 0 ? driverCounties : undefined),
+        storage.getOpenScheduledRides(driverCounties.length > 0 ? driverCounties : undefined, await badgesFor(userId)),
         storage.getDriverUpcomingRides(userId),
       ]);
       res.json({ open, mine });
@@ -4784,6 +4798,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Driver claims an open scheduled ride
   app.post('/api/driver/rides/:rideId/claim', isAuthenticated, async (req: any, res) => {
     try {
+      // Commercial work: only a driver cleared for it (the board hides these
+      // jobs anyway; this is the belt to that pair of braces).
+      try {
+        await assertDriverMayTakeRide(
+          req.session?.userId || req.session?.testUserId || req.user?.claims?.sub,
+          req.params.rideId,
+        );
+      } catch (badgeErr) {
+        if (badgeErr instanceof CommercialError) return res.status(badgeErr.status).json({ message: badgeErr.message });
+        throw badgeErr;
+      }
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
 
@@ -4826,6 +4851,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           for (const p of takenPayloads) ws.send(p);
         }
       });
+
+      // The passenger holds no account: text them the driver's name and a
+      // link that shows the car. Never blocks the claim.
+      textPassengerTrackingLink(storage, rideId).catch((err) => console.error(`[commercial] passenger text failed for ride ${rideId}:`, err));
 
       res.json(claimedRides[0]);
     } catch (error: any) {
@@ -8474,6 +8503,46 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
     } catch (error) {
       console.error("SMS inbound error:", error);
       res.status(500).send("Error");
+    }
+  });
+
+  /**
+   * The signature at the facility: the driver types who received the
+   * passenger. Stored on the commercial job for the desk, the statement and
+   * any later dispute.
+   */
+  app.post('/api/driver/rides/:rideId/proof', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      res.json({ proof: await recordProof(req.params.rideId, userId, req.body ?? {}) });
+    } catch (error) {
+      if (error instanceof CommercialError) return res.status(error.status).json({ message: error.message });
+      console.error("proof failed:", error);
+      res.status(500).json({ message: "Could not record who received the passenger" });
+    }
+  });
+
+  /** What this driver is cleared for, and what each badge means. */
+  app.get('/api/driver/badges', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const badges = await badgesFor(userId);
+      res.json({ badges, summary: describeBadges(badges), all: DRIVER_BADGES.map((b) => ({ id: b, label: BADGE_LABELS[b], held: badges.includes(b) })) });
+    } catch (error) {
+      res.status(500).json({ message: "Could not load your badges" });
+    }
+  });
+
+  /** Operator: grant or revoke a driver's badges. */
+  app.put('/api/admin/drivers/:userId/badges', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const badges = await setBadges(req.params.userId, req.body?.badges);
+      console.log(`[commercial] badges set :: driver ${req.params.userId} | ${describeBadges(badges)}`);
+      res.json({ badges, summary: describeBadges(badges) });
+    } catch (error) {
+      if (error instanceof CommercialError) return res.status(error.status).json({ message: error.message });
+      console.error("set badges failed:", error);
+      res.status(500).json({ message: "Could not set the badges" });
     }
   });
 

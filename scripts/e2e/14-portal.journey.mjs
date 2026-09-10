@@ -1,4 +1,4 @@
-import { Session, check, section, serverLog, deleteRides, FIXTURES, PICKUP, DEST } from "./harness.mjs";
+import { Session, check, section, serverLog, deleteRides, deleteOrgs, FIXTURES, PICKUP, DEST } from "./harness.mjs";
 
 /**
  * The requester portal's server side (slice 2): an owner manages the
@@ -69,10 +69,6 @@ export async function run({ base, db, server }) {
     check("driver completes it", (await driver.req("POST", `/api/driver/rides/${onRoad.json.ride.id}/complete`, {})).status === 200);
   } finally {
     await deleteRides(db, rideIds).catch(() => {});
-    if (orgIds.length) {
-      await db.query("DELETE FROM commercial_jobs WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
-      await db.query("DELETE FROM organization_members WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
-      await db.query("DELETE FROM organizations WHERE id = ANY($1::varchar[])", [orgIds]).catch(() => {});
-    }
+    await deleteOrgs(db, orgIds).catch(() => {});
   }
 }

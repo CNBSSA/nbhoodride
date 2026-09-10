@@ -1,4 +1,4 @@
-import { Session, check, section, serverLog, deleteRides, startServer, stopServer, FIXTURES, PICKUP, DEST } from "./harness.mjs";
+import { Session, check, section, serverLog, deleteRides, deleteOrgs, startServer, stopServer, FIXTURES, PICKUP, DEST } from "./harness.mjs";
 
 /**
  * Commercial riders, slice 1: an organization is created, people are
@@ -151,10 +151,6 @@ export async function run({ base, db, server }) {
     check("a member with the billing role of another account cannot pull A's statement", (await rider.req("GET", `/api/org/${A.json.id}/statement`)).status === 403);
   } finally {
     await deleteRides(db, rideIds).catch(() => {});
-    if (orgIds.length) {
-      await db.query("DELETE FROM commercial_jobs WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
-      await db.query("DELETE FROM organization_members WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
-      await db.query("DELETE FROM organizations WHERE id = ANY($1::varchar[])", [orgIds]).catch(() => {});
-    }
+    await deleteOrgs(db, orgIds).catch(() => {});
   }
 }

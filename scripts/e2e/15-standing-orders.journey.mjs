@@ -1,4 +1,4 @@
-import { Session, check, section, serverLog, deleteRides, FIXTURES, PICKUP, DEST } from "./harness.mjs";
+import { Session, check, section, serverLog, deleteRides, deleteOrgs, FIXTURES, PICKUP, DEST } from "./harness.mjs";
 
 /**
  * Slice 3: a standing order books its jobs a week ahead and never twice;
@@ -104,11 +104,6 @@ export async function run({ base, db, server }) {
     check("the statement carries waiting, late cancel and no-show", totals.waitFees >= 20 && totals.cancellationFees >= 27, JSON.stringify(totals));
   } finally {
     await deleteRides(db, rideIds).catch(() => {});
-    if (orgIds.length) {
-      await db.query("DELETE FROM commercial_jobs WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
-      await db.query("DELETE FROM commercial_standing_orders WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
-      await db.query("DELETE FROM organization_members WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
-      await db.query("DELETE FROM organizations WHERE id = ANY($1::varchar[])", [orgIds]).catch(() => {});
-    }
+    await deleteOrgs(db, orgIds).catch(() => {});
   }
 }

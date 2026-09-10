@@ -142,6 +142,7 @@ export interface JobRow {
   poNumber: string | null;
   notes: string | null;
   driverName: string | null;
+  proof: Record<string, unknown> | null;
   standingOrderId: string | null;
   serviceDate: string | null;
   leg: string;
@@ -197,6 +198,7 @@ export async function listJobs(organizationId: string, opts: ListJobsOptions = {
       poNumber: job.poNumber,
       notes: job.notes,
       driverName: driverFirst ? `${driverFirst} ${(driverLast ?? "").charAt(0)}${driverLast ? "." : ""}`.trim() : null,
+      proof: (job.proof ?? null) as Record<string, unknown> | null,
       standingOrderId: job.standingOrderId,
       serviceDate: job.serviceDate,
       leg: job.leg,
