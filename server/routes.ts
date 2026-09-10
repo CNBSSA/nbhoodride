@@ -165,6 +165,7 @@ import { riderAlert, setRiderAlertRecorder } from "./riderAlerts";
 import { reliabilityEventRecorder } from "./reliabilityEvents";
 import { pageAtRiskRides } from "./rideRiskWatch";
 import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
+import { registerCommercialRoutes } from "./commercial/routes";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
@@ -3138,8 +3139,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "The fare is the amount quoted at booking; it can't be set at completion." });
       }
       const preCheck = await storage.getRide(rideId);
-      if (parsed.tipAmount !== undefined && parsed.tipAmount > 0 && preCheck?.paymentMethod === 'card') {
-        return res.status(400).json({ message: "Tips on card rides are added by the rider, not entered by the driver." });
+      if (parsed.tipAmount !== undefined && parsed.tipAmount > 0 && preCheck?.paymentMethod !== 'cash') {
+        return res.status(400).json({
+          message: preCheck?.paymentMethod === 'invoice'
+            ? "Tips are not taken on jobs billed to an organization."
+            : "Tips on card rides are added by the rider, not entered by the driver.",
+        });
       }
       const actualFare: number | undefined = undefined;
       const tipAmount = parsed.tipAmount;
@@ -5020,6 +5025,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       walletEnabled: featureFlags.walletEnabled,
       driverMarketplaceEnabled: featureFlags.driverMarketplaceEnabled,
       equityProgramEnabled: featureFlags.equityProgramEnabled,
+      commercialEnabled: featureFlags.commercialEnabled,
     });
   });
 
@@ -10652,6 +10658,34 @@ Generate the FAQ list.`;
 
   // ── Scheduled ride monitor: fires every minute ──
   // Handles: 30-min reminders, T-60/15/5 escalations, midnight county cleanup
+  // ── Commercial riders: organizations that book for other people and are billed ──
+  // Registered here so the driver-board broadcast can reuse the live socket map.
+  registerCommercialRoutes(app, {
+    storage,
+    isAuthenticated,
+    isAdminOrSessionAuth,
+    notifyDriversOfScheduledRide: (ride, pickupCounty) => {
+      const payload = JSON.stringify({
+        type: 'new_scheduled_ride',
+        rideId: ride.id,
+        riderId: ride.riderId,
+        riderName: ride.passengerName ? `${ride.passengerName.split(' ')[0]} ${(ride.passengerName.split(' ')[1] ?? '').charAt(0)}${ride.passengerName.includes(' ') ? '.' : ''}` : 'Passenger',
+        riderRating: '5.0',
+        pickupAddress: ride.pickupLocation?.address || '',
+        destinationAddress: ride.destinationLocation?.address || '',
+        estimatedFare: ride.estimatedFare,
+        scheduledAt: ride.scheduledAt,
+        pickupInstructions: ride.pickupInstructions || '',
+        pickupCounty: pickupCounty || '',
+        commercial: true,
+      });
+      activeConnections.forEach((ws, driverId) => {
+        const counties = driverCountyCache.get(driverId) ?? [];
+        if (driverCoversCounty(counties, pickupCounty) && ws.readyState === WebSocket.OPEN) ws.send(payload);
+      });
+    },
+  });
+
   setInterval(async () => {
     // Circuit run reminders (cutoff + pre-departure) — idempotent via
     // NotifiedAt stamps, so failures here just retry next minute.

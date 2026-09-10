@@ -41,6 +41,14 @@ export const featureFlags = {
   driverMarketplaceEnabled: flag(process.env.DRIVER_MARKETPLACE_ENABLED, true),
   /** Driver-equity / ownership / profit distributions. Off => hidden entirely. */
   equityProgramEnabled: flag(process.env.EQUITY_PROGRAM_ENABLED, true),
+  /**
+   * Commercial riders: organizations that book for other people and are
+   * billed. OFF by default — it is a new surface, switched on per deployment
+   * once a slice is proven (COMMERCIAL_ENABLED=true). Off => every
+   * /api/admin/organizations and /api/org route answers 404 and the admin
+   * tab is hidden.
+   */
+  commercialEnabled: flag(process.env.COMMERCIAL_ENABLED, false),
 } as const;
 
 export type FeatureFlags = typeof featureFlags;

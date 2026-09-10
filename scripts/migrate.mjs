@@ -23,7 +23,7 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE payment_method AS ENUM ('cash','card');
+  CREATE TYPE payment_method AS ENUM ('cash','card','invoice');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -718,6 +718,52 @@ CREATE TABLE IF NOT EXISTS safety_alerts (
 );
 
 -- ── Agent audit log (explainable dispatch / agent actions) ───────────────────
+CREATE TABLE IF NOT EXISTS organizations (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR NOT NULL,
+  category VARCHAR NOT NULL,
+  status VARCHAR NOT NULL DEFAULT 'active',
+  billing_mode VARCHAR NOT NULL DEFAULT 'weekly_debit',
+  facility_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+  contact_name VARCHAR,
+  contact_email VARCHAR,
+  contact_phone VARCHAR,
+  address JSONB,
+  notes TEXT,
+  stripe_customer_id VARCHAR,
+  terms JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS organization_members (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id),
+  user_id VARCHAR NOT NULL REFERENCES users(id),
+  role VARCHAR NOT NULL DEFAULT 'requester',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_organization_member ON organization_members (organization_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_organization_members_user ON organization_members (user_id);
+CREATE TABLE IF NOT EXISTS commercial_jobs (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  ride_id VARCHAR NOT NULL UNIQUE REFERENCES rides(id),
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id),
+  requester_id VARCHAR REFERENCES users(id),
+  category VARCHAR NOT NULL,
+  job_number SERIAL NOT NULL,
+  po_number VARCHAR,
+  notes TEXT,
+  facility_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+  wait_minutes INTEGER NOT NULL DEFAULT 0,
+  wait_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+  cancellation_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+  proof JSONB,
+  billed_status VARCHAR NOT NULL DEFAULT 'open',
+  statement_id VARCHAR,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_commercial_jobs_org ON commercial_jobs (organization_id);
+
 CREATE TABLE IF NOT EXISTS reliability_events (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
   kind VARCHAR NOT NULL,
@@ -1323,6 +1369,13 @@ async function migrate() {
       await client.query(`ALTER TYPE payment_status ADD VALUE IF NOT EXISTS 'settlement_failed'`);
     } catch (err) {
       if (err.code !== '42704') throw err; // 42704 = type doesn't exist yet (fresh DB — CREATE TYPE includes it)
+    }
+    // Commercial jobs are billed to an organization on a statement, never
+    // charged at the ride (shared/commercial.ts).
+    try {
+      await client.query(`ALTER TYPE payment_method ADD VALUE IF NOT EXISTS 'invoice'`);
+    } catch (err) {
+      if (err.code !== '42704') throw err;
     }
     await client.query(SQL);
     console.log('Migration complete — all tables ready.');

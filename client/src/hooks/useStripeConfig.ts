@@ -9,6 +9,7 @@ export interface StripeConfig {
   walletEnabled: boolean;
   driverMarketplaceEnabled: boolean;
   equityProgramEnabled: boolean;
+  commercialEnabled?: boolean;
 }
 
 export function useStripeConfig() {
@@ -33,5 +34,6 @@ export function useFeatureFlags() {
     walletEnabled: data?.walletEnabled ?? false,
     driverMarketplaceEnabled: data?.driverMarketplaceEnabled ?? false,
     equityProgramEnabled: data?.equityProgramEnabled ?? false,
+    commercialEnabled: data?.commercialEnabled ?? false,
   };
 }
