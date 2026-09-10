@@ -2030,6 +2030,9 @@ export class DatabaseStorage implements IStorage {
     // it (early end) — a normal completion charges the quote.
     const routePath = (ride.routePath as Array<{lat: number, lng: number, timestamp: number}>) || [];
     let meteredFare: number | undefined;
+    // The same GPS price before any promotion came off it — what the driver is
+    // paid on when a ride ends early on a promo trip.
+    let meteredGross: number | undefined;
 
     if (routePath.length >= 2 && ride.startedAt) {
       // Calculate actual distance from GPS waypoints
@@ -2061,6 +2064,8 @@ export class DatabaseStorage implements IStorage {
         if (originalFareNum > 0 && estimatedFareNum > 0 && estimatedFareNum < originalFareNum) {
           fareAmount = fareAmount * (estimatedFareNum / originalFareNum);
         }
+        meteredGross = Math.round(fareAmount * 100) / 100;
+
         const promoDiscount = parseFloat(ride.promoDiscountApplied || "0");
         if (promoDiscount > 0) {
           fareAmount = Math.max(0, fareAmount - promoDiscount);
@@ -2099,7 +2104,26 @@ export class DatabaseStorage implements IStorage {
     // 15% to PG Ride, 100% of the tip to the driver.
     const fareForSplit = parseFloat(updateData.actualFare ?? ride.actualFare ?? ride.estimatedFare ?? "0");
     const tipForSplit = tipAmount !== undefined ? tipAmount : parseFloat(ride.tipAmount ?? "0");
-    const split = splitFare(fareForSplit, tipForSplit);
+
+    // A welcome credit or promotion is what PG Ride spends to win a rider, not
+    // a cut in the driver's pay: they drove the same miles either way, so they
+    // are paid on the fare before the discount and PG Ride's share absorbs it.
+    // An explicit fare is what an admin says the ride cost, discount and all,
+    // so it is taken at face value.
+    const promo = Math.max(0, parseFloat(ride.promoDiscountApplied || "0"));
+    let driverBasis = fareForSplit;
+    if (promo > 0 && resolved && resolved.basis !== "explicit") {
+      const quotedGross = parseFloat(ride.estimatedFare || "0");
+      const grossOfBasis = resolved.basis === "metered" && meteredGross !== undefined ? meteredGross : quotedGross;
+      // A metered fare is capped at the quote, so the basis is capped with it —
+      // the driver is never paid on more than the rider was ever quoted.
+      const capped = quotedGross > 0 ? Math.min(grossOfBasis, quotedGross) : grossOfBasis;
+      driverBasis = Math.max(fareForSplit, capped);
+    }
+    const split = splitFare(fareForSplit, tipForSplit, { driverBasis });
+    if (driverBasis > fareForSplit) {
+      console.log(`[fare] ride ${rideId}: driver paid on $${driverBasis.toFixed(2)} (pre-discount), rider charged $${fareForSplit.toFixed(2)}; PG Ride's share $${split.platformFee.toFixed(2)}`);
+    }
     updateData.platformFee = split.platformFee.toFixed(2);
     updateData.driverEarnings = split.driverEarnings.toFixed(2);
 

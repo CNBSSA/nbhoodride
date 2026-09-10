@@ -3053,7 +3053,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (ride.driverId && finalAmount > 0) {
         // 85% of the fare + 100% of the tip; PG Ride's 15% (and the card
         // processing fee, which PG Ride absorbs) stays in the Stripe balance.
-        const driverCredit = splitFare(finalFare, tip).driverEarnings;
+        // completeRide already fixed that split on the ride — including paying
+        // the driver on the fare before any promotion — so credit exactly what
+        // it recorded and the ledger can never disagree with the ride. The
+        // recompute is only for a row written before the split was recorded.
+        const recorded = parseFloat(ride.driverEarnings ?? "");
+        const driverCredit = Number.isFinite(recorded) && recorded > 0
+          ? recorded
+          : splitFare(finalFare, tip).driverEarnings;
         if (driverCredit > 0) await storage.creditDriverEarningsOnce(rideId, ride.driverId, driverCredit);
       }
 
