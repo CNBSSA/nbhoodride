@@ -77,8 +77,10 @@ export async function startServer(env = {}) {
       // Production-like: card-only, Stripe armed (unreachable here), email "configured",
       // Telegram + Twilio dummies so every alert/SMS path executes and fails gracefully.
       WALLET_ENABLED: "false", STRIPE_SECRET_KEY: "sk_test_e2e_fake",
-      // Commercial riders is off in production until proven; journeys exercise it on.
-      COMMERCIAL_ENABLED: "true",
+      // Commercial riders is off in production until proven; journeys exercise
+      // it on. Overridable so the flag-off state — what production actually
+      // runs — can be re-proved on demand, not just argued about.
+      COMMERCIAL_ENABLED: process.env.COMMERCIAL_ENABLED ?? "true",
       RESEND_API_KEY: "re_e2e_fake", RESEND_FROM: "noreply@peoplegoverned.com",
       TELEGRAM_BOT_TOKEN: "e2e", TELEGRAM_CHAT_ID: "1",
       TWILIO_ACCOUNT_SID: "ACe2e", TWILIO_AUTH_TOKEN: "e2e-auth-token", TWILIO_PHONE_NUMBER: "+18882743045",
@@ -103,7 +105,7 @@ export async function startServer(env = {}) {
 export async function deleteRides(db, ids) {
   ids = (ids || []).filter(Boolean);
   if (ids.length === 0) return;
-  for (const [table, col] of [["commercial_jobs", "ride_id"], ["disputes", "ride_id"], ["emergency_incidents", "ride_id"], ["agent_audit_log", "ride_id"], ["ride_surface_cache", "ride_id"], ["bonus_allocations", "ride_id"], ["agent_action_proposals", "ride_id"], ["l4_readiness_events", "ride_id"], ["lost_found_reports", "ride_id"], ["ride_messages", "ride_id"]]) {
+  for (const [table, col] of [["commercial_jobs", "ride_id"], ["disputes", "ride_id"], ["emergency_incidents", "ride_id"], ["agent_audit_log", "ride_id"], ["ride_surface_cache", "ride_id"], ["bonus_allocations", "ride_id"], ["agent_action_proposals", "ride_id"], ["l4_readiness_events", "ride_id"], ["lost_found_reports", "ride_id"], ["ride_messages", "ride_id"], ["wallet_transactions", "ride_id"]]) {
     await db.query(`DELETE FROM ${table} WHERE ${col} = ANY($1::varchar[])`, [ids]).catch(() => {});
   }
   await db.query("UPDATE guardian_links SET active_ride_id=NULL WHERE active_ride_id = ANY($1::varchar[])", [ids]).catch(() => {});
