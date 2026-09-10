@@ -167,6 +167,8 @@ import { pageAtRiskRides } from "./rideRiskWatch";
 import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
 import { registerCommercialRoutes } from "./commercial/routes";
 import { materializeAllStandingOrders } from "./commercial/standingOrders";
+import { runWeeklyBilling } from "./commercial/billing";
+import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
 import { CommercialError } from "./commercial/organizations";
@@ -10796,6 +10798,16 @@ Generate the FAQ list.`;
 
       // ── Rider Promise Review: 4:00 AM Eastern, once a day, to Telegram ──
       maybeSendRiderPromiseReview(storage, now).catch((err) => console.error("rider promise review failed:", err));
+
+      // ── Weekly billing: last week's jobs, debited Monday morning ──
+      // Claimed once per week through the same claim-once table the daily
+      // review uses, so restarts and extra instances cannot double-charge.
+      if (featureFlags.commercialEnabled && billingRunDue(now)) {
+        const weekKey = previousBillingWeek(now).weekKey;
+        storage.claimWebhookEvent("commercial_weekly_billing", weekKey, "weekly")
+          .then((claimed) => claimed ? runWeeklyBilling(now, weekKey) : null)
+          .catch((err) => console.error("weekly billing failed:", err));
+      }
 
       // ── Standing orders: book the next week's commercial jobs ──
       // Every 5 minutes; booking is idempotent per (order, service date, leg).

@@ -27,6 +27,8 @@ import { buildStatement, statementToCsv, statementToHtml } from "./statements";
 import { cancelJob } from "./cancel";
 import { bookWillCallReturn, createStandingOrder, listStandingOrders, materializeAllStandingOrders, materializeStandingOrder, setStandingOrderActive, standingOrderJobCounts } from "./standingOrders";
 import { describeTerms, orgTerms } from "@shared/commercialTerms";
+import { chargeStatement, describePaymentMethod, issueStatement, listStatements, runWeeklyBilling, savePaymentMethod, startPaymentMethodSetup } from "./billing";
+import { describeBillingStatus, previousBillingWeek } from "@shared/billingCycle";
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown;
 
@@ -187,7 +189,12 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       if (!org) return res.status(404).json({ message: "Organization not found." });
       const { stripeCustomerId: _s, notes: _n, ...safe } = org;
       const terms = orgTerms(org.terms);
-      res.json({ ...safe, terms, termsText: describeTerms(terms), role: req.orgRole });
+      const { defaultPaymentMethodId: _pm, ...rest } = safe as any;
+      res.json({
+        ...rest, terms, termsText: describeTerms(terms), role: req.orgRole,
+        billingText: describePaymentMethod(org),
+        hasPaymentMethod: !!org.defaultPaymentMethodId,
+      });
     } catch (err) { fail(res, err, "Could not load the organization"); }
   });
   app.post("/api/org/:orgId/members", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
@@ -258,6 +265,44 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       opsAlert(formatOpsAlert("🔔 Will-call return — passenger ready", [["Account", org?.name ?? req.orgId], ["Job", label], ["Leaves", leaves], ["Pickup", booked.ride.pickupLocation?.address?.split(",").slice(0, 2).join(",")]]));
       res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: label } });
     } catch (err) { fail(res, err, "Could not book the return"); }
+  });
+
+  // ── Billing: the week's statements and how the account pays ──
+  app.get("/api/org/:orgId/statements", gate, isAuthenticated, requireMember(canSeeStatement), async (req: any, res) => {
+    try {
+      const rows = await listStatements(req.orgId);
+      res.json(rows.map((s) => ({ ...s, statusText: describeBillingStatus(s.status, s.total, s.periodLabel) })));
+    } catch (err) { fail(res, err, "Could not list statements"); }
+  });
+  app.post("/api/org/:orgId/billing/setup-intent", gate, isAuthenticated, requireMember(canSeeStatement), async (req: any, res) => {
+    try { res.json(await startPaymentMethodSetup(req.orgId)); }
+    catch (err) { fail(res, err, "Could not start the payment setup"); }
+  });
+  app.post("/api/org/:orgId/billing/payment-method", gate, isAuthenticated, requireMember(canSeeStatement), async (req: any, res) => {
+    try {
+      const id = String(req.body?.paymentMethodId ?? "").trim();
+      if (!id) return res.status(400).json({ message: "A payment method is needed." });
+      const saved = await savePaymentMethod(req.orgId, id);
+      const org = await getOrganization(req.orgId);
+      opsAlert(formatOpsAlert("🏦 Commercial account added a payment method", [["Account", org?.name ?? req.orgId], ["Kind", saved.kind]]));
+      res.json({ ...saved, billingText: describePaymentMethod({ ...org, defaultPaymentMethodKind: saved.kind }) });
+    } catch (err) { fail(res, err, "Could not save the payment method"); }
+  });
+
+  // Operator: issue and collect on demand; the Monday run does both by itself.
+  app.post("/api/admin/organizations/:id/statements", gate, isAdminOrSessionAuth, async (req, res) => {
+    try {
+      const weekKey = typeof req.body?.week === "string" && req.body.week ? req.body.week : previousBillingWeek().weekKey;
+      res.json(await issueStatement(req.params.id, weekKey));
+    } catch (err) { fail(res, err, "Could not issue the statement"); }
+  });
+  app.post("/api/admin/commercial-statements/:statementId/charge", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await chargeStatement(req.params.statementId)); }
+    catch (err) { fail(res, err, "Could not collect the statement"); }
+  });
+  app.post("/api/admin/analytics/weekly-billing", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await runWeeklyBilling(new Date(), typeof req.body?.week === "string" && req.body.week ? req.body.week : undefined)); }
+    catch (err) { fail(res, err, "Could not run the weekly billing"); }
   });
 
   // Operator: run the standing-order sweep now (the minute sweep runs it too).

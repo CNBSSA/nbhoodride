@@ -93,6 +93,7 @@
     "button-pause-plan-*",
     "button-payment-methods",
     "button-portal-add-member",
+    "button-portal-add-payment-method",
     "button-portal-book",
     "button-portal-book-inline",
     "button-portal-cancel-job-*",
@@ -271,6 +272,7 @@
     "button-portal-remove-member-*": "shown for other members only; the seeded organization has one",
     "button-portal-submit-standing-order": "disabled until passenger, addresses, days and time are filled",
     "button-portal-toggle-standing-order-*": "one per standing order; journeys create and clean their own",
-    "button-driver-badge-*": "one pair per approved driver in the admin drivers panel; a fresh database has one approved driver and the audit does not grant badges"
+    "button-driver-badge-*": "one pair per approved driver in the admin drivers panel; a fresh database has one approved driver and the audit does not grant badges",
+    "button-portal-add-payment-method": "starts a Stripe SetupIntent; Stripe is unreachable from the audit's sandbox"
   }
 }
