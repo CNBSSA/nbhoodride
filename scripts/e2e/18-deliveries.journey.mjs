@@ -33,7 +33,7 @@ export async function run({ base, db, server }) {
     const wrongKind = await rider.req("POST", `/api/org/${clinic.json.id}/deliveries`, body());
     check("a medical account cannot book a parcel", wrongKind.status === 409 && /books rides, not deliveries/i.test(wrongKind.json?.message ?? ""), JSON.stringify(wrongKind.json?.message));
 
-    const office = await admin.req("POST", "/api/admin/organizations", { name: "Oxon Hill Title Co", category: "business" });
+    const office = await admin.req("POST", "/api/admin/organizations", { name: "Oxon Hill Title Co", category: "business", contactName: "Night desk", contactPhone: "3015559000" });
     orgIds.push(office.json.id);
     await admin.req("POST", `/api/admin/organizations/${office.json.id}/members`, { email: FIXTURES.rider.email, role: "owner" });
 
@@ -133,6 +133,10 @@ export async function run({ base, db, server }) {
     await new Promise((r) => setTimeout(r, 300));
     const sosLine = serverLog(server).split("\n").reverse().find((l) => l.includes("[sos]")) ?? "";
     check("the alert names the account and the job, never the passenger", /Oxon Hill Title Co/.test(sosLine) && /J-\d{5}/.test(sosLine) && !/Ms Rivera|Mr Chen/.test(sosLine), sosLine.slice(0, 220));
+    // The operator rings the facility; nothing is auto-texted to a business
+    // line that may be unattended. So the number has to be in the alert, not
+    // somewhere they have to go and look for it mid-emergency.
+    check("and hands the operator the facility's number to ring", /Ring the facility: 3015559000 \(Night desk\)/.test(sosLine), sosLine.slice(0, 260));
     await db.query("DELETE FROM emergency_incidents WHERE ride_id=$1", [thirdRide]).catch(() => {});
 
     const receipt = await rider.req("GET", `/api/rides/${ride.id}/receipt`);

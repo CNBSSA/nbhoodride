@@ -226,10 +226,23 @@ export async function commercialJobForRide(rideId: string): Promise<{ jobId: str
   return row ?? null;
 }
 
-/** For paging and notifications: which organization a ride belongs to, if any. */
-export async function jobForRide(rideId: string): Promise<{ organizationName: string; jobNumber: number; category: string } | null> {
+/**
+ * For paging and notifications: which organization a ride belongs to, if any.
+ * Carries the facility's own contact so an operator handling an SOS can ring
+ * them in the same breath as reading the alert, rather than going to look the
+ * number up while a passenger is in trouble.
+ */
+export async function jobForRide(rideId: string): Promise<
+  { organizationName: string; jobNumber: number; category: string; contactName: string | null; contactPhone: string | null } | null
+> {
   const [row] = await db
-    .select({ organizationName: organizations.name, jobNumber: commercialJobs.jobNumber, category: commercialJobs.category })
+    .select({
+      organizationName: organizations.name,
+      jobNumber: commercialJobs.jobNumber,
+      category: commercialJobs.category,
+      contactName: organizations.contactName,
+      contactPhone: organizations.contactPhone,
+    })
     .from(commercialJobs)
     .innerJoin(organizations, eq(organizations.id, commercialJobs.organizationId))
     .where(eq(commercialJobs.rideId, rideId));

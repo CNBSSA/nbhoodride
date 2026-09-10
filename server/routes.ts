@@ -5615,10 +5615,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const sosJob = rideId ? await jobForRide(rideId).catch(() => null) : null;
       // Mirrored to the server log like every rider alert: an SOS must be on
       // record even when Telegram is unreachable.
-      console.warn(`[sos] ${incidentType} :: incident on ride ${rideId ?? "none"}${sosJob ? ` | Account: ${sosJob.organizationName} | Job: ${formatJobNumber(sosJob.jobNumber)} | commercial passenger aboard` : ""}`);
+      console.warn(`[sos] ${incidentType} :: incident on ride ${rideId ?? "none"}${sosJob ? ` | Account: ${sosJob.organizationName} | Job: ${formatJobNumber(sosJob.jobNumber)} | commercial passenger aboard | Ring the facility: ${sosJob.contactPhone ?? "no number on the account"}${sosJob.contactName ? ` (${sosJob.contactName})` : ""}` : ""}`);
       opsAlert(formatOpsAlert("🚨 SOS ALERT", [
         ["Type", incidentType],
-        ...(sosJob ? [["Account", sosJob.organizationName] as [string, string], ["Job", formatJobNumber(sosJob.jobNumber)] as [string, string], ["Contact the facility", "yes — a commercial passenger is aboard"] as [string, string]] : []),
+        // A person is rung by a person. The facility is not auto-texted: an
+        // unattended business line would answer nobody and would tell a
+        // company something happened to someone in their care with no human
+        // judgement in between. What the operator needs is the number, here,
+        // now — not a note telling them to go and find it.
+        ...(sosJob ? [
+          ["Account", sosJob.organizationName] as [string, string],
+          ["Job", formatJobNumber(sosJob.jobNumber)] as [string, string],
+          ["Ring the facility", sosJob.contactPhone
+            ? `${sosJob.contactPhone}${sosJob.contactName ? ` (${sosJob.contactName})` : ""}`
+            : "no number on the account — add one in Admin → Organizations"] as [string, string],
+        ] : []),
         ["Details", description],
         ["Map", location?.lat != null && location?.lng != null ? `https://maps.google.com/?q=${Number(location.lat)},${Number(location.lng)}` : null],
         ["Admin", `${resolveAppUrl()}/admin`],
