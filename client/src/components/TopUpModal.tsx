@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { loadStripe } from "@stripe/stripe-js";
 import {
   Elements,
   PaymentElement,
@@ -21,9 +20,8 @@ import { Loader2, CreditCard, CheckCircle } from "lucide-react";
 import { PG_CARD } from "@shared/userFacingCopy";
 
 import { useStripeConfig } from "@/hooks/useStripeConfig";
+import { STRIPE_PUBLISHABLE_KEY, useStripeLoader } from "@/lib/stripeLoader";
 
-const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY as string | undefined;
-const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
 const PRESET_AMOUNTS = [10, 20, 25, 50];
 
@@ -116,7 +114,8 @@ interface TopUpModalProps {
 export default function TopUpModal({ isOpen, onClose, currentBalance }: TopUpModalProps) {
   const { toast } = useToast();
   const { data: stripeConfig } = useStripeConfig();
-  const stripeReady = stripeConfig?.topUpEnabled ?? !!stripePublishableKey;
+  const stripeReady = stripeConfig?.topUpEnabled ?? !!STRIPE_PUBLISHABLE_KEY;
+  const stripeLoad = useStripeLoader();
   const [step, setStep] = useState<"select" | "pay" | "done">("select");
   const [selectedAmount, setSelectedAmount] = useState<number>(20);
   const [customAmount, setCustomAmount] = useState<string>("");
@@ -233,7 +232,7 @@ export default function TopUpModal({ isOpen, onClose, currentBalance }: TopUpMod
 
         {stripeReady && step === "pay" && clientSecret && (
           <Elements
-            stripe={stripePromise}
+            stripe={stripeLoad.stripe}
             options={{ clientSecret, appearance: { theme: "stripe" } }}
           >
             <TopUpForm
