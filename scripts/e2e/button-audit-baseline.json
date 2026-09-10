@@ -100,10 +100,9 @@
     "button-portal-install",
     "button-portal-new-standing-order",
     "button-portal-remove-member-*",
-    "button-portal-so-return-*",
-    "button-portal-so-toggle-*",
     "button-portal-submit-job",
     "button-portal-submit-standing-order",
+    "button-portal-toggle-standing-order-*",
     "button-preset-*",
     "button-preset-max",
     "button-prev-card",
@@ -270,7 +269,6 @@
     "button-portal-cancel-job-*": "needs a cancellable job in the list; journeys create and clean their own",
     "button-portal-remove-member-*": "shown for other members only; the seeded organization has one",
     "button-portal-submit-standing-order": "disabled until passenger, addresses, days and time are filled",
-    "button-portal-so-toggle-*": "one per standing order; journeys create and clean their own",
-    "button-portal-so-return-*": "shown on an outbound will-call job that has no return yet"
+    "button-portal-toggle-standing-order-*": "one per standing order; journeys create and clean their own"
   }
 }
