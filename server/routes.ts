@@ -171,6 +171,7 @@ import { runWeeklyBilling } from "./commercial/billing";
 import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { noteWatchRan } from "./watchHeartbeat";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
+import { payDriverForCompletedJob, payDriverForWaiting } from "./commercial/driverPay";
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
 import { cancelJob as cancelCommercialJob } from "./commercial/cancel";
 import { commercialJobForRide, jobForRide } from "./commercial/jobs";
@@ -2706,14 +2707,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Collect the flat no-show fee from the rider's authorization (or
       // wallet on cash rides) and split it with the fairness fund.
       // A commercial job's no-show costs the ORGANIZATION what its agreement
-      // says, on the statement; nothing is taken from anyone's card, so there
-      // is nothing to collect or split here.
+      // says, on the statement, so nothing is taken from anyone's card here —
+      // but the driver drove there and waited exactly as on any other ride,
+      // so their cut of the fee is the same and is paid now, not when the
+      // organization settles its week.
       const commercialNoShowFee = ride.paymentMethod === 'invoice'
         ? await recordNoShowForRide(rideId).catch((err) => { console.error(`[no-show] commercial fee failed for ride ${rideId}:`, err); return null; })
         : null;
       const noShowFee = commercialNoShowFee ?? RIDER_NO_SHOW_FEE;
       const collected = commercialNoShowFee === null ? await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE) : 0;
-      const split = await routeFeeWithFairnessSplit(collected, userId, rideId);
+      const split = await routeFeeWithFairnessSplit(commercialNoShowFee ?? collected, userId, rideId);
       const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
 
@@ -3050,7 +3053,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (ride.driverId && finalAmount > 0) {
         // 85% of the fare + 100% of the tip; PG Ride's 15% (and the card
         // processing fee, which PG Ride absorbs) stays in the Stripe balance.
-        const driverCredit = splitFare(finalFare, tip).driverEarnings;
+        // completeRide already fixed that split on the ride — including paying
+        // the driver on the fare before any promotion — so credit exactly what
+        // it recorded and the ledger can never disagree with the ride. The
+        // recompute is only for a row written before the split was recorded.
+        const recorded = parseFloat(ride.driverEarnings ?? "");
+        const driverCredit = Number.isFinite(recorded) && recorded > 0
+          ? recorded
+          : splitFare(finalFare, tip).driverEarnings;
         if (driverCredit > 0) await storage.creditDriverEarningsOnce(rideId, ride.driverId, driverCredit);
       }
 
@@ -3230,10 +3240,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // A commercial job's waiting at the door is priced by the organization's
-      // own terms and lands on the job for the statement. Never blocks the
-      // completion response.
+      // own terms and lands on the job for the statement.
+      //
+      // This is also where the driver is paid. A card ride settles below and a
+      // cash driver is holding the fare; a commercial driver is neither, so
+      // without this they finish the work and their wallet stays empty. The
+      // organization is billed weekly, but the driver is paid now — their money
+      // does not wait on someone else's payment terms.
+      //
+      // Never blocks the completion response, but an unpaid driver is paged
+      // rather than swallowed: it is not something to discover at payout time.
       if (ride.paymentMethod === 'invoice') {
-        await recordWaitingForCompletedRide(rideId).catch((err) => console.error(`[complete] waiting charge failed for ride ${rideId}:`, err));
+        const waiting = await recordWaitingForCompletedRide(rideId)
+          .catch((err) => { console.error(`[complete] waiting charge failed for ride ${rideId}:`, err); return null; });
+        try {
+          await payDriverForCompletedJob(storage, ride);
+          if (waiting && waiting.waitFee > 0) await payDriverForWaiting(storage, ride, waiting.waitFee);
+        } catch (payErr) {
+          console.error(`[complete] DRIVER NOT PAID for commercial ride ${rideId}:`, payErr);
+          opsAlert(formatOpsAlert("💸 Driver not paid for commercial work", [
+            ["Ride", rideId.slice(0, 8)],
+            ["Driver", ride.driverId ?? "—"],
+            ["Owed", `$${Number(ride.driverEarnings ?? 0).toFixed(2)}`],
+            ["Reason", String((payErr as any)?.message ?? payErr).slice(0, 200)],
+            ["Fix", "Credit the driver by hand in the admin wallet panel"],
+          ]));
+        }
       }
 
       // If ride uses card payment, settle against the auth taken at accept time.
@@ -5583,10 +5615,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const sosJob = rideId ? await jobForRide(rideId).catch(() => null) : null;
       // Mirrored to the server log like every rider alert: an SOS must be on
       // record even when Telegram is unreachable.
-      console.warn(`[sos] ${incidentType} :: incident on ride ${rideId ?? "none"}${sosJob ? ` | Account: ${sosJob.organizationName} | Job: ${formatJobNumber(sosJob.jobNumber)} | commercial passenger aboard` : ""}`);
+      console.warn(`[sos] ${incidentType} :: incident on ride ${rideId ?? "none"}${sosJob ? ` | Account: ${sosJob.organizationName} | Job: ${formatJobNumber(sosJob.jobNumber)} | commercial passenger aboard | Ring the facility: ${sosJob.contactPhone ?? "no number on the account"}${sosJob.contactName ? ` (${sosJob.contactName})` : ""}` : ""}`);
       opsAlert(formatOpsAlert("🚨 SOS ALERT", [
         ["Type", incidentType],
-        ...(sosJob ? [["Account", sosJob.organizationName] as [string, string], ["Job", formatJobNumber(sosJob.jobNumber)] as [string, string], ["Contact the facility", "yes — a commercial passenger is aboard"] as [string, string]] : []),
+        // A person is rung by a person. The facility is not auto-texted: an
+        // unattended business line would answer nobody and would tell a
+        // company something happened to someone in their care with no human
+        // judgement in between. What the operator needs is the number, here,
+        // now — not a note telling them to go and find it.
+        ...(sosJob ? [
+          ["Account", sosJob.organizationName] as [string, string],
+          ["Job", formatJobNumber(sosJob.jobNumber)] as [string, string],
+          ["Ring the facility", sosJob.contactPhone
+            ? `${sosJob.contactPhone}${sosJob.contactName ? ` (${sosJob.contactName})` : ""}`
+            : "no number on the account — add one in Admin → Organizations"] as [string, string],
+        ] : []),
         ["Details", description],
         ["Map", location?.lat != null && location?.lng != null ? `https://maps.google.com/?q=${Number(location.lat)},${Number(location.lng)}` : null],
         ["Admin", `${resolveAppUrl()}/admin`],

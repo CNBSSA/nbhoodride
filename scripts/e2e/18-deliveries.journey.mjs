@@ -33,7 +33,7 @@ export async function run({ base, db, server }) {
     const wrongKind = await rider.req("POST", `/api/org/${clinic.json.id}/deliveries`, body());
     check("a medical account cannot book a parcel", wrongKind.status === 409 && /books rides, not deliveries/i.test(wrongKind.json?.message ?? ""), JSON.stringify(wrongKind.json?.message));
 
-    const office = await admin.req("POST", "/api/admin/organizations", { name: "Oxon Hill Title Co", category: "business" });
+    const office = await admin.req("POST", "/api/admin/organizations", { name: "Oxon Hill Title Co", category: "business", contactName: "Night desk", contactPhone: "3015559000" });
     orgIds.push(office.json.id);
     await admin.req("POST", `/api/admin/organizations/${office.json.id}/members`, { email: FIXTURES.rider.email, role: "owner" });
 
@@ -82,6 +82,7 @@ export async function run({ base, db, server }) {
     check("a photo alone is not a handover", noName.status === 400 && /who received/i.test(noName.json?.message ?? ""), JSON.stringify(noName.json?.message));
     const proof = await driver.req("POST", `/api/driver/rides/${ride.id}/proof`, { receivedBy: "Ms Rivera", photoUrl: "https://example.test/parcel.jpg", note: "Left at reception desk" });
     check("the driver records who took it and the photo", proof.status === 200 && proof.json?.proof?.receivedBy === "Ms Rivera" && proof.json?.proof?.photoUrl === "https://example.test/parcel.jpg", JSON.stringify(proof.json?.proof));
+    const { rows: [payBefore] } = await db.query("SELECT COALESCE(virtual_card_balance,'0') AS bal FROM users WHERE id=$1", [FIXTURES.driver.id]);
     check("driver completes it", (await driver.req("POST", `/api/driver/rides/${ride.id}/complete`, {})).status === 200);
 
     section("What the account is billed");
@@ -91,6 +92,16 @@ export async function run({ base, db, server }) {
     check("the handover shows on the job", done.proof?.receivedBy === "Ms Rivera");
     const { rows: [split] } = await db.query("SELECT driver_earnings, platform_fee, actual_fare FROM rides WHERE id=$1", [ride.id]);
     check("the driver keeps 85% of a delivery, exactly as on a ride", Math.abs(Number(split.driver_earnings) - Number(split.actual_fare) * 0.85) < 0.011, JSON.stringify(split));
+    // Recording the split on the ride is not paying anybody. The organization
+    // is billed weekly and PG Ride collects the money, so unlike a cash ride
+    // the driver never holds the fare: it has to reach their wallet.
+    const { rows: [payAfter] } = await db.query("SELECT COALESCE(virtual_card_balance,'0') AS bal FROM users WHERE id=$1", [FIXTURES.driver.id]);
+    check("the driver is actually paid for commercial work, not just credited on paper",
+      Math.abs((Number(payAfter.bal) - Number(payBefore.bal)) - Number(split.driver_earnings)) < 0.011,
+      `wallet ${payBefore.bal} -> ${payAfter.bal}, earnings ${split.driver_earnings}`);
+    const { rows: ledger } = await db.query("SELECT amount, reason FROM wallet_transactions WHERE ride_id=$1 AND reason='ride_earnings'", [ride.id]);
+    check("and it is in the ledger once, so a payout can be requested against it",
+      ledger.length === 1 && Math.abs(Number(ledger[0].amount) - Number(split.driver_earnings)) < 0.011, JSON.stringify(ledger));
     await new Promise((r) => setTimeout(r, 300));
     const bookedLine = serverLog(server).split("\n").find((l) => l.includes("[commercial] delivery booked") && l.includes("Oxon Hill Title Co")) ?? "";
     check("the booking was logged by account, parcel and window", /Small box.* · hand to Ms Rivera/.test(bookedLine) && /Ready .*deliver by/.test(bookedLine) && /\$\d+\.\d\d/.test(bookedLine), bookedLine.slice(0, 200));
@@ -122,6 +133,10 @@ export async function run({ base, db, server }) {
     await new Promise((r) => setTimeout(r, 300));
     const sosLine = serverLog(server).split("\n").reverse().find((l) => l.includes("[sos]")) ?? "";
     check("the alert names the account and the job, never the passenger", /Oxon Hill Title Co/.test(sosLine) && /J-\d{5}/.test(sosLine) && !/Ms Rivera|Mr Chen/.test(sosLine), sosLine.slice(0, 220));
+    // The operator rings the facility; nothing is auto-texted to a business
+    // line that may be unattended. So the number has to be in the alert, not
+    // somewhere they have to go and look for it mid-emergency.
+    check("and hands the operator the facility's number to ring", /Ring the facility: 3015559000 \(Night desk\)/.test(sosLine), sosLine.slice(0, 260));
     await db.query("DELETE FROM emergency_incidents WHERE ride_id=$1", [thirdRide]).catch(() => {});
 
     const receipt = await rider.req("GET", `/api/rides/${ride.id}/receipt`);

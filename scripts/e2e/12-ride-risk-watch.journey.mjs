@@ -104,7 +104,10 @@ export async function run({ base, db, server }) {
     const beat = await fetch(`${base}/health/deps?probe=production-watch`);
     check("the outside watch can mark itself on the health endpoint", beat.status === 200 || beat.status === 503);
     await new Promise((r) => setTimeout(r, 400));
-    const { rows: beats } = await db.query("SELECT page, message FROM reliability_events WHERE kind='watch_ran' ORDER BY created_at DESC LIMIT 5");
+    // Scoped to this run, not "the newest few rows": other watches beat away in
+    // the background all through the suite, and on a database that has served
+    // more than one run they crowd a global LIMIT out of usefulness.
+    const { rows: beats } = await db.query("SELECT page, message FROM reliability_events WHERE kind='watch_ran' AND created_at > NOW() - interval '2 minutes' ORDER BY created_at DESC");
     check("the heartbeat is recorded under a known watch name", beats.some((b) => b.page === "production-watch" && /Production watch/.test(b.message ?? "")), JSON.stringify(beats.map((b) => b.page)));
     await admin.req("POST", "/api/admin/analytics/dependency-check", {});
     await new Promise((r) => setTimeout(r, 400));

@@ -124,12 +124,21 @@ export async function run({ base, db }) {
   check("driver's earnings screen counts the share, not the gross fare", todayEarnings.status === 200 && Math.abs(fareDelta - 19.73) < 0.011 && Math.abs(tipDelta - 5) < 0.011, `fare +${fareDelta.toFixed(2)} tips +${tipDelta.toFixed(2)}`);
 
   section("Promo recorded at accept comes off the quote");
+  const beforeB = await driver.req("GET", "/api/driver/earnings/today");
   const rideB = await seed({ promo: "5.00" });
   await driver.req("POST", `/api/driver/rides/${rideB}/start`);
   await sparseTrack(rideB);
   const doneB = await driver.req("POST", `/api/driver/rides/${rideB}/complete`, {});
   check("quote minus $5 promo", Number(doneB.json?.actualFare) === 18.21, `actualFare=${doneB.json?.actualFare}`);
-  check("split follows the discounted fare: $2.73 to PG Ride, $15.48 to the driver", Number(doneB.json?.platformFee) === 2.73 && Number(doneB.json?.driverEarnings) === 15.48, `platformFee=${doneB.json?.platformFee} driverEarnings=${doneB.json?.driverEarnings}`);
+  // The rider pays $18.21, but the driver drove the whole $23.21 trip and is
+  // paid on it: $19.73. PG Ride's share goes to -$1.52 — the $5 credit came
+  // out of its own $3.48 and then out of its pocket. That is what winning a
+  // rider costs, and it is not the driver's to pay.
+  check("the driver is paid on the fare before the promo: $19.73", Number(doneB.json?.driverEarnings) === 19.73, `driverEarnings=${doneB.json?.driverEarnings}`);
+  check("and the $5 credit comes out of PG Ride's share, not the driver's", Number(doneB.json?.platformFee) === -1.52, `platformFee=${doneB.json?.platformFee}`);
+  const afterB = await driver.req("GET", "/api/driver/earnings/today");
+  const promoDelta = Number(afterB.json?.fare) - Number(beforeB.json?.fare ?? 0);
+  check("and their earnings screen shows the whole $19.73, not the discounted share", Math.abs(promoDelta - 19.73) < 0.011, `fare +${promoDelta.toFixed(2)}`);
 
   section("Ride ended early mid-trip is metered, never above the quote");
   const rideC = await seed();

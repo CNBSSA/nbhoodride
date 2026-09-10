@@ -78,6 +78,14 @@ export async function run({ base, db, server }) {
     const after = await rider.req("GET", `/api/org/${A.json.id}/jobs`);
     const doneJob = (after.json ?? []).find((j) => j.id === today.id);
     check("the job's total includes the waiting fee and the facility fee", doneJob && Math.abs(doneJob.total - (Number(doneJob.actualFare) + 4 + 20)) < 0.011, JSON.stringify(doneJob && [doneJob.total, doneJob.actualFare, doneJob.waitFee]));
+    // Charging the account is not paying the driver. Nothing settles at the
+    // kerb on a commercial job and the driver is not holding cash, so the
+    // money has to reach their wallet here or it never does.
+    const { rows: [earned] } = await db.query("SELECT driver_earnings FROM rides WHERE id=$1", [today.rideId]);
+    const { rows: farePaid } = await db.query("SELECT amount FROM wallet_transactions WHERE ride_id=$1 AND reason='ride_earnings'", [today.rideId]);
+    check("the driver is paid for the job itself", farePaid.length === 1 && farePaid[0].amount === earned.driver_earnings, JSON.stringify([farePaid, earned]));
+    const { rows: waitPaid } = await db.query("SELECT amount FROM wallet_transactions WHERE ride_id=$1 AND reason='commercial_waiting'", [today.rideId]);
+    check("and keeps 85% of the waiting, because the 20 minutes at the door were theirs", waitPaid.length === 1 && waitPaid[0].amount === "17.00", JSON.stringify(waitPaid));
 
     section("Cancellations and no-shows cost what the terms say");
     const tomorrow = fromOrder.sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt))[1];
@@ -99,6 +107,11 @@ export async function run({ base, db, server }) {
     await new Promise((r) => setTimeout(r, 400));
     const { rows: [nsj] } = await db.query("SELECT c.cancellation_fee, r.status, r.stripe_payment_intent_id FROM commercial_jobs c JOIN rides r ON r.id=c.ride_id WHERE c.id=$1", [ns.id]);
     check("the organization's no-show fee is on the job; nothing was charged to anyone's card", nsj.cancellation_fee === "15.00" && nsj.status === "no_show" && !nsj.stripe_payment_intent_id, JSON.stringify(nsj));
+    // The driver drove there and waited. That the fee is collected weekly from
+    // the account rather than at once from a card changes who pays, not who
+    // gets paid: the same cut as an ordinary no-show, at the same moment.
+    const { rows: nsPaid } = await db.query("SELECT amount FROM wallet_transactions WHERE ride_id=$1 AND reason='cancellation_fee'", [ns.rideId]);
+    check("the driver gets their cut of the no-show fee, as on any other ride", nsPaid.length === 1 && nsPaid[0].amount === "12.00", JSON.stringify(nsPaid));
     const stmt = await rider.req("GET", `/api/org/${A.json.id}/statement?month=${new Date().toISOString().slice(0, 7)}`);
     const totals = stmt.json?.totals ?? {};
     check("the statement carries waiting, late cancel and no-show", totals.waitFees >= 20 && totals.cancellationFees >= 27, JSON.stringify(totals));

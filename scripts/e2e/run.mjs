@@ -6,8 +6,10 @@ import { readdirSync } from "node:fs";
 import { connectDb, seedFixtures, startServer, stopServer, summary } from "./harness.mjs";
 
 const dir = new URL("./", import.meta.url);
-const only = process.argv[2];
-const files = readdirSync(dir).filter((f) => f.endsWith(".journey.mjs") && (!only || f.includes(only))).sort();
+// One or more comma-separated substrings: `run.mjs 13` for a single journey,
+// `run.mjs 01-,02-` for a chosen set.
+const only = (process.argv[2] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+const files = readdirSync(dir).filter((f) => f.endsWith(".journey.mjs") && (only.length === 0 || only.some((o) => f.includes(o)))).sort();
 
 const db = await connectDb();
 await seedFixtures(db);
