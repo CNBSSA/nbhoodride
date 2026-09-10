@@ -219,6 +219,13 @@ export async function listJobs(organizationId: string, opts: ListJobsOptions = {
   });
 }
 
+/** The job id and organization behind a ride, for routes that hold only a ride. */
+export async function commercialJobForRide(rideId: string): Promise<{ jobId: string; organizationId: string } | null> {
+  const [row] = await db.select({ jobId: commercialJobs.id, organizationId: commercialJobs.organizationId })
+    .from(commercialJobs).where(eq(commercialJobs.rideId, rideId));
+  return row ?? null;
+}
+
 /** For paging and notifications: which organization a ride belongs to, if any. */
 export async function jobForRide(rideId: string): Promise<{ organizationName: string; jobNumber: number; category: string } | null> {
   const [row] = await db

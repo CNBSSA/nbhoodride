@@ -171,6 +171,8 @@ import { runWeeklyBilling } from "./commercial/billing";
 import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
+import { cancelJob as cancelCommercialJob } from "./commercial/cancel";
+import { commercialJobForRide } from "./commercial/jobs";
 import { CommercialError } from "./commercial/organizations";
 import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadges";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
@@ -4314,6 +4316,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const role: "rider" | "driver" = userId === ride.riderId ? "rider" : "driver";
+
+      // ── A commercial job is the organization's, not this person's ──
+      // The requester is the rider of record, so this route is reachable from
+      // their own ride history. Cancelling here must use the ACCOUNT's terms
+      // and put the fee on the ACCOUNT's statement — never take it from the
+      // requester's wallet, which the rider fee ladder below would do.
+      if (role === "rider" && ride.paymentMethod === "invoice") {
+        const job = await commercialJobForRide(rideId);
+        if (job) {
+          try {
+            const result = await cancelCommercialJob(job.organizationId, job.jobId, userId, reason || "Cancelled by the organization");
+            console.log(`[commercial] job cancelled from the app :: ride ${rideId} | fee ${result.cancellationFee} | ${result.reason}`);
+            if (result.driverId) {
+              const ws = activeConnections.get(result.driverId);
+              if (ws?.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "ride_cancelled", rideId, message: "This job was cancelled by the organization." }));
+              }
+            }
+            return res.json({
+              success: true,
+              ride: result.ride,
+              cancellationFee: Number(result.cancellationFee),
+              feeReason: result.reason,
+              billedTo: "organization",
+              message: Number(result.cancellationFee) > 0
+                ? `Cancelled. A $${Number(result.cancellationFee).toFixed(2)} fee goes on your organization's statement.`
+                : "Cancelled at no charge.",
+            });
+          } catch (commercialErr: any) {
+            const status = commercialErr?.status ?? 500;
+            return res.status(status).json({ message: commercialErr?.message ?? "Could not cancel this job." });
+          }
+        }
+      }
 
       // ── Status guards: terminal rides can't be re-cancelled ──
       if (["completed", "cancelled", "no_show"].includes(ride.status ?? "")) {

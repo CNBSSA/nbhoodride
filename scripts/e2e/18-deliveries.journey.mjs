@@ -94,6 +94,30 @@ export async function run({ base, db, server }) {
     await new Promise((r) => setTimeout(r, 300));
     const bookedLine = serverLog(server).split("\n").find((l) => l.includes("[commercial] delivery booked") && l.includes("Oxon Hill Title Co")) ?? "";
     check("the booking was logged by account, parcel and window", /Small box.* · hand to Ms Rivera/.test(bookedLine) && /Ready .*deliver by/.test(bookedLine) && /\$\d+\.\d\d/.test(bookedLine), bookedLine.slice(0, 200));
+    section("Audit: cancelling from the rider app charges the account, never the person");
+    // The requester is the rider of record, so a commercial job is reachable
+    // from their own ride history. Before this was caught, that path used the
+    // rider fee ladder and tried to take the fee from the requester's wallet.
+    const second = await rider.req("POST", `/api/org/${office.json.id}/deliveries`, { ...body(), readyAt: inMin(120), dropContact: { name: "Mr Chen", phone: "3015550133" } });
+    check("a second delivery is booked", second.status === 201, JSON.stringify(second.json?.message ?? second.status));
+    const secondRide = second.json.ride.id; rideIds.push(secondRide);
+    const secondJob = second.json.job.id;
+    await admin.req("PATCH", `/api/admin/organizations/${office.json.id}`, { terms: { lateCancelFee: 11, freeCancelHours: 48 } });
+    check("driver claims it, so a cancellation now costs the account", (await driver.req("POST", `/api/driver/rides/${secondRide}/claim`)).status === 200);
+    const { rows: [walletBefore] } = await db.query("SELECT COALESCE(virtual_card_balance,'0') AS bal FROM users WHERE id=$1", [FIXTURES.rider.id]);
+    const fromApp = await rider.req("POST", `/api/rides/${secondRide}/cancel`, { reason: "Not needed after all" });
+    check("the app's own cancel answers with the account's fee, not the rider ladder's", fromApp.status === 200 && fromApp.json?.billedTo === "organization" && Number(fromApp.json?.cancellationFee) === 11, JSON.stringify([fromApp.status, fromApp.json?.cancellationFee, fromApp.json?.billedTo]));
+    const { rows: [walletAfter] } = await db.query("SELECT COALESCE(virtual_card_balance,'0') AS bal FROM users WHERE id=$1", [FIXTURES.rider.id]);
+    check("nothing was taken from the person who booked it", Number(walletAfter.bal) === Number(walletBefore.bal), `${walletBefore.bal} -> ${walletAfter.bal}`);
+    const { rows: [onJob] } = await db.query("SELECT cancellation_fee FROM commercial_jobs WHERE id=$1", [secondJob]);
+    check("the fee is on the job, so it reaches the statement", onJob.cancellation_fee === "11.00", JSON.stringify(onJob));
+    const { rows: [cancelledRide] } = await db.query("SELECT status, stripe_payment_intent_id FROM rides WHERE id=$1", [secondRide]);
+    check("the job is cancelled and no card was ever involved", cancelledRide.status === "cancelled" && !cancelledRide.stripe_payment_intent_id, JSON.stringify(cancelledRide));
+    const receipt = await rider.req("GET", `/api/rides/${ride.id}/receipt`);
+    if (receipt.status === 200) {
+      check("a commercial receipt says the organization was billed, not the person", /Billed to the organization/.test(JSON.stringify(receipt.json)), JSON.stringify(receipt.json?.paymentMethodLabel ?? receipt.json).slice(0, 120));
+    }
+
   } finally {
     await db.query("UPDATE driver_profiles SET badges=ARRAY['medical','delivery']::text[] WHERE user_id=$1", [FIXTURES.driver.id]).catch(() => {});
     await deleteRides(db, rideIds).catch(() => {});
