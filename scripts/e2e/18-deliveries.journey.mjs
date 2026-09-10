@@ -113,6 +113,17 @@ export async function run({ base, db, server }) {
     check("the fee is on the job, so it reaches the statement", onJob.cancellation_fee === "11.00", JSON.stringify(onJob));
     const { rows: [cancelledRide] } = await db.query("SELECT status, stripe_payment_intent_id FROM rides WHERE id=$1", [secondRide]);
     check("the job is cancelled and no card was ever involved", cancelledRide.status === "cancelled" && !cancelledRide.stripe_payment_intent_id, JSON.stringify(cancelledRide));
+    section("Audit: an SOS names the account so the facility can be rung");
+    const third = await rider.req("POST", `/api/org/${office.json.id}/deliveries`, { ...body(), readyAt: inMin(150) });
+    const thirdRide = third.json.ride.id; rideIds.push(thirdRide);
+    await driver.req("POST", `/api/driver/rides/${thirdRide}/claim`);
+    const sos = await driver.req("POST", "/api/emergency/start", { incidentType: "safety", rideId: thirdRide, location: { lat: 38.9, lng: -76.8 }, description: "Audit check" });
+    check("the SOS is raised", sos.status === 200 || sos.status === 201, JSON.stringify(sos.json?.message ?? sos.status));
+    await new Promise((r) => setTimeout(r, 300));
+    const sosLine = serverLog(server).split("\n").reverse().find((l) => l.includes("[sos]")) ?? "";
+    check("the alert names the account and the job, never the passenger", /Oxon Hill Title Co/.test(sosLine) && /J-\d{5}/.test(sosLine) && !/Ms Rivera|Mr Chen/.test(sosLine), sosLine.slice(0, 220));
+    await db.query("DELETE FROM emergency_incidents WHERE ride_id=$1", [thirdRide]).catch(() => {});
+
     const receipt = await rider.req("GET", `/api/rides/${ride.id}/receipt`);
     if (receipt.status === 200) {
       check("a commercial receipt says the organization was billed, not the person", /Billed to the organization/.test(JSON.stringify(receipt.json)), JSON.stringify(receipt.json?.paymentMethodLabel ?? receipt.json).slice(0, 120));

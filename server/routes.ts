@@ -172,7 +172,8 @@ import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
 import { cancelJob as cancelCommercialJob } from "./commercial/cancel";
-import { commercialJobForRide } from "./commercial/jobs";
+import { commercialJobForRide, jobForRide } from "./commercial/jobs";
+import { formatJobNumber } from "@shared/commercial";
 import { CommercialError } from "./commercial/organizations";
 import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadges";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
@@ -5575,8 +5576,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const incident = await storage.createEmergencyIncidentWithSharing(incidentData);
 
+      // A facility's patient may be in the car. Name the account and the job
+      // so the operator can ring the facility at once; the passenger's own
+      // name still never leaves the app.
+      const sosJob = rideId ? await jobForRide(rideId).catch(() => null) : null;
+      // Mirrored to the server log like every rider alert: an SOS must be on
+      // record even when Telegram is unreachable.
+      console.warn(`[sos] ${incidentType} :: incident on ride ${rideId ?? "none"}${sosJob ? ` | Account: ${sosJob.organizationName} | Job: ${formatJobNumber(sosJob.jobNumber)} | commercial passenger aboard` : ""}`);
       opsAlert(formatOpsAlert("🚨 SOS ALERT", [
         ["Type", incidentType],
+        ...(sosJob ? [["Account", sosJob.organizationName] as [string, string], ["Job", formatJobNumber(sosJob.jobNumber)] as [string, string], ["Contact the facility", "yes — a commercial passenger is aboard"] as [string, string]] : []),
         ["Details", description],
         ["Map", location?.lat != null && location?.lng != null ? `https://maps.google.com/?q=${Number(location.lat)},${Number(location.lng)}` : null],
         ["Admin", `${resolveAppUrl()}/admin`],
