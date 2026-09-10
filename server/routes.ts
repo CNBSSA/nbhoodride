@@ -10684,6 +10684,11 @@ Generate the FAQ list.`;
         if (driverCoversCounty(counties, pickupCounty) && ws.readyState === WebSocket.OPEN) ws.send(payload);
       });
     },
+    notifyUser: (userId, payload) => {
+      const ws = activeConnections.get(userId);
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+      deliverUserNotification(userId, { type: payload.type, title: payload.title, body: payload.message, tag: `job-${payload.rideId}`, url: '/', data: { rideId: payload.rideId } }).catch(console.error);
+    },
   });
 
   setInterval(async () => {

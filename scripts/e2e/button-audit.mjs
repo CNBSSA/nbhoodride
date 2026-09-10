@@ -49,12 +49,13 @@ const SCREENS = [
   { role: "rider", path: "/" }, { role: "rider", path: "/ratings" }, { role: "rider", path: "/payments" }, { role: "rider", path: "/card-setup" },
   { role: "driver", path: "/" }, { role: "driver", path: "/driver/insights" },
   { role: "admin", path: "/admin" }, { role: "admin", path: "/" },
+  { role: "requester", path: "/org" },
 ];
 
 /** BUTTON_AUDIT_ONLY="rider /" runs one screen; BUTTON_AUDIT_VERBOSE=1 prints every press. */
 const ONLY = process.env.BUTTON_AUDIT_ONLY || "";
 const VERBOSE = process.env.BUTTON_AUDIT_VERBOSE === "1";
-const ROLE_USER = { rider: FIXTURES.rider.email, driver: FIXTURES.driver.email, admin: FIXTURES.admin.email };
+const ROLE_USER = { rider: FIXTURES.rider.email, driver: FIXTURES.driver.email, admin: FIXTURES.admin.email, requester: FIXTURES.rider.email };
 
 // ── source inventory: every static button testid, and every templated prefix ──
 function sourceFiles(dir, out = []) {
@@ -278,7 +279,10 @@ async function auditScreen(browser, base, screen) {
     pressedHere += 1;
     if (r.problems.length) broken.push(r);
     // Depth 2: anything that appeared because of this press. A sheet takes a
-    // moment to fill, so give it one before looking.
+    // moment to fill, so give it one before looking. A press that navigated to
+    // another screen reveals that screen's buttons, which belong to its own
+    // audit, not to this one.
+    if (new URL(page.url()).pathname !== screen.path) { await restore(page, base, screen, opts); continue; }
     if (await page.locator('[role="dialog"]').first().isVisible().catch(() => false)) await page.waitForTimeout(500);
     const now = await visibleClickables(page);
     // Named buttons first: they are the ones the coverage rule tracks, and a

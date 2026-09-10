@@ -16,6 +16,7 @@ export const FIXTURES = {
   admin: { id: "e2e-admin", email: "e2e-admin@example.com" },
   rider: { id: "e2e-rider", email: "e2e-rider@example.com" },
   driver: { id: "e2e-driver", email: "e2e-driver@example.com" },
+  org: { id: "e2e-org", name: "E2E Dialysis Center" },
 };
 
 let failures = 0, passes = 0;
@@ -54,6 +55,10 @@ export async function seedFixtures(db) {
   // A previous run (the every-button audit as admin, a journey that left the
   // driver online) must not decide whether this driver can go online.
   await db.query(`UPDATE driver_profiles SET approval_status='approved', is_suspended=false, is_online=false, current_location=NULL WHERE user_id=$1`, [FIXTURES.driver.id]);
+  // A standing organization with the e2e rider as owner, so the requester
+  // portal has something to show the audits (journeys create their own).
+  await db.query(`INSERT INTO organizations (id, name, category, facility_fee) VALUES ('e2e-org', 'E2E Dialysis Center', 'medical', 4.00) ON CONFLICT (id) DO NOTHING`);
+  await db.query(`INSERT INTO organization_members (organization_id, user_id, role) VALUES ('e2e-org', $1, 'owner') ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner'`, [FIXTURES.rider.id]);
   const { rows: [prof] } = await db.query("SELECT id FROM driver_profiles WHERE user_id=$1", [FIXTURES.driver.id]);
   await db.query(`INSERT INTO vehicles (driver_profile_id, make, model, year, color, license_plate)
     SELECT $1::varchar,'Toyota','Camry',2020,'Blue','E2E0001' WHERE NOT EXISTS (SELECT 1 FROM vehicles WHERE driver_profile_id=$1::varchar)`, [prof.id]);

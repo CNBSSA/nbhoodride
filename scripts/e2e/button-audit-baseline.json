@@ -91,6 +91,14 @@
     "button-open-organization-*",
     "button-pause-plan-*",
     "button-payment-methods",
+    "button-portal-add-member",
+    "button-portal-book",
+    "button-portal-book-inline",
+    "button-portal-cancel-job-*",
+    "button-portal-close-book",
+    "button-portal-install",
+    "button-portal-remove-member-*",
+    "button-portal-submit-job",
     "button-preset-*",
     "button-preset-max",
     "button-prev-card",
@@ -251,6 +259,10 @@
     "button-toggle-organization-status": "inside an organization's detail, which needs an organization",
     "button-add-member": "disabled until an email is typed",
     "button-remove-member-*": "inside an organization's detail",
-    "button-book-job": "disabled until passenger, addresses and time are filled"
+    "button-book-job": "disabled until passenger, addresses and time are filled",
+    "button-portal-install": "only offered when the browser fires beforeinstallprompt; headless Chromium never does",
+    "button-portal-submit-job": "disabled until passenger, addresses and time are filled",
+    "button-portal-cancel-job-*": "needs a cancellable job in the list; journeys create and clean their own",
+    "button-portal-remove-member-*": "shown for other members only; the seeded organization has one"
   }
 }
