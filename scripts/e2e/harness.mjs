@@ -72,6 +72,8 @@ export async function startServer(env = {}) {
       // Production-like: card-only, Stripe armed (unreachable here), email "configured",
       // Telegram + Twilio dummies so every alert/SMS path executes and fails gracefully.
       WALLET_ENABLED: "false", STRIPE_SECRET_KEY: "sk_test_e2e_fake",
+      // Commercial riders is off in production until proven; journeys exercise it on.
+      COMMERCIAL_ENABLED: "true",
       RESEND_API_KEY: "re_e2e_fake", RESEND_FROM: "noreply@peoplegoverned.com",
       TELEGRAM_BOT_TOKEN: "e2e", TELEGRAM_CHAT_ID: "1",
       TWILIO_ACCOUNT_SID: "ACe2e", TWILIO_AUTH_TOKEN: "e2e-auth-token", TWILIO_PHONE_NUMBER: "+18882743045",
@@ -96,7 +98,7 @@ export async function startServer(env = {}) {
 export async function deleteRides(db, ids) {
   ids = (ids || []).filter(Boolean);
   if (ids.length === 0) return;
-  for (const [table, col] of [["disputes", "ride_id"], ["emergency_incidents", "ride_id"], ["agent_audit_log", "ride_id"], ["ride_surface_cache", "ride_id"], ["bonus_allocations", "ride_id"], ["agent_action_proposals", "ride_id"], ["l4_readiness_events", "ride_id"], ["lost_found_reports", "ride_id"], ["ride_messages", "ride_id"]]) {
+  for (const [table, col] of [["commercial_jobs", "ride_id"], ["disputes", "ride_id"], ["emergency_incidents", "ride_id"], ["agent_audit_log", "ride_id"], ["ride_surface_cache", "ride_id"], ["bonus_allocations", "ride_id"], ["agent_action_proposals", "ride_id"], ["l4_readiness_events", "ride_id"], ["lost_found_reports", "ride_id"], ["ride_messages", "ride_id"]]) {
     await db.query(`DELETE FROM ${table} WHERE ${col} = ANY($1::varchar[])`, [ids]).catch(() => {});
   }
   await db.query("UPDATE guardian_links SET active_ride_id=NULL WHERE active_ride_id = ANY($1::varchar[])", [ids]).catch(() => {});
@@ -127,6 +129,15 @@ export class Session {
     this.absorb(res);
     let json = null; try { json = await res.json(); } catch {}
     return { status: res.status, json };
+  }
+  /** Same session, raw body: for CSV and HTML responses. */
+  async text(method, path) {
+    const headers = { "X-Forwarded-Proto": "https", Cookie: this.cookieHeader() };
+    const csrf = this.jar.get("csrf_token");
+    if (csrf) headers["X-CSRF-Token"] = decodeURIComponent(csrf);
+    const res = await fetch(this.base + path, { method, headers });
+    this.absorb(res);
+    return { status: res.status, text: await res.text(), type: res.headers.get("content-type") ?? "" };
   }
   async csrf() { await this.req("GET", "/api/csrf"); return this; }
   async login(email, password = PASSWORD) { await this.csrf(); return this.req("POST", "/api/auth/email-login", { email, password }); }
