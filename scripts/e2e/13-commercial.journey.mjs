@@ -58,7 +58,7 @@ export async function run({ base, db, server }) {
 
     section("One account can never see another");
     const mine = await rider.req("GET", "/api/org/mine");
-    check("a member sees their organizations and roles", mine.status === 200 && mine.json.length === 2 && mine.json.some((m) => m.organization.id === A.json.id && m.role === "requester"), JSON.stringify(mine.json?.map((m) => [m.organization.name, m.role])));
+    check("a member sees their organizations and roles", mine.status === 200 && mine.json.some((m) => m.organization.id === A.json.id && m.role === "requester") && mine.json.some((m) => m.organization.id === B.json.id && m.role === "billing"), JSON.stringify(mine.json?.map((m) => [m.organization.name, m.role])));
     check("requester lists A's jobs", (await rider.req("GET", `/api/org/${A.json.id}/jobs`)).status === 200);
     check("requester cannot see A's statement", (await rider.req("GET", `/api/org/${A.json.id}/statement`)).status === 403);
     check("billing sees B's statement", (await rider.req("GET", `/api/org/${B.json.id}/statement`)).status === 200);

@@ -31,6 +31,7 @@ import { PwaInstallGate } from "@/components/PwaInstallGate";
 import { captureInstallGateFromUrl } from "@/lib/pwaInstall";
 import { AssistantFab } from "@/components/AssistantFab";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import PortalPage from "@/pages/portal/PortalPage";
 
 function AuthRedirect({ component: Component }: { component: React.ComponentType }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -69,6 +70,7 @@ function Router() {
           <Route path="/payments" component={PaymentsPage} />
           <Route path="/card-setup" component={CardSetupPage} />
           <Route path="/admin" component={AdminDashboard} />
+          <Route path="/org" component={PortalPage} />
           <Route path="/driver/insights" component={DriverInsights} />
         </>
       )}

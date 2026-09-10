@@ -22,8 +22,9 @@ import {
   CommercialError, addMemberByEmail, createOrganization, firstBookingMember, getOrganization,
   listMembers, listOrganizations, membershipRole, organizationsForUser, removeMember, updateOrganization,
 } from "./organizations";
-import { bookJob, listJobs } from "./jobs";
+import { bookJob, jobForRide, listJobs } from "./jobs";
 import { buildStatement, statementToCsv, statementToHtml } from "./statements";
+import { cancelJob } from "./cancel";
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown;
 
@@ -33,6 +34,8 @@ export interface CommercialDeps {
   isAdminOrSessionAuth: Handler;
   /** Tell drivers covering the pickup county about a new open scheduled ride. */
   notifyDriversOfScheduledRide: (ride: Ride, pickupCounty: string | null) => void;
+  /** Tell one signed-in user something now (socket) and on their phone (push). */
+  notifyUser: (userId: string, payload: { type: string; rideId: string; message: string; title: string }) => void;
 }
 
 const userIdOf = (req: any): string | undefined => req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -175,6 +178,43 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
   app.get("/api/org/:orgId/members", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
     try { res.json(await listMembers(req.orgId)); }
     catch (err) { fail(res, err, "Could not list members"); }
+  });
+  app.get("/api/org/:orgId", gate, isAuthenticated, requireMember(), async (req: any, res) => {
+    try {
+      const org = await getOrganization(req.orgId);
+      if (!org) return res.status(404).json({ message: "Organization not found." });
+      const { stripeCustomerId: _s, notes: _n, ...safe } = org;
+      res.json({ ...safe, role: req.orgRole });
+    } catch (err) { fail(res, err, "Could not load the organization"); }
+  });
+  app.post("/api/org/:orgId/members", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
+    try { res.status(201).json(await addMemberByEmail(req.orgId, req.body?.email, req.body?.role ?? "requester")); }
+    catch (err) { fail(res, err, "Could not add the member"); }
+  });
+  app.delete("/api/org/:orgId/members/:userId", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
+    try {
+      if (req.params.userId === userIdOf(req)) return res.status(400).json({ message: "You cannot remove yourself. Ask another owner, or PG Ride." });
+      res.json({ removed: await removeMember(req.orgId, req.params.userId) });
+    } catch (err) { fail(res, err, "Could not remove the member"); }
+  });
+  app.post("/api/org/:orgId/jobs/:jobId/cancel", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try {
+      const result = await cancelJob(req.orgId, req.params.jobId, userIdOf(req)!, String(req.body?.reason ?? ""));
+      const org = await getOrganization(req.orgId);
+      const job = await jobForRide(result.ride.id);
+      const label = job ? formatJobNumber(job.jobNumber) : result.ride.id;
+      console.log(`[commercial] job cancelled :: Account: ${org?.name ?? req.orgId} | Job: ${label} | fee ${result.cancellationFee}${result.driverId ? ` | driver ${result.driverId}` : ""}`);
+      if (result.driverId) {
+        deps.notifyUser(result.driverId, {
+          type: "ride_cancelled",
+          rideId: result.ride.id,
+          title: "Job cancelled",
+          message: `${org?.name ?? "The organization"} cancelled ${label} (${result.ride.scheduledAt ? new Date(result.ride.scheduledAt).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }) : "scheduled"}).`,
+        });
+      }
+      opsAlert(formatOpsAlert("🏢 Commercial job cancelled", [["Account", org?.name ?? req.orgId], ["Job", label], ["Fee", `$${result.cancellationFee}`], ["Reason", String(req.body?.reason ?? "").slice(0, 120)]]));
+      res.json({ ride: result.ride, cancellationFee: result.cancellationFee });
+    } catch (err) { fail(res, err, "Could not cancel the job"); }
   });
 
   async function sendStatement(res: Response, organizationId: string, query: any) {
