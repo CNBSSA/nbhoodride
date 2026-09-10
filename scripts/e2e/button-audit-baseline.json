@@ -59,6 +59,7 @@
     "button-delete-confirm",
     "button-dismiss-push",
     "button-download-receipt",
+    "button-driver-badge-*",
     "button-driver-cancel-*",
     "button-driver-documents",
     "button-edit-profile",
@@ -269,6 +270,7 @@
     "button-portal-cancel-job-*": "needs a cancellable job in the list; journeys create and clean their own",
     "button-portal-remove-member-*": "shown for other members only; the seeded organization has one",
     "button-portal-submit-standing-order": "disabled until passenger, addresses, days and time are filled",
-    "button-portal-toggle-standing-order-*": "one per standing order; journeys create and clean their own"
+    "button-portal-toggle-standing-order-*": "one per standing order; journeys create and clean their own",
+    "button-driver-badge-*": "one pair per approved driver in the admin drivers panel; a fresh database has one approved driver and the audit does not grant badges"
   }
 }

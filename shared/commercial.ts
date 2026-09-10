@@ -90,6 +90,8 @@ export interface StatementLine extends JobCharges {
   from: string;
   to: string;
   status: string;
+  /** Who received the passenger at the far end, when the driver recorded it. */
+  receivedBy?: string | null;
 }
 
 export interface StatementTotals {
@@ -162,18 +164,18 @@ const money = (n: number) => n.toFixed(2);
 /** A statement as CSV: one header, one line per job, one totals line. */
 export function statementCsv(orgName: string, window: StatementWindow, lines: StatementLine[]): string {
   const rows: string[][] = [
-    ["Job", "Date", "Passenger", "From", "To", "Status", "Fare", "Facility fee", "Waiting", "Cancellation fee", "Total"],
+    ["Job", "Date", "Passenger", "From", "To", "Status", "Received by", "Fare", "Facility fee", "Waiting", "Cancellation fee", "Total"],
   ];
   for (const l of lines) {
     rows.push([
-      formatJobNumber(l.jobNumber), l.at, l.passenger, l.from, l.to, l.status,
+      formatJobNumber(l.jobNumber), l.at, l.passenger, l.from, l.to, l.status, l.receivedBy ?? "",
       money(l.status === "completed" ? num(l.fare) : 0), money(l.status === "completed" ? num(l.facilityFee) : 0),
       money(l.status === "completed" ? num(l.waitFee) : 0), money(l.status === "completed" ? 0 : num(l.cancellationFee)),
       money(jobTotal(l.status, l)),
     ]);
   }
   const t = statementTotals(lines);
-  rows.push(["Total", window.label, orgName, "", "", `${t.completed} completed, ${t.cancelled} cancelled`, money(t.fares), money(t.facilityFees), money(t.waitFees), money(t.cancellationFees), money(t.total)]);
+  rows.push(["Total", window.label, orgName, "", "", `${t.completed} completed, ${t.cancelled} cancelled`, "", money(t.fares), money(t.facilityFees), money(t.waitFees), money(t.cancellationFees), money(t.total)]);
   return rows.map((r) => r.map(csvCell).join(",")).join("\n") + "\n";
 }
 

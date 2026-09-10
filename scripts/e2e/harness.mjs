@@ -54,7 +54,7 @@ export async function seedFixtures(db) {
   await db.query(`INSERT INTO driver_profiles (user_id, approval_status, is_online) VALUES ($1,'approved',false) ON CONFLICT DO NOTHING`, [FIXTURES.driver.id]);
   // A previous run (the every-button audit as admin, a journey that left the
   // driver online) must not decide whether this driver can go online.
-  await db.query(`UPDATE driver_profiles SET approval_status='approved', is_suspended=false, is_online=false, current_location=NULL WHERE user_id=$1`, [FIXTURES.driver.id]);
+  await db.query(`UPDATE driver_profiles SET approval_status='approved', is_suspended=false, is_online=false, current_location=NULL, badges=ARRAY['medical','delivery']::text[] WHERE user_id=$1`, [FIXTURES.driver.id]);
   // A standing organization with the e2e rider as owner, so the requester
   // portal has something to show the audits (journeys create their own).
   await db.query(`INSERT INTO organizations (id, name, category, facility_fee) VALUES ('e2e-org', 'E2E Dialysis Center', 'medical', 4.00) ON CONFLICT (id) DO NOTHING`);
@@ -110,6 +110,22 @@ export async function deleteRides(db, ids) {
   await db.query("UPDATE sms_booking_sessions SET active_ride_id=NULL WHERE active_ride_id = ANY($1::varchar[])", [ids]).catch(() => {});
   await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [ids]);
 }
+/**
+ * Everything belonging to these organizations: their jobs' rides first (the
+ * standing-order sweep may have booked more than the journey listed), then
+ * the jobs, the standing orders, the members and the organizations.
+ */
+export async function deleteOrgs(db, orgIds) {
+  orgIds = (orgIds || []).filter(Boolean);
+  if (orgIds.length === 0) return;
+  const { rows } = await db.query("SELECT ride_id FROM commercial_jobs WHERE organization_id = ANY($1::varchar[])", [orgIds]);
+  await db.query("DELETE FROM commercial_jobs WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+  await deleteRides(db, rows.map((r) => r.ride_id)).catch(() => {});
+  await db.query("DELETE FROM commercial_standing_orders WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+  await db.query("DELETE FROM organization_members WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+  await db.query("DELETE FROM organizations WHERE id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+}
+
 export function stopServer(server) { try { server.child.kill(); } catch {} }
 export function serverLog(server) { try { return readFileSync(server.logPath, "utf8"); } catch { return ""; } }
 

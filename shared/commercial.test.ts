@@ -56,10 +56,10 @@ describe("statement", () => {
     const w = statementMonthWindow("2026-09");
     const csv = statementCsv("Largo Dialysis, LLC", w, lines);
     const rows = csv.trim().split("\n");
-    expect(rows[0]).toBe("Job,Date,Passenger,From,To,Status,Fare,Facility fee,Waiting,Cancellation fee,Total");
-    expect(rows[1]).toContain("J-00001,2026-09-02T10:10:00.000Z,Ada L.,\"Bowie, MD\",\"Largo, MD\",completed,30.00,4.00,0.00,0.00,34.00");
-    expect(rows[3]).toContain("cancelled,0.00,0.00,0.00,7.00,7.00");
-    expect(rows[5]).toBe('Total,September 2026,"Largo Dialysis, LLC",,,"2 completed, 1 cancelled",60.00,8.00,2.50,7.00,77.50');
+    expect(rows[0]).toBe("Job,Date,Passenger,From,To,Status,Received by,Fare,Facility fee,Waiting,Cancellation fee,Total");
+    expect(rows[1]).toContain("J-00001,2026-09-02T10:10:00.000Z,Ada L.,\"Bowie, MD\",\"Largo, MD\",completed,,30.00,4.00,0.00,0.00,34.00");
+    expect(rows[3]).toContain("cancelled,,0.00,0.00,0.00,7.00,7.00");
+    expect(rows[5]).toBe('Total,September 2026,"Largo Dialysis, LLC",,,"2 completed, 1 cancelled",,60.00,8.00,2.50,7.00,77.50');
   });
   it("a passenger name that looks like a formula cannot run in a spreadsheet", () => {
     const w = statementMonthWindow("2026-09");

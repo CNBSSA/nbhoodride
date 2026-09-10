@@ -138,6 +138,10 @@ export const driverProfiles = pgTable("driver_profiles", {
   approvalStatus: varchar("approval_status").default("pending"),
   discountRate: decimal("discount_rate", { precision: 3, scale: 2 }).default("0.00"),
   currentLocation: jsonb("current_location").$type<{lat: number, lng: number}>(),
+  // What this driver is cleared for beyond ordinary rides: medical transport,
+  // deliveries (shared/driverBadges.ts). Granted by the operator; an unbadged
+  // driver is never shown that work and cannot claim it.
+  badges: text("badges").array().notNull().default(sql`ARRAY[]::text[]`),
   // Counties this driver accepts rides in. Empty array = all Maryland counties accepted.
   acceptedCounties: text("accepted_counties").array().notNull().default(sql`ARRAY[]::text[]`),
   // Daily session — cleared when driver goes offline or at midnight

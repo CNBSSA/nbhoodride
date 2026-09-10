@@ -42,6 +42,7 @@ export async function buildStatement(organizationId: string, monthKey: string): 
       facilityFee: j.facilityFee,
       waitFee: j.waitFee,
       cancellationFee: j.cancellationFee,
+      receivedBy: (j.proof as any)?.receivedBy ?? null,
     }));
   return {
     organization: { id: org.id, name: org.name, category: org.category, contactName: org.contactName, contactEmail: org.contactEmail },
@@ -66,7 +67,7 @@ export function statementToHtml(s: Statement): string {
     const completed = l.status === "completed";
     return `<tr>
       <td>${esc(formatJobNumber(l.jobNumber))}</td><td>${esc(when(l.at))}</td><td>${esc(l.passenger)}</td>
-      <td>${esc(l.from)}<br><span class="to">to ${esc(l.to)}</span></td><td>${esc(l.status)}</td>
+      <td>${esc(l.from)}<br><span class="to">to ${esc(l.to)}</span></td><td>${esc(l.status)}</td><td>${esc(l.receivedBy ?? "")}</td>
       <td class="n">${completed ? money(l.fare) : ""}</td><td class="n">${completed ? money(l.facilityFee) : ""}</td>
       <td class="n">${completed ? money(l.waitFee) : ""}</td><td class="n">${completed ? "" : money(l.cancellationFee)}</td>
       <td class="n">${money(completed ? Number(l.fare ?? 0) + Number(l.facilityFee ?? 0) + Number(l.waitFee ?? 0) : l.cancellationFee)}</td>
@@ -93,9 +94,9 @@ export function statementToHtml(s: Statement): string {
   <div><p><strong>${esc(s.organization.name)}</strong></p><p>${esc(category)}</p>${s.organization.contactName ? `<p>${esc(s.organization.contactName)}</p>` : ""}${s.organization.contactEmail ? `<p>${esc(s.organization.contactEmail)}</p>` : ""}</div>
 </div>
 <table>
-  <thead><tr><th>Job</th><th>When</th><th>Passenger</th><th>Trip</th><th>Status</th><th class="n">Fare</th><th class="n">Facility fee</th><th class="n">Waiting</th><th class="n">Cancellation</th><th class="n">Total</th></tr></thead>
-  <tbody>${rows || `<tr><td colspan="10">No billable jobs in ${esc(s.window.label)}.</td></tr>`}</tbody>
-  <tfoot><tr><td colspan="5">${t.completed} completed · ${t.cancelled} cancelled</td><td class="n">${money(t.fares)}</td><td class="n">${money(t.facilityFees)}</td><td class="n">${money(t.waitFees)}</td><td class="n">${money(t.cancellationFees)}</td><td class="n">${money(t.total)}</td></tr></tfoot>
+  <thead><tr><th>Job</th><th>When</th><th>Passenger</th><th>Trip</th><th>Status</th><th>Received by</th><th class="n">Fare</th><th class="n">Facility fee</th><th class="n">Waiting</th><th class="n">Cancellation</th><th class="n">Total</th></tr></thead>
+  <tbody>${rows || `<tr><td colspan="11">No billable jobs in ${esc(s.window.label)}.</td></tr>`}</tbody>
+  <tfoot><tr><td colspan="6">${t.completed} completed · ${t.cancelled} cancelled</td><td class="n">${money(t.fares)}</td><td class="n">${money(t.facilityFees)}</td><td class="n">${money(t.waitFees)}</td><td class="n">${money(t.cancellationFees)}</td><td class="n">${money(t.total)}</td></tr></tfoot>
 </table>
 <p class="note">Fares are the amounts quoted when each job was booked. Times are Eastern. Questions: ${esc(BRAND.supportEmail ?? "")}</p>
 </body></html>`;

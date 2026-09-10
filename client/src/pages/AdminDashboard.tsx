@@ -29,6 +29,7 @@ import { format } from "date-fns";
 import { useLocation } from "wouter";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { OrganizationsPanel } from "@/components/admin/OrganizationsPanel";
+import { DriverBadges } from "@/components/admin/DriverBadges";
 import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
@@ -884,6 +885,7 @@ function DriversPanel() {
                     <Badge className="bg-green-500 text-white">Approved</Badge>
                     {d.licenseNumber && <Badge variant="outline">License: {d.licenseNumber}</Badge>}
                   </div>
+                  <DriverBadges userId={d.userId} badges={d.badges} />
                   {d.vehicles?.length > 0 && (
                     <div className="mt-2 text-xs text-muted-foreground">
                       {d.vehicles.map((v: any) => (

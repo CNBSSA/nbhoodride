@@ -37,7 +37,7 @@ interface JobRow {
   id: string; jobNumber: number; rideId: string; status: string; scheduledAt: string | null; createdAt: string; completedAt: string | null;
   passengerName: string | null; passengerPhone: string | null; pickup: { lat: number; lng: number; address: string }; destination: { lat: number; lng: number; address: string };
   vehicleType: string | null; estimatedFare: string | null; actualFare: string | null; facilityFee: string; waitFee: string; cancellationFee: string;
-  poNumber: string | null; notes: string | null; driverName: string | null; total: number;
+  poNumber: string | null; notes: string | null; driverName: string | null; total: number; proof?: { receivedBy?: string } | null;
 }
 interface Member { userId: string; role: OrgRole; firstName: string | null; lastName: string | null; email: string | null }
 interface StatementLine { jobNumber: number; at: string; passenger: string; from: string; to: string; status: string; fare: string | null; facilityFee: string; waitFee: string; cancellationFee: string }
@@ -263,7 +263,7 @@ function JobsList({ org, canCancel }: { org: Org; canCancel: boolean }) {
                   <td className="px-3 py-2 truncate">{j.passengerName}</td>
                   <td className="px-3 py-2"><div className="truncate">{j.pickup?.address}</div><div className="truncate text-muted-foreground">to {j.destination?.address}</div></td>
                   <td className="px-3 py-2"><Badge variant={tone[j.status] ?? "outline"} className="whitespace-nowrap">{STATUS_WORDS[j.status] ?? j.status}</Badge></td>
-                  <td className="px-3 py-2">{j.driverName ?? "—"}</td>
+                  <td className="px-3 py-2">{j.driverName ?? "—"}{j.proof?.receivedBy ? <div className="text-xs text-muted-foreground">received by {j.proof.receivedBy}</div> : null}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{money(j.total)}</td>
                   <td className="px-3 py-2 text-right">
                     {canCancel && CANCELLABLE.has(j.status) && (
