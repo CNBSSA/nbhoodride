@@ -98,10 +98,12 @@
     "button-portal-book-inline",
     "button-portal-cancel-job-*",
     "button-portal-close-book",
+    "button-portal-close-delivery",
     "button-portal-close-standing-order",
     "button-portal-install",
     "button-portal-new-standing-order",
     "button-portal-remove-member-*",
+    "button-portal-submit-delivery",
     "button-portal-submit-job",
     "button-portal-submit-standing-order",
     "button-portal-toggle-standing-order-*",
@@ -273,6 +275,7 @@
     "button-portal-submit-standing-order": "disabled until passenger, addresses, days and time are filled",
     "button-portal-toggle-standing-order-*": "one per standing order; journeys create and clean their own",
     "button-driver-badge-*": "one pair per approved driver in the admin drivers panel; a fresh database has one approved driver and the audit does not grant badges",
-    "button-portal-add-payment-method": "starts a Stripe SetupIntent; Stripe is unreachable from the audit's sandbox"
+    "button-portal-add-payment-method": "starts a Stripe SetupIntent; Stripe is unreachable from the audit's sandbox",
+    "button-portal-submit-delivery": "disabled until both contacts, both addresses and a ready time are filled"
   }
 }
