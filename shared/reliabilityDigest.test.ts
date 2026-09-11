@@ -44,8 +44,12 @@ describe("reading the report", () => {
     const f = readReport(healthy.replace('"status":"pass"}]', '"status":"fail"}]'));
     expect(f.failures.length).toBe(1);
   });
-  it("notices when the written analysis was skipped", () => {
-    expect(readReport("⚠️ AI analysis skipped: ANTHROPIC_API_KEY secret is not set").aiSkipped).toBe(true);
+  it("notices when the written analysis was skipped, and why", () => {
+    const f = readReport("⚠️ AI analysis skipped: ANTHROPIC_API_KEY secret is not set");
+    expect(f.aiSkipped).toBe(true);
+    expect(f.aiSkipReason).toBe("ANTHROPIC_API_KEY secret is not set");
+    expect(readReport("⚠️ AI analysis skipped: Claude API returned no text (stop_reason: max_tokens)").aiSkipReason)
+      .toBe("Claude API returned no text (stop_reason: max_tokens)");
   });
 });
 
@@ -77,9 +81,17 @@ describe("the message", () => {
     expect(msg).toContain("⚠️ SMS opt-out webhook (TCPA)");
     expect(msg).toContain("Full report: https://github.com/x/y/issues/178");
   });
-  it("says so when the analysis was skipped, and how to fix it", () => {
+  it("says why the analysis was skipped, in the report's own words", () => {
     const msg = buildReliabilityDigest({ report: "AI analysis skipped: ANTHROPIC_API_KEY secret is not set" });
-    expect(msg).toContain("ANTHROPIC_API_KEY is not set as a repository secret");
+    expect(msg).toContain("ANTHROPIC_API_KEY secret is not set");
+  });
+
+  it("does not blame a missing key for a failure that was not that", () => {
+    // The morning this was wrong, the key was set and the call returned
+    // nothing — and the digest still said the secret was missing.
+    const msg = buildReliabilityDigest({ report: "AI analysis skipped: Claude API returned no text (stop_reason: max_tokens)" });
+    expect(msg).toContain("stop_reason: max_tokens");
+    expect(msg).not.toContain("is not set as a repository secret");
   });
   it("always fits one Telegram message", () => {
     const huge = healthy + "\n" + Array.from({ length: 400 }, (_, i) => `{"label":"Check ${i}","status":"warn"}`).join("\n");

@@ -38,6 +38,8 @@ export interface DigestFacts {
   audit: string | null;
   parity: string | null;
   aiSkipped: boolean;
+  /** Why it was skipped, in the report's own words. */
+  aiSkipReason: string | null;
 }
 
 /** Pull the few things worth waking up to out of the evidence bundle. */
@@ -55,6 +57,7 @@ export function readReport(report: string): DigestFacts {
     audit: firstMatch(report, /npm audit: (total \d+[^\n]*)/),
     parity: firstMatch(report, /left-right count \(developOnly mainOnly\): ([^\n]+)/),
     aiSkipped: /AI analysis skipped/.test(report),
+    aiSkipReason: firstMatch(report, /AI analysis skipped:\s*([^\n]+)/),
   };
 }
 
@@ -96,7 +99,11 @@ export function buildReliabilityDigest(input: DigestInput): string {
     for (const x of f.warnings) lines.push(`  ⚠️ ${x}`);
   }
   if (f.aiSkipped) {
-    lines.push("", "Note: the written analysis was skipped because ANTHROPIC_API_KEY is not set as a repository secret. Only the raw evidence was gathered.");
+    // Say what actually went wrong. This line used to assert the key was
+    // missing whatever the reason, which sent a morning's debugging at the
+    // wrong problem: the key was set, and the API had returned nothing.
+    const why = f.aiSkipReason ? f.aiSkipReason.replace(/\s+$/, "") : "reason not recorded";
+    lines.push("", `Note: the written analysis was skipped — ${why}. Only the raw evidence was gathered.`);
   }
   if (input.issueUrl) lines.push("", `Full report: ${input.issueUrl}`);
   else if (input.runUrl) lines.push("", `Run: ${input.runUrl}`);
