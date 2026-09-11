@@ -20,6 +20,7 @@ import { pool } from "./db";
 import { stripe } from "./stripeService";
 import { opsAlert, telegramOpsEnabled } from "./telegramOps";
 import { recordReliabilityEvent } from "./reliabilityEvents";
+import { noteWatchRan } from "./watchHeartbeat";
 
 export type DependencyName = "database" | "stripe";
 
@@ -107,6 +108,7 @@ export interface WatchOutcome {
 export async function runDependencyWatch(now: Date = new Date()): Promise<WatchOutcome> {
   const report = await checkDependencies(now);
   last = report;
+  noteWatchRan("dependency-watch", now);
   const paged: WatchOutcome["paged"] = [];
 
   for (const dep of Object.keys(report.deps) as DependencyName[]) {

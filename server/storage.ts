@@ -1,3 +1,4 @@
+import { normalizeBadges } from "@shared/driverBadges";
 import {
   users,
   driverProfiles,
@@ -375,7 +376,7 @@ export interface IStorage {
   getDriverDailySession(userId: string): Promise<{ dailyCounties: string[] | null, dailySessionStart: Date | null } | null>;
 
   // Scheduled ride operations
-  getOpenScheduledRides(driverCounties?: string[]): Promise<any[]>;
+  getOpenScheduledRides(driverCounties?: string[], driverBadges?: string[]): Promise<any[]>;
   updateRideCounty(rideId: string, county: string): Promise<void>;
   getScheduledRidesWithDriver(userId: string): Promise<any[]>;
   claimScheduledRide(rideId: string, driverId: string): Promise<Ride>;
@@ -1205,8 +1206,23 @@ export class DatabaseStorage implements IStorage {
       .orderBy(asc(rides.scheduledAt));
   }
 
-  async getOpenScheduledRides(driverCounties?: string[]): Promise<any[]> {
+  async getOpenScheduledRides(driverCounties?: string[], driverBadges?: string[]): Promise<any[]> {
     const riderAlias = alias(users, 'rider_user');
+    // Commercial work is shown only to drivers cleared for it
+    // (shared/driverBadges.ts): medical jobs need the medical badge, both
+    // kinds of delivery share one. An ordinary ride has no category and is
+    // shown to everyone.
+    // Each badge is bound as its own parameter: drizzle expands a JS array
+    // into a row, not a text[], so `= ANY(...)` cannot be used here.
+    const badges = normalizeBadges(driverBadges);
+    const badgeWhere = badges.length === 0
+      ? sql`NOT EXISTS (SELECT 1 FROM commercial_jobs cj WHERE cj.ride_id = ${rides.id})`
+      : sql`NOT EXISTS (
+          SELECT 1 FROM commercial_jobs cj
+          WHERE cj.ride_id = ${rides.id}
+            AND (CASE WHEN cj.category = 'medical' THEN 'medical' ELSE 'delivery' END)
+                NOT IN (${sql.join(badges.map((b) => sql`${b}`), sql`, `)})
+        )`;
     const baseWhere = and(
       eq(rides.status, "pending"),
       isNotNull(rides.scheduledAt),
@@ -1215,7 +1231,8 @@ export class DatabaseStorage implements IStorage {
       // Circuit seats are claimed as a whole RUN via the circuit-runs claim
       // board — listing them individually here would let one driver claim a
       // single seat and split the run.
-      or(isNull(rides.rideType), sql`${rides.rideType} <> 'circuit'`)
+      or(isNull(rides.rideType), sql`${rides.rideType} <> 'circuit'`),
+      badgeWhere
     );
 
     // If driver has specific county preferences, filter to rides in those counties.
@@ -1244,6 +1261,9 @@ export class DatabaseStorage implements IStorage {
         scheduledAt: rides.scheduledAt,
         pickupCounty: rides.pickupCounty,
         createdAt: rides.createdAt,
+        // medical | business | food when this is commercial work, so the
+        // driver's card can say what it is before they claim it.
+        commercialKind: sql<string | null>`(SELECT cj.category FROM commercial_jobs cj WHERE cj.ride_id = ${rides.id})`,
         rider: {
           id: riderAlias.id,
           firstName: riderAlias.firstName,
@@ -2010,6 +2030,9 @@ export class DatabaseStorage implements IStorage {
     // it (early end) — a normal completion charges the quote.
     const routePath = (ride.routePath as Array<{lat: number, lng: number, timestamp: number}>) || [];
     let meteredFare: number | undefined;
+    // The same GPS price before any promotion came off it — what the driver is
+    // paid on when a ride ends early on a promo trip.
+    let meteredGross: number | undefined;
 
     if (routePath.length >= 2 && ride.startedAt) {
       // Calculate actual distance from GPS waypoints
@@ -2041,6 +2064,8 @@ export class DatabaseStorage implements IStorage {
         if (originalFareNum > 0 && estimatedFareNum > 0 && estimatedFareNum < originalFareNum) {
           fareAmount = fareAmount * (estimatedFareNum / originalFareNum);
         }
+        meteredGross = Math.round(fareAmount * 100) / 100;
+
         const promoDiscount = parseFloat(ride.promoDiscountApplied || "0");
         if (promoDiscount > 0) {
           fareAmount = Math.max(0, fareAmount - promoDiscount);
@@ -2079,7 +2104,26 @@ export class DatabaseStorage implements IStorage {
     // 15% to PG Ride, 100% of the tip to the driver.
     const fareForSplit = parseFloat(updateData.actualFare ?? ride.actualFare ?? ride.estimatedFare ?? "0");
     const tipForSplit = tipAmount !== undefined ? tipAmount : parseFloat(ride.tipAmount ?? "0");
-    const split = splitFare(fareForSplit, tipForSplit);
+
+    // A welcome credit or promotion is what PG Ride spends to win a rider, not
+    // a cut in the driver's pay: they drove the same miles either way, so they
+    // are paid on the fare before the discount and PG Ride's share absorbs it.
+    // An explicit fare is what an admin says the ride cost, discount and all,
+    // so it is taken at face value.
+    const promo = Math.max(0, parseFloat(ride.promoDiscountApplied || "0"));
+    let driverBasis = fareForSplit;
+    if (promo > 0 && resolved && resolved.basis !== "explicit") {
+      const quotedGross = parseFloat(ride.estimatedFare || "0");
+      const grossOfBasis = resolved.basis === "metered" && meteredGross !== undefined ? meteredGross : quotedGross;
+      // A metered fare is capped at the quote, so the basis is capped with it —
+      // the driver is never paid on more than the rider was ever quoted.
+      const capped = quotedGross > 0 ? Math.min(grossOfBasis, quotedGross) : grossOfBasis;
+      driverBasis = Math.max(fareForSplit, capped);
+    }
+    const split = splitFare(fareForSplit, tipForSplit, { driverBasis });
+    if (driverBasis > fareForSplit) {
+      console.log(`[fare] ride ${rideId}: driver paid on $${driverBasis.toFixed(2)} (pre-discount), rider charged $${fareForSplit.toFixed(2)}; PG Ride's share $${split.platformFee.toFixed(2)}`);
+    }
     updateData.platformFee = split.platformFee.toFixed(2);
     updateData.driverEarnings = split.driverEarnings.toFixed(2);
 

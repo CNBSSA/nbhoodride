@@ -1,5 +1,6 @@
 import { sql, relations } from 'drizzle-orm';
 import {
+  serial,
   index,
   uniqueIndex,
   jsonb,
@@ -137,6 +138,10 @@ export const driverProfiles = pgTable("driver_profiles", {
   approvalStatus: varchar("approval_status").default("pending"),
   discountRate: decimal("discount_rate", { precision: 3, scale: 2 }).default("0.00"),
   currentLocation: jsonb("current_location").$type<{lat: number, lng: number}>(),
+  // What this driver is cleared for beyond ordinary rides: medical transport,
+  // deliveries (shared/driverBadges.ts). Granted by the operator; an unbadged
+  // driver is never shown that work and cannot claim it.
+  badges: text("badges").array().notNull().default(sql`ARRAY[]::text[]`),
   // Counties this driver accepts rides in. Empty array = all Maryland counties accepted.
   acceptedCounties: text("accepted_counties").array().notNull().default(sql`ARRAY[]::text[]`),
   // Daily session — cleared when driver goes offline or at midnight
@@ -201,7 +206,9 @@ export const paymentStatusEnum = pgEnum("payment_status", [
 // Payment method enum
 export const paymentMethodEnum = pgEnum("payment_method", [
   "cash",
-  "card"
+  "card",
+  // Commercial jobs: billed to the organization on a statement, never charged at the ride.
+  "invoice"
 ]);
 
 // Ownership status enum
@@ -894,6 +901,153 @@ export const reliabilityEvents = pgTable("reliability_events", {
   index("idx_reliability_events_created").on(table.createdAt),
   index("idx_reliability_events_kind").on(table.kind),
 ]);
+
+// ── Commercial riders (shared/commercial.ts) ──
+// An organization books rides and deliveries for other people and is billed
+// for them. Every commercial job is still a row in `rides` (dispatch,
+// claiming, tracking, paging and the driver app all key off it); the
+// commercial detail lives in `commercial_jobs`, joined one to one, so rider
+// flows never learn it exists.
+export const organizations = pgTable("organizations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name").notNull(),
+  /** medical | business | food */
+  category: varchar("category").notNull(),
+  /** active | paused — paused organizations cannot book */
+  status: varchar("status").notNull().default("active"),
+  /** weekly_debit | net_terms */
+  billingMode: varchar("billing_mode").notNull().default("weekly_debit"),
+  /** Charged to the organization on every completed job, on top of the fare. */
+  facilityFee: decimal("facility_fee", { precision: 8, scale: 2 }).notNull().default("0.00"),
+  contactName: varchar("contact_name"),
+  contactEmail: varchar("contact_email"),
+  contactPhone: varchar("contact_phone"),
+  address: jsonb("address").$type<{ lat?: number; lng?: number; address?: string }>(),
+  notes: text("notes"),
+  stripeCustomerId: varchar("stripe_customer_id"),
+  /** The bank account or card the weekly debit is taken from. */
+  defaultPaymentMethodId: varchar("default_payment_method_id"),
+  /** us_bank_account | card — what the desk attached, for the words shown. */
+  defaultPaymentMethodKind: varchar("default_payment_method_kind"),
+  /** Cancellation / no-show terms, per agreement (slice 3). */
+  terms: jsonb("terms").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const organizationMembers = pgTable("organization_members", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  /** owner | requester | billing */
+  role: varchar("role").notNull().default("requester"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_organization_member").on(table.organizationId, table.userId),
+  index("idx_organization_members_user").on(table.userId),
+]);
+
+export const commercialJobs = pgTable("commercial_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  rideId: varchar("ride_id").notNull().unique().references(() => rides.id),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  /** The member who booked it (or the admin booking on the organization's behalf). */
+  requesterId: varchar("requester_id").references(() => users.id),
+  category: varchar("category").notNull(),
+  /** Short number the facility and the driver can say aloud: J-00042. */
+  jobNumber: serial("job_number").notNull(),
+  poNumber: varchar("po_number"),
+  notes: text("notes"),
+  facilityFee: decimal("facility_fee", { precision: 8, scale: 2 }).notNull().default("0.00"),
+  waitMinutes: integer("wait_minutes").notNull().default(0),
+  waitFee: decimal("wait_fee", { precision: 8, scale: 2 }).notNull().default("0.00"),
+  cancellationFee: decimal("cancellation_fee", { precision: 8, scale: 2 }).notNull().default("0.00"),
+  /** Deliveries (slice 6): a job with no passenger. */
+  parcelSize: varchar("parcel_size"),
+  pickupContact: jsonb("pickup_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
+  dropContact: jsonb("drop_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
+  windowStart: timestamp("window_start"),
+  windowEnd: timestamp("window_end"),
+  /** Who received the passenger or the parcel, and the photo if there is one. */
+  proof: jsonb("proof").$type<Record<string, unknown>>(),
+  /** The standing order this job came from, if any (slice 3). */
+  standingOrderId: varchar("standing_order_id"),
+  /** Eastern service date "YYYY-MM-DD": one job per order, date and leg. */
+  serviceDate: varchar("service_date"),
+  /** out | return */
+  leg: varchar("leg").notNull().default("out"),
+  /** For a will-call return: the outbound job it belongs to. */
+  returnOf: varchar("return_of"),
+  /** open | statement | paid */
+  billedStatus: varchar("billed_status").notNull().default("open"),
+  statementId: varchar("statement_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_commercial_jobs_org").on(table.organizationId),
+  // One job per standing order, service date and leg: the sweep can run as
+  // often as it likes and never books the same trip twice.
+  uniqueIndex("uq_commercial_job_standing").on(table.standingOrderId, table.serviceDate, table.leg),
+  uniqueIndex("uq_commercial_job_return_of").on(table.returnOf),
+]);
+
+// One week's work, priced and collected: issued the following Monday and
+// charged to the organization's bank account (shared/billingCycle.ts). Jobs
+// carry the statement id once issued, so a job is billed exactly once.
+export const commercialStatements = pgTable("commercial_statements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  /** The Eastern date of the week's Monday, "YYYY-MM-DD". */
+  periodKey: varchar("period_key").notNull(),
+  periodLabel: varchar("period_label").notNull(),
+  periodStart: timestamp("period_start").notNull(),
+  periodEnd: timestamp("period_end").notNull(),
+  jobCount: integer("job_count").notNull().default(0),
+  total: decimal("total", { precision: 10, scale: 2 }).notNull().default("0.00"),
+  /** open | charging | paid | failed | void */
+  status: varchar("status").notNull().default("open"),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+  issuedAt: timestamp("issued_at").defaultNow().notNull(),
+  paidAt: timestamp("paid_at"),
+}, (table) => [
+  uniqueIndex("uq_commercial_statement_period").on(table.organizationId, table.periodKey),
+]);
+export type CommercialStatement = typeof commercialStatements.$inferSelect;
+
+// A facility's recurring instruction: "Monday, Wednesday, Friday at 6:10 AM,
+// return when the patient is ready". Jobs are booked from it a week ahead
+// (server/commercial/standingOrders.ts); rules in shared/commercialTerms.ts.
+export const commercialStandingOrders = pgTable("commercial_standing_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  passengerName: varchar("passenger_name").notNull(),
+  passengerPhone: varchar("passenger_phone"),
+  pickup: jsonb("pickup").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  destination: jsonb("destination").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  /** 0 = Sunday … 6 = Saturday. */
+  days: jsonb("days").$type<number[]>().notNull(),
+  departureHour: integer("departure_hour").notNull(),
+  departureMinute: integer("departure_minute").notNull().default(0),
+  /** none | fixed | will_call */
+  returnMode: varchar("return_mode").notNull().default("none"),
+  returnHour: integer("return_hour"),
+  returnMinute: integer("return_minute"),
+  vehicleType: varchar("vehicle_type").notNull().default("standard"),
+  notes: text("notes"),
+  poNumber: varchar("po_number"),
+  isActive: boolean("is_active").notNull().default(true),
+  pausedAt: timestamp("paused_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_commercial_standing_orders_org").on(table.organizationId),
+]);
+export type CommercialStandingOrder = typeof commercialStandingOrders.$inferSelect;
+export type Organization = typeof organizations.$inferSelect;
+export type OrganizationMember = typeof organizationMembers.$inferSelect;
+export type CommercialJob = typeof commercialJobs.$inferSelect;
 
 export const agentAuditLog = pgTable("agent_audit_log", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

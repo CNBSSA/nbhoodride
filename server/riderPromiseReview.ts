@@ -18,6 +18,7 @@ import type { IStorage } from "./storage";
 import { opsAlert } from "./telegramOps";
 import { APP_ERROR_KINDS, SERVER_ERROR_KINDS } from "./reliabilityEvents";
 import { RISK_STAMPS } from "@shared/rideRisk";
+import { watchesInWindow } from "./watchHeartbeat";
 import {
   DANGER_WINDOW_HOURS,
   LATE_PICKUP_MINUTES,
@@ -146,6 +147,10 @@ export async function collectRiderPromiseMetrics(window: ReviewWindow, now: Date
   `);
   const pg = (paged.rows?.[0] ?? {}) as Record<string, unknown>;
 
+  // Which overnight checks were alive. A check that stopped quietly is the
+  // thing this review exists to catch.
+  const watches = await watchesInWindow(start, end);
+
   return {
     booked: n(y.booked),
     delivered: n(y.delivered),
@@ -167,6 +172,7 @@ export async function collectRiderPromiseMetrics(window: ReviewWindow, now: Date
       peopleAffected: n(hh.people),
       outages,
     },
+    overnight: watches.map((w) => ({ label: w.label, beats: w.beats, ran: w.beats > 0 })),
     pagedAhead: { paged: n(pg.paged), delivered: n(pg.delivered) },
     ahead: {
       unclaimedNext24h: n(a.unclaimed_24h),

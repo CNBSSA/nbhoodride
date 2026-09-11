@@ -165,6 +165,19 @@ import { riderAlert, setRiderAlertRecorder } from "./riderAlerts";
 import { reliabilityEventRecorder } from "./reliabilityEvents";
 import { pageAtRiskRides } from "./rideRiskWatch";
 import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
+import { registerCommercialRoutes } from "./commercial/routes";
+import { materializeAllStandingOrders } from "./commercial/standingOrders";
+import { runWeeklyBilling } from "./commercial/billing";
+import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
+import { noteWatchRan } from "./watchHeartbeat";
+import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
+import { payDriverForCompletedJob, payDriverForWaiting } from "./commercial/driverPay";
+import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
+import { cancelJob as cancelCommercialJob } from "./commercial/cancel";
+import { commercialJobForRide, jobForRide } from "./commercial/jobs";
+import { formatJobNumber } from "@shared/commercial";
+import { CommercialError } from "./commercial/organizations";
+import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadges";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
@@ -2153,6 +2166,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/driver/rides/:rideId/accept', isAuthenticated, async (req: any, res) => {
     try {
+      // Commercial work: only a driver cleared for it (the board hides these
+      // jobs anyway; this is the belt to that pair of braces).
+      try {
+        await assertDriverMayTakeRide(
+          req.session?.userId || req.session?.testUserId || req.user?.claims?.sub,
+          req.params.rideId,
+        );
+      } catch (badgeErr) {
+        if (badgeErr instanceof CommercialError) return res.status(badgeErr.status).json({ message: badgeErr.message });
+        throw badgeErr;
+      }
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
 
@@ -2682,9 +2706,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Collect the flat no-show fee from the rider's authorization (or
       // wallet on cash rides) and split it with the fairness fund.
-      const collected = await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE);
-      const split = await routeFeeWithFairnessSplit(collected, userId, rideId);
-      const updated = await storage.markRideNoShow(rideId, RIDER_NO_SHOW_FEE, "Rider did not appear at pickup");
+      // A commercial job's no-show costs the ORGANIZATION what its agreement
+      // says, on the statement, so nothing is taken from anyone's card here —
+      // but the driver drove there and waited exactly as on any other ride,
+      // so their cut of the fee is the same and is paid now, not when the
+      // organization settles its week.
+      const commercialNoShowFee = ride.paymentMethod === 'invoice'
+        ? await recordNoShowForRide(rideId).catch((err) => { console.error(`[no-show] commercial fee failed for ride ${rideId}:`, err); return null; })
+        : null;
+      const noShowFee = commercialNoShowFee ?? RIDER_NO_SHOW_FEE;
+      const collected = commercialNoShowFee === null ? await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE) : 0;
+      const split = await routeFeeWithFairnessSplit(commercialNoShowFee ?? collected, userId, rideId);
+      const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
 
       await logRideAudit({
@@ -3020,7 +3053,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (ride.driverId && finalAmount > 0) {
         // 85% of the fare + 100% of the tip; PG Ride's 15% (and the card
         // processing fee, which PG Ride absorbs) stays in the Stripe balance.
-        const driverCredit = splitFare(finalFare, tip).driverEarnings;
+        // completeRide already fixed that split on the ride — including paying
+        // the driver on the fare before any promotion — so credit exactly what
+        // it recorded and the ledger can never disagree with the ride. The
+        // recompute is only for a row written before the split was recorded.
+        const recorded = parseFloat(ride.driverEarnings ?? "");
+        const driverCredit = Number.isFinite(recorded) && recorded > 0
+          ? recorded
+          : splitFare(finalFare, tip).driverEarnings;
         if (driverCredit > 0) await storage.creditDriverEarningsOnce(rideId, ride.driverId, driverCredit);
       }
 
@@ -3138,8 +3178,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "The fare is the amount quoted at booking; it can't be set at completion." });
       }
       const preCheck = await storage.getRide(rideId);
-      if (parsed.tipAmount !== undefined && parsed.tipAmount > 0 && preCheck?.paymentMethod === 'card') {
-        return res.status(400).json({ message: "Tips on card rides are added by the rider, not entered by the driver." });
+      if (parsed.tipAmount !== undefined && parsed.tipAmount > 0 && preCheck?.paymentMethod !== 'cash') {
+        return res.status(400).json({
+          message: preCheck?.paymentMethod === 'invoice'
+            ? "Tips are not taken on jobs billed to an organization."
+            : "Tips on card rides are added by the rider, not entered by the driver.",
+        });
       }
       const actualFare: number | undefined = undefined;
       const tipAmount = parsed.tipAmount;
@@ -3193,6 +3237,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       } catch (auditErr) {
         console.error(`[complete] audit log failed for ride ${rideId}:`, auditErr);
+      }
+
+      // A commercial job's waiting at the door is priced by the organization's
+      // own terms and lands on the job for the statement.
+      //
+      // This is also where the driver is paid. A card ride settles below and a
+      // cash driver is holding the fare; a commercial driver is neither, so
+      // without this they finish the work and their wallet stays empty. The
+      // organization is billed weekly, but the driver is paid now — their money
+      // does not wait on someone else's payment terms.
+      //
+      // Never blocks the completion response, but an unpaid driver is paged
+      // rather than swallowed: it is not something to discover at payout time.
+      if (ride.paymentMethod === 'invoice') {
+        const waiting = await recordWaitingForCompletedRide(rideId)
+          .catch((err) => { console.error(`[complete] waiting charge failed for ride ${rideId}:`, err); return null; });
+        try {
+          await payDriverForCompletedJob(storage, ride);
+          if (waiting && waiting.waitFee > 0) await payDriverForWaiting(storage, ride, waiting.waitFee);
+        } catch (payErr) {
+          console.error(`[complete] DRIVER NOT PAID for commercial ride ${rideId}:`, payErr);
+          opsAlert(formatOpsAlert("💸 Driver not paid for commercial work", [
+            ["Ride", rideId.slice(0, 8)],
+            ["Driver", ride.driverId ?? "—"],
+            ["Owed", `$${Number(ride.driverEarnings ?? 0).toFixed(2)}`],
+            ["Reason", String((payErr as any)?.message ?? payErr).slice(0, 200)],
+            ["Fix", "Credit the driver by hand in the admin wallet panel"],
+          ]));
+        }
       }
 
       // If ride uses card payment, settle against the auth taken at accept time.
@@ -4278,6 +4351,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const role: "rider" | "driver" = userId === ride.riderId ? "rider" : "driver";
 
+      // ── A commercial job is the organization's, not this person's ──
+      // The requester is the rider of record, so this route is reachable from
+      // their own ride history. Cancelling here must use the ACCOUNT's terms
+      // and put the fee on the ACCOUNT's statement — never take it from the
+      // requester's wallet, which the rider fee ladder below would do.
+      if (role === "rider" && ride.paymentMethod === "invoice") {
+        const job = await commercialJobForRide(rideId);
+        if (job) {
+          try {
+            const result = await cancelCommercialJob(job.organizationId, job.jobId, userId, reason || "Cancelled by the organization");
+            console.log(`[commercial] job cancelled from the app :: ride ${rideId} | fee ${result.cancellationFee} | ${result.reason}`);
+            if (result.driverId) {
+              const ws = activeConnections.get(result.driverId);
+              if (ws?.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "ride_cancelled", rideId, message: "This job was cancelled by the organization." }));
+              }
+            }
+            return res.json({
+              success: true,
+              ride: result.ride,
+              cancellationFee: Number(result.cancellationFee),
+              feeReason: result.reason,
+              billedTo: "organization",
+              message: Number(result.cancellationFee) > 0
+                ? `Cancelled. A $${Number(result.cancellationFee).toFixed(2)} fee goes on your organization's statement.`
+                : "Cancelled at no charge.",
+            });
+          } catch (commercialErr: any) {
+            const status = commercialErr?.status ?? 500;
+            return res.status(status).json({ message: commercialErr?.message ?? "Could not cancel this job." });
+          }
+        }
+      }
+
       // ── Status guards: terminal rides can't be re-cancelled ──
       if (["completed", "cancelled", "no_show"].includes(ride.status ?? "")) {
         return res.status(400).json({ message: `Ride is already ${ride.status} and can't be cancelled.` });
@@ -4750,7 +4857,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const profile = await storage.getDriverProfile(userId);
       const driverCounties = profile?.acceptedCounties ?? [];
       const [open, mine] = await Promise.all([
-        storage.getOpenScheduledRides(driverCounties.length > 0 ? driverCounties : undefined),
+        storage.getOpenScheduledRides(driverCounties.length > 0 ? driverCounties : undefined, await badgesFor(userId)),
         storage.getDriverUpcomingRides(userId),
       ]);
       res.json({ open, mine });
@@ -4763,6 +4870,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Driver claims an open scheduled ride
   app.post('/api/driver/rides/:rideId/claim', isAuthenticated, async (req: any, res) => {
     try {
+      // Commercial work: only a driver cleared for it (the board hides these
+      // jobs anyway; this is the belt to that pair of braces).
+      try {
+        await assertDriverMayTakeRide(
+          req.session?.userId || req.session?.testUserId || req.user?.claims?.sub,
+          req.params.rideId,
+        );
+      } catch (badgeErr) {
+        if (badgeErr instanceof CommercialError) return res.status(badgeErr.status).json({ message: badgeErr.message });
+        throw badgeErr;
+      }
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
 
@@ -4805,6 +4923,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           for (const p of takenPayloads) ws.send(p);
         }
       });
+
+      // The passenger holds no account: text them the driver's name and a
+      // link that shows the car. Never blocks the claim.
+      textPassengerTrackingLink(storage, rideId).catch((err) => console.error(`[commercial] passenger text failed for ride ${rideId}:`, err));
 
       res.json(claimedRides[0]);
     } catch (error: any) {
@@ -5020,6 +5142,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       walletEnabled: featureFlags.walletEnabled,
       driverMarketplaceEnabled: featureFlags.driverMarketplaceEnabled,
       equityProgramEnabled: featureFlags.equityProgramEnabled,
+      commercialEnabled: featureFlags.commercialEnabled,
     });
   });
 
@@ -5486,8 +5609,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const incident = await storage.createEmergencyIncidentWithSharing(incidentData);
 
+      // A facility's patient may be in the car. Name the account and the job
+      // so the operator can ring the facility at once; the passenger's own
+      // name still never leaves the app.
+      const sosJob = rideId ? await jobForRide(rideId).catch(() => null) : null;
+      // Mirrored to the server log like every rider alert: an SOS must be on
+      // record even when Telegram is unreachable.
+      console.warn(`[sos] ${incidentType} :: incident on ride ${rideId ?? "none"}${sosJob ? ` | Account: ${sosJob.organizationName} | Job: ${formatJobNumber(sosJob.jobNumber)} | commercial passenger aboard | Ring the facility: ${sosJob.contactPhone ?? "no number on the account"}${sosJob.contactName ? ` (${sosJob.contactName})` : ""}` : ""}`);
       opsAlert(formatOpsAlert("🚨 SOS ALERT", [
         ["Type", incidentType],
+        // A person is rung by a person. The facility is not auto-texted: an
+        // unattended business line would answer nobody and would tell a
+        // company something happened to someone in their care with no human
+        // judgement in between. What the operator needs is the number, here,
+        // now — not a note telling them to go and find it.
+        ...(sosJob ? [
+          ["Account", sosJob.organizationName] as [string, string],
+          ["Job", formatJobNumber(sosJob.jobNumber)] as [string, string],
+          ["Ring the facility", sosJob.contactPhone
+            ? `${sosJob.contactPhone}${sosJob.contactName ? ` (${sosJob.contactName})` : ""}`
+            : "no number on the account — add one in Admin → Organizations"] as [string, string],
+        ] : []),
         ["Details", description],
         ["Map", location?.lat != null && location?.lng != null ? `https://maps.google.com/?q=${Number(location.lat)},${Number(location.lng)}` : null],
         ["Admin", `${resolveAppUrl()}/admin`],
@@ -8455,6 +8597,46 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
     }
   });
 
+  /**
+   * The signature at the facility: the driver types who received the
+   * passenger. Stored on the commercial job for the desk, the statement and
+   * any later dispute.
+   */
+  app.post('/api/driver/rides/:rideId/proof', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      res.json({ proof: await recordProof(req.params.rideId, userId, req.body ?? {}) });
+    } catch (error) {
+      if (error instanceof CommercialError) return res.status(error.status).json({ message: error.message });
+      console.error("proof failed:", error);
+      res.status(500).json({ message: "Could not record who received the passenger" });
+    }
+  });
+
+  /** What this driver is cleared for, and what each badge means. */
+  app.get('/api/driver/badges', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const badges = await badgesFor(userId);
+      res.json({ badges, summary: describeBadges(badges), all: DRIVER_BADGES.map((b) => ({ id: b, label: BADGE_LABELS[b], held: badges.includes(b) })) });
+    } catch (error) {
+      res.status(500).json({ message: "Could not load your badges" });
+    }
+  });
+
+  /** Operator: grant or revoke a driver's badges. */
+  app.put('/api/admin/drivers/:userId/badges', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const badges = await setBadges(req.params.userId, req.body?.badges);
+      console.log(`[commercial] badges set :: driver ${req.params.userId} | ${describeBadges(badges)}`);
+      res.json({ badges, summary: describeBadges(badges) });
+    } catch (error) {
+      if (error instanceof CommercialError) return res.status(error.status).json({ message: error.message });
+      console.error("set badges failed:", error);
+      res.status(500).json({ message: "Could not set the badges" });
+    }
+  });
+
   app.post('/api/rides/:rideId/sms-tracking', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -10652,6 +10834,39 @@ Generate the FAQ list.`;
 
   // ── Scheduled ride monitor: fires every minute ──
   // Handles: 30-min reminders, T-60/15/5 escalations, midnight county cleanup
+  // ── Commercial riders: organizations that book for other people and are billed ──
+  // Registered here so the driver-board broadcast can reuse the live socket map.
+  registerCommercialRoutes(app, {
+    storage,
+    isAuthenticated,
+    isAdminOrSessionAuth,
+    notifyDriversOfScheduledRide: (ride, pickupCounty) => {
+      const payload = JSON.stringify({
+        type: 'new_scheduled_ride',
+        rideId: ride.id,
+        riderId: ride.riderId,
+        riderName: ride.passengerName ? `${ride.passengerName.split(' ')[0]} ${(ride.passengerName.split(' ')[1] ?? '').charAt(0)}${ride.passengerName.includes(' ') ? '.' : ''}` : 'Passenger',
+        riderRating: '5.0',
+        pickupAddress: ride.pickupLocation?.address || '',
+        destinationAddress: ride.destinationLocation?.address || '',
+        estimatedFare: ride.estimatedFare,
+        scheduledAt: ride.scheduledAt,
+        pickupInstructions: ride.pickupInstructions || '',
+        pickupCounty: pickupCounty || '',
+        commercial: true,
+      });
+      activeConnections.forEach((ws, driverId) => {
+        const counties = driverCountyCache.get(driverId) ?? [];
+        if (driverCoversCounty(counties, pickupCounty) && ws.readyState === WebSocket.OPEN) ws.send(payload);
+      });
+    },
+    notifyUser: (userId, payload) => {
+      const ws = activeConnections.get(userId);
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+      deliverUserNotification(userId, { type: payload.type, title: payload.title, body: payload.message, tag: `job-${payload.rideId}`, url: '/', data: { rideId: payload.rideId } }).catch(console.error);
+    },
+  });
+
   setInterval(async () => {
     // Circuit run reminders (cutoff + pre-departure) — idempotent via
     // NotifiedAt stamps, so failures here just retry next minute.
@@ -10670,8 +10885,27 @@ Generate the FAQ list.`;
         materializeAllWeeklyPlans(storage, now).catch((err) => console.error("weekly plan sweep failed:", err));
       }
 
+      // ── Heartbeats: prove to tomorrow's review that these ran ──
+      noteWatchRan("minute-sweep", now);
+
       // ── Rider Promise Review: 4:00 AM Eastern, once a day, to Telegram ──
       maybeSendRiderPromiseReview(storage, now).catch((err) => console.error("rider promise review failed:", err));
+
+      // ── Weekly billing: last week's jobs, debited Monday morning ──
+      // Claimed once per week through the same claim-once table the daily
+      // review uses, so restarts and extra instances cannot double-charge.
+      if (featureFlags.commercialEnabled && billingRunDue(now)) {
+        const weekKey = previousBillingWeek(now).weekKey;
+        storage.claimWebhookEvent("commercial_weekly_billing", weekKey, "weekly")
+          .then((claimed) => claimed ? runWeeklyBilling(now, weekKey) : null)
+          .catch((err) => console.error("weekly billing failed:", err));
+      }
+
+      // ── Standing orders: book the next week's commercial jobs ──
+      // Every 5 minutes; booking is idempotent per (order, service date, leg).
+      if (featureFlags.commercialEnabled && now.getMinutes() % 5 === 0) {
+        materializeAllStandingOrders(storage, now).catch((err) => console.error("standing order sweep failed:", err));
+      }
 
       // ── Ride-risk watch: page ops before the rider finds out ──
       pageAtRiskRides(now).catch((err) => console.error("ride risk watch failed:", err));

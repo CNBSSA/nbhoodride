@@ -199,5 +199,40 @@ try {
     await rideDb.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [[riderRide.id, driverRide.id]]).catch(() => {});
     await rideDb.end();
   }
+
+// ── The requester portal: a desk tool that must still work on a phone ──
+// Chromium only (WebKit repeats the mobile sheets above); the portal has no
+// bottom sheets, so the check is that its primary actions are on screen and
+// hit-testable at a desk-sized window and at phone width.
+if (engine === chromium) {
+  section("Requester portal (organizations)");
+  for (const [label, viewport] of [["desk 1280×800", { width: 1280, height: 800 }], ["phone 390×844", VIEWPORT]]) {
+    const ctx = await browser.newContext({ viewport, isMobile: viewport.width < 500, hasTouch: viewport.width < 500 });
+    const page = await ctx.newPage();
+    try {
+      await loginAs(page, server.base, FIXTURES.rider.email);
+      await page.goto(server.base + "/org", { waitUntil: "domcontentloaded" });
+      const book = page.locator('[data-testid="button-portal-book"]').first();
+      await book.waitFor({ timeout: 15000 });
+      const box = await book.boundingBox();
+      const inside = !!box && box.y >= 0 && box.y + box.height <= viewport.height && box.x >= 0 && box.x + box.width <= viewport.width;
+      check(`portal ${label}: Book a job is on screen`, inside, box ? `at ${Math.round(box.x)},${Math.round(box.y)}` : "no box");
+      const hit = await page.evaluate(() => { const el = document.querySelector('[data-testid="button-portal-book"]'); if (!el) return false; const r = el.getBoundingClientRect(); const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!at && (el.contains(at) || at.contains(el)); });
+      check(`portal ${label}: Book a job is hit-testable`, hit);
+      check(`portal ${label}: the board and the map are both present`, (await page.locator('[data-testid="portal-today"]').count()) === 1 && (await page.locator('[data-testid="portal-jobs-map"]').count()) === 1);
+      await page.keyboard.press("n");
+      const drawer = page.locator('[data-testid="portal-book-drawer"]');
+      await drawer.waitFor({ timeout: 5000 }).catch(() => {});
+      check(`portal ${label}: N opens the booking form with the passenger field focused`, (await drawer.count()) === 1 && (await page.evaluate(() => document.activeElement?.getAttribute("data-testid"))) === "input-portal-passenger-name");
+      await page.keyboard.press("Escape");
+      check(`portal ${label}: Escape closes it`, (await drawer.count()) === 0);
+      const scrollW = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+      check(`portal ${label}: no sideways scroll`, scrollW);
+    } catch (e) {
+      check(`portal ${label}: audit ran`, false, String(e?.message ?? e).split("\n")[0]);
+    } finally { await ctx.close(); }
+  }
+}
 } finally { await browser.close(); stopServer(server); }
+
 process.exit(summary() === 0 ? 0 : 1);

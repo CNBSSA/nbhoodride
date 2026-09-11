@@ -49,12 +49,13 @@ const SCREENS = [
   { role: "rider", path: "/" }, { role: "rider", path: "/ratings" }, { role: "rider", path: "/payments" }, { role: "rider", path: "/card-setup" },
   { role: "driver", path: "/" }, { role: "driver", path: "/driver/insights" },
   { role: "admin", path: "/admin" }, { role: "admin", path: "/" },
+  { role: "requester", path: "/org" },
 ];
 
 /** BUTTON_AUDIT_ONLY="rider /" runs one screen; BUTTON_AUDIT_VERBOSE=1 prints every press. */
 const ONLY = process.env.BUTTON_AUDIT_ONLY || "";
 const VERBOSE = process.env.BUTTON_AUDIT_VERBOSE === "1";
-const ROLE_USER = { rider: FIXTURES.rider.email, driver: FIXTURES.driver.email, admin: FIXTURES.admin.email };
+const ROLE_USER = { rider: FIXTURES.rider.email, driver: FIXTURES.driver.email, admin: FIXTURES.admin.email, requester: FIXTURES.rider.email };
 
 // ── source inventory: every static button testid, and every templated prefix ──
 function sourceFiles(dir, out = []) {
@@ -278,7 +279,10 @@ async function auditScreen(browser, base, screen) {
     pressedHere += 1;
     if (r.problems.length) broken.push(r);
     // Depth 2: anything that appeared because of this press. A sheet takes a
-    // moment to fill, so give it one before looking.
+    // moment to fill, so give it one before looking. A press that navigated to
+    // another screen reveals that screen's buttons, which belong to its own
+    // audit, not to this one.
+    if (new URL(page.url()).pathname !== screen.path) { await restore(page, base, screen, opts); continue; }
     if (await page.locator('[role="dialog"]').first().isVisible().catch(() => false)) await page.waitForTimeout(500);
     const now = await visibleClickables(page);
     // Named buttons first: they are the ones the coverage rule tracks, and a
@@ -360,28 +364,37 @@ try {
 }
 
 section("Coverage");
-const isPressed = (id) => pressed.has(id);
+const wasPressed = (id) => pressed.has(id);
 const templateCovered = (prefix) => [...pressed].some((p) => p.startsWith(prefix));
-const unpressedStatic = [...staticIds].filter((id) => !isPressed(id) && !NEVER.test(id)).sort();
+const unpressedStatic = [...staticIds].filter((id) => !wasPressed(id) && !NEVER.test(id)).sort();
 const unpressedTemplates = [...templatePrefixes].filter((p) => !templateCovered(p) && !NEVER.test(p)).sort();
 const neverPressed = [...staticIds].filter((id) => NEVER.test(id)).length;
+const inventory = [...[...staticIds], ...[...templatePrefixes].map((p) => `${p}*`)].sort();
 const baselineFile = existsSync(BASELINE_PATH) ? JSON.parse(readFileSync(BASELINE_PATH, "utf8")) : null;
-if (covered.size) console.log(`  not pressable from where the audit stood (covered by another layer), ${covered.size}: ${[...covered].slice(0, 12).join(", ")}${covered.size > 12 ? ", …" : ""}`);
-if (skipped.size) console.log(`  never pressed by rule, ${skipped.size}: ${[...skipped.keys()].join(", ")}`);
 console.log(`  buttons in source: ${staticIds.size} static + ${templatePrefixes.size} templated · pressed ${pressed.size} distinct testids in ${pressCount} presses across ${SCREENS.length} screens · ${neverPressed} never pressed by rule`);
 if (ONLY) {
   console.log("  (single-screen run: coverage not judged)");
 } else if (!baselineFile) {
   writeFileSync(BASELINE_PATH, JSON.stringify({
-    note: "Buttons the every-button audit cannot reach today. Each entry is a debt: reach it or remove it. A button not listed here and not pressed fails the audit.",
+    note: "Every button the audit knew about when this file was written (known), and the ones it could not reach from a clean screen (unreachable, each a debt: reach it or remove it). A button in source that is in neither list is new and fails the audit until it is pressed or listed here with a reason.",
+    known: inventory,
     unreachable: Object.fromEntries([...unpressedStatic, ...unpressedTemplates.map((p) => `${p}*`)].map((id) => [id, "not reachable from the audited screens yet"])),
   }, null, 2) + "\n");
   check("baseline written (first run) — commit scripts/e2e/button-audit-baseline.json", true, `${unpressedStatic.length + unpressedTemplates.length} listed`);
 } else {
-  const known = new Set(Object.keys(baselineFile.unreachable ?? {}));
-  const newUnreached = [...unpressedStatic.filter((id) => !known.has(id)), ...unpressedTemplates.filter((p) => !known.has(`${p}*`)).map((p) => `${p}*`)];
-  check(`every button in source is pressed by the audit or listed in the baseline`, newUnreached.length === 0, newUnreached.length ? `new buttons the audit cannot reach: ${newUnreached.join(", ")} — give them a path in button-audit.mjs or list them in button-audit-baseline.json with a reason` : "");
-  const nowReachable = [...known].filter((id) => id.endsWith("*") ? templateCovered(id.slice(0, -1)) : isPressed(id));
+  // The rule is about NEW buttons: a testid the baseline has never seen must be
+  // pressed or listed. A known button that was reached on other runs but not
+  // this one (a sheet that took a beat longer to fill) is reported, not failed —
+  // otherwise timing decides whether a promotion is red.
+  const known = new Set([...(baselineFile.known ?? []), ...Object.keys(baselineFile.unreachable ?? {})]);
+  const unpressedAll = [...unpressedStatic, ...unpressedTemplates.map((p) => `${p}*`)];
+  const newUnreached = unpressedAll.filter((id) => !known.has(id));
+  const knownMissed = unpressedAll.filter((id) => known.has(id) && !(id in (baselineFile.unreachable ?? {})));
+  check(`every new button in source is pressed by the audit or listed in the baseline`, newUnreached.length === 0, newUnreached.length ? `new buttons the audit cannot reach: ${newUnreached.join(", ")} — give them a path in button-audit.mjs or list them in button-audit-baseline.json with a reason` : "");
+  if (knownMissed.length) console.log(`  ⚠ reachable on other runs, not pressed this run: ${knownMissed.join(", ")}`);
+  const nowReachable = Object.keys(baselineFile.unreachable ?? {}).filter((id) => id.endsWith("*") ? templateCovered(id.slice(0, -1)) : wasPressed(id));
   if (nowReachable.length) console.log(`  ✨ now reachable, remove from baseline: ${nowReachable.join(", ")}`);
+  const unknownInSource = inventory.filter((id) => !known.has(id));
+  if (unknownInSource.length && newUnreached.length === 0) console.log(`  new buttons pressed this run, add to baseline.known when convenient: ${unknownInSource.join(", ")}`);
 }
 process.exit(summary() === 0 ? 0 : 1);

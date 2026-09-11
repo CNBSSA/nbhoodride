@@ -18,7 +18,7 @@ import {
   type AnnouncementAudience,
 } from "@shared/announcementPolicy";
 import {
-  LayoutDashboard, Users, Car, MapPin, AlertTriangle,
+  LayoutDashboard, Users, Car, MapPin, AlertTriangle, Building2,
   DollarSign, Award, TrendingUp, Shield, Activity,
   CheckCircle, XCircle, Eye, Ban, UserCheck, Clock,
   ChevronLeft, BarChart3, Brain, AlertCircle, BookOpen,
@@ -28,6 +28,9 @@ import {
 import { format } from "date-fns";
 import { useLocation } from "wouter";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
+import { OrganizationsPanel } from "@/components/admin/OrganizationsPanel";
+import { DriverBadges } from "@/components/admin/DriverBadges";
+import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
 
@@ -37,7 +40,7 @@ import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
 const SOS_INCIDENTS_KEY = "/api/admin/emergency-incidents?limit=500";
 const AWAITING_SETTLEMENT_KEY = "/api/admin/rides/awaiting-settlement";
 
-type AdminTab = "dashboard" | "announcements" | "sos" | "reconciliation" | "pricing" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
+type AdminTab = "dashboard" | "organizations" | "announcements" | "sos" | "reconciliation" | "pricing" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
 function useAdminNavPendingCounts() {
   const { data: pendingUsers = [] } = useQuery<any[]>({
@@ -90,6 +93,7 @@ export default function AdminDashboard() {
 
   const tabs: { id: AdminTab; label: string; icon: any }[] = [
     { id: "dashboard", label: "Overview", icon: LayoutDashboard },
+    { id: "organizations", label: "Organizations", icon: Building2 },
     { id: "announcements", label: "Announcements", icon: Megaphone },
     { id: "sos", label: "SOS / Emergency", icon: Siren },
     { id: "reconciliation", label: "Reconciliation", icon: Banknote },
@@ -109,6 +113,9 @@ export default function AdminDashboard() {
     { id: "activity", label: "Activity Log", icon: Activity },
     { id: "analytics", label: "Analytics", icon: BarChart3 },
   ];
+  // Commercial riders is a new surface, on per deployment (COMMERCIAL_ENABLED).
+  const flags = useFeatureFlags();
+  const visibleTabs = tabs.filter((t) => t.id !== "organizations" || flags.commercialEnabled);
 
   return (
     <div className="min-h-screen bg-gray-50" data-testid="admin-dashboard">
@@ -121,7 +128,7 @@ export default function AdminDashboard() {
             <h1 className="text-lg font-bold">PG Ride Admin</h1>
           </div>
           <nav className="space-y-1">
-            {tabs.map((tab) => (
+            {visibleTabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
@@ -162,7 +169,7 @@ export default function AdminDashboard() {
             <Button variant="ghost" size="sm" onClick={() => setLocation("/")} data-testid="btn-admin-back-mobile">
               <ChevronLeft className="w-4 h-4" />
             </Button>
-            {tabs.map((tab) => (
+            {visibleTabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
@@ -183,6 +190,7 @@ export default function AdminDashboard() {
 
         <main className="flex-1 p-6 md:p-8 mt-12 md:mt-0 max-w-6xl">
           {activeTab === "dashboard" && <DashboardOverview />}
+          {activeTab === "organizations" && <OrganizationsPanel />}
           {activeTab === "announcements" && <AnnouncementsPanel />}
           {activeTab === "sos" && <SosPanel />}
           {activeTab === "reconciliation" && <ReconciliationPanel />}
@@ -877,6 +885,7 @@ function DriversPanel() {
                     <Badge className="bg-green-500 text-white">Approved</Badge>
                     {d.licenseNumber && <Badge variant="outline">License: {d.licenseNumber}</Badge>}
                   </div>
+                  <DriverBadges userId={d.userId} badges={d.badges} />
                   {d.vehicles?.length > 0 && (
                     <div className="mt-2 text-xs text-muted-foreground">
                       {d.vehicles.map((v: any) => (

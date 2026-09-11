@@ -16,6 +16,7 @@ export const FIXTURES = {
   admin: { id: "e2e-admin", email: "e2e-admin@example.com" },
   rider: { id: "e2e-rider", email: "e2e-rider@example.com" },
   driver: { id: "e2e-driver", email: "e2e-driver@example.com" },
+  org: { id: "e2e-org", name: "E2E Dialysis Center" },
 };
 
 let failures = 0, passes = 0;
@@ -53,7 +54,11 @@ export async function seedFixtures(db) {
   await db.query(`INSERT INTO driver_profiles (user_id, approval_status, is_online) VALUES ($1,'approved',false) ON CONFLICT DO NOTHING`, [FIXTURES.driver.id]);
   // A previous run (the every-button audit as admin, a journey that left the
   // driver online) must not decide whether this driver can go online.
-  await db.query(`UPDATE driver_profiles SET approval_status='approved', is_suspended=false, is_online=false, current_location=NULL WHERE user_id=$1`, [FIXTURES.driver.id]);
+  await db.query(`UPDATE driver_profiles SET approval_status='approved', is_suspended=false, is_online=false, current_location=NULL, badges=ARRAY['medical','delivery']::text[] WHERE user_id=$1`, [FIXTURES.driver.id]);
+  // A standing organization with the e2e rider as owner, so the requester
+  // portal has something to show the audits (journeys create their own).
+  await db.query(`INSERT INTO organizations (id, name, category, facility_fee) VALUES ('e2e-org', 'E2E Dialysis Center', 'medical', 4.00) ON CONFLICT (id) DO NOTHING`);
+  await db.query(`INSERT INTO organization_members (organization_id, user_id, role) VALUES ('e2e-org', $1, 'owner') ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner'`, [FIXTURES.rider.id]);
   const { rows: [prof] } = await db.query("SELECT id FROM driver_profiles WHERE user_id=$1", [FIXTURES.driver.id]);
   await db.query(`INSERT INTO vehicles (driver_profile_id, make, model, year, color, license_plate)
     SELECT $1::varchar,'Toyota','Camry',2020,'Blue','E2E0001' WHERE NOT EXISTS (SELECT 1 FROM vehicles WHERE driver_profile_id=$1::varchar)`, [prof.id]);
@@ -72,6 +77,10 @@ export async function startServer(env = {}) {
       // Production-like: card-only, Stripe armed (unreachable here), email "configured",
       // Telegram + Twilio dummies so every alert/SMS path executes and fails gracefully.
       WALLET_ENABLED: "false", STRIPE_SECRET_KEY: "sk_test_e2e_fake",
+      // Commercial riders is off in production until proven; journeys exercise
+      // it on. Overridable so the flag-off state — what production actually
+      // runs — can be re-proved on demand, not just argued about.
+      COMMERCIAL_ENABLED: process.env.COMMERCIAL_ENABLED ?? "true",
       RESEND_API_KEY: "re_e2e_fake", RESEND_FROM: "noreply@peoplegoverned.com",
       TELEGRAM_BOT_TOKEN: "e2e", TELEGRAM_CHAT_ID: "1",
       TWILIO_ACCOUNT_SID: "ACe2e", TWILIO_AUTH_TOKEN: "e2e-auth-token", TWILIO_PHONE_NUMBER: "+18882743045",
@@ -96,13 +105,31 @@ export async function startServer(env = {}) {
 export async function deleteRides(db, ids) {
   ids = (ids || []).filter(Boolean);
   if (ids.length === 0) return;
-  for (const [table, col] of [["disputes", "ride_id"], ["emergency_incidents", "ride_id"], ["agent_audit_log", "ride_id"], ["ride_surface_cache", "ride_id"], ["bonus_allocations", "ride_id"], ["agent_action_proposals", "ride_id"], ["l4_readiness_events", "ride_id"], ["lost_found_reports", "ride_id"], ["ride_messages", "ride_id"]]) {
+  for (const [table, col] of [["commercial_jobs", "ride_id"], ["disputes", "ride_id"], ["emergency_incidents", "ride_id"], ["agent_audit_log", "ride_id"], ["ride_surface_cache", "ride_id"], ["bonus_allocations", "ride_id"], ["agent_action_proposals", "ride_id"], ["l4_readiness_events", "ride_id"], ["lost_found_reports", "ride_id"], ["ride_messages", "ride_id"], ["wallet_transactions", "ride_id"]]) {
     await db.query(`DELETE FROM ${table} WHERE ${col} = ANY($1::varchar[])`, [ids]).catch(() => {});
   }
   await db.query("UPDATE guardian_links SET active_ride_id=NULL WHERE active_ride_id = ANY($1::varchar[])", [ids]).catch(() => {});
   await db.query("UPDATE sms_booking_sessions SET active_ride_id=NULL WHERE active_ride_id = ANY($1::varchar[])", [ids]).catch(() => {});
   await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [ids]);
 }
+/**
+ * Everything belonging to these organizations: their jobs' rides first (the
+ * standing-order sweep may have booked more than the journey listed), then
+ * the jobs, the standing orders, the members and the organizations.
+ */
+export async function deleteOrgs(db, orgIds) {
+  orgIds = (orgIds || []).filter(Boolean);
+  if (orgIds.length === 0) return;
+  const { rows } = await db.query("SELECT ride_id FROM commercial_jobs WHERE organization_id = ANY($1::varchar[])", [orgIds]);
+  await db.query("UPDATE commercial_jobs SET statement_id = NULL WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+  await db.query("DELETE FROM commercial_statements WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+  await db.query("DELETE FROM commercial_jobs WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+  await deleteRides(db, rows.map((r) => r.ride_id)).catch(() => {});
+  await db.query("DELETE FROM commercial_standing_orders WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+  await db.query("DELETE FROM organization_members WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+  await db.query("DELETE FROM organizations WHERE id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+}
+
 export function stopServer(server) { try { server.child.kill(); } catch {} }
 export function serverLog(server) { try { return readFileSync(server.logPath, "utf8"); } catch { return ""; } }
 
@@ -127,6 +154,15 @@ export class Session {
     this.absorb(res);
     let json = null; try { json = await res.json(); } catch {}
     return { status: res.status, json };
+  }
+  /** Same session, raw body: for CSV and HTML responses. */
+  async text(method, path) {
+    const headers = { "X-Forwarded-Proto": "https", Cookie: this.cookieHeader() };
+    const csrf = this.jar.get("csrf_token");
+    if (csrf) headers["X-CSRF-Token"] = decodeURIComponent(csrf);
+    const res = await fetch(this.base + path, { method, headers });
+    this.absorb(res);
+    return { status: res.status, text: await res.text(), type: res.headers.get("content-type") ?? "" };
   }
   async csrf() { await this.req("GET", "/api/csrf"); return this; }
   async login(email, password = PASSWORD) { await this.csrf(); return this.req("POST", "/api/auth/email-login", { email, password }); }

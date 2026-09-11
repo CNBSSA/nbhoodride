@@ -15,6 +15,8 @@ import { db } from "./db";
 import { riderAlert } from "./riderAlerts";
 import { PLAN_TIMEZONE, zonedParts } from "@shared/weeklyPlan";
 import { describeDriverRisk, driverPickupCheck, unclaimedPageDue } from "@shared/rideRisk";
+import { commercialPagingFields } from "@shared/commercial";
+import { noteWatchRan } from "./watchHeartbeat";
 
 export interface RiskPage {
   rideId: string;
@@ -49,17 +51,21 @@ export async function pageAtRiskRides(now: Date = new Date()): Promise<RiskPage[
            r.estimated_fare, r.plan_id,
            ru.first_name AS rider_first, ru.last_name AS rider_last, ru.phone AS rider_phone,
            du.first_name AS driver_first, du.last_name AS driver_last,
-           dp.current_location AS driver_location, dp.updated_at AS driver_location_at
+           dp.current_location AS driver_location, dp.updated_at AS driver_location_at,
+           o.name AS org_name, cj.job_number, cj.category AS job_category
     FROM rides r
     JOIN users ru ON ru.id = r.rider_id
     LEFT JOIN users du ON du.id = r.driver_id
     LEFT JOIN driver_profiles dp ON dp.user_id = r.driver_id
+    LEFT JOIN commercial_jobs cj ON cj.ride_id = r.id
+    LEFT JOIN organizations o ON o.id = cj.organization_id
     WHERE r.scheduled_at IS NOT NULL
       AND r.scheduled_at >= ${now} AND r.scheduled_at <= ${horizon}
       AND r.status IN ('pending', 'accepted')
     ORDER BY r.scheduled_at
   `);
 
+  noteWatchRan("ride-risk", now);
   const out: RiskPage[] = [];
   for (const r of (rows.rows ?? []) as any[]) {
     const departure = new Date(r.scheduled_at);
@@ -67,9 +73,13 @@ export async function pageAtRiskRides(now: Date = new Date()): Promise<RiskPage[
     const stamps = (r.reminder_stamps ?? {}) as Record<string, unknown>;
     const pickup = r.pickup_location as { lat?: number; lng?: number; address?: string } | null;
     const rider = `${r.rider_first ?? ""} ${r.rider_last ?? ""}`.trim() || "Rider";
+    // A commercial job is paged by account and job number; the passenger's
+    // name and phone never leave the app (shared/commercial.ts).
+    const who: Array<[string, string | number | null | undefined]> = r.org_name
+      ? commercialPagingFields({ orgName: r.org_name, jobNumber: r.job_number, category: r.job_category })
+      : [["Rider", rider], ["Phone", r.rider_phone]];
     const common: Array<[string, string | number | null | undefined]> = [
-      ["Rider", rider],
-      ["Phone", r.rider_phone],
+      ...who,
       ["Leaves", `${localClock(departure)} (${Math.max(0, Math.round(mins))} min)`],
       ["Pickup", short(pickup?.address)],
       ["To", short((r.destination_location as any)?.address)],

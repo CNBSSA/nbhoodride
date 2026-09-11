@@ -3,7 +3,7 @@ import type { IStorage } from "../storage";
 import { createGuardianShareToken } from "./orchestrator";
 import { resolveAppUrl } from "../appUrl";
 
-async function createTrackingLink(
+export async function createTrackingLink(
   storage: IStorage,
   riderUserId: string,
   rideId: string,

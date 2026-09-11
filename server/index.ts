@@ -77,16 +77,26 @@ app.get('/api/version', (_req, res) => {
 // What the server can see of its own lifelines (database, Stripe): the
 // last dependency-watch result. No secrets, cached, cheap to poll from the
 // outside watch. 503 while anything configured is down.
-app.get('/health/deps', async (_req, res) => {
+app.get('/health/deps', async (req, res) => {
   res.set("Cache-Control", "no-store");
+  // The outside production watch marks itself here, so tomorrow's 4 AM
+  // review can say whether it actually ran (server/watchHeartbeat.ts).
+  if (typeof req.query.probe === "string") {
+    const { noteWatchRan } = await import('./watchHeartbeat');
+    noteWatchRan(req.query.probe);
+  }
   const { lastDependencyReport } = await import('./dependencyWatch');
   const report = lastDependencyReport();
   if (!report) return res.status(200).json({ checkedAt: null, deps: {}, down: [], note: "first check pending" });
   res.status(report.down.length === 0 ? 200 : 503).json(report);
 });
 
-app.get('/health/ready', async (_req, res) => {
+app.get('/health/ready', async (req, res) => {
   try {
+    if (typeof req.query.probe === "string") {
+      const { noteWatchRan } = await import('./watchHeartbeat');
+      noteWatchRan(req.query.probe);
+    }
     const { getPhase0Readiness } = await import('./phase0Readiness');
     const report = await getPhase0Readiness();
     res.status(report.ready ? 200 : 503).json(report);
