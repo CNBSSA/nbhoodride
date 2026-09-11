@@ -171,6 +171,8 @@ import { runWeeklyBilling } from "./commercial/billing";
 import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { noteWatchRan } from "./watchHeartbeat";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
+import { describeClientBuild } from "@shared/clientBuild";
+import { BUILD_ID } from "./buildInfo";
 import { payDriverForCompletedJob, payDriverForWaiting } from "./commercial/driverPay";
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
 import { cancelJob as cancelCommercialJob } from "./commercial/cancel";
@@ -6453,12 +6455,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!message) return res.status(400).json({ message: "message required" });
       const userId = req.session?.userId || req.session?.testUserId || null;
       const who = userId ? await storage.getUser(userId).catch(() => undefined) : undefined;
-      riderAlert(kind, `${userId ?? req.ip}:${message.slice(0, 40)}`, [
+
+      // A phone runs whatever bundle it opened with until it refreshes, so
+      // every deploy leaves a tail of crashes in code that is already fixed.
+      // Say which build reported this, and when it is an old one, key the
+      // alert by the BUILD rather than the rider: fifty phones still on
+      // yesterday's bundle should raise one alert, not fifty, and it should
+      // say plainly that it is not a new fault.
+      const build = describeClientBuild(req.body?.buildId, BUILD_ID);
+      const key = build.keyPart
+        ? `${build.keyPart}:${message.slice(0, 40)}`
+        : `${userId ?? req.ip}:${message.slice(0, 40)}`;
+      riderAlert(kind, key, [
         ["User", who ? `${who.firstName ?? ""} ${who.lastName ?? ""}`.trim() || userId : "not signed in"],
         ["User id", userId],
         ["Phone", who?.phone],
         ["Page", page],
         ["Error", message],
+        ["App build", build.text],
+        ...(build.stale
+          ? [["Likely already fixed", "this phone is running an old build; it refreshes on its next foreground"] as [string, string]]
+          : []),
       ]);
       res.json({ ok: true });
     } catch (error) {
