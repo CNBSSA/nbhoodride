@@ -11,7 +11,10 @@ export async function run({ base, db, server }) {
   const admin = new Session(base); await admin.login(FIXTURES.admin.email); await admin.req("POST", `/api/admin/users/${u.id}/approve`);
   await r.login(email);
   await r.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 20, paymentMethod: "card" }); // no card
-  await r.req("POST", "/api/client-errors", { kind: "push_subscribe_failed", message: "invalid_key: e2e", page: "/profile" });
+  // A phone on the current build: the alert is keyed to the rider, because
+  // it is a live fault rather than the tail of an old bundle.
+  const liveBuild = (await (await fetch(`${base}/api/version`)).json()).id;
+  await r.req("POST", "/api/client-errors", { kind: "push_subscribe_failed", message: "invalid_key: e2e", page: "/profile", buildId: liveBuild });
   await new Promise((res) => setTimeout(res, 300));
   const log = serverLog(server);
   const n = (kind, key) => (log.match(new RegExp(`\\[rider-alert\\] ${kind} key=${key}`, "g")) || []).length;

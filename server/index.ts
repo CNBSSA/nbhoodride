@@ -1,3 +1,4 @@
+import { buildInfo } from "./buildInfo";
 import express, { type Request, Response, NextFunction } from "express";
 import helmet from "helmet";
 import cors from "cors";
@@ -65,10 +66,6 @@ app.get('/health', (_req, res) => {
 // Which build is running. The client compares this with the id baked into
 // its bundle and refreshes itself when a newer deploy is live — without it a
 // phone (iOS in particular) can keep running a stale bundle for days.
-let buildInfo: { id: string; builtAt: string } = { id: "dev", builtAt: "" };
-try {
-  buildInfo = JSON.parse(readFileSync("build-id.json", "utf8"));
-} catch { /* dev or missing file */ }
 app.get('/api/version', (_req, res) => {
   res.set("Cache-Control", "no-store");
   res.json(buildInfo);

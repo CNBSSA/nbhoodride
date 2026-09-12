@@ -120,12 +120,16 @@ ${recentCommits.out}
 
 // ── 2. Call Claude for the structured report ────────────────────────────────
 function degradedReport(reason) {
+  // Only advertise the secret when the secret is actually the problem. This
+  // line used to print unconditionally, so a working key with a failing call
+  // still read as "you forgot to add the key" — and was believed.
+  const hint = /API key|not set/i.test(reason)
+    ? "> The deterministic evidence below was still gathered. Add an `ANTHROPIC_API_KEY`\n> repo secret to enable the full AI reliability analysis.\n"
+    : "> The deterministic evidence below was still gathered; only the written\n> analysis is missing. The key is configured — this is a call failure.\n";
   return `# PG Ride Daily Reliability Report — ${today}
 
 > ⚠️ AI analysis skipped: ${reason}
-> The deterministic evidence below was still gathered. Add an \`ANTHROPIC_API_KEY\`
-> repo secret to enable the full AI reliability analysis.
-
+${hint}
 ${evidence}
 `;
 }
@@ -179,7 +183,16 @@ async function main() {
     const data = await res.json();
     reportBody = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
     if (!reportBody) {
-      writeFileSync(OUT, degradedReport("Claude API returned an empty response"));
+      // "Empty response" on its own is not diagnosable a day later. Say what
+      // came back: the stop reason usually names the cause outright (hitting
+      // max_tokens, a refusal, an unexpected block type).
+      const blocks = (data.content || []).map((b) => b.type).join(", ") || "none";
+      const detail =
+        `Claude API returned no text (stop_reason: ${data.stop_reason ?? "?"}, ` +
+        `blocks: ${blocks}, in/out tokens: ${data.usage?.input_tokens ?? "?"}/${data.usage?.output_tokens ?? "?"}, ` +
+        `model: ${MODEL})`;
+      writeFileSync(OUT, degradedReport(detail));
+      console.log(detail);
       return;
     }
   } catch (e) {

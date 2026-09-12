@@ -21,6 +21,10 @@ export function reportClientError(input: { kind?: ClientErrorKind; message: stri
       kind: input.kind ?? "client_error",
       message,
       page: typeof window !== "undefined" ? window.location.pathname : "",
+      // Which bundle this phone is actually running. A browser keeps the code
+      // it opened with, so without this the operator cannot tell a crash in
+      // yesterday's build from a new bug in today's.
+      buildId: typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "",
     }).catch(() => {});
   } catch {
     /* never throw from the reporter */
