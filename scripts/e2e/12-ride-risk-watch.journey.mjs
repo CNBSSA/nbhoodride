@@ -87,15 +87,40 @@ export async function run({ base, db, server }) {
     section("A white-screen crash reaches the operator and the ledger");
     const rider = new Session(base); await rider.login(FIXTURES.rider.email);
     const crashMsg = "Cannot read properties of undefined (reading 'map') at RiderDashboard";
-    const crash = await rider.req("POST", "/api/client-errors", { kind: "client_crash", message: crashMsg, page: "/" });
+    // A crash from a phone on the CURRENT build: genuinely new, so it is
+    // keyed per rider and the operator hears about each one.
+    const liveBuild = (await (await fetch(`${base}/api/version`)).json()).id;
+    const crash = await rider.req("POST", "/api/client-errors", { kind: "client_crash", message: crashMsg, page: "/", buildId: liveBuild });
     check("crash report accepted", crash.status === 200, JSON.stringify(crash.json));
     await new Promise((r) => setTimeout(r, 400));
     const rx = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     check("crash alert sent with its own title", alerts("client_crash", rx(`${FIXTURES.rider.id}:${crashMsg.slice(0, 40)}`)) === 1);
+    const liveLine = serverLog(server).split("\n").reverse().find((l) => l.includes("client_crash") && l.includes(crashMsg.slice(0, 20))) ?? "";
+    check("a current-build crash is not written off as an old bundle", /\(current\)/.test(liveLine) && !/OUT OF DATE/.test(liveLine), liveLine.slice(0, 200));
     const { rows: ev } = await db.query("SELECT kind, user_id, page, message FROM reliability_events WHERE user_id=$1 AND kind='client_crash' ORDER BY created_at DESC LIMIT 1", [FIXTURES.rider.id]);
     check("crash recorded against the rider with page and message", ev[0]?.page === "/" && /RiderDashboard/.test(ev[0]?.message ?? ""), JSON.stringify(ev[0]));
     const { rows: pg } = await db.query("SELECT count(*)::int AS n FROM reliability_events WHERE kind='ride_unclaimed' AND page=$1", [unclaimed2h]);
     check("ride pages are recorded too", pg[0].n >= 1, `n=${pg[0].n}`);
+
+    section("A crash from an old bundle is not read as a new fault");
+    // Every deploy leaves a tail: phones keep the code they opened with and
+    // go on hitting bugs that are already fixed. Those must not page the
+    // operator once per rider, and must not look like a fresh regression.
+    const staleMsg = "Unhandled: Failed to load Stripe.js";
+    const stale1 = await rider.req("POST", "/api/client-errors", { kind: "client_crash", message: staleMsg, page: "/login", buildId: "ancient0build" });
+    check("a crash from an old build is accepted", stale1.status === 200, JSON.stringify(stale1.json));
+    await new Promise((r) => setTimeout(r, 400));
+    const staleLine = serverLog(server).split("\n").reverse().find((l) => l.includes("client_crash") && l.includes("ancient0build")) ?? "";
+    check("the alert names the phone's build and says it is out of date", /OUT OF DATE/.test(staleLine), staleLine.slice(0, 240));
+    check("and tells the operator it is likely already fixed", /Likely already fixed/.test(staleLine), staleLine.slice(0, 240));
+    check("it is keyed by the build, not the rider", /key=build:ancient0build/.test(staleLine), staleLine.slice(0, 160));
+
+    // A second phone on the same old bundle is the same news, not new news.
+    const driver2 = new Session(base); await driver2.login(FIXTURES.driver.email);
+    await driver2.req("POST", "/api/client-errors", { kind: "client_crash", message: staleMsg, page: "/login", buildId: "ancient0build" });
+    await new Promise((r) => setTimeout(r, 400));
+    const staleCount = serverLog(server).split("\n").filter((l) => l.includes("client_crash") && l.includes("key=build:ancient0build")).length;
+    check("a second phone on the same old bundle does not page again", staleCount === 1, `alerts=${staleCount}`);
 
     section("The review is a watchdog on the watchdogs");
     // A check that dies quietly is worse than no check. The heartbeats say
