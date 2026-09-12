@@ -227,7 +227,24 @@ if (engine === chromium) {
     await freshCtx.setExtraHTTPHeaders({ "X-Forwarded-Proto": "https" });
     const ip = await freshCtx.newPage();
     await loginAs(ip, server.base, FIXTURES.rider.email);
-    await assertPrimary(ip, "Install app (floating)", "button-pwa-install-fab");
+    // Which affordance appears depends on the browser, not on us: a engine
+    // that fires beforeinstallprompt (Chromium on a secure origin, which
+    // includes localhost) shows the banner; Safari, which never fires it,
+    // shows the floating button. Assert the guarantee a rider cares about —
+    // that SOME visible, tappable way to install is on screen — rather than
+    // one branch of it, which is how this check first failed in CI while
+    // passing here.
+    const floating = ip.locator('[data-testid="button-pwa-install-fab"]');
+    const banner = ip.locator('[data-testid="pwa-install-prompt"]');
+    await Promise.race([
+      floating.waitFor({ timeout: 20000 }).catch(() => {}),
+      banner.waitFor({ timeout: 20000 }).catch(() => {}),
+    ]);
+    const viaFab = await floating.count() > 0;
+    check("there is a way to install on screen", viaFab || await banner.count() > 0,
+      viaFab ? "floating button" : "install banner");
+    await assertPrimary(ip, viaFab ? "Install app (floating)" : "Install app (banner)",
+      viaFab ? "button-pwa-install-fab" : "pwa-install-prompt");
     await ip.tap('[data-testid="tab-profile"]');
     await ip.waitForSelector('[data-testid="button-install-app"]', { timeout: 15000 });
     await ip.locator('[data-testid="button-install-app"]').scrollIntoViewIfNeeded();
