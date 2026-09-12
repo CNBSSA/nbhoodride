@@ -4857,7 +4857,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const profile = await storage.getDriverProfile(userId);
-      const driverCounties = profile?.acceptedCounties ?? [];
+      // Today's counties (chosen at go-online) take precedence over the
+      // driver's permanent prefs, same as dispatch matching and the WS
+      // broadcast cache — otherwise a driver who opts into an extra county
+      // for today's shift never sees scheduled rides open there.
+      const driverCounties = (profile?.dailyCounties?.length ? profile.dailyCounties : null)
+        ?? profile?.acceptedCounties
+        ?? [];
       const [open, mine] = await Promise.all([
         storage.getOpenScheduledRides(driverCounties.length > 0 ? driverCounties : undefined, await badgesFor(userId)),
         storage.getDriverUpcomingRides(userId),

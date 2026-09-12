@@ -73,6 +73,10 @@ const browser = await engine.launch(engine === chromium ? { executablePath, args
 try {
   const ctx = await browser.newContext({ viewport: VIEWPORT, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
     geolocation: { latitude: 38.9073, longitude: -76.7781 }, permissions: ["geolocation"] });
+  // Pretend the app is already installed, so the install prompt does not sit
+  // over the buttons every other check is about. NOTE: this also hides ALL
+  // install UI — which is why a broken install button went unnoticed for
+  // weeks. The install surfaces get their own context below, without this.
   await ctx.addInitScript(() => { const o = window.matchMedia.bind(window); window.matchMedia = (q) => String(q).includes("display-mode: standalone") ? { matches: true, media: String(q), onchange: null, addEventListener(){}, removeEventListener(){}, addListener(){}, removeListener(){}, dispatchEvent(){ return false; } } : o(q); });
   await ctx.setExtraHTTPHeaders({ "X-Forwarded-Proto": "https" });
 
@@ -100,6 +104,10 @@ try {
   await page.tap('[data-testid="button-close-documents"]');
   await page.waitForTimeout(400);
   await assertPrimary(page, "Profile header", "button-logout");
+  // "Install app" lives here permanently because the floating one is easy
+  // to miss — and on iPhone it was painted over by the booking sheet, so
+  // there was no way in at all. Hit-tested, not just present: a button
+  // under an overlay looks identical to a visible one in the DOM.
   await page.close();
 
   section("Rider: schedule and book sheets");
@@ -205,6 +213,55 @@ try {
 // bottom sheets, so the check is that its primary actions are on screen and
 // hit-testable at a desk-sized window and at phone width.
 if (engine === chromium) {
+  section("Install app: the way in, on a phone that has not installed it");
+  // A context WITHOUT the standalone stub above, on an iPhone user agent —
+  // the only combination in which the install surfaces exist at all. Both
+  // are hit-tested, because the bug this exists to catch was a button that
+  // rendered perfectly and sat underneath the booking sheet: present in the
+  // DOM, invisible to a rider, and indistinguishable from working.
+  {
+    const freshCtx = await browser.newContext({
+      viewport: VIEWPORT, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      geolocation: { latitude: 38.9073, longitude: -76.7781 }, permissions: ["geolocation"] });
+    await freshCtx.setExtraHTTPHeaders({ "X-Forwarded-Proto": "https" });
+    const ip = await freshCtx.newPage();
+    await loginAs(ip, server.base, FIXTURES.rider.email);
+    await assertPrimary(ip, "Install app (floating)", "button-pwa-install-fab");
+    await ip.tap('[data-testid="tab-profile"]');
+    await ip.waitForSelector('[data-testid="button-install-app"]', { timeout: 15000 });
+    await ip.locator('[data-testid="button-install-app"]').scrollIntoViewIfNeeded();
+    await assertPrimary(ip, "Install app (Profile row)", "button-install-app");
+    await ip.tap('[data-testid="button-install-app"]');
+    check("Profile row opens the iPhone walkthrough", await ip.locator('[data-testid="pwa-install-prompt"]').isVisible());
+    await ip.close();
+    await freshCtx.close();
+  }
+
+  section("Update banner: the one thing that tells a rider to pick up a fix");
+  // Forced by answering /api/version with a build id the bundle does not
+  // match — the same condition a rider hits the moment a deploy lands.
+  // Nothing exercised this before, and it is the only prompt telling
+  // someone on an old bundle that a fix exists.
+  {
+    const upCtx = await browser.newContext({ viewport: VIEWPORT, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+      geolocation: { latitude: 38.9073, longitude: -76.7781 }, permissions: ["geolocation"] });
+    await upCtx.setExtraHTTPHeaders({ "X-Forwarded-Proto": "https" });
+    const up = await upCtx.newPage();
+    await up.route("**/api/version", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ id: "a-newer-build", builtAt: new Date().toISOString() }) }));
+    await loginAs(up, server.base, FIXTURES.rider.email);
+    await up.waitForSelector('[data-testid="update-banner"]', { timeout: 15000 });
+    await assertPrimary(up, "Update banner", "update-banner");
+    const top = await up.locator('[data-testid="update-banner"]').boundingBox();
+    check("Update banner: starts at the very top of the screen", !!top && top.y <= 1, top ? `y=${Math.round(top.y)}` : "no box");
+    // Installed on an iPhone there is no browser chrome, so the banner sits
+    // under the clock and the Dynamic Island unless the inset is padded.
+    const padTop = await up.locator('[data-testid="update-banner"]').evaluate((el) => getComputedStyle(el).paddingTop);
+    check("Update banner: pads the status-bar inset, so it is readable when installed", /^\d/.test(padTop) && parseFloat(padTop) >= 8, `padding-top ${padTop}`);
+    await up.close();
+    await upCtx.close();
+  }
+
   section("Requester portal (organizations)");
   for (const [label, viewport] of [["desk 1280×800", { width: 1280, height: 800 }], ["phone 390×844", VIEWPORT]]) {
     const ctx = await browser.newContext({ viewport, isMobile: viewport.width < 500, hasTouch: viewport.width < 500 });
