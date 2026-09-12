@@ -73,6 +73,10 @@ const browser = await engine.launch(engine === chromium ? { executablePath, args
 try {
   const ctx = await browser.newContext({ viewport: VIEWPORT, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
     geolocation: { latitude: 38.9073, longitude: -76.7781 }, permissions: ["geolocation"] });
+  // Pretend the app is already installed, so the install prompt does not sit
+  // over the buttons every other check is about. NOTE: this also hides ALL
+  // install UI — which is why a broken install button went unnoticed for
+  // weeks. The install surfaces get their own context below, without this.
   await ctx.addInitScript(() => { const o = window.matchMedia.bind(window); window.matchMedia = (q) => String(q).includes("display-mode: standalone") ? { matches: true, media: String(q), onchange: null, addEventListener(){}, removeEventListener(){}, addListener(){}, removeListener(){}, dispatchEvent(){ return false; } } : o(q); });
   await ctx.setExtraHTTPHeaders({ "X-Forwarded-Proto": "https" });
 
@@ -100,6 +104,10 @@ try {
   await page.tap('[data-testid="button-close-documents"]');
   await page.waitForTimeout(400);
   await assertPrimary(page, "Profile header", "button-logout");
+  // "Install app" lives here permanently because the floating one is easy
+  // to miss — and on iPhone it was painted over by the booking sheet, so
+  // there was no way in at all. Hit-tested, not just present: a button
+  // under an overlay looks identical to a visible one in the DOM.
   await page.close();
 
   section("Rider: schedule and book sheets");
@@ -205,6 +213,31 @@ try {
 // bottom sheets, so the check is that its primary actions are on screen and
 // hit-testable at a desk-sized window and at phone width.
 if (engine === chromium) {
+  section("Install app: the way in, on a phone that has not installed it");
+  // A context WITHOUT the standalone stub above, on an iPhone user agent —
+  // the only combination in which the install surfaces exist at all. Both
+  // are hit-tested, because the bug this exists to catch was a button that
+  // rendered perfectly and sat underneath the booking sheet: present in the
+  // DOM, invisible to a rider, and indistinguishable from working.
+  {
+    const freshCtx = await browser.newContext({
+      viewport: VIEWPORT, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      geolocation: { latitude: 38.9073, longitude: -76.7781 }, permissions: ["geolocation"] });
+    await freshCtx.setExtraHTTPHeaders({ "X-Forwarded-Proto": "https" });
+    const ip = await freshCtx.newPage();
+    await loginAs(ip, server.base, FIXTURES.rider.email);
+    await assertPrimary(ip, "Install app (floating)", "button-pwa-install-fab");
+    await ip.tap('[data-testid="tab-profile"]');
+    await ip.waitForSelector('[data-testid="button-install-app"]', { timeout: 15000 });
+    await ip.locator('[data-testid="button-install-app"]').scrollIntoViewIfNeeded();
+    await assertPrimary(ip, "Install app (Profile row)", "button-install-app");
+    await ip.tap('[data-testid="button-install-app"]');
+    check("Profile row opens the iPhone walkthrough", await ip.locator('[data-testid="pwa-install-prompt"]').isVisible());
+    await ip.close();
+    await freshCtx.close();
+  }
+
   section("Requester portal (organizations)");
   for (const [label, viewport] of [["desk 1280×800", { width: 1280, height: 800 }], ["phone 390×844", VIEWPORT]]) {
     const ctx = await browser.newContext({ viewport, isMobile: viewport.width < 500, hasTouch: viewport.width < 500 });
