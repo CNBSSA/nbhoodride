@@ -238,6 +238,30 @@ if (engine === chromium) {
     await freshCtx.close();
   }
 
+  section("Update banner: the one thing that tells a rider to pick up a fix");
+  // Forced by answering /api/version with a build id the bundle does not
+  // match — the same condition a rider hits the moment a deploy lands.
+  // Nothing exercised this before, and it is the only prompt telling
+  // someone on an old bundle that a fix exists.
+  {
+    const upCtx = await browser.newContext({ viewport: VIEWPORT, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+      geolocation: { latitude: 38.9073, longitude: -76.7781 }, permissions: ["geolocation"] });
+    await upCtx.setExtraHTTPHeaders({ "X-Forwarded-Proto": "https" });
+    const up = await upCtx.newPage();
+    await up.route("**/api/version", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ id: "a-newer-build", builtAt: new Date().toISOString() }) }));
+    await loginAs(up, server.base, FIXTURES.rider.email);
+    await up.waitForSelector('[data-testid="update-banner"]', { timeout: 15000 });
+    await assertPrimary(up, "Update banner", "update-banner");
+    const top = await up.locator('[data-testid="update-banner"]').boundingBox();
+    check("Update banner: starts at the very top of the screen", !!top && top.y <= 1, top ? `y=${Math.round(top.y)}` : "no box");
+    // Installed on an iPhone there is no browser chrome, so the banner sits
+    // under the clock and the Dynamic Island unless the inset is padded.
+    const padTop = await up.locator('[data-testid="update-banner"]').evaluate((el) => getComputedStyle(el).paddingTop);
+    check("Update banner: pads the status-bar inset, so it is readable when installed", /^\d/.test(padTop) && parseFloat(padTop) >= 8, `padding-top ${padTop}`);
+    await up.close();
+    await upCtx.close();
+  }
+
   section("Requester portal (organizations)");
   for (const [label, viewport] of [["desk 1280×800", { width: 1280, height: 800 }], ["phone 390×844", VIEWPORT]]) {
     const ctx = await browser.newContext({ viewport, isMobile: viewport.width < 500, hasTouch: viewport.width < 500 });
