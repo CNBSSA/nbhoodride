@@ -238,7 +238,21 @@ if (engine === chromium) {
       await loginAs(page, server.base, FIXTURES.rider.email);
       await page.goto(server.base + "/org", { waitUntil: "domcontentloaded" });
       const book = page.locator('[data-testid="button-portal-book"]').first();
-      await book.waitFor({ timeout: 15000 });
+      // The desk pass is the FIRST portal load of the run: cold server, cold
+      // browser, and this button only exists once login, /api/org/mine,
+      // /api/org/:id and its jobs have all come back. Fifteen seconds was
+      // enough warm and not always enough cold, so on the runner the desk
+      // pass timed out while the phone pass right after it — same checks,
+      // warm — passed. More room, and if it still does not appear, say what
+      // WAS on the screen instead of only "Timeout exceeded".
+      await book.waitFor({ timeout: 45000 }).catch(async () => {
+        const seen = await page.evaluate(() => ({
+          loading: !!document.querySelector('[data-testid="portal-loading"]'),
+          empty: !!document.querySelector('[data-testid="portal-empty"]'),
+          text: (document.body.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120),
+        }));
+        throw new Error(`Book a job never appeared — still loading: ${seen.loading}, empty state: ${seen.empty} :: ${seen.text}`);
+      });
       const box = await book.boundingBox();
       const inside = !!box && box.y >= 0 && box.y + box.height <= viewport.height && box.x >= 0 && box.x + box.width <= viewport.width;
       check(`portal ${label}: Book a job is on screen`, inside, box ? `at ${Math.round(box.x)},${Math.round(box.y)}` : "no box");
