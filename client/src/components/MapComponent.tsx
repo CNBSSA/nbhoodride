@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { addBaseLayer } from "@/lib/mapTiles";
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -58,9 +59,7 @@ export default function MapComponent({
 
     if (!mapInstanceRef.current) {
       mapInstanceRef.current = L.map(mapRef.current).setView([center.lat, center.lng], zoom);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors'
-      }).addTo(mapInstanceRef.current);
+      void addBaseLayer(mapInstanceRef.current);
     }
 
     // Clear existing markers + route line

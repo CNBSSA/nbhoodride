@@ -4,6 +4,7 @@ import "leaflet/dist/leaflet.css";
 import { useRoute } from "@/hooks/useRoute";
 import { metersToMiles, secondsToMinutes } from "@shared/routeGeometry";
 import { Navigation, Loader2 } from "lucide-react";
+import { addBaseLayer } from "@/lib/mapTiles";
 
 interface LatLng { lat: number; lng: number }
 
@@ -64,9 +65,7 @@ export function RideMapView({
     if (!mapRef.current || mapInstanceRef.current) return;
     const start = driverLoc ?? target;
     mapInstanceRef.current = L.map(mapRef.current, { zoomControl: true }).setView([start.lat, start.lng], 14);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "© OpenStreetMap contributors",
-    }).addTo(mapInstanceRef.current);
+    void addBaseLayer(mapInstanceRef.current);
   }, [driverLoc, target]);
 
   // Target pin.

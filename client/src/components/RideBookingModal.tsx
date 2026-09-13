@@ -168,14 +168,19 @@ export default function RideBookingModal({
     if (destinationAddress.length < 5) return;
     const timer = setTimeout(async () => {
       try {
+        // Through our own geocoder, not OpenStreetMap's volunteer Nominatim
+        // server. Calling that from every rider's browser is against its
+        // usage policy — the same policy that got our map tiles blocked —
+        // and the server's geocoder is better anyway: Mapbox when a token
+        // is set, PG County landmark aliases first, and a shared cache.
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationAddress)}&limit=1&countrycodes=us`,
-          { headers: { 'User-Agent': 'PGRide-Community-Rideshare/1.0' } }
+          `/api/geocode/suggest?q=${encodeURIComponent(destinationAddress)}&limit=1`,
+          { credentials: 'include' }
         );
-        const results = await res.json();
+        const results = (await res.json())?.suggestions ?? [];
         if (results.length > 0) {
-          const lat = parseFloat(results[0].lat);
-          const lng = parseFloat(results[0].lon);
+          const lat = Number(results[0].lat);
+          const lng = Number(results[0].lng);
           setDestCoords({ lat, lng });
           const R = 3959;
           const dLat = (lat - userLocation.lat) * Math.PI / 180;

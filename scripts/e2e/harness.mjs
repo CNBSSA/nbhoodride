@@ -95,7 +95,16 @@ export async function startServer(env = {}) {
     await new Promise((r) => setTimeout(r, 500));
   }
   child.kill();
-  throw new Error(`server did not become healthy; see ${logPath}`);
+  // Print WHY, here, instead of a path into a runner that no longer exists.
+  // Two CI failures were misread as test bugs because the real message —
+  // the server never came up — was only in a file nobody could open, and
+  // the step output was flooded by container logs.
+  let tail = "(no output)";
+  try { tail = readFileSync(logPath, "utf8").split("\n").slice(-40).join("\n"); } catch {}
+  throw new Error(
+    `server did not become healthy after 30s on ${base}\n` +
+    `----- last 40 lines of ${logPath} -----\n${tail}\n` +
+    `--------------------------------------`);
 }
 /**
  * Delete rides and every row that references them (audit logs, disputes,

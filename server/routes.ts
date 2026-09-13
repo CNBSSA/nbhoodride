@@ -172,6 +172,7 @@ import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { noteWatchRan } from "./watchHeartbeat";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { describeClientBuild } from "@shared/clientBuild";
+import { registerMapTileRoutes } from "./mapTiles";
 import { BUILD_ID } from "./buildInfo";
 import { payDriverForCompletedJob, payDriverForWaiting } from "./commercial/driverPay";
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
@@ -477,6 +478,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Auth middleware
   await setupAuth(app);
+
+  // Map tiles through us, never straight from OpenStreetMap's volunteer
+  // servers — drawing from those in production is against their usage
+  // policy, and on 2026-09-12 they blocked us and every rider's map broke.
+  registerMapTileRoutes(app);
 
   // Ensure super admin account is properly configured on startup
   await ensureSuperAdminSetup();
