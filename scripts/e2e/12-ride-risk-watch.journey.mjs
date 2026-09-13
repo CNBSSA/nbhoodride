@@ -102,6 +102,28 @@ export async function run({ base, db, server }) {
     const { rows: pg } = await db.query("SELECT count(*)::int AS n FROM reliability_events WHERE kind='ride_unclaimed' AND page=$1", [unclaimed2h]);
     check("ride pages are recorded too", pg[0].n >= 1, `n=${pg[0].n}`);
 
+    section("The map draws through us, not from a service that blocked us");
+    // OpenStreetMap's volunteer tile servers blocked the app on 2026-09-12
+    // and every rider's map became a wall of 403s. Tiles now come through
+    // our own endpoint. With no MAPBOX_TOKEN (as here) it must say so
+    // plainly rather than falling back to the service that blocked us.
+    const mapCfg = await rider.req("GET", "/api/map/config");
+    check("the client is told where to get tiles", mapCfg.status === 200 && typeof mapCfg.json?.available === "boolean", JSON.stringify(mapCfg.json));
+    check("with no token it says tiles are unavailable, and why",
+      mapCfg.json?.available === false && mapCfg.json?.tileUrl === null && /MAPBOX_TOKEN/.test(mapCfg.json?.message ?? ""),
+      JSON.stringify(mapCfg.json));
+    const tile = await rider.req("GET", "/api/map/tiles/12/1170/1567");
+    check("a tile request without a token is refused with a reason, not a crash",
+      tile.status === 503 && /MAPBOX_TOKEN/.test(tile.json?.message ?? ""), `${tile.status} ${JSON.stringify(tile.json?.message)}`);
+    for (const bad of ["12/abc/1567", "12/-1/1567", "99/1170/1567", "12/1170/99999999"]) {
+      const r = await rider.req("GET", `/api/map/tiles/${bad}`);
+      check(`the tile endpoint refuses ${bad}`, r.status === 400, `${bad} -> ${r.status}`);
+    }
+    // A real coordinate at a zoom a rider actually uses must get past
+    // validation and reach the "not configured" answer, not be rejected.
+    const deepTile = await rider.req("GET", "/api/map/tiles/19/149000/200000");
+    check("a high-zoom tile is a valid request, not a malformed one", deepTile.status === 503, String(deepTile.status));
+
     section("A crash from an old bundle is not read as a new fault");
     // Every deploy leaves a tail: phones keep the code they opened with and
     // go on hitting bugs that are already fixed. Those must not page the
