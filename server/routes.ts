@@ -173,6 +173,8 @@ import { noteWatchRan } from "./watchHeartbeat";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { describeClientBuild } from "@shared/clientBuild";
 import { registerMapTileRoutes } from "./mapTiles";
+import { runWeeklyPayday } from "./payday";
+import { paydayKeyOf, paydayRunDue } from "@shared/paydayCycle";
 import { BUILD_ID } from "./buildInfo";
 import { payDriverForCompletedJob, payDriverForWaiting } from "./commercial/driverPay";
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
@@ -8102,6 +8104,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Driver: submit new payout request
+  /**
+   * Run payday by hand. The Friday sweep does this on its own; this is for
+   * the first run, a run that was missed while the server was down, and for
+   * the journey that proves it works. Claimed the same way, so running it by
+   * hand and having the sweep fire cannot both pay the same driver.
+   */
+  app.post('/api/admin/analytics/payday', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const at = req.body?.at ? new Date(req.body.at) : new Date();
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ message: "Bad date." });
+      const paydayKey = paydayKeyOf(at);
+      const claimed = await storage.claimWebhookEvent("weekly_payday", paydayKey, "payday");
+      if (!claimed) {
+        return res.json({ ran: false, paydayKey, message: `Payday ${paydayKey} has already run.` });
+      }
+      const result = await runWeeklyPayday(at);
+      res.json({ ran: true, ...result });
+    } catch (error) {
+      console.error("Manual payday failed:", error);
+      res.status(500).json({ message: "Payday run failed." });
+    }
+  });
+
   app.post('/api/driver/payout-requests', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -8129,6 +8154,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         payoutMethod,
         payoutDetails,
       });
+      // Remember where this went, so Friday's payday has somewhere to send
+      // their money without asking again. Best-effort: failing to remember a
+      // preference must never fail the payout the driver just asked for.
+      storage.adminUpdateDriverProfile(userId, { payoutMethod, payoutDetails } as any)
+        .catch((err) => console.error(`[payday] could not remember payout method for ${userId}:`, err));
       res.json(request);
     } catch (error) {
       console.error("Error creating payout request:", error);
@@ -10923,6 +10953,16 @@ Generate the FAQ list.`;
       // ── Weekly billing: last week's jobs, debited Monday morning ──
       // Claimed once per week through the same claim-once table the daily
       // review uses, so restarts and extra instances cannot double-charge.
+      // ── Payday: Friday 9 AM Eastern, claimed once so a restart cannot
+      //    pay anyone twice. Not behind the commercial flag: every driver
+      //    is paid this way, not only those doing commercial work.
+      if (paydayRunDue(now)) {
+        const paydayKey = paydayKeyOf(now);
+        storage.claimWebhookEvent("weekly_payday", paydayKey, "payday")
+          .then((claimed) => claimed ? runWeeklyPayday(now) : null)
+          .catch((err) => console.error("payday run failed:", err));
+      }
+
       if (featureFlags.commercialEnabled && billingRunDue(now)) {
         const weekKey = previousBillingWeek(now).weekKey;
         storage.claimWebhookEvent("commercial_weekly_billing", weekKey, "weekly")
