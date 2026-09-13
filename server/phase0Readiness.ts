@@ -2,6 +2,7 @@ import { pool } from "./db";
 import { resolveAppUrl } from "./appUrl";
 import { checkVapidPublicKey } from "@shared/vapidKey";
 import { getEmailConfigSummary } from "./emailService";
+import { probeMapTiles } from "./mapTiles";
 
 export type Phase0CheckStatus = "pass" | "warn" | "fail";
 
@@ -20,6 +21,40 @@ export interface Phase0ReadinessReport {
   checkedAt: string;
   appUrl: string;
   checks: Phase0Check[];
+}
+
+/**
+ * Map tiles, verified by actually fetching one.
+ *
+ * This check exists because of 2026-09-13: a deploy whose MAPBOX_TOKEN was
+ * rejected blanked every map in the app, passed every gate we had, and was
+ * first reported by a rider. Readiness covered the database, the session
+ * secret, email, Twilio, push, Stripe and the domain — and not the map.
+ *
+ * It is a failure, not a warning, because tiles have no fallback. Geocoding
+ * quietly falls back to Nominatim, which is exactly how a dead token stayed
+ * invisible for so long; a map with no tiles is just a grey screen.
+ *
+ * /health/ready is polled, so one result is good for a minute — a tile fetch
+ * per request would be wasteful and rude to Mapbox. Note this endpoint is NOT
+ * Railway's healthcheck (that is /health, a flat 200), so a rejected token
+ * turns the audit red without taking the site down with it.
+ */
+const MAP_PROBE_TTL_MS = 60_000;
+let mapProbe: { at: number; ok: boolean; detail?: string } | null = null;
+
+async function mapTilesReady(): Promise<{ ok: boolean; detail?: string }> {
+  if (mapProbe && Date.now() - mapProbe.at < MAP_PROBE_TTL_MS) {
+    return { ok: mapProbe.ok, detail: mapProbe.detail };
+  }
+  const r = await probeMapTiles(6_000);
+  mapProbe = { at: Date.now(), ok: r.ok, detail: r.detail };
+  return r;
+}
+
+/** Exposed for tests, which must not inherit a previous case's result. */
+export function _resetMapProbeCache(): void {
+  mapProbe = null;
 }
 
 function envPresent(name: string): boolean {
@@ -277,7 +312,20 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
       : "DNS not on custom domain yet — recommended before store marketing",
   });
 
-  const requiredIds = new Set(["0.1-database", "0.1-session", "0.2-public-url", "0.3-super-admin"]);
+  const maps = await mapTilesReady();
+  checks.push({
+    id: "0.8-maps",
+    label: "Map tiles (Mapbox)",
+    status: maps.ok ? "pass" : "fail",
+    owner: "track_b",
+    detail: maps.ok
+      ? "A real tile was fetched — riders can see the map"
+      : maps.detail ?? "Map tiles unavailable",
+  });
+
+  // Maps are required: a rider who cannot see the map cannot judge where the
+  // car is or where they are going.
+  const requiredIds = new Set(["0.1-database", "0.1-session", "0.2-public-url", "0.3-super-admin", "0.8-maps"]);
   const ready = checks
     .filter((c) => requiredIds.has(c.id))
     .every((c) => c.status !== "fail");

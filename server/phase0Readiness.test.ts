@@ -19,15 +19,25 @@ vi.mock("./db", () => ({
   },
 }));
 
+// The map check fetches a real tile in production. Here it is controlled, so
+// these tests keep testing readiness logic and not Mapbox's availability.
+vi.mock("./mapTiles", () => ({ probeMapTiles: vi.fn() }));
+
 import { pool } from "./db";
-import { getPhase0Readiness } from "./phase0Readiness";
+import { probeMapTiles } from "./mapTiles";
+import { getPhase0Readiness, _resetMapProbeCache } from "./phase0Readiness";
 
 const mockQuery = vi.mocked(pool.query);
+const mockMapProbe = vi.mocked(probeMapTiles);
 
 beforeEach(() => {
   for (const k of ENV_KEYS) delete process.env[k];
   mockQuery.mockReset();
   mockQuery.mockResolvedValue({ rows: [{ "?column?": 1 }], rowCount: 1 } as never);
+  // A working map by default; the cases that care set their own.
+  _resetMapProbeCache();
+  mockMapProbe.mockReset();
+  mockMapProbe.mockResolvedValue({ ok: true });
 });
 
 afterAll(() => {
@@ -91,5 +101,61 @@ describe("getPhase0Readiness", () => {
     expect(report.ready).toBe(true);
     expect(report.checks.find((c) => c.id === "0.2-public-url")?.status).toBe("pass");
     expect(report.checks.find((c) => c.id === "0.7-domain")?.status).toBe("pass");
+  });
+});
+
+// 2026-09-13: a deploy whose MAPBOX_TOKEN was rejected blanked every map in
+// the app, passed every gate, and was first reported by a rider. Readiness
+// covered the database, session secret, email, Twilio, push, Stripe and the
+// domain — and not the map.
+describe("map tiles are part of being ready", () => {
+  const arrangeHealthyExceptMaps = () => {
+    process.env.SESSION_SECRET = "secret";
+    process.env.PUBLIC_APP_URL = "https://peoplegoverned.com";
+    process.env.SUPER_ADMIN_EMAIL = "admin@example.com";
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ "?column?": 1 }], rowCount: 1 } as never)
+      .mockResolvedValueOnce({ rows: [{ is_super_admin: true, is_admin: true }], rowCount: 1 } as never);
+  };
+
+  it("a rejected token fails the check, and is not softened to a warning", async () => {
+    arrangeHealthyExceptMaps();
+    mockMapProbe.mockResolvedValue({
+      ok: false,
+      detail: "MAPBOX_TOKEN was rejected — every map in the app is blank (HTTP 401)",
+    });
+
+    const report = await getPhase0Readiness();
+    const check = report.checks.find((c) => c.id === "0.8-maps");
+    expect(check?.status).toBe("fail");
+    expect(check?.detail).toContain("HTTP 401");
+  });
+
+  it("and that alone makes the deployment not ready", async () => {
+    arrangeHealthyExceptMaps();
+    mockMapProbe.mockResolvedValue({ ok: false, detail: "MAPBOX_TOKEN not set" });
+
+    const report = await getPhase0Readiness();
+    expect(report.ready).toBe(false);
+  });
+
+  it("a working map passes and says a real tile was fetched", async () => {
+    arrangeHealthyExceptMaps();
+
+    const report = await getPhase0Readiness();
+    const check = report.checks.find((c) => c.id === "0.8-maps");
+    expect(check?.status).toBe("pass");
+    expect(check?.detail).toContain("real tile");
+    expect(report.ready).toBe(true);
+  });
+
+  it("does not refetch a tile on every poll", async () => {
+    arrangeHealthyExceptMaps();
+    await getPhase0Readiness();
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ "?column?": 1 }], rowCount: 1 } as never)
+      .mockResolvedValueOnce({ rows: [{ is_super_admin: true, is_admin: true }], rowCount: 1 } as never);
+    await getPhase0Readiness();
+    expect(mockMapProbe).toHaveBeenCalledTimes(1);
   });
 });

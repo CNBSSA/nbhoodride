@@ -219,6 +219,19 @@ export async function run({ base, db, server }) {
     // The outside probe reads this same list, so naming maps here is what
     // makes a blank map visible to the watch that runs off our own server.
     check("/health/deps names the map too, so the outside probe sees it", (depsJson.down ?? []).includes("maps"), JSON.stringify(depsJson.down));
+    // Readiness, not just the watch. The watch tells you a map broke while
+    // running; this is what stops a deploy that never had a working map from
+    // being called ready in the first place — the gap that let a grey screen
+    // reach a rider on 2026-09-13.
+    const ready = await fetch(`${base}/health/ready`);
+    const readyJson = await ready.json();
+    const mapCheck = (readyJson.checks ?? []).find((c) => c.id === "0.8-maps");
+    check("readiness checks the map at all", !!mapCheck, JSON.stringify((readyJson.checks ?? []).map((c) => c.id)));
+    check("a deployment that cannot fetch a tile fails, not warns",
+      mapCheck?.status === "fail" && /MAPBOX_TOKEN/.test(mapCheck?.detail ?? ""), JSON.stringify(mapCheck));
+    check("and that makes the whole deployment not ready",
+      readyJson.ready === false && ready.status === 503, `${ready.status} ready=${readyJson.ready}`);
+
     const rv2 = await admin.req("GET", `/api/admin/analytics/rider-promise-review?at=${encodeURIComponent(at.toISOString())}`);
     const outages = rv2.json?.metrics?.appHealth?.outages ?? [];
     check("review lists the Stripe outage as still down", outages.some((o) => o.name === "Stripe" && o.minutes === null), JSON.stringify(outages));
