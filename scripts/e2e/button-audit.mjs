@@ -50,6 +50,9 @@ const SCREENS = [
   { role: "driver", path: "/" }, { role: "driver", path: "/driver/insights" },
   { role: "admin", path: "/admin" }, { role: "admin", path: "/" },
   { role: "requester", path: "/org" },
+  // An admin who is in no organization sees the portal's empty state — the only
+  // place the way back to Admin → Organizations is offered. Nobody else can see it.
+  { role: "admin", path: "/org" },
 ];
 
 /** BUTTON_AUDIT_ONLY="rider /" runs one screen; BUTTON_AUDIT_VERBOSE=1 prints every press. */

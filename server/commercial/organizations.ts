@@ -52,6 +52,26 @@ export async function createOrganization(input: OrganizationInput): Promise<Orga
     address: input.address ?? null,
     notes: clean(input.notes, 2000),
   }).returning();
+
+  // Give the new account its first owner. The form already asks who runs it;
+  // if that email belongs to a PG Ride user, they are made owner here.
+  // Without this a freshly created account has nobody in it, the portal
+  // tells whoever opens it that they are "not attached to an organization",
+  // and the person who just created it has no way in — which is exactly
+  // what happened the first time this was used for real.
+  const seedEmail = clean(input.contactEmail, 200)?.toLowerCase();
+  if (seedEmail) {
+    try {
+      await addMemberByEmail(row.id, seedEmail, "owner");
+      console.log(`[commercial] account created :: ${row.name} | first owner ${seedEmail}`);
+    } catch (err) {
+      // No PG Ride account with that email yet is an ordinary case, not a
+      // failure: the account still exists and the operator can add people.
+      console.log(`[commercial] account created :: ${row.name} | no owner yet (${seedEmail} has no PG Ride account)`);
+    }
+  } else {
+    console.log(`[commercial] account created :: ${row.name} | no contact email, so no owner yet`);
+  }
   return row;
 }
 
