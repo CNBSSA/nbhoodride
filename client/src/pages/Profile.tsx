@@ -33,6 +33,11 @@ export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
   const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [isSafetyPrivacyModalOpen, setIsSafetyPrivacyModalOpen] = useState(false);
+  // Organization memberships decide whether the portal row shows at all.
+  const { data: orgMemberships } = useQuery<Array<{ organization: { id: string; name: string } }>>({
+    queryKey: ["/api/org/mine"],
+    retry: false,
+  });
   const { permission, isSubscribed, isSupported, isLoading: pushLoading, subscribe, unsubscribe } = usePushNotifications();
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [showCountySelector, setShowCountySelector] = useState(false);
@@ -504,6 +509,29 @@ export default function Profile() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* The way in to the organization portal. It existed as a route and
+              nothing anywhere linked to it, so the only way a clinic's booking
+              clerk could reach their own account was to be told a URL to type. */}
+          {(orgMemberships?.length ?? 0) > 0 && (
+            <Button
+              variant="outline"
+              className="w-full justify-between p-4"
+              onClick={() => setLocation("/org")}
+              data-testid="button-open-org-portal"
+            >
+              <div className="flex items-center space-x-3">
+                <i className="fas fa-hospital text-secondary text-xl" />
+                <div className="text-left">
+                  <p className="font-medium">
+                    {orgMemberships!.length === 1 ? orgMemberships![0].organization.name : `${orgMemberships!.length} organizations`}
+                  </p>
+                  <p className="text-sm text-muted-foreground">Book and bill for your organization</p>
+                </div>
+              </div>
+              <i className="fas fa-chevron-right text-muted-foreground" />
+            </Button>
           )}
 
           {/* A permanent home for "install". The floating button can be

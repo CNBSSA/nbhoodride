@@ -142,6 +142,13 @@ export const driverProfiles = pgTable("driver_profiles", {
   // deliveries (shared/driverBadges.ts). Granted by the operator; an unbadged
   // driver is never shown that work and cannot claim it.
   badges: text("badges").array().notNull().default(sql`ARRAY[]::text[]`),
+  /**
+   * Where the weekly payday sends this driver's money. Saved from the last
+   * payout they asked for, so the automatic Friday run has somewhere to go
+   * without asking again. A driver with neither is skipped and told why.
+   */
+  payoutMethod: varchar("payout_method"),
+  payoutDetails: varchar("payout_details"),
   // Counties this driver accepts rides in. Empty array = all Maryland counties accepted.
   acceptedCounties: text("accepted_counties").array().notNull().default(sql`ARRAY[]::text[]`),
   // Daily session — cleared when driver goes offline or at midnight
