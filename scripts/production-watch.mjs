@@ -76,7 +76,19 @@ let depsDown = [];
 try {
   const d = JSON.parse(deps.body || "{}");
   depsDown = Array.isArray(d.down) ? d.down : [];
-  if (deps.status === 503 || depsDown.length > 0) notes.push(`server reports down: ${depsDown.join(", ") || "unknown"} (already paged by the server)`);
+  // Carry the REASON, not just the name. "server reports down: maps" tells
+  // the operator something is wrong and nothing about what to do; the
+  // dependency's own detail says whether a token is absent, rejected,
+  // rate-limited or the provider is unreachable — four different fixes.
+  // These details are written to be safe to show: /health/deps is public and
+  // the watch redacts keys before they ever reach it.
+  const withWhy = depsDown
+    .map((n) => {
+      const why = d.deps?.[n]?.detail;
+      return why ? `${n} — ${String(why).slice(0, 160)}` : n;
+    })
+    .join("; ");
+  if (deps.status === 503 || depsDown.length > 0) notes.push(`server reports down: ${withWhy || "unknown"} [already paged by the server]`);
   else if (deps.status !== 200) failures.push(`Dependencies (/health/deps): HTTP ${deps.status}`);
 } catch {
   if (health) failures.push(`Dependencies (/health/deps): ${deps.status === 0 ? deps.error : `HTTP ${deps.status}, not JSON`}`);
