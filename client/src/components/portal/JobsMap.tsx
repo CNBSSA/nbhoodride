@@ -6,6 +6,7 @@
 import { useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { addBaseLayer } from "@/lib/mapTiles";
 
 export interface MapJob {
   id: string;
@@ -34,7 +35,7 @@ export function JobsMap({ jobs, height = "320px" }: { jobs: MapJob[]; height?: s
   useEffect(() => {
     if (!el.current || map.current) return;
     map.current = L.map(el.current, { zoomControl: true, attributionControl: true }).setView(COUNTY_CENTER, 11);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "&copy; OpenStreetMap" }).addTo(map.current);
+    void addBaseLayer(map.current);
     layer.current = L.layerGroup().addTo(map.current);
     return () => { map.current?.remove(); map.current = null; layer.current = null; };
   }, []);

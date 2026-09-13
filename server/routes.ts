@@ -172,6 +172,7 @@ import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { noteWatchRan } from "./watchHeartbeat";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { describeClientBuild } from "@shared/clientBuild";
+import { registerMapTileRoutes } from "./mapTiles";
 import { BUILD_ID } from "./buildInfo";
 import { payDriverForCompletedJob, payDriverForWaiting } from "./commercial/driverPay";
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
@@ -477,6 +478,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Auth middleware
   await setupAuth(app);
+
+  // Map tiles through us, never straight from OpenStreetMap's volunteer
+  // servers — drawing from those in production is against their usage
+  // policy, and on 2026-09-12 they blocked us and every rider's map broke.
+  registerMapTileRoutes(app);
 
   // Ensure super admin account is properly configured on startup
   await ensureSuperAdminSetup();
@@ -4857,7 +4863,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const profile = await storage.getDriverProfile(userId);
-      const driverCounties = profile?.acceptedCounties ?? [];
+      // Today's counties (chosen at go-online) take precedence over the
+      // driver's permanent prefs, same as dispatch matching and the WS
+      // broadcast cache — otherwise a driver who opts into an extra county
+      // for today's shift never sees scheduled rides open there.
+      const driverCounties = (profile?.dailyCounties?.length ? profile.dailyCounties : null)
+        ?? profile?.acceptedCounties
+        ?? [];
       const [open, mine] = await Promise.all([
         storage.getOpenScheduledRides(driverCounties.length > 0 ? driverCounties : undefined, await badgesFor(userId)),
         storage.getDriverUpcomingRides(userId),

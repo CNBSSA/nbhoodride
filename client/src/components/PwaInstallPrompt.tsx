@@ -45,6 +45,16 @@ export default function PwaInstallPrompt() {
     return () => window.removeEventListener("beforeinstallprompt", onBeforeInstall);
   }, []);
 
+  // Anywhere in the app can ask for the install walkthrough — the Profile
+  // row does. Registered in its own effect so it still works when the
+  // floating button has been dismissed for the session, and a rider who
+  // went looking for it deliberately is never told "no".
+  useEffect(() => {
+    const onAsk = () => { setDismissed(false); setShowIosHint(true); };
+    window.addEventListener("pgride:open-install", onAsk);
+    return () => window.removeEventListener("pgride:open-install", onAsk);
+  }, []);
+
   const handleDismiss = () => {
     setDismissed(true);
     sessionStorage.setItem(DISMISS_KEY, "1");
@@ -58,7 +68,8 @@ export default function PwaInstallPrompt() {
     handleDismiss();
   };
 
-  if (dismissed || isStandalone() || isInstallGateRequired()) return null;
+  if (isStandalone()) return null;
+  if ((dismissed && !showIosHint) || isInstallGateRequired()) return null;
 
   const ios = isIosDevice();
   const showAndroid = !!deferredPrompt;
@@ -68,7 +79,13 @@ export default function PwaInstallPrompt() {
       <button
         type="button"
         onClick={() => setShowIosHint(true)}
-        className="fixed bottom-20 right-4 z-40 rounded-full bg-primary text-primary-foreground shadow-lg h-11 px-4 text-xs font-medium flex items-center gap-2"
+        // z-[58]: above the rider home's idle bottom sheet (z-[55]) and the
+        // bottom nav (z-50), below the assistant FAB (z-[59]) which sits
+        // higher up at bottom-36. At the default z-40 the sheet painted
+        // straight over this — the same fault already fixed for the
+        // assistant, and the reason iPhone users saw no install button at
+        // all. Android never showed it because Chrome offers its own.
+        className="fixed bottom-20 right-4 z-[58] rounded-full bg-primary text-primary-foreground shadow-lg h-11 px-4 text-xs font-medium flex items-center gap-2"
         data-testid="button-pwa-install-fab"
       >
         <Download className="h-4 w-4" />
@@ -157,7 +174,7 @@ export default function PwaInstallPrompt() {
 
   return (
     <div
-      className="fixed bottom-20 left-4 right-4 z-50 max-w-sm mx-auto"
+      className="fixed bottom-20 left-4 right-4 z-[58] max-w-sm mx-auto"
       data-testid="pwa-install-prompt"
     >
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl p-4">

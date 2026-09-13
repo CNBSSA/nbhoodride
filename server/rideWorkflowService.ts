@@ -390,10 +390,17 @@ export async function findBestDriver(
     (d) => !excludeDriverIds.includes(d.profile.userId)
   );
 
-  // Filter by county preference
-  const countyFiltered = candidates.filter((d) =>
-    driverCoversCounty(d.profile.acceptedCounties ?? [], pickupCounty)
-  );
+  // Filter by county preference. A driver's counties for today (chosen at
+  // go-online) take precedence over their permanent prefs, same as the WS
+  // broadcast cache in routes.ts — otherwise a driver who opts into an extra
+  // county for today's shift gets pinged over the socket but can never
+  // actually be dispatched there.
+  const countyFiltered = candidates.filter((d) => {
+    const counties = (d.profile.dailyCounties?.length ? d.profile.dailyCounties : null)
+      ?? d.profile.acceptedCounties
+      ?? [];
+    return driverCoversCounty(counties, pickupCounty);
+  });
 
   // Filter out drivers with active pre-start rides
   const driverUserIds = countyFiltered.map((d) => d.profile.userId);

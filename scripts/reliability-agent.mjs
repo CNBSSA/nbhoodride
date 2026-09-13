@@ -168,7 +168,13 @@ async function main() {
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 3000,
+        // Thinking and the written answer share this budget. Sonnet 5 thinks
+        // adaptively by default, and at 3000 it spent the entire allowance
+        // reasoning and never reached the text block — every report for weeks
+        // came back "AI analysis skipped", with stop_reason max_tokens and a
+        // lone thinking block as the only evidence. 16000 is the documented
+        // non-streaming default: room to think and still write the report.
+        max_tokens: 16000,
         system,
         messages: [{ role: "user", content: userMsg }],
       }),

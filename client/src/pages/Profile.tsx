@@ -27,6 +27,7 @@ import { MD_COUNTIES } from "../../../shared/schema";
 import type { Locale } from "@shared/i18n";
 import { useLocation, Link } from "wouter";
 import { PG_CARD, SUPPORT } from "@shared/userFacingCopy";
+import { isAppInstalledContext, isIosDevice } from "@/lib/pwaInstall";
 
 export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
@@ -503,6 +504,31 @@ export default function Profile() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* A permanent home for "install". The floating button can be
+              dismissed, is easy to miss, and on iPhone it was painted over
+              by the booking sheet for weeks — so the one place a rider will
+              always look has to carry it too. Hidden once the app is
+              actually installed. */}
+          {!isAppInstalledContext() && (
+            <Button
+              variant="outline"
+              className="w-full justify-between p-4"
+              onClick={() => window.dispatchEvent(new CustomEvent("pgride:open-install"))}
+              data-testid="button-install-app"
+            >
+              <div className="flex items-center space-x-3">
+                <i className="fas fa-mobile-alt text-primary text-xl" />
+                <div className="text-left">
+                  <p className="font-medium">Install app</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isIosDevice() ? "Add PG Ride to your iPhone home screen" : "Add PG Ride to your home screen"}
+                  </p>
+                </div>
+              </div>
+              <i className="fas fa-chevron-right text-muted-foreground" />
+            </Button>
           )}
 
           <Button

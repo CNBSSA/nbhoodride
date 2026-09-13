@@ -3,6 +3,7 @@ import { useParams } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
+import { addBaseLayerTo } from "@/lib/mapTiles";
 
 interface EmergencyIncident {
   id: string;
@@ -49,9 +50,7 @@ export default function EmergencyTracking() {
     if (!incident || !window.L) return;
 
     const map = window.L.map('emergency-map');
-    window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors'
-    }).addTo(map);
+    void addBaseLayerTo(window.L, map);
 
     let marker: any = null;
 
