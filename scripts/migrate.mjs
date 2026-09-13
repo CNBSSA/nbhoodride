@@ -771,6 +771,10 @@ CREATE TABLE IF NOT EXISTS commercial_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_commercial_jobs_org ON commercial_jobs (organization_id);
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS badges TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
+-- Where the weekly payday sends a driver's money, remembered from the last
+-- payout they asked for so the Friday run does not have to ask again.
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS payout_method VARCHAR;
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS payout_details VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS standing_order_id VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS service_date VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS leg VARCHAR NOT NULL DEFAULT 'out';
