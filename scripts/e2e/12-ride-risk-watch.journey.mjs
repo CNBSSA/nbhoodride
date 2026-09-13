@@ -222,7 +222,12 @@ export async function run({ base, db, server }) {
     const rv2 = await admin.req("GET", `/api/admin/analytics/rider-promise-review?at=${encodeURIComponent(at.toISOString())}`);
     const outages = rv2.json?.metrics?.appHealth?.outages ?? [];
     check("review lists the Stripe outage as still down", outages.some((o) => o.name === "Stripe" && o.minutes === null), JSON.stringify(outages));
-    check("review text carries the outages line", /Outages: Stripe \(still down\)/.test(rv2.json?.text ?? ""));
+    // Order-independent: the line is a comma-joined list, so pinning it to
+    // "Outages: Stripe" broke the moment a second dependency joined the
+    // watch. Assert what is named, not what happens to be named first.
+    const outagesLine = /Outages: ([^\n]+)/.exec(rv2.json?.text ?? "")?.[1] ?? "";
+    check("review text carries the outages line", /Stripe \(still down\)/.test(outagesLine), outagesLine);
+    check("and the morning review names the map outage too", /Maps \(still down\)/.test(outagesLine), outagesLine);
 
     section("Found by the every-button audit");
     // A new driver's first visit to Ownership fires two requests at once;
