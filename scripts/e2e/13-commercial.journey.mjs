@@ -18,6 +18,30 @@ export async function run({ base, db, server }) {
   const inHours = (h) => new Date(Date.now() + h * 3_600_000);
 
   try {
+    section("A new account is not a dead end: it has an owner from the start");
+    // Creating an account used to insert the organization and nothing else,
+    // so it had nobody in it, and the person who had just created it opened
+    // the portal to "your account is not attached to an organization yet".
+    const seeded = await admin.req("POST", "/api/admin/organizations", {
+      name: "Seeded Owner Clinic", category: "medical", contactEmail: FIXTURES.rider.email, contactName: "Front desk",
+    });
+    check("the account is created", seeded.status === 201 && seeded.json?.id, JSON.stringify(seeded.json?.message ?? seeded.status));
+    orgIds.push(seeded.json.id);
+    const seededMembers = await admin.req("GET", `/api/admin/organizations/${seeded.json.id}`);
+    check("the contact email is already an owner, so the account has a way in",
+      (seededMembers.json?.members ?? []).some((m) => m.email === FIXTURES.rider.email && m.role === "owner"),
+      JSON.stringify(seededMembers.json?.members));
+    const seenByOwner = await rider.req("GET", "/api/org/mine");
+    check("and that owner sees it on their own portal without being added by hand",
+      (seenByOwner.json ?? []).some((m) => m.organization?.id === seeded.json.id), JSON.stringify((seenByOwner.json ?? []).map((m) => m.organization?.name)));
+
+    // An address nobody has signed up with must not fail the creation.
+    const noUser = await admin.req("POST", "/api/admin/organizations", {
+      name: "Not Yet Signed Up Clinic", category: "medical", contactEmail: "nobody-here@example.test",
+    });
+    check("an account for someone without a PG Ride login is still created", noUser.status === 201, JSON.stringify(noUser.json?.message ?? noUser.status));
+    if (noUser.json?.id) orgIds.push(noUser.json.id);
+
     section("The surface does not exist while the flag is off");
     const off = await startServer({ COMMERCIAL_ENABLED: "false" });
     try {

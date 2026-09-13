@@ -63,6 +63,7 @@ const isTyping = () => { const t = document.activeElement as HTMLElement | null;
 
 export default function PortalPage() {
   const { user } = useAuth();
+  const isAdmin = !!(user as any)?.isAdmin || !!(user as any)?.isSuperAdmin;
   const { data: memberships, isLoading, error } = useQuery<Membership[]>({ queryKey: ["/api/org/mine"], queryFn: () => json("GET", "/api/org/mine") });
   const [orgId, setOrgId] = useState<string | null>(null);
   const [view, setView] = useState<View>("today");
@@ -83,11 +84,33 @@ export default function PortalPage() {
 
   if (isLoading) return <div className="p-8 text-sm text-muted-foreground" data-testid="portal-loading">Loading your organizations…</div>;
   if (error || !memberships || memberships.length === 0) {
+    // An operator who just created accounts is not "waiting to be added by
+    // someone" — they ARE that someone. Telling the admin to go and ask
+    // themselves is how this page read the first time it was used for real.
     return (
       <div className="min-h-screen bg-background p-8 max-w-xl mx-auto space-y-4" data-testid="portal-empty">
         <Link href="/" className="inline-flex items-center gap-1 text-sm text-muted-foreground"><ArrowLeft className="h-4 w-4" /> Back to the app</Link>
         <h1 className="text-2xl font-bold">{BRAND.appName} for organizations</h1>
-        <p className="text-muted-foreground">Your account is not attached to an organization yet. Ask the person who runs your account with {BRAND.appName} to add your email, then open this page again.</p>
+        {isAdmin ? (
+          <>
+            <p className="text-muted-foreground" data-testid="portal-empty-admin">
+              Creating an account does not put you in it. You are not a member of any organization yet,
+              so there is nothing to show here.
+            </p>
+            <p className="text-muted-foreground">
+              Open <strong>Admin → Organizations</strong>, pick the account, and add your own email as an
+              owner. Then this page opens on it.
+            </p>
+            <Link href="/admin" className="inline-flex items-center gap-2 rounded-xl bg-primary text-primary-foreground px-4 py-2 text-sm font-medium" data-testid="button-portal-to-admin">
+              Go to Admin → Organizations
+            </Link>
+          </>
+        ) : (
+          <p className="text-muted-foreground">
+            Your account is not attached to an organization yet. Ask the person who runs your account
+            with {BRAND.appName} to add your email, then open this page again.
+          </p>
+        )}
       </div>
     );
   }
