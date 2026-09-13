@@ -41,6 +41,45 @@ const numeric = (v: string, max: number): number | null => {
   return Number.isInteger(n) && n >= 0 && n <= max ? n : null;
 };
 
+/**
+ * Prince George's County at zoom 10 — a tile a rider actually loads, not a
+ * synthetic one. x = floor((lng+180)/360 · 2^10), y from the Mercator
+ * formula at 38.9°N, -76.8°W.
+ */
+const PROBE_TILE = { z: 10, x: 293, y: 391 };
+
+/**
+ * Fetch one real tile, for the dependency watch.
+ *
+ * A token that is merely *present* proves nothing: a revoked key, a key
+ * over its quota and a key with the wrong scope all answer 401/403/429 and
+ * blank every map in the app just as thoroughly as no key at all. So this
+ * asks Mapbox for an actual tile, through the same style and token the
+ * riders' tiles go through, and reports what came back.
+ */
+export async function probeMapTiles(timeoutMs = 8_000): Promise<{ ok: boolean; detail?: string }> {
+  const token = process.env.MAPBOX_TOKEN;
+  if (!token) return { ok: false, detail: MAP_TILES_UNAVAILABLE };
+
+  const { z, x, y } = PROBE_TILE;
+  const url = `https://api.mapbox.com/styles/v1/${STYLE}/tiles/256/${z}/${x}/${y}`
+    + `?access_token=${encodeURIComponent(token)}`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) {
+      const why = res.status === 401 || res.status === 403
+        ? "MAPBOX_TOKEN was rejected — every map in the app is blank"
+        : res.status === 429
+          ? "Mapbox is rate-limiting us — maps will fail intermittently"
+          : "Mapbox did not return a tile";
+      return { ok: false, detail: `${why} (HTTP ${res.status})` };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, detail: `Mapbox unreachable: ${String((e as any)?.message ?? e).slice(0, 120)}` };
+  }
+}
+
 export function registerMapTileRoutes(app: Express): void {
   /** What the client should draw with. Public: the map is on the front page. */
   app.get("/api/map/config", (_req: Request, res: Response) => {
