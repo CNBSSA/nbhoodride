@@ -48,8 +48,8 @@ export function readReport(report: string): DigestFacts {
     Array.from(report.matchAll(new RegExp(`"label":"([^"]+)","status":"${status}"`, "g"))).map((m) => m[1]);
   return {
     date: firstMatch(report, /Daily Reliability Report — (\d{4}-\d{2}-\d{2})/),
-    checkExit: firstMatch(report, /npm run check exit code: (\d+)/),
-    testExit: firstMatch(report, /npm test exit code: (\d+)/),
+    checkExit: firstMatch(report, /npm run check exit code: (-?\d+)/),
+    testExit: firstMatch(report, /npm test exit code: (-?\d+)/),
     tests: firstMatch(report, /Tests[^\d]*(\d+ passed)/),
     ready: /\/health\/ready: HTTP 200/.test(report) ? true : /\/health\/ready: HTTP \d+/.test(report) ? false : null,
     warnings: labelled("warn"),
@@ -72,6 +72,21 @@ export function verdictOf(f: DigestFacts): { emoji: string; text: string; bad: b
   if (f.ready === false) broken.push("production not ready");
   if (f.failures.length > 0) broken.push(`${f.failures.length} readiness check failing`);
   if (broken.length > 0) return { emoji: "🔴", text: broken.join(", "), bad: true };
+
+  // A result we could not read is not a result we can call healthy. This
+  // used to fall through to green while the body line printed
+  // "FAILING (exit ?)" from the same missing value — one message asserting
+  // both at once, every morning the AI analysis succeeded, because only the
+  // degraded report carried the evidence these facts are read from.
+  const unknown = [
+    f.checkExit === null ? "build" : null,
+    f.testExit === null ? "tests" : null,
+    f.ready === null ? "production" : null,
+  ].filter((x): x is string => x !== null);
+  if (unknown.length > 0) {
+    return { emoji: "🟡", text: `cannot tell — no ${unknown.join(", ")} result in the report`, bad: false };
+  }
+
   if (f.warnings.length > 0) return { emoji: "🟡", text: `healthy, ${f.warnings.length} thing${f.warnings.length === 1 ? "" : "s"} still to set up`, bad: false };
   return { emoji: "🟢", text: "everything healthy", bad: false };
 }
@@ -84,7 +99,8 @@ export function buildReliabilityDigest(input: DigestInput): string {
     `🛰 Daily Reliability Report${f.date ? ` — ${f.date}` : ""}`,
     `${v.emoji} ${v.text}`,
     "",
-    `Build: ${f.checkExit === "0" ? "clean" : `FAILING (exit ${f.checkExit ?? "?"})`} · Tests: ${f.testExit === "0" ? (f.tests ?? "passing") : `FAILING (exit ${f.testExit ?? "?"})`}`,
+    `Build: ${f.checkExit === null ? "not recorded" : f.checkExit === "0" ? "clean" : `FAILING (exit ${f.checkExit})`}`
+      + ` · Tests: ${f.testExit === null ? "not recorded" : f.testExit === "0" ? (f.tests ?? "passing") : `FAILING (exit ${f.testExit})`}`,
     `Production: ${f.ready === true ? "ready" : f.ready === false ? "NOT READY" : "not probed"}`,
   ];
   if (f.parity) lines.push(`develop↔main (ahead/behind): ${f.parity}`);

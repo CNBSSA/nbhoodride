@@ -191,6 +191,20 @@ export async function run({ base, db, server }) {
     check("database answers", d1.json?.report?.deps?.database?.ok === true, JSON.stringify(d1.json?.report?.deps?.database));
     check("stripe is configured and unreachable here", d1.json?.report?.deps?.stripe?.configured === true && d1.json?.report?.deps?.stripe?.ok === false, JSON.stringify(d1.json?.report?.deps?.stripe));
     check("stripe failure never leaks the key", !/sk_test_e2e_fake/.test(JSON.stringify(d1.json)));
+    // Maps, unlike Stripe, are never "not configured, therefore fine". There
+    // is no fallback for tiles: no MAPBOX_TOKEN (as here) means every map in
+    // the app is blank, so the watch must call it down and say so. Before
+    // this, nothing watched the map at all — neither this watch nor the
+    // outside probe — so a dead token blanked every map while both stayed
+    // green and a rider found out first.
+    check("maps are always treated as required, never as optional",
+      d1.json?.report?.deps?.maps?.configured === true, JSON.stringify(d1.json?.report?.deps?.maps));
+    check("a missing map token reads as down, not as fine",
+      d1.json?.report?.deps?.maps?.ok === false && /MAPBOX_TOKEN/.test(d1.json?.report?.deps?.maps?.detail ?? ""),
+      JSON.stringify(d1.json?.report?.deps?.maps));
+    const mapsPage = /\[dependency-watch\] maps down :: .*/.exec(serverLog(server));
+    check("the operator is paged about the map, and reminded while it stays down",
+      mapsPage !== null, mapsPage ? mapsPage[0].slice(0, 140) : "no maps down page in the server log");
     const d2 = await admin.req("POST", "/api/admin/analytics/dependency-check", { at: inMin(10).toISOString() });
     check("still down ten minutes later pages nothing new", (d2.json?.paged ?? []).length === 0, JSON.stringify(d2.json?.paged));
     const d3 = await admin.req("POST", "/api/admin/analytics/dependency-check", { at: inMin(70).toISOString() });
@@ -202,10 +216,18 @@ export async function run({ base, db, server }) {
     const depsPage = await fetch(`${base}/health/deps`);
     const depsJson = await depsPage.json();
     check("/health/deps is public, 503 while Stripe is down, and names it", depsPage.status === 503 && (depsJson.down ?? []).includes("stripe"), JSON.stringify(depsJson.down));
+    // The outside probe reads this same list, so naming maps here is what
+    // makes a blank map visible to the watch that runs off our own server.
+    check("/health/deps names the map too, so the outside probe sees it", (depsJson.down ?? []).includes("maps"), JSON.stringify(depsJson.down));
     const rv2 = await admin.req("GET", `/api/admin/analytics/rider-promise-review?at=${encodeURIComponent(at.toISOString())}`);
     const outages = rv2.json?.metrics?.appHealth?.outages ?? [];
     check("review lists the Stripe outage as still down", outages.some((o) => o.name === "Stripe" && o.minutes === null), JSON.stringify(outages));
-    check("review text carries the outages line", /Outages: Stripe \(still down\)/.test(rv2.json?.text ?? ""));
+    // Order-independent: the line is a comma-joined list, so pinning it to
+    // "Outages: Stripe" broke the moment a second dependency joined the
+    // watch. Assert what is named, not what happens to be named first.
+    const outagesLine = /Outages: ([^\n]+)/.exec(rv2.json?.text ?? "")?.[1] ?? "";
+    check("review text carries the outages line", /Stripe \(still down\)/.test(outagesLine), outagesLine);
+    check("and the morning review names the map outage too", /Maps \(still down\)/.test(outagesLine), outagesLine);
 
     section("Found by the every-button audit");
     // A new driver's first visit to Ownership fires two requests at once;
@@ -223,7 +245,7 @@ export async function run({ base, db, server }) {
     const probe = spawnSync("node", ["scripts/production-watch.mjs"], { env: { ...process.env, BASE_URL: base }, encoding: "utf8" });
     const lastLine = (probe.stdout ?? "").trim().split("\n").pop() ?? "";
     check("outside probe passes against a healthy app shell and pages", probe.status === 0, `${probe.status}: ${lastLine} ${probe.stderr}`);
-    check("outside probe carries the server's own view instead of paging twice", /server reports down: stripe \(already paged by the server\)/.test(lastLine), lastLine);
+    check("outside probe carries the server's own view instead of paging twice", /server reports down: [^()]*stripe[^()]*\(already paged by the server\)/.test(lastLine), lastLine);
     const probeDown = spawnSync("node", ["scripts/production-watch.mjs"], { env: { ...process.env, BASE_URL: "http://127.0.0.1:1" }, encoding: "utf8" });
     check("outside probe fails red when nothing answers", probeDown.status === 1 && /^DOWN — Process/.test((probeDown.stdout ?? "").trim().split("\n").pop() ?? ""), (probeDown.stdout ?? "").trim().split("\n").pop());
   } finally {
