@@ -18,11 +18,12 @@
 
 import { pool } from "./db";
 import { stripe } from "./stripeService";
+import { probeMapTiles } from "./mapTiles";
 import { opsAlert, telegramOpsEnabled } from "./telegramOps";
 import { recordReliabilityEvent } from "./reliabilityEvents";
 import { noteWatchRan } from "./watchHeartbeat";
 
-export type DependencyName = "database" | "stripe";
+export type DependencyName = "database" | "stripe" | "maps";
 
 export interface DependencyStatus {
   ok: boolean;
@@ -47,7 +48,7 @@ export const DEPENDENCY_CHECK_EVERY_MINUTES = 10;
 export const STILL_DOWN_REMINDER_MINUTES = 60;
 const CHECK_TIMEOUT_MS = 8_000;
 
-const LABELS: Record<DependencyName, string> = { database: "Database", stripe: "Stripe" };
+const LABELS: Record<DependencyName, string> = { database: "Database", stripe: "Stripe", maps: "Map tiles" };
 
 function withTimeout<T>(p: Promise<T>, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -71,11 +72,22 @@ async function timed(configured: boolean, run: () => Promise<void>, notConfigure
 
 /** One check of every dependency. Never throws. */
 export async function checkDependencies(now: Date = new Date()): Promise<DependencyReport> {
-  const [database, stripeStatus] = await Promise.all([
+  const [database, stripeStatus, maps] = await Promise.all([
     timed(true, async () => { await withTimeout(pool.query("SELECT 1"), "Database"); }, ""),
     timed(!!stripe, async () => { await withTimeout(stripe!.balance.retrieve({}, { timeout: CHECK_TIMEOUT_MS }), "Stripe"); }, "STRIPE_SECRET_KEY not set"),
+    // Always `configured: true`, unlike Stripe. A deployment can legitimately
+    // run without a Stripe key; none can run without map tiles. Geocoding
+    // falls back to Nominatim when MAPBOX_TOKEN is absent, but tiles have no
+    // fallback at all — no token means every map in the app is blank, which
+    // is an outage, not a configuration choice. Reporting it as "not
+    // configured, therefore fine" is how a blank map stayed invisible to
+    // both watches while OpenStreetMap 403s reached riders first.
+    timed(true, async () => {
+      const r = await probeMapTiles(CHECK_TIMEOUT_MS);
+      if (!r.ok) throw new Error(r.detail ?? "Map tiles unavailable");
+    }, ""),
   ]);
-  const deps = { database, stripe: stripeStatus };
+  const deps = { database, stripe: stripeStatus, maps };
   const down = (Object.keys(deps) as DependencyName[]).filter((k) => deps[k].configured && !deps[k].ok);
   return { checkedAt: now.toISOString(), deps, down };
 }
