@@ -291,6 +291,13 @@ if (engine === chromium) {
       // under the clock and the Dynamic Island unless the inset is padded.
       const padTop = await up.locator('[data-testid="update-banner"]').evaluate((el) => getComputedStyle(el).paddingTop);
       check("Update banner: pads the status-bar inset, so it is readable when installed", /^\d/.test(padTop) && parseFloat(padTop) >= 8, `padding-top ${padTop}`);
+      // Asserted on the STYLE, not the measured box. The banner is the button,
+      // so without a floor its tap target is whatever the text line happens to
+      // measure — 56px on a machine with the app's fonts, 36px on a runner
+      // without them. The measured check above passes on generous fonts even
+      // when the floor has been deleted; this one does not.
+      const minH = await up.locator('[data-testid="update-banner"]').evaluate((el) => getComputedStyle(el).minHeight);
+      check("Update banner: has a tap-target floor that does not depend on font metrics", /^\d/.test(minH) && parseFloat(minH) >= 44, `min-height ${minH}`);
     } finally { await up.close(); await upCtx.close(); }
   } catch (e) {
     check("update-banner audit ran", false, String(e?.message ?? e).split("\n")[0]);
