@@ -21,6 +21,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 
 /** Mapbox raster style used for the base map. */
 const STYLE = "mapbox/streets-v12";
@@ -80,6 +81,35 @@ export async function probeMapTiles(timeoutMs = 8_000): Promise<{ ok: boolean; d
   }
 }
 
+/**
+ * Tiles per address per 15 minutes.
+ *
+ * This endpoint has to stay public: the guardian tracking page is opened by
+ * someone with no account at all, following a ride by a link. So it cannot
+ * be put behind login, and every request it serves spends Mapbox quota on
+ * our token. The general /api limiter (2,000 per 15 min) is tuned for a
+ * signed-in app and would let one address pull ~190,000 tiles a day; the
+ * damage is not the bill, which Mapbox lets you cap, but that an address
+ * burning the quota makes Mapbox answer 429 and blanks the map for every
+ * rider at once.
+ *
+ * A phone viewport is 15–20 tiles; a whole booking with pans and zooms is a
+ * few hundred, and the browser keeps what it has fetched for a week. 600
+ * leaves real riders several times over and cuts one address to ~58,000 a
+ * day. It will not stop a distributed scraper — nothing per-address does —
+ * so the spend cap on the Mapbox account stays the backstop.
+ */
+export const TILE_LIMIT_PER_WINDOW = 600;
+
+const tileLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: TILE_LIMIT_PER_WINDOW,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => ipKeyGenerator(req.ip ?? ""),
+  message: { message: "Too many map tiles requested from this address. Please wait a few minutes." },
+});
+
 export function registerMapTileRoutes(app: Express): void {
   /** What the client should draw with. Public: the map is on the front page. */
   app.get("/api/map/config", (_req: Request, res: Response) => {
@@ -93,7 +123,7 @@ export function registerMapTileRoutes(app: Express): void {
     });
   });
 
-  app.get("/api/map/tiles/:z/:x/:y", async (req: Request, res: Response) => {
+  app.get("/api/map/tiles/:z/:x/:y", tileLimiter, async (req: Request, res: Response) => {
     // Bounded, integer-only path segments: this endpoint must never be a way
     // to make the server fetch an arbitrary URL. Validated BEFORE the token
     // check, so a malformed request is refused the same way whether or not
