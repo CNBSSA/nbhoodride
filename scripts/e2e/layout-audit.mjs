@@ -213,22 +213,88 @@ try {
 // bottom sheets, so the check is that its primary actions are on screen and
 // hit-testable at a desk-sized window and at phone width.
 if (engine === chromium) {
-  // REMOVED for now: the install-app and update-banner sections.
+  // Restored 2026-09-14, after the removal note was re-examined.
   //
-  // They were added yesterday, passed locally, and have failed on the runner
-  // every time since — always at exactly 30 seconds, which is this audit's
-  // server-boot timeout, meaning the audit died before running a single
-  // check. I misread that twice as an assertion bug and "fixed" it twice.
-  //
-  // They are test scaffolding. They were blocking a fix for a rider who
-  // cannot see a map, so they come out rather than hold that up. The
-  // product changes they covered (the install button raised above the
-  // booking sheet, the permanent Profile row, the update banner clearing
-  // the iPhone status bar) are all still in place and unaffected.
-  //
-  // Restored in a follow-up once the boot failure is understood — the
-  // harness now prints the server's own log on a boot timeout, so the next
-  // failure will say what is wrong instead of being guessed at.
+  // These were pulled on 12 Sep because the runner failed "at exactly 30
+  // seconds" and I read that as these sections killing the boot. That
+  // reading was wrong: 30s is startServer's own wait (60 tries x 500ms),
+  // and these blocks run AFTER it returns — they cannot fail a boot. What
+  // they COULD do is kill the run, because neither was wrapped: one
+  // waitForSelector timing out threw uncaught and the whole audit died with
+  // no summary, which is exactly what a boot failure looks like from the
+  // outside. Both now report a failed check instead, and the harness prints
+  // the server's log on a real boot timeout, so the two can no longer be
+  // confused for each other.
+
+  section("Install app: the way in, on a phone that has not installed it");
+  // A context WITHOUT the standalone stub above, on an iPhone user agent —
+  // the only combination in which the install surfaces exist at all. Both
+  // are hit-tested, because the bug this exists to catch was a button that
+  // rendered perfectly and sat underneath the booking sheet: present in the
+  // DOM, invisible to a rider, and indistinguishable from working.
+  try {
+    const freshCtx = await browser.newContext({
+      viewport: VIEWPORT, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      geolocation: { latitude: 38.9073, longitude: -76.7781 }, permissions: ["geolocation"] });
+    await freshCtx.setExtraHTTPHeaders({ "X-Forwarded-Proto": "https" });
+    const ip = await freshCtx.newPage();
+    try {
+      await loginAs(ip, server.base, FIXTURES.rider.email);
+      // Which affordance appears depends on the browser, not on us: an engine
+      // that fires beforeinstallprompt (Chromium on a secure origin, which
+      // includes localhost) shows the banner; Safari, which never fires it,
+      // shows the floating button. Assert the guarantee a rider cares about —
+      // that SOME visible, tappable way to install is on screen — rather than
+      // one branch of it, which is how this check first failed in CI while
+      // passing here.
+      const floating = ip.locator('[data-testid="button-pwa-install-fab"]');
+      const banner = ip.locator('[data-testid="pwa-install-prompt"]');
+      await Promise.race([
+        floating.waitFor({ timeout: 20000 }).catch(() => {}),
+        banner.waitFor({ timeout: 20000 }).catch(() => {}),
+      ]);
+      const viaFab = await floating.count() > 0;
+      check("there is a way to install on screen", viaFab || await banner.count() > 0,
+        viaFab ? "floating button" : "install banner");
+      await assertPrimary(ip, viaFab ? "Install app (floating)" : "Install app (banner)",
+        viaFab ? "button-pwa-install-fab" : "pwa-install-prompt");
+      await ip.tap('[data-testid="tab-profile"]');
+      await ip.waitForSelector('[data-testid="button-install-app"]', { timeout: 15000 });
+      await ip.locator('[data-testid="button-install-app"]').scrollIntoViewIfNeeded();
+      await assertPrimary(ip, "Install app (Profile row)", "button-install-app");
+      await ip.tap('[data-testid="button-install-app"]');
+      check("Profile row opens the iPhone walkthrough", await ip.locator('[data-testid="pwa-install-prompt"]').isVisible());
+    } finally { await ip.close(); await freshCtx.close(); }
+  } catch (e) {
+    check("install audit ran", false, String(e?.message ?? e).split("\n")[0]);
+  }
+
+  section("Update banner: the one thing that tells a rider to pick up a fix");
+  // Forced by answering /api/version with a build id the bundle does not
+  // match — the same condition a rider hits the moment a deploy lands.
+  // Nothing exercised this before, and it is the only prompt telling
+  // someone on an old bundle that a fix exists.
+  try {
+    const upCtx = await browser.newContext({ viewport: VIEWPORT, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+      geolocation: { latitude: 38.9073, longitude: -76.7781 }, permissions: ["geolocation"] });
+    await upCtx.setExtraHTTPHeaders({ "X-Forwarded-Proto": "https" });
+    const up = await upCtx.newPage();
+    try {
+      await up.route("**/api/version", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ id: "a-newer-build", builtAt: new Date().toISOString() }) }));
+      await loginAs(up, server.base, FIXTURES.rider.email);
+      await up.waitForSelector('[data-testid="update-banner"]', { timeout: 15000 });
+      await assertPrimary(up, "Update banner", "update-banner");
+      const top = await up.locator('[data-testid="update-banner"]').boundingBox();
+      check("Update banner: starts at the very top of the screen", !!top && top.y <= 1, top ? `y=${Math.round(top.y)}` : "no box");
+      // Installed on an iPhone there is no browser chrome, so the banner sits
+      // under the clock and the Dynamic Island unless the inset is padded.
+      const padTop = await up.locator('[data-testid="update-banner"]').evaluate((el) => getComputedStyle(el).paddingTop);
+      check("Update banner: pads the status-bar inset, so it is readable when installed", /^\d/.test(padTop) && parseFloat(padTop) >= 8, `padding-top ${padTop}`);
+    } finally { await up.close(); await upCtx.close(); }
+  } catch (e) {
+    check("update-banner audit ran", false, String(e?.message ?? e).split("\n")[0]);
+  }
 
   section("Requester portal (organizations)");
   for (const [label, viewport] of [["desk 1280×800", { width: 1280, height: 800 }], ["phone 390×844", VIEWPORT]]) {
