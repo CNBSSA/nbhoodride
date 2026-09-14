@@ -18,7 +18,7 @@
  * reason: money leaves the balance if and only if a request exists for it.
  */
 
-import { and, eq, gt, isNotNull, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { driverProfiles, payoutRequests, users } from "@shared/schema";
 import { MINIMUM_PAYDAY_AMOUNT, paydayFor, paydayKeyOf, paydayLabel } from "@shared/paydayCycle";
@@ -64,7 +64,11 @@ export async function runWeeklyPayday(now: Date = new Date()): Promise<PaydayRes
     .from(driverProfiles)
     .innerJoin(users, eq(users.id, driverProfiles.userId))
     .where(and(
-      eq(driverProfiles.isSuspended, false),
+      // NULL is not suspended. The column is nullable, and `= false` would
+      // silently drop a NULL row: such a driver would go unpaid AND be
+      // absent from the skipped list, so nobody would know. No code writes
+      // NULL today; this makes sure a future one cannot hide money.
+      sql`COALESCE(${driverProfiles.isSuspended}, false) = false`,
       sql`CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) > 0`,
     ));
 

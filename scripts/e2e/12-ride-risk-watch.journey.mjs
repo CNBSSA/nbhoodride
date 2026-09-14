@@ -123,6 +123,14 @@ export async function run({ base, db, server }) {
     // validation and reach the "not configured" answer, not be rejected.
     const deepTile = await rider.req("GET", "/api/map/tiles/19/149000/200000");
     check("a high-zoom tile is a valid request, not a malformed one", deepTile.status === 503, String(deepTile.status));
+    // Tiles must stay public (the guardian page has no login) and every one
+    // spends Mapbox quota on our token, so the endpoint carries its own,
+    // tighter fence than the general /api limiter. Assert the fence from
+    // the standard rate-limit headers rather than by firing 600 requests.
+    const fenced = await fetch(`${base}/api/map/tiles/12/1170/1567`, { headers: { "X-Forwarded-Proto": "https" } });
+    const limitHeader = fenced.headers.get("ratelimit-limit") ?? (fenced.headers.get("ratelimit") ?? "").match(/limit=(\d+)/)?.[1] ?? "";
+    check("the tile endpoint has its own rate limit, tighter than the app's general one",
+      Number(limitHeader) > 0 && Number(limitHeader) <= 600, `RateLimit-Limit ${limitHeader || "(absent)"}`);
 
     section("A crash from an old bundle is not read as a new fault");
     // Every deploy leaves a tail: phones keep the code they opened with and

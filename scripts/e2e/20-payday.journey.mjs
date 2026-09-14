@@ -25,7 +25,7 @@ export async function run({ base, db, server }) {
   // Payday is claimed once per Friday, and the claim lives in the database.
   // These journeys use fixed Fridays, so a previous run's claims would make
   // this one silently do nothing. Clear ours before and after.
-  const KEYS = ["2026-09-11", "2026-09-18", "2026-09-25"];
+  const KEYS = ["2026-09-11", "2026-09-18", "2026-09-25", "2026-10-02"];
   const clearClaims = () => db.query(
     "DELETE FROM processed_webhook_events WHERE provider='weekly_payday' AND event_id = ANY($1::varchar[])", [KEYS]);
   await clearClaims();
@@ -67,7 +67,22 @@ export async function run({ base, db, server }) {
     const rode = (small.json?.skipped ?? []).find((l) => l.driverId === D);
     check("it is not paid out in pennies", /next Friday/i.test(rode?.reason ?? ""), JSON.stringify(rode));
     check("and the balance is still theirs", await balance() === 4.99, String(await balance()));
+
+    section("A driver whose suspended flag is NULL is still paid");
+    // is_suspended is nullable. Filtering it with `= false` would drop a
+    // NULL row silently: unpaid, AND missing from the skipped list, so the
+    // operator would never know. Nothing writes NULL today; this makes sure
+    // a future something cannot hide a driver's money.
+    await db.query("UPDATE driver_profiles SET is_suspended=NULL WHERE user_id=$1", [D]);
+    await setBalance("50.00");
+    await setMethod("zelle", "3015550002");
+    const nullRun = await payday(new Date("2026-10-02T13:00:00Z").toISOString());
+    const nullPaid = (nullRun.json?.paid ?? []).find((l) => l.driverId === D);
+    check("NULL is read as not suspended, and the driver is paid", !!nullPaid && nullPaid.amount === 50, JSON.stringify(nullPaid ?? nullRun.json?.skipped));
+    check("and their balance was taken, not left behind", await balance() === 0, String(await balance()));
+    await db.query("UPDATE driver_profiles SET is_suspended=false WHERE user_id=$1", [D]);
   } finally {
+    await db.query("UPDATE driver_profiles SET is_suspended=false WHERE user_id=$1", [D]).catch(() => {});
     await clearClaims().catch(() => {});
     await setBalance("0.00").catch(() => {});
     await setMethod(null, null).catch(() => {});
