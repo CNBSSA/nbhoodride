@@ -17,7 +17,7 @@ export function UpdateBanner() {
     <button
       type="button"
       onClick={applyUpdate}
-      className="fixed top-0 left-1/2 -translate-x-1/2 z-[70] w-full max-w-[430px] bg-primary text-primary-foreground text-sm pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] px-4 flex items-center justify-center gap-2 shadow"
+      className="fixed top-0 left-1/2 -translate-x-1/2 z-[70] w-full max-w-[430px] bg-primary text-primary-foreground text-sm min-h-[44px] pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] px-4 flex items-center justify-center gap-2 shadow"
       data-testid="update-banner"
     >
       <RefreshCw className="w-4 h-4" />
