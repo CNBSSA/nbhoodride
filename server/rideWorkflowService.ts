@@ -355,8 +355,10 @@ export async function findBestDriver(
     .leftJoin(vehicles, eq(vehicles.driverProfileId, driverProfiles.id))
     .where(
       and(
-        eq(driverProfiles.isSuspended, false),
-        eq(users.isSuspended, false)
+        // NULL is not suspended: `= false` drops a NULL row silently, and a
+        // driver dropped here can never be dispatched. Same trap as payday.
+        sql`COALESCE(${driverProfiles.isSuspended}, false) = false`,
+        sql`COALESCE(${users.isSuspended}, false) = false`
       )
     );
 
