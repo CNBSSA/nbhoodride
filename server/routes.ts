@@ -4099,6 +4099,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Reload ride to get updated driverId
       const updatedRide = await storage.getRide(ride.id) ?? ride;
 
+      // ── Step 4b: An immediate ride that matched nobody is dead now, not later ──
+      // Found by the 2026-09-15 daily audit. Step 5 only ever notified a driver
+      // or started the acceptance timer when a driver was assigned, and the
+      // "no drivers available" cancellation lives inside that timer. So when
+      // findBestDriver returned null the ride stayed `pending` with no driver,
+      // no timer, no cancellation and no message — while the client's success
+      // toast told the rider "Your driver is on the way." Nothing watches
+      // immediate rides for being stuck, so it would have sat there forever.
+      //
+      // Same outcome as the timer's own exhausted path (status, reason, audit
+      // event, ops page, WS + push), and a 409 rather than a 200: the client
+      // toasts success on ANY 2xx, and stale bundles linger on phones, so the
+      // status code is the one signal every bundle — including old ones —
+      // will read honestly.
+      if (!isScheduledFuture && !updatedRide.driverId) {
+        await storage.updateRide(ride.id, {
+          status: "cancelled",
+          cancellationReason: "No available drivers in your area",
+          cancelledBy: "system",
+          cancelledByRole: "system",
+        } as any);
+        await logRideAudit({
+          rideId: ride.id,
+          event: "auto_cancelled_no_drivers_available",
+          details: { attempts: 0, atBooking: true, pickupCounty, requestedVehicleType: ride.requestedVehicleType ?? null },
+        });
+        riderAlert("no_driver_found", ride.id, [["Ride", ride.id.slice(0, 8)], ["From", pickup.address], ["To", destination.address], ["Effect", "No driver matched at booking — cancelled immediately"]]);
+        notifyRiderRideCancelled(userId, ride.id, {
+          wsReason: "No drivers available in your area right now. Please try again.",
+          pushTitle: "No Drivers Available",
+          pushBody: "We couldn't find a driver for your ride. Please try again.",
+          tag: "ride-cancelled",
+        });
+        return res.status(409).json({
+          message: "No drivers available in your area right now. Please try again.",
+          rideId: ride.id,
+          status: "cancelled",
+        });
+      }
+
       // ── Step 5: Notify driver(s) and start acceptance timer ──
       if (isScheduledFuture && !updatedRide.driverId) {
         // Open scheduled ride — broadcast to drivers who cover the pickup county
@@ -7686,6 +7726,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
               });
             },
           );
+        } else {
+          // Nobody matched — same dead end as POST /api/rides Step 4b, found by
+          // the 2026-09-15 audit in both handlers. Cancel now and say so.
+          await storage.updateRide(ride.id, {
+            status: "cancelled",
+            cancellationReason: "No available drivers in your area",
+            cancelledBy: "system",
+            cancelledByRole: "system",
+          } as any);
+          await logRideAudit({
+            rideId: ride.id,
+            event: "auto_cancelled_no_drivers_available",
+            details: { attempts: 0, atBooking: true, viaMultiStop: true, pickupCounty },
+          });
+          riderAlert("no_driver_found", ride.id, [["Ride", ride.id.slice(0, 8)], ["From", pickupLocation.address], ["To", destinationLocation.address], ["Effect", "Multi-stop: no driver matched at booking — cancelled immediately"]]);
+          notifyRiderRideCancelled(userId, ride.id, {
+            wsReason: "No drivers available in your area right now. Please try again.",
+            pushTitle: "No Drivers Available",
+            pushBody: "We couldn't find a driver for your multi-stop ride. Please try again.",
+            tag: "ride-cancelled",
+          });
+          return res.status(409).json({
+            message: "No drivers available in your area right now. Please try again.",
+            rideId: ride.id,
+            status: "cancelled",
+          });
         }
       } catch (dispatchErr) {
         console.error("Multi-stop dispatch error (non-fatal):", dispatchErr);

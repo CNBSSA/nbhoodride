@@ -95,8 +95,9 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
       queryClient.invalidateQueries({ queryKey: ["/api/rides"] });
       onClose();
     },
-    onError: () => {
-      toast({ title: "Booking Failed", description: "Please try again.", variant: "destructive" });
+    onError: (error: Error) => {
+      // The server says why ("No drivers available…"); a rider should see it.
+      toast({ title: "Booking Failed", description: error.message || "Please try again.", variant: "destructive" });
     },
   });
 

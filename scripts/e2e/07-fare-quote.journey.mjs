@@ -61,6 +61,10 @@ export async function run({ base, db }) {
   const bogus = await rider.req("POST", "/api/rides/calculate-fare", { distance: 17.3, duration: 42, vehicleType: "limo" });
   check("an unknown vehicle class is refused", bogus.status === 400);
   // An app that sends the standard fare for an SUV request does not get an SUV at the standard price.
+  // Dispatch now refuses a class nobody drives (2026-09-15 audit fix), so
+  // give the fixture driver an SUV for these bookings — this section is
+  // about PRICING, and it used to pass only because the ride sat pending.
+  await db.query("UPDATE vehicles SET vehicle_type='suv' WHERE driver_profile_id=(SELECT id FROM driver_profiles WHERE user_id=$1)", [FIXTURES.driver.id]);
   const lowball = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: std.json.total, paymentMethod: "card", distance: 17.3, duration: 42, requestedVehicleType: "suv" });
   check("SUV booking accepted", lowball.status === 200, JSON.stringify(lowball.json?.message ?? lowball.status));
   check("server raised the lowballed SUV fare to its own SUV quote and recorded the multiplier", Number(lowball.json?.estimatedFare) === suv.json.total && Number(lowball.json?.vehicleFareMultiplier) === sm, `fare=${lowball.json?.estimatedFare} mult=${lowball.json?.vehicleFareMultiplier}`);
@@ -69,6 +73,7 @@ export async function run({ base, db }) {
   check("receipt shows the SUV line and what it added", suvReceipt.status === 200 && suvReceipt.json?.vehicleMultiplier === sm && suvReceipt.json?.vehicleAdjustment > 0, JSON.stringify({ m: suvReceipt.json?.vehicleMultiplier, adj: suvReceipt.json?.vehicleAdjustment }));
   const honest = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: suv.json.total, paymentMethod: "card", distance: 17.3, duration: 42, requestedVehicleType: "suv" });
   check("an app that already priced the SUV correctly is left alone", honest.status === 200 && Number(honest.json?.estimatedFare) === suv.json.total, `fare=${honest.json?.estimatedFare}`);
+  await db.query("UPDATE vehicles SET vehicle_type='standard' WHERE driver_profile_id=(SELECT id FROM driver_profiles WHERE user_id=$1)", [FIXTURES.driver.id]);
   await deleteRides(db, [lowball.json?.id, honest.json?.id]);
 
   section("Add a stop: the whole route is quoted and shown");
