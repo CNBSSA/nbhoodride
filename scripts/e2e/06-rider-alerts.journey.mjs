@@ -28,6 +28,33 @@ export async function run({ base, db, server }) {
   // sent "fare-dispute" and the schema only knew "fare_dispute". Both must
   // work, a report must alert, and in card-only mode it must reach a human
   // rather than be auto-"resolved" with a credit to a wallet that is off.
+  section("A ride nobody can take is refused now, not stranded forever");
+  // 2026-09-15 daily audit: with zero matching drivers, POST /api/rides
+  // answered 200, the ride stayed `pending` with no timer and no
+  // cancellation, and the client toasted "Your driver is on the way."
+  //
+  // The zero-match is forced by VEHICLE TYPE, not county: with geocoding
+  // unavailable here the pickup county is unknown, and an unknown county
+  // matches every driver. The fixture driver's car is `standard`, so an
+  // SUV request matches nobody — deterministic, and it is also the shape a
+  // real rider hits when they pick a class the fleet does not yet have.
+  // The rider needs a card on file first, or the card wall answers before
+  // dispatch ever runs.
+  await db.query("UPDATE users SET stripe_customer_id='cus_e2e', stripe_payment_method_id='pm_e2e' WHERE id=$1", [u.id]);
+  {
+    const stranded = await r.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 20, paymentMethod: "card", requestedVehicleType: "suv" });
+    check("the booking is refused with a reason, not accepted with a lie",
+      stranded.status === 409 && /No drivers available/.test(stranded.json?.message ?? ""), `${stranded.status} ${JSON.stringify(stranded.json?.message)}`);
+    const rideId = stranded.json?.rideId;
+    const row = rideId ? (await db.query("SELECT status, cancelled_by, cancellation_reason FROM rides WHERE id=$1", [rideId])).rows[0] : null;
+    check("the ride is cancelled by the system, not left pending",
+      row?.status === "cancelled" && row?.cancelled_by === "system", row ? JSON.stringify(row) : "no rideId in response");
+    await new Promise((res) => setTimeout(res, 300));
+    const paged = /\[rider-alert\] no_driver_found key=[^\n]*/.exec(serverLog(server));
+    check("and the operator is paged, before any rider has to complain",
+      paged !== null, paged ? paged[0].slice(0, 120) : "no no_driver_found page in the server log");
+  }
+
   section("Report Issue reaches the founder");
   const loc = (p) => JSON.stringify(p);
   const { rows: [done] } = await db.query(
