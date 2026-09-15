@@ -948,8 +948,9 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(vehicles, eq(vehicles.driverProfileId, driverProfiles.id))
       .where(
         and(
-          eq(driverProfiles.isSuspended, false),
-          eq(users.isSuspended, false)
+          // NULL is not suspended (see findBestDriver / payday for why).
+          sql`COALESCE(${driverProfiles.isSuspended}, false) = false`,
+          sql`COALESCE(${users.isSuspended}, false) = false`
         )
       );
 
@@ -3177,7 +3178,9 @@ export class DatabaseStorage implements IStorage {
     return await db
       .select()
       .from(users)
-      .where(and(eq(users.isApproved, false), eq(users.isSuperAdmin, false)))
+      // NULL is "not yet approved": `= false` would hide a NULL-flagged signup
+      // from this queue while login also refuses them — invisible and stuck.
+      .where(and(sql`COALESCE(${users.isApproved}, false) = false`, eq(users.isSuperAdmin, false)))
       .orderBy(desc(users.createdAt));
   }
 
