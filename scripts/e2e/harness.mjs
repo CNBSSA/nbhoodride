@@ -40,7 +40,7 @@ export async function connectDb() {
 
 /** Idempotent: admin, approved rider, approved driver with a vehicle. */
 /** The invitation link the audits open: /org/join/<E2E_INVITE_TOKEN>. Only its hash is stored. */
-export const E2E_INVITE_TOKEN = "e2e0invite0token0e2e0invite0token0e2e0invite0tok";
+export const E2E_INVITE_TOKEN = "e2e0" .repeat(12); // 48 hex chars, the shape a real token has
 export async function seedFixtures(db) {
   const hash = await bcrypt.hash(PASSWORD, 10);
   await db.query(`INSERT INTO users (id,email,password,first_name,last_name,is_approved,is_admin,phone,registration_completed_at)

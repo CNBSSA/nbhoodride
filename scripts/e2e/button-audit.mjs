@@ -261,6 +261,13 @@ async function auditScreen(browser, base, screen) {
   load.stop();
   const name = `${screen.role} ${screen.path}`;
   const results = [[`${name}: screen loads clean`, loadProblems.length === 0, loadProblems.join("; ")]];
+  // A screen that quietly redirects elsewhere used to pass: the audit then
+  // pressed the buttons of wherever it landed and reported that screen as
+  // fine. A signed-out visit to the portal bounced to /login?expired=1 for a
+  // whole slice before anyone noticed (2026-09-16). Stay where you were opened.
+  const wanted = new URL(base + screen.path).pathname;
+  const landed = new URL(page.url()).pathname;
+  results.push([`${name}: stays on its own screen`, landed === wanted, landed === wanted ? "" : `landed on ${landed}${new URL(page.url()).search}`]);
 
   const broken = [];
   const baseline = oneOfEach(await visibleClickables(page));

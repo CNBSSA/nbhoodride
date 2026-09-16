@@ -87,11 +87,18 @@ function handleAuthError(error: unknown) {
   if (!(error instanceof Error) || !isUnauthorizedError(error)) return;
   const path = window.location.pathname;
   if (path.startsWith("/login") || path.startsWith("/signup") ||
-      path.startsWith("/forgot-password") || path.startsWith("/reset-password")) {
+      path.startsWith("/forgot-password") || path.startsWith("/reset-password") ||
+      path.startsWith("/org/login") || path.startsWith("/org/join")) {
     return;
   }
   if (redirectingForAuth) return;
   redirectingForAuth = true;
+  // A desk whose session died goes back through its own door and returns to
+  // the same organization; everyone else to the rider sign-in, as before.
+  if (path.startsWith("/org")) {
+    window.location.href = `/org/login?expired=1&next=${encodeURIComponent(path + window.location.search)}`;
+    return;
+  }
   window.location.href = "/login?expired=1";
 }
 
