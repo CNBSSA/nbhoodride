@@ -20,7 +20,7 @@ import {
   SIZE_VEHICLE_HINT, deliveryFare, describeParcel, describeWindow, isParcelSize,
   validateDelivery, type Contact, type DeliveryInput,
 } from "@shared/deliveries";
-import { requiredBadge } from "@shared/driverBadges";
+import { categoryMayBook } from "@shared/commercial";
 import type { IStorage } from "../storage";
 import type { Location } from "../rideWorkflowService";
 import { CommercialError, getOrganization } from "./organizations";
@@ -49,7 +49,7 @@ const contact = (c: Contact | undefined | null): Contact | null => {
 export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, now: Date = new Date()): Promise<BookedJob> {
   const org = await getOrganization(input.organizationId);
   if (!org) throw new CommercialError("Organization not found.", 404);
-  if (requiredBadge(org.category) !== "delivery") {
+  if (!categoryMayBook(org.category, "delivery")) {
     throw new CommercialError("This account books rides, not deliveries. A delivery account is a business or food account.", 409);
   }
   const checked = validateDelivery(input, now);
@@ -104,5 +104,5 @@ export function deliverySummary(job: { parcelSize?: string | null; dropContact?:
 export async function deliveryOrganizations(): Promise<Array<{ id: string; name: string; category: string }>> {
   const rows = await db.select({ id: organizations.id, name: organizations.name, category: organizations.category })
     .from(organizations).where(eq(organizations.status, "active"));
-  return rows.filter((o) => requiredBadge(o.category) === "delivery");
+  return rows.filter((o) => categoryMayBook(o.category, "delivery"));
 }

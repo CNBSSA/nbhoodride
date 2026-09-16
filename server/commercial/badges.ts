@@ -16,6 +16,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { commercialJobs, driverProfiles, organizations, rides, users } from "@shared/schema";
 import { badgeRefusalMessage, driverMayTake, normalizeBadges, type DriverBadge } from "@shared/driverBadges";
+import { kindOfJob, type JobKind } from "@shared/commercial";
 import { formatJobNumber } from "@shared/commercial";
 import { createTrackingLink } from "../agents/smsBooking";
 import { sendSms } from "../smsService";
@@ -43,16 +44,25 @@ export async function categoryOfRide(rideId: string): Promise<string | null> {
   return row?.category ?? null;
 }
 
+/** The work a ride is: its account's category and whether it carries a parcel or a person. */
+export async function workOfRide(rideId: string): Promise<{ category: string; kind: JobKind } | null> {
+  const [row] = await db
+    .select({ category: commercialJobs.category, parcelSize: commercialJobs.parcelSize })
+    .from(commercialJobs)
+    .where(eq(commercialJobs.rideId, rideId));
+  return row ? { category: row.category, kind: kindOfJob(row) } : null;
+}
+
 /**
  * Refuse the claim when the driver is not cleared for the work. Called by
  * the claim and accept routes; the board hides these jobs anyway, so this
  * is the belt to that pair of braces.
  */
 export async function assertDriverMayTakeRide(userId: string, rideId: string): Promise<void> {
-  const category = await categoryOfRide(rideId);
-  if (!category) return;
-  if (!driverMayTake(await badgesFor(userId), category)) {
-    throw new CommercialError(badgeRefusalMessage(category), 403);
+  const work = await workOfRide(rideId);
+  if (!work) return;
+  if (!driverMayTake(await badgesFor(userId), work.category, work.kind)) {
+    throw new CommercialError(badgeRefusalMessage(work.category, work.kind), 403);
   }
 }
 

@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import { badgeRefusalMessage, describeBadges, driverMayTake, normalizeBadges, requiredBadge } from "./driverBadges";
 
 describe("what a job needs", () => {
-  it("medical work needs the medical badge; both deliveries share one", () => {
+  it("a medical account's passenger needs the medical badge; a parcel needs delivery whoever sends it", () => {
     expect(requiredBadge("medical")).toBe("medical");
-    expect(requiredBadge("business")).toBe("delivery");
-    expect(requiredBadge("food")).toBe("delivery");
+    expect(requiredBadge("business", "delivery")).toBe("delivery");
+    expect(requiredBadge("food", "delivery")).toBe("delivery");
+    // A business or food account's PASSENGER is an ordinary ride. This used
+    // to read "delivery" for every business job, rides included.
+    expect(requiredBadge("business")).toBeNull();
+    expect(requiredBadge("food")).toBeNull();
   });
   it("an ordinary rider's trip needs no badge at all", () => {
     expect(requiredBadge(null)).toBeNull();
@@ -40,11 +44,32 @@ describe("what people are told", () => {
     expect(m).toContain("Medical transport");
     expect(m).toContain("passenger-assistance training");
     expect(m).toContain("Ask PG Ride");
-    expect(badgeRefusalMessage("business")).toContain("Deliveries");
+    expect(badgeRefusalMessage("business", "delivery")).toContain("Deliveries");
   });
   it("a driver's badges read as words", () => {
     expect(describeBadges([])).toBe("Ordinary rides only");
     expect(describeBadges(["medical"])).toBe("Medical transport");
     expect(describeBadges(["delivery", "medical"])).toBe("Medical transport · Deliveries");
+  });
+});
+
+describe("the badge follows what the job is, not only who booked it", () => {
+  it("a business account's passenger ride is an ordinary ride — no badge", () => {
+    expect(requiredBadge("business", "ride")).toBeNull();
+    expect(requiredBadge("food", "ride")).toBeNull();
+    expect(driverMayTake([], "business", "ride")).toBe(true);
+  });
+  it("a parcel needs the delivery badge whoever sends it", () => {
+    expect(requiredBadge("business", "delivery")).toBe("delivery");
+    expect(requiredBadge("food", "delivery")).toBe("delivery");
+    expect(driverMayTake([], "business", "delivery")).toBe(false);
+    expect(driverMayTake(["delivery"], "business", "delivery")).toBe(true);
+  });
+  it("a medical account's passenger still needs the medical badge", () => {
+    expect(requiredBadge("medical", "ride")).toBe("medical");
+    expect(driverMayTake(["delivery"], "medical", "ride")).toBe(false);
+  });
+  it("the refusal names the badge the JOB needs", () => {
+    expect(badgeRefusalMessage("business", "delivery")).toContain("Deliveries");
   });
 });
