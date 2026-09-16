@@ -32,6 +32,9 @@ import { captureInstallGateFromUrl } from "@/lib/pwaInstall";
 import { AssistantFab } from "@/components/AssistantFab";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import PortalPage from "@/pages/portal/PortalPage";
+import BusinessLogin, { businessNext } from "@/pages/portal/BusinessLogin";
+import JoinOrganization from "@/pages/portal/JoinOrganization";
+import { prefersBusinessHome } from "@/lib/businessHome";
 
 function AuthRedirect({ component: Component }: { component: React.ComponentType }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -41,6 +44,13 @@ function AuthRedirect({ component: Component }: { component: React.ComponentType
   }
 
   return <Component />;
+}
+
+/** The business door: signed in already → straight to the desk. */
+function BusinessAuthRedirect() {
+  const { isAuthenticated, isLoading } = useAuth();
+  if (!isLoading && isAuthenticated) return <Redirect to={businessNext()} />;
+  return <BusinessLogin />;
 }
 
 function Router() {
@@ -60,12 +70,22 @@ function Router() {
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
       <Route path="/test-login" component={TestLogin} />
+      {/* The business door (2026-09-16): its own sign-in, and the invitation
+          link. The portal address works signed out too — it shows the
+          business sign-in instead of "not found" and comes back afterwards. */}
+      <Route path="/org/login">{() => <BusinessAuthRedirect />}</Route>
+      <Route path="/org/join/:token">{(params) => <JoinOrganization token={params.token} />}</Route>
       
       {isLoading || !isAuthenticated ? (
-        <Route path="/" component={Landing} />
+        <>
+          <Route path="/" component={Landing} />
+          <Route path="/org">{() => (isLoading ? <div className="p-8 text-sm text-muted-foreground" data-testid="portal-loading">Loading…</div> : <BusinessLogin />)}</Route>
+        </>
       ) : (
         <>
-          <Route path="/" component={Home} />
+          {/* A device that signed in through the business door opens on the
+              desk; the desk's own links back to the rider app clear that. */}
+          <Route path="/">{() => (prefersBusinessHome() ? <Redirect to="/org" /> : <Home />)}</Route>
           <Route path="/ratings" component={RatingsPage} />
           <Route path="/payments" component={PaymentsPage} />
           <Route path="/card-setup" component={CardSetupPage} />

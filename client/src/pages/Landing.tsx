@@ -85,6 +85,11 @@ export default function Landing() {
                   Login
                 </Button>
               </Link>
+              <Link href="/org/login">
+                <Button variant="ghost" size="sm" className="w-full" data-testid="button-business-landing">
+                  PG Ride for Business — sign in to your desk
+                </Button>
+              </Link>
             </div>
 
             {/* Contact / support — visible to riders and to a payment reviewer. */}

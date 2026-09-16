@@ -8,7 +8,7 @@
  * Run locally: npm run test:layout   (needs a built app + Postgres, like the journeys)
  */
 import { chromium, webkit } from "playwright";
-import { connectDb, seedFixtures, startServer, stopServer, FIXTURES, PASSWORD, check, section, summary } from "./harness.mjs";
+import { connectDb, seedFixtures, startServer, stopServer, FIXTURES, PASSWORD, check, section, summary, E2E_INVITE_TOKEN } from "./harness.mjs";
 
 const VIEWPORT = { width: 390, height: 844 };
 const executablePath = process.env.PW_CHROMIUM_PATH || undefined;
@@ -301,6 +301,30 @@ if (engine === chromium) {
     } finally { await up.close(); await upCtx.close(); }
   } catch (e) {
     check("update-banner audit ran", false, String(e?.message ?? e).split("\n")[0]);
+  }
+
+  section("Business sign-in: the desk's own door, signed out");
+  for (const [label, viewport] of [["desk 1280×800", { width: 1280, height: 800 }], ["phone 390×844", VIEWPORT]]) {
+    const ctx = await browser.newContext({ viewport, isMobile: viewport.width < 500, hasTouch: viewport.width < 500 });
+    const page = await ctx.newPage();
+    try {
+      // Signed out, the portal address itself shows the business sign-in —
+      // until 2026-09-16 it showed "not found".
+      await page.goto(server.base + "/org?org=e2e-biz", { waitUntil: "domcontentloaded" });
+      const signIn = page.locator('[data-testid="button-business-login"]').first();
+      await signIn.waitFor({ timeout: 20000 });
+      const box = await signIn.boundingBox();
+      check(`business sign-in ${label}: /org signed out shows the business sign-in, on screen`, !!box && box.y >= 0 && box.y + box.height <= viewport.height, box ? `at ${Math.round(box.x)},${Math.round(box.y)} h=${Math.round(box.height)}` : "no box");
+      check(`business sign-in ${label}: the sign-in button is a real tap target (≥44px)`, !!box && box.height >= 44, box ? `h=${Math.round(box.height)}` : "no box");
+      check(`business sign-in ${label}: no sideways scroll`, await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+      await page.goto(server.base + `/org/join/${E2E_INVITE_TOKEN}`, { waitUntil: "domcontentloaded" });
+      const join = page.locator('[data-testid="button-join-organization"]').first();
+      await join.waitFor({ timeout: 20000 });
+      const jbox = await join.boundingBox();
+      check(`join page ${label}: the join button is on screen without scrolling the form off it`, !!jbox && jbox.height >= 44, jbox ? `h=${Math.round(jbox.height)}` : "no box");
+    } catch (e) {
+      check(`business sign-in ${label}: audit ran`, false, String(e?.message ?? e).split("\n")[0]);
+    } finally { await ctx.close(); }
   }
 
   section("Requester portal: a business account has a parcel door");

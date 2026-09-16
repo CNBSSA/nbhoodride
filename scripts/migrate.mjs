@@ -746,6 +746,20 @@ CREATE TABLE IF NOT EXISTS organization_members (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_organization_member ON organization_members (organization_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_organization_members_user ON organization_members (user_id);
+CREATE TABLE IF NOT EXISTS organization_invitations (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id),
+  email VARCHAR NOT NULL,
+  role VARCHAR NOT NULL DEFAULT 'requester',
+  token_hash VARCHAR NOT NULL,
+  invited_by VARCHAR NOT NULL REFERENCES users(id),
+  expires_at TIMESTAMP NOT NULL,
+  accepted_at TIMESTAMP,
+  accepted_user_id VARCHAR REFERENCES users(id),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_organization_invitation_email ON organization_invitations (organization_id, email);
+CREATE INDEX IF NOT EXISTS idx_organization_invitations_token ON organization_invitations (token_hash);
 CREATE TABLE IF NOT EXISTS commercial_jobs (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
   ride_id VARCHAR NOT NULL UNIQUE REFERENCES rides(id),

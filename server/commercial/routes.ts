@@ -23,6 +23,10 @@ import {
   listMembers, listOrganizations, membershipRole, organizationsForUser, removeMember, updateOrganization,
 } from "./organizations";
 import { bookJob, jobForRide, listJobs } from "./jobs";
+import { acceptInvitation, describeInvitation, inviteByEmail, listOpenInvitations, revokeInvitation } from "./invitations";
+import { sendOrganizationInviteEmail } from "../emailService";
+import { resolveAppUrl } from "../appUrl";
+import { INVITATION_DAYS } from "@shared/invitations";
 import { bookDelivery } from "./deliveries";
 import { buildStatement, statementToCsv, statementToHtml } from "./statements";
 import { cancelJob } from "./cancel";
@@ -198,9 +202,51 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       });
     } catch (err) { fail(res, err, "Could not load the organization"); }
   });
+  // Adding a person: an existing account is attached as before; an email
+  // with no account is INVITED — a link they open to set up their sign-in
+  // and land in this desk (2026-09-16; until then the desk was told "they
+  // need to sign up first", through the rider app).
   app.post("/api/org/:orgId/members", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
-    try { res.status(201).json(await addMemberByEmail(req.orgId, req.body?.email, req.body?.role ?? "requester")); }
-    catch (err) { fail(res, err, "Could not add the member"); }
+    try {
+      const email = String(req.body?.email ?? "").trim().toLowerCase();
+      const role = req.body?.role ?? "requester";
+      const existing = email ? await storage.getUserByEmail(email) : null;
+      if (existing && !existing.deletedAt) return res.status(201).json(await addMemberByEmail(req.orgId, email, role));
+      const inviter = await storage.getUser(userIdOf(req)!);
+      const appUrl = resolveAppUrl(`${req.protocol}://${req.get("host")}`);
+      const inv = await inviteByEmail(req.orgId, email, role, userIdOf(req)!, appUrl);
+      let emailSent = false;
+      try {
+        await sendOrganizationInviteEmail({ email: inv.email, organizationName: inv.organizationName, inviterName: inviter?.firstName ?? null, link: inv.link, days: INVITATION_DAYS });
+        emailSent = true;
+      } catch (err) {
+        console.error(`[invite] email to ${inv.email} not sent; the desk gets the link to send itself:`, (err as any)?.message ?? err);
+      }
+      res.status(202).json({ invited: true, ...inv, emailSent });
+    } catch (err) { fail(res, err, "Could not add the member"); }
+  });
+  app.get("/api/org/:orgId/invitations", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
+    try { res.json(await listOpenInvitations(req.orgId)); }
+    catch (err) { fail(res, err, "Could not list invitations"); }
+  });
+  app.delete("/api/org/:orgId/invitations/:id", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
+    try { res.json({ revoked: await revokeInvitation(req.orgId, String(req.params.id)) }); }
+    catch (err) { fail(res, err, "Could not revoke the invitation"); }
+  });
+  // The invitee's side: no account yet, so no auth. Rate-limited in routes.ts.
+  app.get("/api/org/invitations/:token", gate, async (req, res) => {
+    try { res.json(await describeInvitation(String(req.params.token))); }
+    catch (err) { fail(res, err, "Could not read the invitation"); }
+  });
+  app.post("/api/org/invitations/:token/accept", gate, async (req: any, res) => {
+    try {
+      const result = await acceptInvitation(String(req.params.token), req.body ?? {});
+      if (!result.existing) {
+        req.session.userId = result.userId;
+        await storage.updateLastLogin(result.userId).catch(() => {});
+      }
+      res.json({ organizationId: result.organizationId, organizationName: result.organizationName, existing: result.existing });
+    } catch (err) { fail(res, err, "Could not accept the invitation"); }
   });
   app.delete("/api/org/:orgId/members/:userId", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
     try {
