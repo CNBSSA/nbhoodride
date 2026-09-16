@@ -161,13 +161,13 @@ export default function PortalPage() {
               </Button>
             )}
             {canBook(role) && parcels && (
-              <Button size="sm" variant="outline" onClick={() => setSendingParcel(true)} disabled={org.status !== "active"} data-testid="button-portal-send-parcel" title="Press P">
-                <Package className="h-4 w-4 mr-1" /> Send a parcel
+              <Button size="sm" variant="outline" onClick={() => setSendingParcel(true)} disabled={org.status !== "active"} data-testid="button-portal-send-parcel" title="Send a parcel (P)" aria-label="Send a parcel">
+                <Package className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Send a parcel</span>
               </Button>
             )}
             {canBook(role) && (
-              <Button size="sm" onClick={() => setBooking(true)} disabled={org.status !== "active"} data-testid="button-portal-book" title="Press N">
-                <Plus className="h-4 w-4 mr-1" /> Book a ride
+              <Button size="sm" onClick={() => setBooking(true)} disabled={org.status !== "active"} data-testid="button-portal-book" title="Book a ride (N)" aria-label="Book a ride">
+                <Plus className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Book a ride</span>
               </Button>
             )}
             <span className="text-xs text-muted-foreground hidden md:inline">{user?.firstName}</span>

@@ -105,6 +105,7 @@
     "button-portal-install",
     "button-portal-new-standing-order",
     "button-portal-remove-member-*",
+    "button-portal-send-parcel",
     "button-portal-submit-delivery",
     "button-portal-submit-job",
     "button-portal-submit-standing-order",
@@ -281,4 +282,4 @@
     "button-portal-add-payment-method": "starts a Stripe SetupIntent; Stripe is unreachable from the audit's sandbox",
     "button-portal-submit-delivery": "disabled until both contacts, both addresses and a ready time are filled"
   }
-}
+}\n
