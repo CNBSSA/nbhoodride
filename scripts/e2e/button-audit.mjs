@@ -50,6 +50,8 @@ const SCREENS = [
   { role: "driver", path: "/" }, { role: "driver", path: "/driver/insights" },
   { role: "admin", path: "/admin" }, { role: "admin", path: "/" },
   { role: "requester", path: "/org" },
+  // The same clerk's BUSINESS account: the only place the parcel door exists.
+  { role: "requester", path: "/org?org=e2e-biz" },
   // An admin who is in no organization sees the portal's empty state — the only
   // place the way back to Admin → Organizations is offered. Nobody else can see it.
   { role: "admin", path: "/org" },

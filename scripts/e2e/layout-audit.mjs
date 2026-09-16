@@ -303,6 +303,29 @@ if (engine === chromium) {
     check("update-banner audit ran", false, String(e?.message ?? e).split("\n")[0]);
   }
 
+  section("Requester portal: a business account has a parcel door");
+  // The delivery drawer shipped with slice 6 and no page opened it — a
+  // business account, the kind that exists to send parcels, could not. The
+  // door must be on screen and tappable at desk width, and P must open it.
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page = await ctx.newPage();
+    try {
+      await loginAs(page, server.base, FIXTURES.rider.email);
+      await page.goto(server.base + "/org?org=e2e-biz", { waitUntil: "domcontentloaded" });
+      await page.locator('[data-testid="button-portal-send-parcel"]').first().waitFor({ timeout: 45000 });
+      await assertPrimary(page, "Send a parcel (business desk)", "button-portal-send-parcel");
+      await page.keyboard.press("p");
+      const drawer = page.locator('[data-testid="portal-delivery-drawer"]');
+      await drawer.waitFor({ timeout: 5000 }).catch(() => {});
+      check("P opens the parcel drawer", (await drawer.count()) === 1);
+      await page.keyboard.press("Escape");
+      check("Escape closes it", (await drawer.count()) === 0);
+    } catch (e) {
+      check("business desk audit ran", false, String(e?.message ?? e).split("\n")[0]);
+    } finally { await ctx.close(); }
+  }
+
   section("Requester portal (organizations)");
   for (const [label, viewport] of [["desk 1280×800", { width: 1280, height: 800 }], ["phone 390×844", VIEWPORT]]) {
     const ctx = await browser.newContext({ viewport, isMobile: viewport.width < 500, hasTouch: viewport.width < 500 });
