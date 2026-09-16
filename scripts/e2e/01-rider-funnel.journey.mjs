@@ -43,6 +43,24 @@ export async function run({ base, db }) {
   check("scheduled ride accepted, open to all drivers", sch.status === 200 && !sch.json?.driverId, `${sch.status}`);
   const soon = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 20, paymentMethod: "card", scheduledAt: new Date(Date.now() + 3600e3).toISOString() });
   check("too-soon schedule gets the 3-hour message", soon.status === 400 && /3 hours/.test(soon.json?.message));
+  section("Revoking approval ends booking now, not at the next logout");
+  // 2026-09-16 daily audit: revoke-approval only flipped the flag, and the
+  // booking funnel re-checked suspension but never approval — a revoked
+  // rider kept booking until they happened to log out. And two doors
+  // (multi-stop, shared schedule) went through no re-check at all. All
+  // three must refuse with the same words the login gate uses.
+  const PENDING = /pending approval by an administrator/;
+  check("revoke", (await admin.req("POST", `/api/admin/users/${u.id}/revoke-approval`)).status === 200);
+  const revokedSolo = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 20, paymentMethod: "card" });
+  check("a revoked rider cannot book a ride on the same session", revokedSolo.status === 400 && PENDING.test(revokedSolo.json?.message ?? ""), `${revokedSolo.status} ${JSON.stringify(revokedSolo.json?.message)}`);
+  const revokedMulti = await rider.req("POST", "/api/rides/multi-stop", { pickupLocation: PICKUP, destinationLocation: DEST, pickupStops: [PICKUP], estimatedFare: 20 });
+  check("nor a multi-stop ride, which used to skip every re-check", revokedMulti.status === 400 && PENDING.test(revokedMulti.json?.message ?? ""), `${revokedMulti.status} ${JSON.stringify(revokedMulti.json?.message)}`);
+  const revokedGroup = await rider.req("POST", "/api/rides/create-shared-schedule", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 20, scheduledAt: new Date(Date.now() + 5 * 3600e3).toISOString() });
+  check("nor a coworker group, which used to skip every re-check", revokedGroup.status === 400 && PENDING.test(revokedGroup.json?.message ?? ""), `${revokedGroup.status} ${JSON.stringify(revokedGroup.json?.message)}`);
+  check("re-approve", (await admin.req("POST", `/api/admin/users/${u.id}/approve`)).status === 200);
+  const restored = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 20, paymentMethod: "card" });
+  check("and booking works again the moment approval is restored", restored.status === 200, `${restored.status} ${JSON.stringify(restored.json?.message ?? "")}`);
+
   const dc = await rider.req("POST", "/api/rides", { pickupLocation: { lat: 38.8977, lng: -77.0365, address: "Washington, DC" }, destinationLocation: DEST, estimatedFare: 20, paymentMethod: "card" });
   check("pickup outside Maryland refused with guidance", dc.status === 400, JSON.stringify(dc.json?.message)?.slice(0, 60));
   await db.query("UPDATE rides SET created_at = created_at - interval '2 hours' WHERE rider_id=$1", [u.id]).catch(() => {});
