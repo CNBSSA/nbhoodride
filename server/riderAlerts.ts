@@ -25,6 +25,7 @@ export type RiderAlertKind =
   | "payment_auth_failed"
   | "settlement_failed"
   | "no_driver_found"
+  | "fare_mismatch"
   | "server_error"
   | "client_error"
   | "push_subscribe_failed"
@@ -43,6 +44,7 @@ const TITLES: Record<RiderAlertKind, string> = {
   payment_auth_failed: "💳 Card authorization failed at accept",
   settlement_failed: "💳 Card settlement failed at completion",
   no_driver_found: "🚗 No driver found — ride cancelled",
+  fare_mismatch: "🧾 Fare quote did not match the server's",
   server_error: "🔥 Server error hit by a user",
   client_error: "📱 App error on a rider's phone",
   push_subscribe_failed: "🔔 Notifications failed to enable",

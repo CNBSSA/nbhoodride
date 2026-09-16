@@ -67,12 +67,26 @@ export async function run({ base, db }) {
   await db.query("UPDATE vehicles SET vehicle_type='suv' WHERE driver_profile_id=(SELECT id FROM driver_profiles WHERE user_id=$1)", [FIXTURES.driver.id]);
   const lowball = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: std.json.total, paymentMethod: "card", distance: 17.3, duration: 42, requestedVehicleType: "suv" });
   check("SUV booking accepted", lowball.status === 200, JSON.stringify(lowball.json?.message ?? lowball.status));
-  check("server raised the lowballed SUV fare to its own SUV quote and recorded the multiplier", Number(lowball.json?.estimatedFare) === suv.json.total && Number(lowball.json?.vehicleFareMultiplier) === sm, `fare=${lowball.json?.estimatedFare} mult=${lowball.json?.vehicleFareMultiplier}`);
+  // The floor is priced from the SERVER's road figures (2026-09-16, #379),
+  // not the 17.3 mi / 42 min the app claimed — so compare against the
+  // server's own quote at the figures it recorded on the ride.
+  const serverQuoteFor = async (ride, vehicleType) => (await rider.req("POST", "/api/rides/calculate-fare", { distance: Number(ride.distance), duration: Number(ride.duration), vehicleType })).json?.total;
+  const suvFloor = await serverQuoteFor(lowball.json, "suv");
+  check("server raised the lowballed SUV fare to its own SUV quote and recorded the multiplier", Math.abs(Number(lowball.json?.estimatedFare) - suvFloor) < 0.011 && Number(lowball.json?.vehicleFareMultiplier) === sm, `fare=${lowball.json?.estimatedFare} serverSuv=${suvFloor} mult=${lowball.json?.vehicleFareMultiplier}`);
+  // And a STANDARD ride is floored too — a tampered app cannot book a
+  // twenty-mile ride for a dollar (daily audit, #379).
+  const dollar = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 1, paymentMethod: "card", distance: 1, duration: 2 });
+  check("a one-dollar standard booking is accepted", dollar.status === 200, JSON.stringify(dollar.json?.message ?? dollar.status));
+  const stdFloor = await serverQuoteFor(dollar.json, "standard");
+  check("but at the server's own quote for the real road distance, not a dollar", Number(dollar.json?.estimatedFare) > 1 && Math.abs(Number(dollar.json?.estimatedFare) - stdFloor) < 0.011, `fare=${dollar.json?.estimatedFare} serverStd=${stdFloor} miles=${dollar.json?.distance}`);
+  await db.query("UPDATE rides SET status='cancelled', cancelled_by='system' WHERE id=$1", [dollar.json?.id]).catch(() => {});
   await db.query("UPDATE rides SET driver_id=$1, status='completed', actual_fare=$3, started_at=NOW() - interval '45 minutes', completed_at=NOW() WHERE id=$2", [FIXTURES.driver.id, lowball.json.id, String(suv.json.total)]);
   const suvReceipt = await rider.req("GET", `/api/rides/${lowball.json.id}/receipt`);
   check("receipt shows the SUV line and what it added", suvReceipt.status === 200 && suvReceipt.json?.vehicleMultiplier === sm && suvReceipt.json?.vehicleAdjustment > 0, JSON.stringify({ m: suvReceipt.json?.vehicleMultiplier, adj: suvReceipt.json?.vehicleAdjustment }));
   const honest = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: suv.json.total, paymentMethod: "card", distance: 17.3, duration: 42, requestedVehicleType: "suv" });
-  check("an app that already priced the SUV correctly is left alone", honest.status === 200 && Number(honest.json?.estimatedFare) === suv.json.total, `fare=${honest.json?.estimatedFare}`);
+  // Priced above the server's figure: left as quoted (a stale rate card on an
+  // old bundle can only overcharge the rider's own device), never lowered.
+  check("an app that already priced the SUV correctly is left alone", honest.status === 200 && Number(honest.json?.estimatedFare) >= suvFloor - 0.011, `fare=${honest.json?.estimatedFare} serverSuv=${suvFloor}`);
   await db.query("UPDATE vehicles SET vehicle_type='standard' WHERE driver_profile_id=(SELECT id FROM driver_profiles WHERE user_id=$1)", [FIXTURES.driver.id]);
   await deleteRides(db, [lowball.json?.id, honest.json?.id]);
 

@@ -117,6 +117,8 @@ export interface ValidationResult {
   destinationCounty?: string | null;
   distanceMiles?: number;
   durationMinutes?: number;
+  /** Straight-line pickup→destination miles: the least any road route can be. */
+  straightLineMiles?: number;
 }
 
 export interface RideAuditEntry {
@@ -263,6 +265,7 @@ export async function validateRideRequest(
     destinationCounty,
     distanceMiles: Math.round(roadMiles * 100) / 100,
     durationMinutes,
+    straightLineMiles: Math.round(distanceMiles * 100) / 100,
   };
 }
 
