@@ -52,6 +52,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Nothing built is removed (every shipped button is still in the source)
+        run: npm run check:buttons-kept
       - name: Migrate
         run: npm run db:push
       - name: Build production bundle
