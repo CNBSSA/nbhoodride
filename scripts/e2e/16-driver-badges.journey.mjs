@@ -78,6 +78,32 @@ export async function run({ base, db, server }) {
     const { rows: [saved] } = await db.query("SELECT proof FROM commercial_jobs WHERE ride_id=$1", [medicalRide]);
     check("the signature is on the job for the statement and any dispute", saved.proof?.receivedBy === "Nurse Adeyemi" && saved.proof?.signedBy === FIXTURES.driver.id, JSON.stringify(saved.proof));
 
+    section("A business account's passenger is an ordinary ride; its parcel is not");
+    // Until 2026-09-16 the badge followed the account's category alone, so
+    // every job on a business account — an employee's ride, a guest from
+    // the airport — went only to parcel-cleared drivers. The badge now
+    // follows what the job IS.
+    await admin.req("PUT", `/api/admin/drivers/${FIXTURES.driver.id}/badges`, { badges: [] });
+    const biz = await admin.req("POST", "/api/admin/organizations", { name: "Books Expert LLC", category: "business" });
+    orgIds.push(biz.json.id);
+    await admin.req("POST", `/api/admin/organizations/${biz.json.id}/members`, { email: FIXTURES.rider.email, role: "owner" });
+    const guest = await rider.req("POST", `/api/org/${biz.json.id}/jobs`, { passengerName: "Visiting Author", passengerPhone: "2405550177", pickup: PICKUP, destination: DEST, scheduledAt: inHours(5) });
+    check("a business account books a passenger ride", guest.status === 201, JSON.stringify(guest.json?.message ?? guest.status));
+    const guestRide = guest.json?.ride?.id; if (guestRide) rideIds.push(guestRide);
+    const parcel = await rider.req("POST", `/api/org/${biz.json.id}/deliveries`, {
+      parcelSize: "small", pickupContact: { name: "Front desk", phone: "3015550111" }, dropContact: { name: "Mr Chen", phone: "3015550122" },
+      readyAt: new Date(Date.now() + 90 * 60_000).toISOString(), windowHours: 2, pickup: PICKUP, destination: DEST,
+    });
+    check("and a parcel", parcel.status === 201, JSON.stringify(parcel.json?.message ?? parcel.status));
+    const parcelRide = parcel.json?.ride?.id; if (parcelRide) rideIds.push(parcelRide);
+    const bizBoard = await board();
+    check("the passenger ride is on an unbadged driver's board — it is an ordinary ride", !!guestRide && onBoard(bizBoard, guestRide));
+    check("the parcel is not", !!parcelRide && !onBoard(bizBoard, parcelRide));
+    const parcelRefused = await driver.req("POST", `/api/driver/rides/${parcelRide}/claim`);
+    check("claiming the parcel is refused, naming the delivery badge", parcelRefused.status === 403 && /Deliveries/.test(parcelRefused.json?.message ?? ""), JSON.stringify(parcelRefused.json));
+    const guestClaim = await driver.req("POST", `/api/driver/rides/${guestRide}/claim`);
+    check("claiming the passenger ride succeeds with no badge at all", guestClaim.status === 200, JSON.stringify(guestClaim.json?.message ?? guestClaim.status));
+
     section("An ordinary ride never needs a badge");
     await admin.req("PUT", `/api/admin/drivers/${FIXTURES.driver.id}/badges`, { badges: [] });
     if (ordinaryRide) {

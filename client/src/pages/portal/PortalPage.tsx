@@ -27,10 +27,11 @@ import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { JobsMap } from "@/components/portal/JobsMap";
 import { StandingOrdersView } from "@/components/portal/StandingOrdersView";
 import { BillingView } from "@/components/portal/BillingView";
-import { CATEGORY_LABELS, ORG_ROLES, canBook, canManageMembers, canSeeStatement, currentMonthKey, formatJobNumber, type CommercialCategory, type OrgRole } from "@shared/commercial";
+import { BookDeliveryDrawer } from "@/components/portal/BookDeliveryDrawer";
+import { CATEGORY_LABELS, ORG_ROLES, canBook, canManageMembers, canSeeStatement, categoryMayBook, currentMonthKey, formatJobNumber, type CommercialCategory, type OrgRole } from "@shared/commercial";
 import { VEHICLE_TYPES, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 import { BRAND } from "@shared/branding";
-import { CalendarDays, ListChecks, Receipt, Users, Plus, Download, Printer, ArrowLeft, Repeat, Landmark } from "lucide-react";
+import { CalendarDays, ListChecks, Receipt, Users, Plus, Download, Printer, ArrowLeft, Repeat, Landmark, Package } from "lucide-react";
 
 interface Org { id: string; name: string; category: CommercialCategory; status: string; facilityFee: string; billingMode: string }
 interface Membership { organization: Org; role: OrgRole }
@@ -65,9 +66,14 @@ export default function PortalPage() {
   const { user } = useAuth();
   const isAdmin = !!(user as any)?.isAdmin || !!(user as any)?.isSuperAdmin;
   const { data: memberships, isLoading, error } = useQuery<Membership[]>({ queryKey: ["/api/org/mine"], queryFn: () => json("GET", "/api/org/mine") });
-  const [orgId, setOrgId] = useState<string | null>(null);
+  // `?org=<id>` opens a particular account directly — a link a clerk can
+  // bookmark when they belong to more than one.
+  const [orgId, setOrgId] = useState<string | null>(() => {
+    try { return new URLSearchParams(window.location.search).get("org"); } catch { return null; }
+  });
   const [view, setView] = useState<View>("today");
   const [booking, setBooking] = useState(false);
+  const [sendingParcel, setSendingParcel] = useState(false);
   const active = useMemo(() => (memberships ?? []).find((m) => m.organization.id === (orgId ?? memberships?.[0]?.organization.id)) ?? null, [memberships, orgId]);
   const { canInstall, install } = usePwaInstallPrompt();
   const { toast } = useToast();
@@ -75,8 +81,10 @@ export default function PortalPage() {
   // N opens the booking form from anywhere on the page; Escape closes it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setBooking(false); return; }
-      if ((e.key === "n" || e.key === "N") && !e.metaKey && !e.ctrlKey && !e.altKey && !isTyping() && active && canBook(active.role)) { e.preventDefault(); setBooking(true); }
+      if (e.key === "Escape") { setBooking(false); setSendingParcel(false); return; }
+      const plain = !e.metaKey && !e.ctrlKey && !e.altKey && !isTyping() && active && canBook(active.role);
+      if ((e.key === "n" || e.key === "N") && plain) { e.preventDefault(); setBooking(true); }
+      if ((e.key === "p" || e.key === "P") && plain && categoryMayBook(active.organization.category, "delivery")) { e.preventDefault(); setSendingParcel(true); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -117,6 +125,10 @@ export default function PortalPage() {
   if (!active) return null;
   const org = active.organization;
   const role = active.role;
+  // Business and food accounts send parcels as well as book rides. The
+  // parcel drawer existed from the day deliveries shipped and nothing on
+  // this page opened it — the one door a delivery account exists for.
+  const parcels = categoryMayBook(org.category, "delivery");
 
   const nav: Array<{ id: View; label: string; icon: any; show: boolean }> = [
     { id: "today", label: "Next 48 hours", icon: CalendarDays, show: true },
@@ -148,9 +160,14 @@ export default function PortalPage() {
                 Install on this computer
               </Button>
             )}
+            {canBook(role) && parcels && (
+              <Button size="sm" variant="outline" onClick={() => setSendingParcel(true)} disabled={org.status !== "active"} data-testid="button-portal-send-parcel" title="Send a parcel (P)" aria-label="Send a parcel">
+                <Package className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Send a parcel</span>
+              </Button>
+            )}
             {canBook(role) && (
-              <Button size="sm" onClick={() => setBooking(true)} disabled={org.status !== "active"} data-testid="button-portal-book" title="Press N">
-                <Plus className="h-4 w-4 mr-1" /> Book a job
+              <Button size="sm" onClick={() => setBooking(true)} disabled={org.status !== "active"} data-testid="button-portal-book" title="Book a ride (N)" aria-label="Book a ride">
+                <Plus className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Book a ride</span>
               </Button>
             )}
             <span className="text-xs text-muted-foreground hidden md:inline">{user?.firstName}</span>
@@ -189,6 +206,7 @@ export default function PortalPage() {
       </div>
 
       {booking && <BookJobDrawer org={org} onClose={() => setBooking(false)} />}
+      {sendingParcel && parcels && <BookDeliveryDrawer orgId={org.id} orgName={org.name} onClose={() => setSendingParcel(false)} />}
     </div>
   );
 }
@@ -218,12 +236,12 @@ function TodayBoard({ org, onBook, canBook: mayBook }: { org: Org; onBook: () =>
           <h1 className="text-xl font-semibold">Next 48 hours</h1>
           <p className="text-sm text-muted-foreground">{upcoming.length} job{upcoming.length === 1 ? "" : "s"}{needDriver > 0 ? ` · ${needDriver} still need a driver` : upcoming.length > 0 ? " · every job has a driver or is done" : ""}. Refreshes every 20 seconds.</p>
         </div>
-        {mayBook && <Button variant="outline" size="sm" onClick={onBook} data-testid="button-portal-book-inline"><Plus className="h-4 w-4 mr-1" /> Book a job</Button>}
+        {mayBook && <Button variant="outline" size="sm" onClick={onBook} data-testid="button-portal-book-inline"><Plus className="h-4 w-4 mr-1" /> Book a ride</Button>}
       </div>
       <div className="grid grid-cols-1 2xl:grid-cols-[1fr_380px] gap-4">
         <div className="rounded-lg border bg-card overflow-x-auto">
           {isLoading ? <p className="p-4 text-sm text-muted-foreground">Loading…</p> : upcoming.length === 0 ? (
-            <p className="p-6 text-sm text-muted-foreground" data-testid="text-portal-no-jobs">Nothing booked for the next two days.{mayBook ? " Press N to book a job." : ""}</p>
+            <p className="p-6 text-sm text-muted-foreground" data-testid="text-portal-no-jobs">Nothing booked for the next two days.{mayBook ? " Press N to book a ride." : ""}</p>
           ) : (
             <table className="w-full text-sm table-fixed min-w-[640px]">
               <colgroup><col className="w-[110px]" /><col className="w-[84px]" /><col className="w-[130px]" /><col /><col className="w-[150px]" /><col className="w-[96px]" /></colgroup>
@@ -420,9 +438,9 @@ function BookJobDrawer({ org, onClose }: { org: Org; onClose: () => void }) {
   });
   const submit = useCallback(() => { if (ready && !book.isPending) book.mutate(); }, [ready, book]);
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose} role="dialog" aria-modal="true" aria-label="Book a job" data-testid="portal-book-drawer">
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose} role="dialog" aria-modal="true" aria-label="Book a ride" data-testid="portal-book-drawer">
       <div className="w-full sm:w-[480px] h-full bg-background shadow-xl overflow-y-auto p-5 space-y-3" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); } }}>
-        <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">Book a job for {org.name}</h2><Button variant="ghost" size="sm" onClick={onClose} data-testid="button-portal-close-book">Close</Button></div>
+        <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">Book a ride for {org.name}</h2><Button variant="ghost" size="sm" onClick={onClose} data-testid="button-portal-close-book">Close</Button></div>
         <p className="text-xs text-muted-foreground">At least 3 hours ahead. Tab through the fields; Ctrl+Enter books.</p>
         <Input ref={first} placeholder="Passenger name" value={passengerName} onChange={(e) => setPassengerName(e.target.value)} data-testid="input-portal-passenger-name" />
         <Input placeholder="Passenger phone (optional)" value={passengerPhone} onChange={(e) => setPassengerPhone(e.target.value)} data-testid="input-portal-passenger-phone" />

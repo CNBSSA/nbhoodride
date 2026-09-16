@@ -33,27 +33,34 @@ export function normalizeBadges(raw: unknown): DriverBadge[] {
   return DRIVER_BADGES.filter((b) => list.includes(b));
 }
 
+export type JobKind = "ride" | "delivery";
+
 /**
- * The badge a commercial job of this category needs. Medical transport
- * carries a person and needs its own clearance; both kinds of delivery
- * carry goods and share one.
+ * The badge a commercial job needs, from what the job IS and who booked it.
+ *
+ * A parcel needs the delivery badge whoever sends it. A person on a medical
+ * account's job needs the medical badge. A person on a business or food
+ * account's job — an employee's ride, a guest collected from the airport —
+ * is an ordinary ride and needs no badge at all. Until 2026-09-16 the badge
+ * followed the category alone, so every business job, rides included, went
+ * only to parcel-cleared drivers.
  */
-export function requiredBadge(category: string | null | undefined): DriverBadge | null {
+export function requiredBadge(category: string | null | undefined, kind: JobKind = "ride"): DriverBadge | null {
+  if (kind === "delivery") return "delivery";
   if (category === "medical") return "medical";
-  if (category === "business" || category === "food") return "delivery";
   return null;
 }
 
-/** May this driver take a job of this category? An ordinary ride has no category. */
-export function driverMayTake(badges: unknown, category: string | null | undefined): boolean {
-  const needed = requiredBadge(category);
+/** May this driver take this job? An ordinary ride has no category and needs nothing. */
+export function driverMayTake(badges: unknown, category: string | null | undefined, kind: JobKind = "ride"): boolean {
+  const needed = requiredBadge(category, kind);
   if (!needed) return true;
   return normalizeBadges(badges).includes(needed);
 }
 
 /** What a driver is told when they are not cleared for the work. */
-export function badgeRefusalMessage(category: string | null | undefined): string {
-  const needed = requiredBadge(category);
+export function badgeRefusalMessage(category: string | null | undefined, kind: JobKind = "ride"): string {
+  const needed = requiredBadge(category, kind);
   if (!needed) return "This job is not available to you.";
   return `This job needs the ${BADGE_LABELS[needed]} badge. ${BADGE_REQUIREMENTS[needed]} Ask PG Ride to add it to your account.`;
 }
