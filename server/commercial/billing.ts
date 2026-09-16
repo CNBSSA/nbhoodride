@@ -83,7 +83,12 @@ export async function issueStatement(organizationId: string, weekKey: string): P
       eq(commercialJobs.organizationId, organizationId),
       sql`${commercialJobs.statementId} IS NULL`,
       inArray(rides.status, [...BILLABLE]),
-      sql`COALESCE(${rides.scheduledAt}, ${rides.createdAt}) >= ${window.start}`,
+      // This week's jobs — AND anything billable from an earlier week that
+      // no statement ever picked up. A job completed on Tuesday for last
+      // week's date arrives after last week's statement was issued, and a
+      // week is issued exactly once; without this it was never billed at
+      // all (daily audit, #381). Late jobs roll onto the next statement,
+      // dated as they were.
       sql`COALESCE(${rides.scheduledAt}, ${rides.createdAt}) < ${window.end}`,
     ));
 
@@ -103,20 +108,25 @@ export async function issueStatement(organizationId: string, weekKey: string): P
   const charge = weekCharge(lines);
   if (!charge.chargeable) return { statement: null, created: false, reason: charge.reason };
 
-  const [statement] = await db.insert(commercialStatements).values({
-    organizationId,
-    periodKey: window.weekKey,
-    periodLabel: window.label,
-    periodStart: window.start,
-    periodEnd: window.end,
-    jobCount: lines.length,
-    total: charge.amount.toFixed(2),
-    status: "open",
-  }).returning();
-
-  await db.update(commercialJobs)
-    .set({ statementId: statement.id, billedStatus: "statement" })
-    .where(inArray(commercialJobs.id, rows.map(({ job }) => job.id)));
+  // The statement and the stamp on its jobs are one write or none: a
+  // statement that exists while its jobs are unstamped carries a total the
+  // jobs do not account for (daily audit, #381).
+  const statement = await db.transaction(async (tx) => {
+    const [created] = await tx.insert(commercialStatements).values({
+      organizationId,
+      periodKey: window.weekKey,
+      periodLabel: window.label,
+      periodStart: window.start,
+      periodEnd: window.end,
+      jobCount: lines.length,
+      total: charge.amount.toFixed(2),
+      status: "open",
+    }).returning();
+    await tx.update(commercialJobs)
+      .set({ statementId: created.id, billedStatus: "statement" })
+      .where(inArray(commercialJobs.id, rows.map(({ job }) => job.id)));
+    return created;
+  });
 
   console.log(`[commercial] statement issued :: ${org.name} | ${window.label} | ${lines.length} job${lines.length === 1 ? "" : "s"} | $${charge.amount.toFixed(2)}`);
   return { statement, created: true, reason: charge.reason };

@@ -89,7 +89,13 @@ export async function bookJob(storage: IStorage, input: BookJobInput, now: Date 
     ? Number(input.fareOverride)
     : quote.total;
 
-  const ride = await storage.createRide({
+  // The ride and its job are one write or none. Two separate inserts left a
+  // window where the second could fail and an invoice ride would exist with
+  // no job — never billed, and with no category it would look like an
+  // ordinary ride to every driver (daily audit, #380). storage.createRide
+  // is a bare insert, so nothing is lost by doing it inside the transaction.
+  const { ride, job } = await db.transaction(async (tx) => {
+  const [ride] = await tx.insert(rides).values({
     riderId: input.requesterId,
     pickupLocation: input.pickup,
     destinationLocation: input.destination,
@@ -107,9 +113,9 @@ export async function bookJob(storage: IStorage, input: BookJobInput, now: Date 
     passengerName,
     passengerPhone: input.passengerPhone ? String(input.passengerPhone).trim().slice(0, 40) : null,
     pickupInstructions: input.notes ? String(input.notes).trim().slice(0, 500) : null,
-  } as any);
+  } as any).returning();
 
-  const [job] = await db.insert(commercialJobs).values({
+  const [job] = await tx.insert(commercialJobs).values({
     rideId: ride.id,
     organizationId: org.id,
     requesterId: input.requesterId,
@@ -122,6 +128,8 @@ export async function bookJob(storage: IStorage, input: BookJobInput, now: Date 
     leg: input.standing?.leg ?? (input.returnOf ? "return" : "out"),
     returnOf: input.returnOf ?? null,
   }).returning();
+  return { ride, job };
+  });
 
   return { ride, job, pickupCounty: validation.pickupCounty ?? null };
 }
