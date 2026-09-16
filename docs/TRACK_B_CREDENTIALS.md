@@ -25,7 +25,7 @@
 | `VITE_STRIPE_PUBLIC_KEY` | Client Stripe.js | **Wired** | Before card payments live | Checkout UI |
 | `STRIPE_WEBHOOK_SECRET` | Verify Stripe webhooks | **Wired** | Before production payments | Payment confirmations |
 | `ANTHROPIC_API_KEY` | AI assistant + orchestrator | **Wired** | Before AI chat live | Mobility intent, FAQ gen |
-| `MAPBOX_TOKEN` | Mapbox geocoding + directions | **Wired** | Before real launch volume | Better US address autocomplete (`/api/geocode/suggest`) + driving routes (`/api/route`) |
+| `MAPBOX_TOKEN` | Map tiles + geocoding + directions | **Required** | Before deploy | The map itself (`/api/map/tiles`; blank without it, and `/health/ready` fails) + address autocomplete + driving routes |
 | `GCS_BUCKET_NAME` | Driver document storage | **Wired** | Before doc uploads live | License/insurance uploads |
 | `GOOGLE_APPLICATION_CREDENTIALS` or Railway GCS plugin | GCS auth | **Wired** | With GCS bucket | Object storage |
 | `GCS_PRIVATE_PREFIX` | Private object path prefix | **Wired** | With GCS (default set) | Doc ACL paths |
@@ -36,6 +36,9 @@
 | `TWILIO_ACCOUNT_SID` | SMS provider | **Optional** | Before SMS booking / SOS SMS | E4 SMS inbound, tracking links |
 | `TWILIO_AUTH_TOKEN` | Twilio auth | **Optional** | With Twilio | SMS send/receive |
 | `TWILIO_PHONE_NUMBER` | Twilio from-number | **Optional** | With Twilio | SMS from PG Ride |
+| `TWILIO_VERIFY_SERVICE_SID` | Twilio Verify service | **Optional** | With Twilio | Password reset by text |
+| `TELEGRAM_BOT_TOKEN` | Ops paging bot (@BotFather) | **Wired** | Before anyone relies on alerts | Every operator page: SOS, rider trouble, outages, 4 AM review, payday |
+| `TELEGRAM_CHAT_ID` | Ops chat the bot posts to | **Wired** | With the bot token | Same — without both, pages go to the server log and nobody is told |
 | `RESEND_API_KEY` | Transactional email | **Optional** | Before production email | Signup, receipts, approvals |
 | `RESEND_FROM` | From address (verified domain) | **Optional** | With Resend | Email deliverability |
 | `PUBLIC_APP_URL` | Canonical app URL | **Wired** | Before guardian/SMS links in prod | Tracking share links |
