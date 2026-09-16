@@ -1906,7 +1906,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         activeRideId: ride.id,
         expiresAt,
       });
-      trackingUrl = `${resolveAppUrl()}/guardian/${token}`;
+      // No request here to fall back on, so if the public URL is not
+      // configured send NO link rather than a relative "/guardian/…" — which
+      // in a text message to someone with no app is a dead link. The
+      // message builder already handles a missing link; the readiness check
+      // (0.2-public-url) is what tells the operator the URL is unset.
+      const base = resolveAppUrl();
+      trackingUrl = base ? `${base}/guardian/${token}` : null;
     } catch (err) {
       // Link creation is a nicety — still send the message without it.
       console.error("[sms] tracking link for friend passenger failed:", err);
