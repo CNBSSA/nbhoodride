@@ -155,19 +155,36 @@ export function haversineMiles(
  *  - Distance does not exceed MAX_RIDE_DISTANCE_MILES
  *  - Rider has not exceeded MAX_RIDE_REQUESTS_PER_HOUR
  */
+/**
+ * Why this rider may not book right now, or null if they may.
+ *
+ * Suspension and approval are checked at login, but an already-logged-in
+ * rider keeps a valid session after an admin acts on them mid-session. So
+ * every door that creates a ride re-reads both flags here. Suspension was
+ * re-checked this way already, but only inside validateRideRequest — and
+ * the 2026-09-16 daily audit found approval revocation was never mirrored
+ * (a revoked rider could keep booking until they happened to log out), and
+ * that multi-stop and shared-schedule booking bypass validateRideRequest
+ * altogether, so they re-checked neither. Same wording as the login gate,
+ * admins and super admins exempt, exactly as at login.
+ */
+export async function riderBookingBlock(riderId: string): Promise<string | null> {
+  const rider = await storage.getUser(riderId);
+  if (!rider) return null;
+  if (rider.isSuspended) return "Your account has been suspended. Please contact support.";
+  if (!rider.isApproved && !rider.isAdmin && !rider.isSuperAdmin) {
+    return "Your account is pending approval by an administrator. Please check back later.";
+  }
+  return null;
+}
+
 export async function validateRideRequest(
   riderId: string,
   pickup: Location,
   destination: Location
 ): Promise<ValidationResult> {
-  // Suspension is checked at login, but an already-logged-in rider keeps a
-  // valid session after an admin suspends them mid-session — re-check here,
-  // the single funnel for ride creation, so a suspended rider can't keep
-  // booking until they happen to log out.
-  const rider = await storage.getUser(riderId);
-  if (rider?.isSuspended) {
-    return { valid: false, error: "Your account has been suspended. Please contact support." };
-  }
+  const blocked = await riderBookingBlock(riderId);
+  if (blocked) return { valid: false, error: blocked };
 
   // Coordinate sanity
   if (
