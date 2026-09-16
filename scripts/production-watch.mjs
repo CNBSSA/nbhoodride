@@ -88,6 +88,12 @@ try {
       return why ? `${n} — ${String(why).slice(0, 160)}` : n;
     })
     .join("; ");
+  // The database down is not a degraded server, it is no server a rider can
+  // use — /health still answers 200 because it is a flat OK. So it is a
+  // FAILURE here, not a note, and this watch goes red (daily audit, #384).
+  // The other dependencies degrade a feature and stay notes: the server
+  // has already paged them itself.
+  if (depsDown.includes("database")) failures.push(`Database down: ${d.deps?.database?.detail ?? "unreachable from the server"}`);
   if (deps.status === 503 || depsDown.length > 0) notes.push(`server reports down: ${withWhy || "unknown"} [already paged by the server]`);
   else if (deps.status !== 200) failures.push(`Dependencies (/health/deps): HTTP ${deps.status}`);
 } catch {
