@@ -131,6 +131,7 @@ import {
 } from "@shared/schema";
 import {
   validateRideRequest,
+  riderBookingBlock,
   estimateFare,
   findBestDriver,
   haversineMiles,
@@ -1905,7 +1906,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         activeRideId: ride.id,
         expiresAt,
       });
-      trackingUrl = `${resolveAppUrl()}/guardian/${token}`;
+      // No request here to fall back on, so if the public URL is not
+      // configured send NO link rather than a relative "/guardian/…" — which
+      // in a text message to someone with no app is a dead link. The
+      // message builder already handles a missing link; the readiness check
+      // (0.2-public-url) is what tells the operator the URL is unset.
+      const base = resolveAppUrl();
+      trackingUrl = base ? `${base}/guardian/${token}` : null;
     } catch (err) {
       // Link creation is a nicety — still send the message without it.
       console.error("[sms] tracking link for friend passenger failed:", err);
@@ -7598,6 +7605,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { pickupLocation, destinationLocation, pickupStops, driverId, estimatedFare, pickupInstructions } = req.body;
+      // Re-read suspension and approval: this door never went through
+      // validateRideRequest, so an admin acting mid-session was ignored here
+      // (2026-09-16 daily audit). Same answer the other doors give.
+      const bookingBlock = await riderBookingBlock(userId);
+      if (bookingBlock) {
+        riderAlert("booking_refused", `${userId}:${bookingBlock.slice(0, 40)}`, [["Rider", userId], ["Reason", bookingBlock]]);
+        return res.status(400).json({ message: bookingBlock });
+      }
 
       if (!pickupLocation || !destinationLocation || !estimatedFare) {
         return res.status(400).json({ message: "Missing required fields" });
@@ -7769,6 +7784,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { pickupLocation, destinationLocation, driverId, estimatedFare, pickupInstructions, scheduledAt, visibility } = req.body;
+      // Re-read suspension and approval: this door never went through
+      // validateRideRequest, so an admin acting mid-session was ignored here
+      // (2026-09-16 daily audit). Same answer the other doors give.
+      const bookingBlock = await riderBookingBlock(userId);
+      if (bookingBlock) {
+        riderAlert("booking_refused", `${userId}:${bookingBlock.slice(0, 40)}`, [["Rider", userId], ["Reason", bookingBlock]]);
+        return res.status(400).json({ message: bookingBlock });
+      }
 
       if (!pickupLocation || !destinationLocation || !estimatedFare) {
         return res.status(400).json({ message: "Missing required fields" });

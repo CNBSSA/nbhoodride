@@ -22,7 +22,7 @@ export type CommercialCategory = (typeof COMMERCIAL_CATEGORIES)[number];
 
 export const CATEGORY_LABELS: Record<CommercialCategory, string> = {
   medical: "Medical transportation",
-  business: "Business deliveries",
+  business: "Business",
   food: "Food deliveries",
 };
 
@@ -43,6 +43,30 @@ export const BILLING_MODES = ["weekly_debit", "net_terms"] as const;
 export type BillingMode = (typeof BILLING_MODES)[number];
 
 export const isCategory = (v: unknown): v is CommercialCategory => COMMERCIAL_CATEGORIES.includes(v as CommercialCategory);
+
+/**
+ * What a job IS, as distinct from who booked it.
+ *
+ * The category says what kind of organization the account is — a clinic, a
+ * restaurant, an office — and drives the facility fee and billing. It used
+ * to also decide what every job on the account was: "business" meant
+ * deliveries, full stop, so a business booking an employee's ride or an
+ * airport pickup for a guest had that ride routed only to parcel-cleared
+ * drivers. The kind is now chosen per job. A parcel is a job with a parcel
+ * on it; everything else carries a person.
+ */
+export const JOB_KINDS = ["ride", "delivery"] as const;
+export type JobKind = (typeof JOB_KINDS)[number];
+
+export function kindOfJob(job: { parcelSize?: string | null }): JobKind {
+  return job.parcelSize ? "delivery" : "ride";
+}
+
+/** Which kinds of job an account of this category may book. */
+export function categoryMayBook(category: string | null | undefined, kind: JobKind): boolean {
+  if (kind === "ride") return isCategory(category);
+  return category === "business" || category === "food";
+}
 export const isOrgRole = (v: unknown): v is OrgRole => ORG_ROLES.includes(v as OrgRole);
 
 /** Owners and requesters book; billing sees money; owners do everything. */

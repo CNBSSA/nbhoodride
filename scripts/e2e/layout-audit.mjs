@@ -303,6 +303,40 @@ if (engine === chromium) {
     check("update-banner audit ran", false, String(e?.message ?? e).split("\n")[0]);
   }
 
+  section("Requester portal: a business account has a parcel door");
+  // The delivery drawer shipped with slice 6 and no page opened it — a
+  // business account, the kind that exists to send parcels, could not. Both
+  // doors must be on screen and hit-testable at desk width AND on a phone
+  // (two header buttons once pushed the ride door off a 390px screen), and
+  // P must open the parcel drawer. Viewport-aware checks, as the portal
+  // pass below uses: assertPrimary assumes the phone viewport.
+  for (const [label, viewport] of [["desk 1280×800", { width: 1280, height: 800 }], ["phone 390×844", VIEWPORT]]) {
+    const ctx = await browser.newContext({ viewport, isMobile: viewport.width < 500, hasTouch: viewport.width < 500 });
+    const page = await ctx.newPage();
+    try {
+      await loginAs(page, server.base, FIXTURES.rider.email);
+      await page.goto(server.base + "/org?org=e2e-biz", { waitUntil: "domcontentloaded" });
+      await page.locator('[data-testid="button-portal-send-parcel"]').first().waitFor({ timeout: 45000 });
+      for (const [name, id] of [["Send a parcel", "button-portal-send-parcel"], ["Book a ride", "button-portal-book"]]) {
+        const box = await page.locator(`[data-testid="${id}"]`).first().boundingBox();
+        const inside = !!box && box.y >= 0 && box.y + box.height <= viewport.height && box.x >= 0 && box.x + box.width <= viewport.width;
+        check(`business ${label}: ${name} is on screen`, inside, box ? `x ${Math.round(box.x)}–${Math.round(box.x + box.width)} of ${viewport.width}` : "no box");
+        const hit = await page.evaluate((sel) => { const el = document.querySelector(sel); if (!el) return false; const r = el.getBoundingClientRect(); const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!at && (el.contains(at) || at.contains(el)); }, `[data-testid="${id}"]`);
+        check(`business ${label}: ${name} is hit-testable`, hit);
+      }
+      await page.keyboard.press("p");
+      const drawer = page.locator('[data-testid="portal-delivery-drawer"]');
+      await drawer.waitFor({ timeout: 5000 }).catch(() => {});
+      check(`business ${label}: P opens the parcel drawer`, (await drawer.count()) === 1);
+      await page.keyboard.press("Escape");
+      check(`business ${label}: Escape closes it`, (await drawer.count()) === 0);
+      const scrollW = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+      check(`business ${label}: no sideways scroll`, scrollW);
+    } catch (e) {
+      check(`business ${label}: audit ran`, false, String(e?.message ?? e).split("\n")[0]);
+    } finally { await ctx.close(); }
+  }
+
   section("Requester portal (organizations)");
   for (const [label, viewport] of [["desk 1280×800", { width: 1280, height: 800 }], ["phone 390×844", VIEWPORT]]) {
     const ctx = await browser.newContext({ viewport, isMobile: viewport.width < 500, hasTouch: viewport.width < 500 });

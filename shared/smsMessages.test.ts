@@ -53,6 +53,16 @@ describe("classifyKeyword", () => {
 });
 
 describe("friend-ride templates", () => {
+  it("sends no tracking link at all when there is none, never a relative or literal-null one", () => {
+    // The route sends null when the public URL is not configured, rather
+    // than a relative "/guardian/…" that is a dead link in a text message.
+    const msg = friendRideAssignedSms({ passengerName: "Dot", bookerName: "Sam", driverName: "Lee", vehicle: null, trackingUrl: null });
+    expect(msg).not.toContain("/guardian");
+    expect(msg).not.toContain("null");
+    expect(msg).not.toContain("Track the ride");
+    expect(msg).toContain("Lee");
+  });
+
   const ctx = {
     passengerName: "Ada",
     bookerName: "Festus",

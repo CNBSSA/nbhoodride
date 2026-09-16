@@ -1210,20 +1210,22 @@ export class DatabaseStorage implements IStorage {
   async getOpenScheduledRides(driverCounties?: string[], driverBadges?: string[]): Promise<any[]> {
     const riderAlias = alias(users, 'rider_user');
     // Commercial work is shown only to drivers cleared for it
-    // (shared/driverBadges.ts): medical jobs need the medical badge, both
-    // kinds of delivery share one. An ordinary ride has no category and is
-    // shown to everyone.
+    // (shared/driverBadges.ts). The badge follows what the job IS: a parcel
+    // needs the delivery badge whoever sends it; a person on a medical
+    // account's job needs the medical badge; a person on a business or food
+    // account's job is an ordinary ride and needs nothing — so NULL here
+    // means "anyone", whether the ride is commercial or not.
     // Each badge is bound as its own parameter: drizzle expands a JS array
     // into a row, not a text[], so `= ANY(...)` cannot be used here.
     const badges = normalizeBadges(driverBadges);
+    const needed = sql`(SELECT CASE
+        WHEN cj.parcel_size IS NOT NULL THEN 'delivery'
+        WHEN cj.category = 'medical' THEN 'medical'
+        ELSE NULL END
+      FROM commercial_jobs cj WHERE cj.ride_id = ${rides.id})`;
     const badgeWhere = badges.length === 0
-      ? sql`NOT EXISTS (SELECT 1 FROM commercial_jobs cj WHERE cj.ride_id = ${rides.id})`
-      : sql`NOT EXISTS (
-          SELECT 1 FROM commercial_jobs cj
-          WHERE cj.ride_id = ${rides.id}
-            AND (CASE WHEN cj.category = 'medical' THEN 'medical' ELSE 'delivery' END)
-                NOT IN (${sql.join(badges.map((b) => sql`${b}`), sql`, `)})
-        )`;
+      ? sql`${needed} IS NULL`
+      : sql`(${needed} IS NULL OR ${needed} IN (${sql.join(badges.map((b) => sql`${b}`), sql`, `)}))`;
     const baseWhere = and(
       eq(rides.status, "pending"),
       isNotNull(rides.scheduledAt),
