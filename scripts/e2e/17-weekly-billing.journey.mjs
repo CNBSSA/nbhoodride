@@ -99,6 +99,19 @@ export async function run({ base, db, server }) {
     const { rows: [bStmt] } = await db.query("SELECT status, total, attempts FROM commercial_statements WHERE organization_id=$1", [B.json.id]);
     check("its statement is open, with nothing attempted", bStmt.status === "open" && bStmt.total === "34.00" && bStmt.attempts === 0, JSON.stringify(bStmt));
 
+    section("A job finished after its week was issued rolls onto the next statement");
+    // A week is issued exactly once. Until 2026-09-16 a job completed on
+    // Tuesday for last week's date arrived after last week's statement and
+    // was never billed by any week (daily audit, #381). It now rolls onto
+    // the next statement, dated as it was.
+    const nextMonday = new Date(lastMonday.getTime() + 7 * 86_400_000);
+    const nextWeekKey = `${nextMonday.getUTCFullYear()}-${String(nextMonday.getUTCMonth() + 1).padStart(2, "0")}-${String(nextMonday.getUTCDate()).padStart(2, "0")}`;
+    const late = await seedJob(A.json.id, { status: "completed", driver: true, actualFare: "30.00", passenger: "Late Larry", at: insideLastWeek(3) });
+    const rolled = await admin.req("POST", `/api/admin/organizations/${A.json.id}/statements`, { week: nextWeekKey });
+    check("the following week's statement is issued and carries the late job", rolled.status === 200 && rolled.json?.created === true && rolled.json?.statement?.jobCount >= 1, JSON.stringify(rolled.json?.reason ?? rolled.json?.message ?? rolled.status));
+    const { rows: [lateRow] } = await db.query("SELECT statement_id, billed_status FROM commercial_jobs WHERE id=$1", [late.jobId]);
+    check("and the late job is stamped with it, not left unbilled forever", lateRow?.statement_id === rolled.json?.statement?.id && lateRow?.billed_status === "statement", JSON.stringify(lateRow));
+
     section("An empty week is not billed at all");
     const C = await admin.req("POST", "/api/admin/organizations", { name: "Quiet Clinic", category: "medical" });
     orgIds.push(C.json.id);

@@ -185,7 +185,7 @@ import { formatJobNumber } from "@shared/commercial";
 import { CommercialError } from "./commercial/organizations";
 import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadges";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
-import { estimateRoute, MAX_RIDE_STOPS } from "@shared/routeEstimate";
+import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
 
 // Lazy Anthropic client — instantiated on first use so the server starts
@@ -3973,27 +3973,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ? Math.round(clientDuration)
         : routeEstimate?.minutes ?? validation.durationMinutes ?? 0;
 
-      // Vehicle-class pricing (shared/vehicleTypes.ts): record the multiplier
-      // the quote was priced with, and never let an XL/SUV request come in
-      // under the server's own quote for that class — the app trusts the
-      // client's number for the standard route figures, but the class
-      // premium is enforced here.
+      // The fare is the quote, and at completion the quote is what is
+      // charged — so the quote cannot be the client's number. Until
+      // 2026-09-16 only XL/SUV requests were floored at the server's class
+      // quote; a standard ride stored whatever estimatedFare the app sent,
+      // and a tampered app could book a twenty-mile ride for a dollar and
+      // pay the driver eighty-five cents of it (daily audit, #379).
+      //
+      // Now every class is floored at the server's own quote. The app's
+      // road figures are its Mapbox route — more accurate than the
+      // straight-line × 1.3 estimate made here, and what the rider was
+      // shown — so they price the floor when they could be true (no
+      // shorter than the straight line, no faster than 70 mph); figures
+      // that could not be true are replaced by the server's own estimate.
+      // A fare the app quoted ABOVE the server's figure is left alone (a
+      // stale rate card on an old bundle can only overcharge the rider's
+      // own device) but flagged to the operator when it is materially above.
       const bookingRates = await storage.getPlatformRates();
       const bookingMultiplier = vehicleFareMultiplier(requestedVehicleType ?? "standard", bookingRates);
-      if (bookingMultiplier !== 1 && quotedMiles > 0 && quotedMinutes > 0) {
-        const classQuote = estimateFare(quotedMiles, quotedMinutes, { rates: bookingRates, vehicleType: requestedVehicleType }).total;
+      const straightLineMiles = routeEstimate?.straightLineMiles ?? validation.straightLineMiles ?? 0;
+      const clientFiguresPlausible = roadFiguresPlausible(clientDistance, clientDuration, straightLineMiles);
+      const serverMiles = clientFiguresPlausible ? quotedMiles : routeEstimate?.miles ?? validation.distanceMiles ?? quotedMiles;
+      const serverMinutes = clientFiguresPlausible ? quotedMinutes : routeEstimate?.minutes ?? validation.durationMinutes ?? quotedMinutes;
+      // The ride records the figures that priced it, so distance, duration
+      // and fare on a ride are always one coherent triple.
+      let rideMiles = quotedMiles;
+      let rideMinutes = quotedMinutes;
+      if (serverMiles > 0 && serverMinutes > 0) {
+        const serverQuote = estimateFare(serverMiles, serverMinutes, { rates: bookingRates, vehicleType: requestedVehicleType ?? "standard" }).total;
         const clientFare = Number(bodyData.estimatedFare);
-        if (!Number.isFinite(clientFare) || clientFare + 0.01 < classQuote) {
-          console.log(`[fare] ${requestedVehicleType} request quoted $${Number.isFinite(clientFare) ? clientFare.toFixed(2) : "?"} by the app; server class quote $${classQuote.toFixed(2)} applied`);
-          bodyData.estimatedFare = classQuote.toFixed(2);
+        if (!Number.isFinite(clientFare) || clientFare + 0.01 < serverQuote) {
+          console.log(`[fare] ${requestedVehicleType ?? "standard"} request quoted $${Number.isFinite(clientFare) ? clientFare.toFixed(2) : "?"} by the app; server quote $${serverQuote.toFixed(2)} applied`);
+          if (Number.isFinite(clientFare) && clientFare > 0 && clientFare < serverQuote * 0.8) {
+            riderAlert("fare_mismatch", `${userId}:${clientFare.toFixed(2)}`, [["Rider", userId], ["App quoted", `$${clientFare.toFixed(2)}`], ["Server quote", `$${serverQuote.toFixed(2)}`], ["Effect", "Server quote applied"]]);
+          }
+          bodyData.estimatedFare = serverQuote.toFixed(2);
+          rideMiles = serverMiles;
+          rideMinutes = Math.round(serverMinutes);
+        } else if (Number.isFinite(clientFare) && clientFare > serverQuote * 1.25) {
+          riderAlert("fare_mismatch", `${userId}:${clientFare.toFixed(2)}`, [["Rider", userId], ["App quoted", `$${clientFare.toFixed(2)}`], ["Server quote", `$${serverQuote.toFixed(2)}`], ["Effect", "Left as quoted — check for a stale bundle"]]);
         }
       }
 
       const dataToValidate = {
         ...bodyData,
         stops: stops.length > 0 ? stops : undefined,
-        distance: quotedMiles > 0 ? quotedMiles.toFixed(2) : undefined,
-        duration: quotedMinutes > 0 ? quotedMinutes : undefined,
+        distance: rideMiles > 0 ? rideMiles.toFixed(2) : undefined,
+        duration: rideMinutes > 0 ? rideMinutes : undefined,
         riderId: userId,
         pickupCounty: validation.pickupCounty ?? undefined,
         vehicleFareMultiplier: bookingMultiplier.toFixed(2),
@@ -10437,6 +10463,12 @@ Generate the FAQ list.`;
             if (ride && ride.paymentStatus !== 'paid_card') {
               await storage.updateRide(rideId, { paymentStatus: 'paid_card' });
             }
+          } else if (pi.metadata?.statementId) {
+            // A commercial bank debit that cleared days after the charge.
+            // Until 2026-09-16 nothing here handled statements, so a
+            // "processing" debit stayed "charging" forever (daily audit, #382).
+            const { settleStatementFromIntent } = await import("./commercial/billing");
+            await settleStatementFromIntent(pi).catch((e) => console.error("[commercial] statement settle failed:", e));
           } else if (pi.metadata?.type === 'virtual_card_topup') {
             // Server-side fallback for wallet top-ups: if the client never
             // reaches POST /topup/confirm (app killed, network dropped after
@@ -10464,6 +10496,13 @@ Generate the FAQ list.`;
         }
         case 'payment_intent.payment_failed': {
           const pi = event.data.object as any;
+          if (pi.metadata?.statementId) {
+            // The account's bank refused the debit after it was in flight:
+            // mark the statement failed and page, so it can be retried.
+            const { settleStatementFromIntent } = await import("./commercial/billing");
+            await settleStatementFromIntent(pi).catch((e) => console.error("[commercial] statement fail-settle failed:", e));
+            break;
+          }
           const rideId = pi.metadata?.rideId;
           if (rideId) {
             const ride = await storage.getRide(rideId);

@@ -27,10 +27,24 @@ export function haversineMiles(a: RoutePoint, b: RoutePoint): number {
 }
 
 /** Road miles (1 decimal) and minutes over every leg of the route. */
-export function estimateRoute(points: RoutePoint[]): { miles: number; minutes: number } {
+export function estimateRoute(points: RoutePoint[]): { miles: number; minutes: number; straightLineMiles: number } {
   let straight = 0;
   for (let i = 1; i < points.length; i++) straight += haversineMiles(points[i - 1], points[i]);
   const miles = Math.round(straight * ROAD_FACTOR * 10) / 10;
   const minutes = Math.round((miles / AVERAGE_MPH) * 60);
-  return { miles, minutes };
+  return { miles, minutes, straightLineMiles: Math.round(straight * 100) / 100 };
+}
+
+/**
+ * Whether road figures an app reports for a trip could be true. A road
+ * route is never shorter than the straight line between its points, and
+ * nobody averages better than 70 mph door to door — figures under either
+ * bar were not measured, they were typed. Above the bars they are taken as
+ * the app's Mapbox route, which is better than any estimate made here.
+ */
+export function roadFiguresPlausible(miles: number, minutes: number, straightLineMiles: number): boolean {
+  if (!Number.isFinite(miles) || !Number.isFinite(minutes) || miles <= 0 || minutes <= 0) return false;
+  if (miles < straightLineMiles * 0.95) return false;
+  if (minutes < (miles / 70) * 60) return false;
+  return true;
 }
