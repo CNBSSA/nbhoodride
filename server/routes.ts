@@ -10463,6 +10463,12 @@ Generate the FAQ list.`;
             if (ride && ride.paymentStatus !== 'paid_card') {
               await storage.updateRide(rideId, { paymentStatus: 'paid_card' });
             }
+          } else if (pi.metadata?.statementId) {
+            // A commercial bank debit that cleared days after the charge.
+            // Until 2026-09-16 nothing here handled statements, so a
+            // "processing" debit stayed "charging" forever (daily audit, #382).
+            const { settleStatementFromIntent } = await import("./commercial/billing");
+            await settleStatementFromIntent(pi).catch((e) => console.error("[commercial] statement settle failed:", e));
           } else if (pi.metadata?.type === 'virtual_card_topup') {
             // Server-side fallback for wallet top-ups: if the client never
             // reaches POST /topup/confirm (app killed, network dropped after
@@ -10490,6 +10496,13 @@ Generate the FAQ list.`;
         }
         case 'payment_intent.payment_failed': {
           const pi = event.data.object as any;
+          if (pi.metadata?.statementId) {
+            // The account's bank refused the debit after it was in flight:
+            // mark the statement failed and page, so it can be retried.
+            const { settleStatementFromIntent } = await import("./commercial/billing");
+            await settleStatementFromIntent(pi).catch((e) => console.error("[commercial] statement fail-settle failed:", e));
+            break;
+          }
           const rideId = pi.metadata?.rideId;
           if (rideId) {
             const ride = await storage.getRide(rideId);

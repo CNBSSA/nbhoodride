@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MINIMUM_CHARGE, autoCharges, billingRunDue, billingWeekWindow, describeBillingStatus, previousBillingWeek, weekCharge, weekKeyOf } from "./billingCycle";
+import { MINIMUM_CHARGE, autoCharges, billingRunDue, billingWeekWindow, describeBillingStatus, previousBillingWeek, statementStatusFromIntent, weekCharge, weekKeyOf } from "./billingCycle";
 import type { StatementLine } from "./commercial";
 
 describe("the billing week", () => {
@@ -91,5 +91,18 @@ describe("what the desk is told", () => {
     expect(describeBillingStatus("failed", "12", "Sep 7–13, 2026")).toContain("could not be collected");
     expect(describeBillingStatus("open", 5, "Sep 7–13, 2026")).toContain("not yet collected");
     expect(describeBillingStatus("charging", 5, "x")).toContain("in progress");
+  });
+});
+
+describe("what a Stripe intent status means for a statement", () => {
+  it("only a decided intent moves a statement", () => {
+    expect(statementStatusFromIntent("succeeded")).toBe("paid");
+    expect(statementStatusFromIntent("canceled")).toBe("failed");
+    expect(statementStatusFromIntent("requires_payment_method")).toBe("failed");
+    // A bank debit clears over days; nothing is decided yet, and nothing
+    // may be charged again in the meantime.
+    expect(statementStatusFromIntent("processing")).toBeNull();
+    expect(statementStatusFromIntent("requires_action")).toBeNull();
+    expect(statementStatusFromIntent("requires_confirmation")).toBeNull();
   });
 });

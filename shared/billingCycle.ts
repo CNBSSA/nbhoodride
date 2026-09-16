@@ -110,3 +110,14 @@ export function describeBillingStatus(status: string, amount: number | string, l
     default: return `${money} for ${label}, not yet collected`;
   }
 }
+
+/**
+ * What a Stripe PaymentIntent status means for a statement. Only a decided
+ * intent moves a statement; "processing" (a bank debit clearing over days)
+ * and "requires_*" are still undecided and return null.
+ */
+export function statementStatusFromIntent(status: string): "paid" | "failed" | null {
+  if (status === "succeeded") return "paid";
+  if (status === "canceled" || status === "requires_payment_method") return "failed";
+  return null;
+}
