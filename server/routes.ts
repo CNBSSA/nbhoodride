@@ -2743,6 +2743,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const split = await routeFeeWithFairnessSplit(commercialNoShowFee ?? collected, userId, rideId);
       const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
+      if (ride.paymentMethod === 'invoice') {
+        const { onCommercialRideEnded } = await import("./commercial/recipientPay");
+        await onCommercialRideEnded(rideId, "the recipient was not there").catch((err) => console.error("[recipient-pay] no-show hook failed:", err));
+      }
 
       await logRideAudit({
         rideId,
@@ -6976,6 +6980,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (ws?.readyState === WebSocket.OPEN) ws.send(cancelMessage);
       }
 
+      if (ride.paymentMethod === 'invoice') {
+        const { onCommercialRideEnded } = await import("./commercial/recipientPay");
+        await onCommercialRideEnded(rideId, "cancelled by PG Ride").catch((err) => console.error("[recipient-pay] admin cancel hook failed:", err));
+      }
       res.json({ success: true, ride: await storage.getRide(rideId) });
     } catch (error) {
       console.error("Error in admin ride cancellation:", error);
@@ -10488,8 +10496,9 @@ Generate the FAQ list.`;
             }
           } else if (pi.metadata?.recipientJobId) {
             // A recipient paid a delivery fee: release the held job (shared/recipientPay.ts).
+            // Throws on failure so the webhook claim is released and Stripe retries.
             const { settleRecipientFromIntent } = await import("./commercial/recipientPay");
-            await settleRecipientFromIntent(pi).catch((e) => console.error("[recipient-pay] settle failed:", e));
+            await settleRecipientFromIntent(pi);
           } else if (pi.metadata?.statementId) {
             // A commercial bank debit that cleared days after the charge.
             // Until 2026-09-16 nothing here handled statements, so a
@@ -10525,7 +10534,7 @@ Generate the FAQ list.`;
           const pi = event.data.object as any;
           if (pi.metadata?.recipientJobId) {
             const { settleRecipientFromIntent } = await import("./commercial/recipientPay");
-            await settleRecipientFromIntent(pi).catch((e) => console.error("[recipient-pay] fail-settle failed:", e));
+            await settleRecipientFromIntent(pi);
             break;
           }
           if (pi.metadata?.statementId) {
@@ -11167,7 +11176,10 @@ Generate the FAQ list.`;
             _isNotNull(ridesT.scheduledAt),
             _gte(ridesT.scheduledAt, now),
             _lte(ridesT.scheduledAt, new Date(now.getTime() + 125 * 60 * 1000)),
-            _sql`${ridesT.status} IN ('pending', 'accepted')`
+            _sql`${ridesT.status} IN ('pending', 'accepted')`,
+            // A delivery the recipient pays for is held until paid: no
+            // driver re-broadcast, no "nobody has claimed" push (shared/recipientPay.ts).
+            _sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${ridesT.id} AND h.payer = 'recipient' AND COALESCE(h.recipient_payment_status, '') <> 'paid')`
           )
         );
 

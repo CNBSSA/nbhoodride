@@ -226,7 +226,7 @@ export async function listJobs(organizationId: string, opts: ListJobsOptions = {
       handover: job.parcelSize ? (job.handover ?? "person") : null,
       payer: job.payer ?? "organization",
       recipientPaymentStatus: job.recipientPaymentStatus ?? null,
-      recipientPayToken: job.payer === "recipient" && job.recipientPaymentStatus !== "paid" ? job.recipientPayToken ?? null : null,
+      recipientPayToken: job.payer === "recipient" && (job.recipientPaymentStatus === "awaiting" || job.recipientPaymentStatus === "declined") && ride.status === "pending" ? job.recipientPayToken ?? null : null,
       recipientFee: job.recipientFee ?? null,
       delivery: deliverySummary(job),
       standingOrderId: job.standingOrderId,

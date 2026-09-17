@@ -39,6 +39,8 @@ export async function run({ base, db, server }) {
     const { rows: [jobRow] } = await db.query("SELECT recipient_pay_token, recipient_fee FROM commercial_jobs WHERE id=$1", [heldJob]);
     check("the fee is the quoted fare, frozen on the job", jobRow?.recipient_pay_token === token && Number(jobRow?.recipient_fee) === Number(held.json.ride.estimatedFare), JSON.stringify(jobRow));
     check("no driver can see a held job", !(await board()).includes(heldRide));
+    const sneak = await driver.req("POST", `/api/driver/rides/${heldRide}/claim`);
+    check("and cannot claim it by id either — the hold is enforced, not just hidden", sneak.status === 409 && /waiting for the recipient to pay/.test(sneak.json?.message ?? ""), JSON.stringify(sneak.json));
     await new Promise((r) => setTimeout(r, 200));
     const textLine = serverLog(server).split("\n").reverse().find((l) => l.includes("[recipient-pay] pay link for") && l.includes("→")) ?? "";
     check("the text to the recipient is logged verbatim: shop, fee, link", /Mama's Kitchen/.test(textLine) && /\$\d+\.\d\d/.test(textLine) && textLine.includes(token) && !/Tunde/.test(textLine.split("→")[0]), textLine.slice(0, 200));
@@ -115,6 +117,20 @@ export async function run({ base, db, server }) {
     await sweep();
     const { rows: [n5] } = await db.query("SELECT cj.recipient_payment_status, r.status FROM commercial_jobs cj JOIN rides r ON r.id=cj.ride_id WHERE cj.id=$1", [orphanJob]);
     check("a paid job nobody took by the end of its window is cancelled and refunded", n5?.status === "cancelled" && n5?.recipient_payment_status === "refund_pending", JSON.stringify(n5));
+
+    section("A cancelled job closes its link; an admin cancel refunds a paid one");
+    const closing = await rider.req("POST", `/api/org/${orgId}/deliveries`, body({ payer: "recipient", readyAt: inMin(70) }));
+    const closingRide = closing.json.ride.id; rideIds.push(closingRide);
+    await rider.req("POST", `/api/org/${orgId}/jobs/${closing.json.job.id}/cancel`, { reason: "Changed our mind" });
+    const closedView = await guest.req("GET", `/api/pay/${tokenOf(closing.json.recipientPay.link)}`);
+    check("the recipient's page says the job was cancelled before payment", closedView.status === 200 && closedView.json?.state === "cancelled", JSON.stringify(closedView.json?.state));
+    check("and it can no longer be paid or declined", (await guest.req("POST", `/api/pay/${tokenOf(closing.json.recipientPay.link)}/intent`)).status === 410 && (await guest.req("POST", `/api/pay/${tokenOf(closing.json.recipientPay.link)}/decline`)).status === 410);
+    const adminPaid = await rider.req("POST", `/api/org/${orgId}/deliveries`, body({ payer: "recipient", readyAt: inMin(75) }));
+    const adminRide = adminPaid.json.ride.id; rideIds.push(adminRide);
+    await db.query("UPDATE commercial_jobs SET recipient_payment_status='paid', recipient_paid_at=NOW(), recipient_payment_intent_id='pi_e2e_admin' WHERE id=$1", [adminPaid.json.job.id]);
+    const adminCancel = await admin.req("POST", `/api/admin/rides/${adminRide}/cancel`, { reason: "Weather" });
+    const { rows: [afterAdmin] } = await db.query("SELECT recipient_payment_status FROM commercial_jobs WHERE id=$1", [adminPaid.json.job.id]);
+    check("PG Ride cancelling a paid job refunds the recipient too", adminCancel.status === 200 && afterAdmin?.recipient_payment_status === "refund_pending", JSON.stringify([adminCancel.status, afterAdmin]));
 
     section("The shop's default");
     const setDefault = await rider.req("PATCH", `/api/org/${orgId}/settings`, { defaultPayer: "recipient" });

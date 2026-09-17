@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describePayer, heldJobExpired, isHeld, paidByRecipient, payerOf, recipientNudgeDue, recipientPayStateFromIntent, recipientPayText, shopDecisionDue } from "./recipientPay";
+import { describePayer, heldJobExpired, isHeld, paidByRecipient, payerOf, recipientNudgeDue, recipientPayStateFromIntent, recipientPayText, settleDecision, shopDecisionDue } from "./recipientPay";
 
 describe("a job the recipient pays for", () => {
   const now = new Date("2026-09-17T12:00:00Z");
@@ -44,6 +44,19 @@ describe("a job the recipient pays for", () => {
   it("gives up a held job when its window closes", () => {
     expect(heldJobExpired({ payer: "recipient", recipientPaymentStatus: "awaiting", windowEnd: new Date("2026-09-17T11:59:00Z") }, now)).toBe(true);
     expect(heldJobExpired({ payer: "recipient", recipientPaymentStatus: "paid", windowEnd: new Date("2026-09-17T11:59:00Z") }, now)).toBe(false);
+  });
+  it("settles a payment only for a job that is still the recipient's to pay; otherwise the money goes back", () => {
+    const job = { payer: "recipient", recipientPaymentStatus: "awaiting", recipientFee: "11.80" };
+    const ok = { status: "succeeded", amount: 1180 };
+    expect(settleDecision(job, { status: "pending" }, ok)).toBe("paid");
+    expect(settleDecision(job, { status: "pending" }, { status: "processing" })).toBe("ignore");
+    expect(settleDecision(job, { status: "pending" }, { status: "requires_payment_method" })).toBe("failed");
+    expect(settleDecision({ ...job, recipientPaymentStatus: "paid" }, { status: "pending" }, ok)).toBe("ignore");
+    expect(settleDecision({ ...job, payer: "organization", recipientPaymentStatus: null }, { status: "pending" }, ok)).toBe("refund");
+    expect(settleDecision({ ...job, recipientPaymentStatus: "cancelled" }, { status: "cancelled" }, ok)).toBe("refund");
+    expect(settleDecision({ ...job, recipientPaymentStatus: "expired" }, { status: "cancelled" }, ok)).toBe("refund");
+    expect(settleDecision(job, { status: "cancelled" }, ok)).toBe("refund");
+    expect(settleDecision(job, { status: "pending" }, { status: "succeeded", amount: 500 })).toBe("refund");
   });
   it("texts the recipient the shop, the fee and the link — never the food price", () => {
     const t = recipientPayText({ shopName: "Mama's Kitchen", fee: 11.8, windowText: "Ready 5:00 PM, deliver by 7:00 PM", link: "https://x/pay/abc" });

@@ -51,8 +51,8 @@ export async function cancelJob(organizationId: string, jobId: string, actorUser
   await db.update(commercialJobs).set({ cancellationFee: feeText }).where(eq(commercialJobs.id, jobId));
   // A recipient who paid for a delivery that is now cancelled gets their
   // money back (shared/recipientPay.ts); the fee above is the account's.
-  const { refundRecipientIfPaid } = await import("./recipientPay");
-  await refundRecipientIfPaid(jobId, "the job was cancelled").catch((err) => console.error("[recipient-pay] refund on cancel failed:", err));
+  const { onCommercialRideEnded } = await import("./recipientPay");
+  await onCommercialRideEnded(ride.id, "the job was cancelled").catch((err) => console.error("[recipient-pay] cancel hook failed:", err));
 
   return { ride: updated, cancellationFee: feeText, reason: charged.reason, driverId: ride.driverId ?? null };
 }

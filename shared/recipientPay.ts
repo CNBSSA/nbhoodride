@@ -20,7 +20,7 @@ export type Payer = (typeof PAYERS)[number];
 export const isPayer = (v: unknown): v is Payer => PAYERS.includes(v as Payer);
 export const payerOf = (v: unknown): Payer => (isPayer(v) ? v : "organization");
 
-export const RECIPIENT_PAY_STATES = ["awaiting", "paid", "declined", "refunded", "refund_pending", "expired"] as const;
+export const RECIPIENT_PAY_STATES = ["awaiting", "paid", "declined", "refunded", "refund_pending", "expired", "cancelled"] as const;
 export type RecipientPayState = (typeof RECIPIENT_PAY_STATES)[number];
 
 /** One nudge to a recipient who has not paid, this long after the text. */
@@ -30,6 +30,9 @@ export interface RecipientPayJob {
   payer?: string | null;
   recipientPaymentStatus?: string | null;
 }
+
+/** A recipient-pays job in one of these states can no longer be paid. */
+export const TERMINAL_RECIPIENT_STATES: ReadonlySet<string> = new Set(["refunded", "refund_pending", "expired", "cancelled"]);
 
 /** Held: booked, but not released to drivers until the recipient pays. */
 export function isHeld(job: RecipientPayJob): boolean {
@@ -50,6 +53,7 @@ export function describePayer(job: RecipientPayJob): string | null {
     case "refunded": return "Refunded to the recipient";
     case "refund_pending": return "Refund to the recipient pending";
     case "expired": return "Not paid in time";
+    case "cancelled": return "Cancelled before payment";
     default: return "Recipient pays";
   }
 }
@@ -59,6 +63,24 @@ export function recipientPayStateFromIntent(status: string | null | undefined): 
   if (status === "succeeded") return "paid";
   if (status === "canceled" || status === "requires_payment_method") return "failed";
   return null;
+}
+
+/**
+ * What to do with a decided Stripe intent for a job (post-implementation
+ * audit, 2026-09-17): money that arrives for a job that was switched to the
+ * account, cancelled, expired or already paid goes straight back.
+ */
+export function settleDecision(job: RecipientPayJob & { recipientFee?: string | number | null }, ride: { status?: string | null }, intent: { status: string; amount?: number | null }): "paid" | "failed" | "refund" | "ignore" {
+  const next = recipientPayStateFromIntent(intent.status);
+  if (!next) return "ignore";
+  if (next === "failed") return "failed";
+  if (paidByRecipient(job)) return "ignore";
+  if (payerOf(job.payer) !== "recipient") return "refund";
+  if (TERMINAL_RECIPIENT_STATES.has(job.recipientPaymentStatus ?? "")) return "refund";
+  if ((ride.status ?? "pending") !== "pending") return "refund";
+  const expected = Math.round(Number(job.recipientFee ?? 0) * 100);
+  if (typeof intent.amount === "number" && expected > 0 && intent.amount !== expected) return "refund";
+  return "paid";
 }
 
 /** When the sweep nudges: once, this long after booking, still unpaid. */

@@ -1339,7 +1339,10 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(rides.id, rideId),
-          sql`${rides.driverId} IS NULL`
+          sql`${rides.driverId} IS NULL`,
+          // A delivery the recipient pays for cannot be claimed until paid,
+          // whatever board or push the driver saw it on (shared/recipientPay.ts).
+          sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${rides.id} AND h.payer = 'recipient' AND COALESCE(h.recipient_payment_status, '') <> 'paid')`
         )
       )
       .returning();

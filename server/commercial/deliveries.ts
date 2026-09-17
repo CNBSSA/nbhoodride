@@ -12,6 +12,7 @@
  * uses; a delivery additionally wants a photo.
  */
 
+import { randomBytes } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "../db";
 import { commercialJobs, organizations } from "@shared/schema";
@@ -85,9 +86,17 @@ export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, 
   }, now);
 
   const handover = handoverOf(input.handover);
+  // Recipient pays: the hold is written with the parcel, in one update, so a
+  // job can never exist billed to the account while the desk was told the
+  // recipient pays (post-implementation audit, 2026-09-17). The text goes
+  // out afterwards (server/commercial/recipientPay.ts).
+  const recipientFields = payer === "recipient"
+    ? { payer: "recipient", recipientPaymentStatus: "awaiting", recipientPayToken: randomBytes(24).toString("hex"), recipientFee: fare.toFixed(2) }
+    : {};
   const [job] = await db.update(commercialJobs).set({
     parcelSize: size,
     handover,
+    ...recipientFields,
     pickupContact,
     dropContact,
     windowStart: checked.window.start,
