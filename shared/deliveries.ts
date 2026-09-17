@@ -169,6 +169,9 @@ export interface DeliveryProof {
   photoUploadedAt?: string | null;
   /** The pending photo never came within a day; ops was paged. */
   photoNeverArrived?: boolean;
+  /** The photo was deleted after the retention period; the record stays. */
+  photoRetired?: boolean;
+  photoRetiredAt?: string | null;
 }
 
 /** A proof recorded this far from the drop address is flagged to the desk. */
@@ -196,6 +199,7 @@ export function describeProof(proof: DeliveryProof | null | undefined, handover:
   if (proof.photoUrl) parts.push("photo");
   else if (proof.photoPending) parts.push("photo pending");
   else if (proof.photoNeverArrived) parts.push("photo never arrived");
+  else if (proof.photoRetired) parts.push("photo kept 90 days, now retired");
   if (proof.farFromDrop) parts.push("recorded away from the drop address");
   return parts.join(" · ");
 }

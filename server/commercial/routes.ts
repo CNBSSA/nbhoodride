@@ -29,6 +29,7 @@ import { resolveAppUrl } from "../appUrl";
 import { INVITATION_DAYS } from "@shared/invitations";
 import { bookDelivery } from "./deliveries";
 import { archiveRecipient, listRecipients, saveRecipient } from "./recipients";
+import { deliveredPhoto, deliveredView, retireOldProofPhotos } from "./delivered";
 import { approvalView, approveByRecipient, declineByRecipient, resendApprovalLink, sendAnyway, setReleaseHook, startRecipientApproval } from "./recipientApproval";
 import { buildStatement, statementToCsv, statementToHtml } from "./statements";
 import { cancelJob } from "./cancel";
@@ -277,6 +278,22 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
   app.post("/api/approve/:token/decline", gate, async (req, res) => {
     try { res.json(await declineByRecipient(String(req.params.token))); }
     catch (err) { fail(res, err, "Could not record that"); }
+  });
+  // ── Delivered: the receiver's proof page, and photo retention ──
+  app.get("/api/delivered/:token", gate, async (req, res) => {
+    try { res.json(await deliveredView(String(req.params.token))); }
+    catch (err) { fail(res, err, "Could not read this delivery"); }
+  });
+  app.get("/api/delivered/:token/photo", gate, async (req, res) => {
+    try {
+      const photo = await deliveredPhoto(String(req.params.token));
+      if (!photo) return res.status(404).json({ message: "No photo." });
+      res.set("Content-Type", photo.contentType); res.set("Cache-Control", "private, max-age=3600"); res.set("X-Content-Type-Options", "nosniff"); res.set("Content-Security-Policy", "sandbox"); res.send(photo.bytes);
+    } catch (err) { fail(res, err, "Could not read the photo"); }
+  });
+  app.post("/api/admin/analytics/retire-proof-photos", gate, isAdminOrSessionAuth, async (_req, res) => {
+    try { res.json(await retireOldProofPhotos()); }
+    catch (err) { fail(res, err, "Could not run the sweep"); }
   });
   app.post("/api/admin/analytics/pending-proof-sweep", gate, isAdminOrSessionAuth, async (_req, res) => {
     try { const { sweepPendingProofPhotos } = await import("./badges"); res.json(await sweepPendingProofPhotos()); }
