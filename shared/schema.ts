@@ -991,6 +991,8 @@ export const commercialJobs = pgTable("commercial_jobs", {
   cancellationFee: decimal("cancellation_fee", { precision: 8, scale: 2 }).notNull().default("0.00"),
   /** Deliveries (slice 6): a job with no passenger. */
   parcelSize: varchar("parcel_size"),
+  /** person | reception | unattended — how the parcel changes hands, which decides the proof (shared/deliveries.ts). */
+  handover: varchar("handover"),
   pickupContact: jsonb("pickup_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
   dropContact: jsonb("drop_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
   windowStart: timestamp("window_start"),

@@ -78,3 +78,39 @@ describe("proof", () => {
     expect(proofComplete({ receivedBy: "Ms Rivera", signedAt: now.toISOString() })).toBe(true);
   });
 });
+
+import { describeHandover, describeProof, handoverOf, proofComplete as proofCompleteRule, proofRequirement, proofSatisfies } from "./deliveries";
+
+describe("how a parcel changes hands decides the proof (Festus: a photo only when nobody signs)", () => {
+  it("defaults to handing it to the named person", () => {
+    expect(handoverOf(undefined)).toBe("person");
+    expect(handoverOf("pigeon")).toBe("person");
+    expect(handoverOf("unattended")).toBe("unattended");
+  });
+  it("a person or reception signs; the door gets a photo", () => {
+    expect(proofRequirement("person")).toEqual({ needsName: true, needsPhoto: false });
+    expect(proofRequirement("reception")).toEqual({ needsName: true, needsPhoto: false });
+    expect(proofRequirement("unattended")).toEqual({ needsName: false, needsPhoto: true });
+  });
+  it("says what is missing, in words", () => {
+    expect(proofSatisfies("person", { photoUrl: "/api/objects/db-upload/x" })).toEqual({ ok: false, missing: "who received it" });
+    expect(proofSatisfies("unattended", { receivedBy: "nobody" })).toEqual({ ok: false, missing: "a photo of where it was left" });
+    expect(proofSatisfies("unattended", { photoUrl: "/api/objects/db-upload/x" }).ok).toBe(true);
+    expect(proofSatisfies("person", { receivedBy: "Ms Rivera" }).ok).toBe(true);
+  });
+  it("a photo still on the phone counts at the door, so no signal does not strand the driver", () => {
+    expect(proofSatisfies("unattended", { photoPending: true }).ok).toBe(true);
+    expect(proofCompleteRule({ photoPending: true, signedAt: "2026-09-17T12:00:00Z" }, "unattended")).toBe(true);
+    expect(proofCompleteRule({ receivedBy: "x" }, "person")).toBe(false);
+  });
+  it("tells the driver what to do in one line", () => {
+    expect(describeHandover("person", "Ms Rivera")).toMatch(/Hand it to Ms Rivera/);
+    expect(describeHandover("unattended")).toMatch(/take a photo/);
+  });
+  it("tells the desk what happened, including a far-away flag", () => {
+    expect(describeProof({ receivedBy: "Ms Rivera", signedAt: "x" })).toBe("received by Ms Rivera");
+    expect(describeProof({ photoUrl: "/p", signedAt: "x", farFromDrop: true }, "unattended")).toBe("left at the door · photo · recorded away from the drop address");
+    expect(describeProof({ photoPending: true, signedAt: "x" }, "unattended")).toBe("left at the door · photo pending");
+    expect(describeProof(null)).toBeNull();
+  });
+});
