@@ -335,7 +335,17 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
   // ── Deliveries: a job with no passenger ──
   app.post("/api/org/:orgId/deliveries", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
     try {
-      const booked = await bookDelivery(storage, { ...(req.body ?? {}), organizationId: req.orgId, requesterId: userIdOf(req)! });
+      // Picked field by field: nothing in a request body may stamp a job as a
+      // standing-order occurrence or set anything the desk did not choose.
+      const b = req.body ?? {};
+      const booked = await bookDelivery(storage, {
+        organizationId: req.orgId, requesterId: userIdOf(req)!,
+        parcelSize: b.parcelSize, handover: b.handover, askRecipient: b.askRecipient === true,
+        pickupContact: b.pickupContact, dropContact: b.dropContact,
+        readyAt: b.readyAt, windowHours: b.windowHours,
+        pickup: b.pickup, destination: b.destination,
+        vehicleType: b.vehicleType, notes: b.notes, poNumber: b.poNumber,
+      });
       const org = await getOrganization(req.orgId);
       // "Remember this recipient": the book fills itself from the booking.
       // A book entry never blocks a delivery, but a failure is reported so
@@ -390,7 +400,7 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       const booked = await materializeStandingOrder(storage, order, new Date(), (b) => deps.notifyDriversOfScheduledRide(b.ride, b.pickupCounty));
       const org = await getOrganization(req.orgId);
       console.log(`[commercial] standing order created :: Account: ${org?.name ?? req.orgId} | order ${order.id} | ${booked} job${booked === 1 ? "" : "s"} booked`);
-      opsAlert(formatOpsAlert("🗓 Standing order created", [["Account", org?.name ?? req.orgId], ["Passenger", order.passengerName], ["Jobs booked", booked]]));
+      opsAlert(formatOpsAlert("🗓 Standing order created", [["Account", org?.name ?? req.orgId], [order.kind === "delivery" ? "Recipient" : "Passenger", order.passengerName], ["Jobs booked", booked]]));
       res.status(201).json({ ...order, booked });
     } catch (err) { fail(res, err, "Could not create the standing order"); }
   });

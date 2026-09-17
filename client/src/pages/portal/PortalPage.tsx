@@ -210,7 +210,7 @@ export default function PortalPage() {
           {view === "today" && <TodayBoard org={org} onBook={() => setBooking(true)} canBook={canBook(role)} />}
           {view === "jobs" && <JobsList org={org} canCancel={canBook(role)} onSendAgain={parcels && canBook(role) ? sendAgain : undefined} />}
           {view === "recipients" && parcels && canBook(role) && <RecipientsView org={org} onSend={sendAgain} />}
-          {view === "standing" && <StandingOrdersView orgId={org.id} canBook={canBook(role)} />}
+          {view === "standing" && <StandingOrdersView orgId={org.id} canBook={canBook(role)} parcels={parcels} />}
           {view === "statement" && canSeeStatement(role) && <StatementView org={org} />}
           {view === "billing" && canSeeStatement(role) && <BillingView orgId={org.id} />}
           {view === "people" && canManageMembers(role) && <PeopleView org={org} />}

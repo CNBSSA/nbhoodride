@@ -1099,6 +1099,13 @@ export const commercialStandingOrders = pgTable("commercial_standing_orders", {
   vehicleType: varchar("vehicle_type").notNull().default("standard"),
   notes: text("notes"),
   poNumber: varchar("po_number"),
+  /** ride | delivery — a standing delivery books a parcel each service day (slice 4 of the delivery plan, 2026-09-17). */
+  kind: varchar("kind").notNull().default("ride"),
+  parcelSize: varchar("parcel_size"),
+  handover: varchar("handover"),
+  pickupContact: jsonb("pickup_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
+  dropContact: jsonb("drop_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
+  windowHours: integer("window_hours"),
   isActive: boolean("is_active").notNull().default(true),
   pausedAt: timestamp("paused_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

@@ -27,6 +27,14 @@ import type { IStorage } from "../storage";
 import { CommercialError, getOrganization } from "./organizations";
 
 export interface BookJobInput {
+  /** A parcel: written with the job in one transaction, so a job never exists without its parcel (post-implementation audit, 2026-09-17). */
+  delivery?: {
+    parcelSize: string; handover: string;
+    pickupContact: { name: string; phone?: string | null; note?: string | null };
+    dropContact: { name: string; phone?: string | null; note?: string | null };
+    windowStart: Date; windowEnd: Date;
+    recipientApproval?: string; recipientApprovalToken?: string | null; recipientFee?: string | null;
+  };
   organizationId: string;
   /** The user the ride belongs to on the rider side. */
   requesterId: string;
@@ -127,6 +135,12 @@ export async function bookJob(storage: IStorage, input: BookJobInput, now: Date 
     serviceDate: input.standing?.serviceDate ?? null,
     leg: input.standing?.leg ?? (input.returnOf ? "return" : "out"),
     returnOf: input.returnOf ?? null,
+    ...(input.delivery ? {
+      parcelSize: input.delivery.parcelSize, handover: input.delivery.handover,
+      pickupContact: input.delivery.pickupContact, dropContact: input.delivery.dropContact,
+      windowStart: input.delivery.windowStart, windowEnd: input.delivery.windowEnd,
+      recipientApproval: input.delivery.recipientApproval ?? "none", recipientApprovalToken: input.delivery.recipientApprovalToken ?? null, recipientFee: input.delivery.recipientFee ?? null,
+    } : {}),
   }).returning();
   return { ride, job };
   });

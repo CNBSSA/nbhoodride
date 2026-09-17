@@ -48,7 +48,8 @@ const contact = (c: Contact | undefined | null): Contact | null => {
   };
 };
 
-export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, now: Date = new Date()): Promise<BookedJob> {
+/** `standing` is set only by the standing-order sweep, never from a request body (post-implementation audit, 2026-09-17). */
+export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, now: Date = new Date(), standing?: { orderId: string; serviceDate?: string | null; leg: "out" | "return" }): Promise<BookedJob> {
   const org = await getOrganization(input.organizationId);
   if (!org) throw new CommercialError("Organization not found.", 404);
   if (!categoryMayBook(org.category, "delivery")) {
@@ -67,6 +68,14 @@ export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, 
   const route = estimateRoute([input.pickup, input.destination]);
   const fare = deliveryFare(route.miles);
 
+  const handover = handoverOf(input.handover);
+  // Ask the recipient: the hold is written with the parcel, in the same
+  // transaction as the job, so a job never exists open to drivers while the
+  // desk was told the recipient would be asked. The text goes out afterwards
+  // (server/commercial/recipientApproval.ts).
+  const recipientFields = askRecipient
+    ? { recipientApproval: "awaiting", recipientApprovalToken: randomBytes(24).toString("hex"), recipientFee: fare.toFixed(2) }
+    : {};
   const booked = await bookJob(storage, {
     organizationId: org.id,
     requesterId: input.requesterId,
@@ -82,25 +91,10 @@ export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, 
     poNumber: input.poNumber,
     allowShortLead: true,
     fareOverride: fare,
+    standing,
+    delivery: { parcelSize: size, handover, pickupContact, dropContact, windowStart: checked.window.start, windowEnd: checked.window.end, ...recipientFields },
   }, now);
-
-  const handover = handoverOf(input.handover);
-  // Ask the recipient: the hold is written with the parcel, in one update,
-  // so a job never exists open to drivers while the desk was told the
-  // recipient would be asked. The text goes out afterwards
-  // (server/commercial/recipientApproval.ts).
-  const recipientFields = askRecipient
-    ? { recipientApproval: "awaiting", recipientApprovalToken: randomBytes(24).toString("hex"), recipientFee: fare.toFixed(2) }
-    : {};
-  const [job] = await db.update(commercialJobs).set({
-    parcelSize: size,
-    handover,
-    ...recipientFields,
-    pickupContact,
-    dropContact,
-    windowStart: checked.window.start,
-    windowEnd: checked.window.end,
-  }).where(eq(commercialJobs.id, booked.job.id)).returning();
+  const job = booked.job;
 
   console.log(`[commercial] delivery booked :: ${org.name} | job ${job.jobNumber} | ${describeParcel(size, dropContact.name)} | ${describeWindow(checked.window)} | $${fare.toFixed(2)}`);
   return { ...booked, job };
