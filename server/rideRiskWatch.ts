@@ -62,7 +62,7 @@ export async function pageAtRiskRides(now: Date = new Date()): Promise<RiskPage[
     WHERE r.scheduled_at IS NOT NULL
       AND r.scheduled_at >= ${now} AND r.scheduled_at <= ${horizon}
       AND r.status IN ('pending', 'accepted')
-      AND NOT (cj.payer = 'recipient' AND COALESCE(cj.recipient_payment_status, '') <> 'paid')
+      AND (cj.payer IS DISTINCT FROM 'recipient' OR cj.recipient_payment_status = 'paid')
     ORDER BY r.scheduled_at
   `);
 

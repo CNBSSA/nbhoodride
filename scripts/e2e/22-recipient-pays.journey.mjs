@@ -40,7 +40,7 @@ export async function run({ base, db, server }) {
     check("the fee is the quoted fare, frozen on the job", jobRow?.recipient_pay_token === token && Number(jobRow?.recipient_fee) === Number(held.json.ride.estimatedFare), JSON.stringify(jobRow));
     check("no driver can see a held job", !(await board()).includes(heldRide));
     await new Promise((r) => setTimeout(r, 200));
-    const textLine = serverLog(server).split("\n").reverse().find((l) => l.includes("[recipient-pay] pay link for")) ?? "";
+    const textLine = serverLog(server).split("\n").reverse().find((l) => l.includes("[recipient-pay] pay link for") && l.includes("→")) ?? "";
     check("the text to the recipient is logged verbatim: shop, fee, link", /Mama's Kitchen/.test(textLine) && /\$\d+\.\d\d/.test(textLine) && textLine.includes(token) && !/Tunde/.test(textLine.split("→")[0]), textLine.slice(0, 200));
     const deskRows = await rider.req("GET", `/api/org/${orgId}/jobs`);
     const deskRow = (deskRows.json ?? []).find((j) => j.id === heldJob);

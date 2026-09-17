@@ -98,18 +98,24 @@ export async function createRecipientIntent(token: string): Promise<{ clientSecr
   if (!stripe) throw new CommercialError("Card payments are not available right now. Tell the shop, or try again shortly.", 503);
   const amount = Math.round(Number(row.job.recipientFee ?? row.ride.estimatedFare ?? 0) * 100);
   if (amount < 50) throw new CommercialError("This delivery fee is too small to charge a card.", 409);
-  if (row.job.recipientPaymentIntentId) {
+  if (row.job.recipientPaymentIntentId && /^pi_/.test(row.job.recipientPaymentIntentId)) {
     const existing = await stripe.paymentIntents.retrieve(row.job.recipientPaymentIntentId).catch(() => null);
     if (existing && existing.client_secret && !["canceled", "succeeded"].includes(existing.status)) {
       return { clientSecret: existing.client_secret, paymentIntentId: existing.id, amount };
     }
   }
-  const intent = await stripe.paymentIntents.create({
-    amount, currency: "usd",
-    description: `PG Ride delivery ${jobLabel(row.job)} from ${row.org.name}`,
-    metadata: { type: "recipient_delivery", recipientJobId: row.job.id, organizationId: row.org.id },
-    automatic_payment_methods: { enabled: true },
-  }, { idempotencyKey: `recipient-job-${row.job.id}-${Date.now()}` });
+  let intent;
+  try {
+    intent = await stripe.paymentIntents.create({
+      amount, currency: "usd",
+      description: `PG Ride delivery ${jobLabel(row.job)} from ${row.org.name}`,
+      metadata: { type: "recipient_delivery", recipientJobId: row.job.id, organizationId: row.org.id },
+      automatic_payment_methods: { enabled: true },
+    }, { idempotencyKey: `recipient-job-${row.job.id}-${Date.now()}` });
+  } catch (err: any) {
+    console.error(`[recipient-pay] Stripe could not start a payment for ${jobLabel(row.job)}:`, err?.message ?? err);
+    throw new CommercialError("Card payments are not available right now. Tell the shop, or try again shortly.", 503);
+  }
   await db.update(commercialJobs).set({ recipientPaymentIntentId: intent.id, recipientPaymentStatus: "awaiting" }).where(eq(commercialJobs.id, row.job.id));
   return { clientSecret: intent.client_secret!, paymentIntentId: intent.id, amount };
 }
