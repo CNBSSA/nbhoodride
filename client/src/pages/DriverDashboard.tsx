@@ -32,15 +32,6 @@ import type { RideMessagePayload } from "@shared/rideChat";
 import { parseRideMessageWsEvent } from "@shared/rideChat";
 
 export default function DriverDashboard() {
-  // A proof photo that could not upload at the door is kept on the phone;
-  // try again whenever the dashboard mounts and every minute after.
-  useEffect(() => {
-    let cancelled = false;
-    const tick = () => { flushProofPhotos().then((n) => { if (!cancelled && n > 0) queryClient.invalidateQueries({ queryKey: ["/api/driver/active-rides"] }); }).catch(() => {}); };
-    tick();
-    const id = setInterval(tick, 60_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, []);
   const [isOnline, setIsOnline] = useState(false);
   // Keep the phone's screen awake while online so requests are never missed
   // because the screen locked mid-shift.
@@ -54,6 +45,22 @@ export default function DriverDashboard() {
   const { user } = useAuth();
   const { equityProgramEnabled } = useFeatureFlags();
   const { toast } = useToast();
+  // A proof photo that could not upload at the door is kept on the phone;
+  // try again whenever the dashboard mounts and every minute after.
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    const tick = () => {
+      flushProofPhotos(user.id).then((r) => {
+        if (cancelled) return;
+        if (r.sent > 0) { queryClient.invalidateQueries({ queryKey: ["/api/driver/active-rides"] }); toast({ title: r.sent === 1 ? "Door photo uploaded" : `${r.sent} door photos uploaded`, description: "The desk can see it now." }); }
+        for (const d of r.dropped) toast({ title: "A door photo could not be attached", description: `${d.reason}. Tell PG Ride if the desk asks for it.`, variant: "destructive" });
+      }).catch(() => {});
+    };
+    tick();
+    const id = setInterval(tick, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [user?.id]);
   const queryClient = useQueryClient();
   const { trackPageView, trackFeatureUsed } = useAnalytics();
   
