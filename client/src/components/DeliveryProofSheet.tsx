@@ -8,7 +8,7 @@
  */
 import { useState } from "react";
 import { Camera, CheckCircle } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SheetPortal } from "@/components/SheetPortal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -82,14 +82,18 @@ export function DeliveryProofSheet({ rideId, delivery, driverLocation, open, onC
     }
   };
 
+  if (!open) return null;
+  // The same shell as the cancel dialogs: one fixed overlay that IS the top
+  // layer everywhere on screen, with the card inside it, so the layout audit
+  // can prove nothing sits over the confirm button.
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v && !busy) onClose(); }}>
-      <DialogContent className="max-w-md" data-testid="delivery-proof-sheet">
-        <DialogHeader>
-          <DialogTitle>Record the handover</DialogTitle>
-          <DialogDescription>{delivery.handoverText}</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
+    <SheetPortal>
+      <div className="fixed inset-0 z-[80] bg-black/50 flex items-end sm:items-center justify-center p-4 overflow-y-auto" style={{ height: "100dvh" }} data-testid="delivery-proof-sheet" onClick={() => { if (!busy) onClose(); }}>
+        <div className="bg-white dark:bg-gray-900 rounded-2xl p-5 w-full max-w-md shadow-xl space-y-4" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="proof-title">
+          <div>
+            <h3 id="proof-title" className="font-bold text-lg">Record the handover</h3>
+            <p className="text-sm text-muted-foreground">{delivery.handoverText}</p>
+          </div>
           <p className="text-sm text-muted-foreground">{delivery.parcelLabel}{delivery.dropContact?.note ? ` · ${delivery.dropContact.note}` : ""}</p>
           {delivery.needsName ? (
             <div className="space-y-2">
@@ -110,9 +114,9 @@ export function DeliveryProofSheet({ rideId, delivery, driverLocation, open, onC
             <CheckCircle className="w-4 h-4 mr-2" />
             {busy ? "Recording…" : "Confirm delivery"}
           </Button>
-          <Button variant="ghost" className="w-full" disabled={busy} onClick={onClose} data-testid={`button-proof-cancel-${rideId}`}>Not yet</Button>
+          <Button variant="ghost" className="w-full min-h-[44px]" disabled={busy} onClick={onClose} data-testid={`button-proof-cancel-${rideId}`}>Not yet</Button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </SheetPortal>
   );
 }
