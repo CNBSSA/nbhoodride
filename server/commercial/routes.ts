@@ -29,8 +29,7 @@ import { resolveAppUrl } from "../appUrl";
 import { INVITATION_DAYS } from "@shared/invitations";
 import { bookDelivery } from "./deliveries";
 import { archiveRecipient, listRecipients, saveRecipient } from "./recipients";
-import { confirmRecipientPayment, createRecipientIntent, declineRecipientPay, recipientView, resendPayLink, setReleaseHook, startRecipientPay, switchPayerToOrganization } from "./recipientPay";
-import { isPayer } from "@shared/recipientPay";
+import { approvalView, approveByRecipient, declineByRecipient, resendApprovalLink, sendAnyway, setReleaseHook, startRecipientApproval } from "./recipientApproval";
 import { buildStatement, statementToCsv, statementToHtml } from "./statements";
 import { cancelJob } from "./cancel";
 import { bookWillCallReturn, createStandingOrder, listStandingOrders, materializeAllStandingOrders, materializeStandingOrder, setStandingOrderActive, standingOrderJobCounts } from "./standingOrders";
@@ -231,23 +230,21 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       res.status(202).json({ invited: true, ...inv, emailSent });
     } catch (err) { fail(res, err, "Could not add the member"); }
   });
-  // ── Recipient pays (shared/recipientPay.ts) ──
-  app.post("/api/org/:orgId/jobs/:jobId/payer", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
-    try {
-      if (req.body?.payer !== "organization") return res.status(400).json({ message: "Only switching the fee to your account is possible here." });
-      res.json(await switchPayerToOrganization(req.orgId, String(req.params.jobId)));
-    } catch (err) { fail(res, err, "Could not change who pays"); }
+  // ── Recipient approval (shared/recipientApproval.ts) ──
+  app.post("/api/org/:orgId/jobs/:jobId/send-anyway", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.json(await sendAnyway(req.orgId, String(req.params.jobId))); }
+    catch (err) { fail(res, err, "Could not send it"); }
   });
-  app.post("/api/org/:orgId/jobs/:jobId/resend-pay-link", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
-    try { res.json(await resendPayLink(req.orgId, String(req.params.jobId), resolveAppUrl(`${req.protocol}://${req.get("host")}`))); }
+  app.post("/api/org/:orgId/jobs/:jobId/resend-approval-link", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.json(await resendApprovalLink(req.orgId, String(req.params.jobId), resolveAppUrl(`${req.protocol}://${req.get("host")}`))); }
     catch (err) { fail(res, err, "Could not resend the link"); }
   });
   app.patch("/api/org/:orgId/settings", gate, isAuthenticated, requireMember((r) => r === "owner"), async (req: any, res) => {
     try {
       const patch: Record<string, unknown> = {};
-      if (req.body?.defaultPayer !== undefined) patch.defaultPayer = req.body.defaultPayer;
+      if (req.body?.askRecipientByDefault !== undefined) patch.askRecipientByDefault = req.body.askRecipientByDefault;
       const org = await updateOrganization(req.orgId, patch);
-      res.json({ defaultPayer: org.defaultPayer });
+      res.json({ askRecipientByDefault: org.askRecipientByDefault });
     } catch (err) { fail(res, err, "Could not save the setting"); }
   });
   // ── The recipient book (shared/recipients.ts) ──
@@ -264,25 +261,21 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
     catch (err) { fail(res, err, "Could not remove the recipient"); }
   });
 
-  app.post("/api/admin/analytics/recipient-pay-sweep", gate, isAdminOrSessionAuth, async (req: any, res) => {
-    try { const { sweepRecipientPay } = await import("./recipientPay"); res.json(await sweepRecipientPay(new Date(), resolveAppUrl(`${req.protocol}://${req.get("host")}`))); }
+  app.post("/api/admin/analytics/recipient-approval-sweep", gate, isAdminOrSessionAuth, async (req: any, res) => {
+    try { const { sweepRecipientApproval } = await import("./recipientApproval"); res.json(await sweepRecipientApproval(new Date(), resolveAppUrl(`${req.protocol}://${req.get("host")}`))); }
     catch (err) { fail(res, err, "Could not run the sweep"); }
   });
   // The recipient's side: no account, the token is the capability. Rate-limited in routes.ts.
-  app.get("/api/pay/:token", gate, async (req, res) => {
-    try { res.json(await recipientView(String(req.params.token))); }
+  app.get("/api/approve/:token", gate, async (req, res) => {
+    try { res.json(await approvalView(String(req.params.token))); }
     catch (err) { fail(res, err, "Could not read this delivery"); }
   });
-  app.post("/api/pay/:token/intent", gate, async (req, res) => {
-    try { res.json(await createRecipientIntent(String(req.params.token))); }
-    catch (err) { fail(res, err, "Could not start the payment"); }
+  app.post("/api/approve/:token/approve", gate, async (req, res) => {
+    try { res.json(await approveByRecipient(String(req.params.token))); }
+    catch (err) { fail(res, err, "Could not record that"); }
   });
-  app.post("/api/pay/:token/confirm", gate, async (req, res) => {
-    try { res.json(await confirmRecipientPayment(String(req.params.token), String(req.body?.paymentIntentId ?? ""))); }
-    catch (err) { fail(res, err, "Could not confirm the payment"); }
-  });
-  app.post("/api/pay/:token/decline", gate, async (req, res) => {
-    try { res.json(await declineRecipientPay(String(req.params.token))); }
+  app.post("/api/approve/:token/decline", gate, async (req, res) => {
+    try { res.json(await declineByRecipient(String(req.params.token))); }
     catch (err) { fail(res, err, "Could not record that"); }
   });
 
@@ -356,13 +349,14 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
           console.log(`[recipients] not remembered: ${remembered.reason}`);
         }
       }
-      // Recipient pays: the job is HELD — not offered to any driver — until
-      // the recipient has paid from the link they are texted
-      // (shared/recipientPay.ts). Otherwise drivers hear about it now.
-      let recipientPay: { link: string; textSent: boolean; state: string } | null = null;
-      if (isPayer(req.body?.payer) && req.body.payer === "recipient") {
-        const started = await startRecipientPay(booked.job.id, resolveAppUrl(`${req.protocol}://${req.get("host")}`));
-        recipientPay = { link: started.link, textSent: started.textSent, state: "awaiting" };
+      // Ask the recipient: the job is HELD — not offered to any driver —
+      // until the recipient approves the fee from the link they are texted,
+      // or the shop sends it anyway (shared/recipientApproval.ts).
+      // Otherwise drivers hear about it now.
+      let recipientApproval: { link: string; textSent: boolean; state: string } | null = null;
+      if (req.body?.askRecipient === true) {
+        const started = await startRecipientApproval(booked.job.id, resolveAppUrl(`${req.protocol}://${req.get("host")}`));
+        recipientApproval = { link: started.link, textSent: started.textSent, state: "awaiting" };
       } else {
         deps.notifyDriversOfScheduledRide(booked.ride, booked.pickupCounty);
       }
@@ -372,9 +366,9 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
         ["Parcel", booked.job.parcelSize],
         ["To", booked.job.dropContact?.name],
         ["Fare", `$${Number(booked.ride.estimatedFare ?? 0).toFixed(2)}`],
-        ["Paid by", recipientPay ? "the recipient (held until paid)" : "the account"],
+        ["Recipient", recipientApproval ? "asked to approve the fee (held until they do)" : "not asked"],
       ]));
-      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: formatJobNumber(booked.job.jobNumber), payer: recipientPay ? "recipient" : "organization", recipientPaymentStatus: recipientPay ? "awaiting" : null }, recipientPay, remembered });
+      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: formatJobNumber(booked.job.jobNumber), recipientApproval: recipientApproval ? "awaiting" : "none" }, recipientApproval, remembered });
     } catch (err) { fail(res, err, "Could not book the delivery"); }
   });
 

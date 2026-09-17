@@ -162,10 +162,9 @@ export interface JobRow {
   handover: string | null;
   /** For a parcel: what was sent and to whom, so the desk can send it again. */
   parcel: { parcelSize: string; handover: string; pickupContact: unknown; dropContact: unknown } | null;
-  /** organization | recipient, and where the recipient's payment stands (shared/recipientPay.ts). */
-  payer: string;
-  recipientPaymentStatus: string | null;
-  recipientPayToken: string | null;
+  /** The recipient's answer to the delivery fee, when the shop asked (shared/recipientApproval.ts). */
+  recipientApproval: string;
+  recipientApprovalToken: string | null;
   recipientFee: string | null;
   /** For a delivery: what it is, who takes it and the window, in one line. */
   delivery: string | null;
@@ -227,9 +226,8 @@ export async function listJobs(organizationId: string, opts: ListJobsOptions = {
       proof: (job.proof ?? null) as Record<string, unknown> | null,
       handover: job.parcelSize ? (job.handover ?? "person") : null,
       parcel: job.parcelSize ? { parcelSize: job.parcelSize, handover: job.handover ?? "person", pickupContact: job.pickupContact ?? null, dropContact: job.dropContact ?? null } : null,
-      payer: job.payer ?? "organization",
-      recipientPaymentStatus: job.recipientPaymentStatus ?? null,
-      recipientPayToken: job.payer === "recipient" && (job.recipientPaymentStatus === "awaiting" || job.recipientPaymentStatus === "declined") && ride.status === "pending" ? job.recipientPayToken ?? null : null,
+      recipientApproval: job.recipientApproval ?? "none",
+      recipientApprovalToken: (job.recipientApproval === "awaiting" || job.recipientApproval === "declined") && ride.status === "pending" ? job.recipientApprovalToken ?? null : null,
       recipientFee: job.recipientFee ?? null,
       delivery: deliverySummary(job),
       standingOrderId: job.standingOrderId,
