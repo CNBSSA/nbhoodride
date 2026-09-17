@@ -12,14 +12,11 @@
  * uses; a delivery additionally wants a photo.
  */
 
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "../db";
 import { commercialJobs, organizations } from "@shared/schema";
 import { estimateRoute } from "@shared/routeEstimate";
-import {
-  SIZE_VEHICLE_HINT, deliveryFare, describeParcel, describeWindow, isParcelSize,
-  validateDelivery, type Contact, type DeliveryInput,
-} from "@shared/deliveries";
+import { SIZE_VEHICLE_HINT, deliveryFare, describeParcel, describeWindow, isParcelSize, validateDelivery, type Contact, type DeliveryInput, handoverOf, describeHandover, proofRequirement, PARCEL_LABELS, type HandoverKind, type DeliveryProof } from "@shared/deliveries";
 import { categoryMayBook } from "@shared/commercial";
 import type { IStorage } from "../storage";
 import type { Location } from "../rideWorkflowService";
@@ -34,6 +31,8 @@ export interface BookDeliveryInput extends DeliveryInput {
   vehicleType?: string | null;
   notes?: string | null;
   poNumber?: string | null;
+  /** person | reception | unattended (shared/deliveries.ts). */
+  handover?: string | null;
 }
 
 const contact = (c: Contact | undefined | null): Contact | null => {
@@ -80,8 +79,10 @@ export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, 
     fareOverride: fare,
   }, now);
 
+  const handover = handoverOf(input.handover);
   const [job] = await db.update(commercialJobs).set({
     parcelSize: size,
+    handover,
     pickupContact,
     dropContact,
     windowStart: checked.window.start,
@@ -98,6 +99,45 @@ export function deliverySummary(job: { parcelSize?: string | null; dropContact?:
   const parts = [describeParcel(job.parcelSize, job.dropContact?.name)];
   if (job.windowStart && job.windowEnd) parts.push(describeWindow({ start: job.windowStart, end: job.windowEnd }));
   return parts.join(" · ");
+}
+
+export interface DeliveryForDriver {
+  jobId: string;
+  parcelSize: string;
+  parcelLabel: string;
+  handover: HandoverKind;
+  handoverText: string;
+  needsName: boolean;
+  needsPhoto: boolean;
+  pickupContact: Contact | null;
+  dropContact: Contact | null;
+  windowText: string | null;
+  proof: DeliveryProof | null;
+}
+
+/** What the driver's card shows for a parcel: what it is, how it changes hands, who to ask for. Rides get nothing. */
+export async function deliveriesForRides(rideIds: string[]): Promise<Map<string, DeliveryForDriver>> {
+  const out = new Map<string, DeliveryForDriver>();
+  if (rideIds.length === 0) return out;
+  const rows = await db.select().from(commercialJobs).where(inArray(commercialJobs.rideId, rideIds));
+  for (const job of rows) {
+    if (!job.parcelSize) continue;
+    const need = proofRequirement(job.handover);
+    out.set(job.rideId, {
+      jobId: job.id,
+      parcelSize: job.parcelSize,
+      parcelLabel: isParcelSize(job.parcelSize) ? PARCEL_LABELS[job.parcelSize] : "Parcel",
+      handover: handoverOf(job.handover),
+      handoverText: describeHandover(job.handover, job.dropContact?.name),
+      needsName: need.needsName,
+      needsPhoto: need.needsPhoto,
+      pickupContact: (job.pickupContact as Contact | null) ?? null,
+      dropContact: (job.dropContact as Contact | null) ?? null,
+      windowText: job.windowStart && job.windowEnd ? describeWindow({ start: job.windowStart, end: job.windowEnd }) : null,
+      proof: (job.proof as DeliveryProof | null) ?? null,
+    });
+  }
+  return out;
 }
 
 /** Every organization that books deliveries, for the desk's account picker. */

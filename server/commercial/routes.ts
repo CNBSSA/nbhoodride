@@ -225,6 +225,11 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       res.status(202).json({ invited: true, ...inv, emailSent });
     } catch (err) { fail(res, err, "Could not add the member"); }
   });
+  app.post("/api/admin/analytics/pending-proof-sweep", gate, isAdminOrSessionAuth, async (_req, res) => {
+    try { const { sweepPendingProofPhotos } = await import("./badges"); res.json(await sweepPendingProofPhotos()); }
+    catch (err) { fail(res, err, "Could not run the sweep"); }
+  });
+
   app.get("/api/org/:orgId/invitations", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
     try { res.json(await listOpenInvitations(req.orgId)); }
     catch (err) { fail(res, err, "Could not list invitations"); }

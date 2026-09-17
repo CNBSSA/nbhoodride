@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
-import { DEFAULT_WINDOW_HOURS, PARCEL_LABELS, PARCEL_NOTES, PARCEL_SIZES, describeDeliveryTariff, type ParcelSize } from "@shared/deliveries";
+import { DEFAULT_WINDOW_HOURS, PARCEL_LABELS, PARCEL_NOTES, PARCEL_SIZES, describeDeliveryTariff, type ParcelSize, HANDOVER_KINDS, HANDOVER_LABELS, DEFAULT_HANDOVER, type HandoverKind } from "@shared/deliveries";
 
 async function json<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await apiRequest(method, url, body);
@@ -34,6 +34,7 @@ export function BookDeliveryDrawer({ orgId, orgName, onClose }: { orgId: string;
   const [dropName, setDropName] = useState("");
   const [dropPhone, setDropPhone] = useState("");
   const [dropNote, setDropNote] = useState("");
+  const [handover, setHandover] = useState<HandoverKind>(DEFAULT_HANDOVER);
   const [pickupText, setPickupText] = useState("");
   const [pickup, setPickup] = useState<AddressSuggestion | null>(null);
   const [destText, setDestText] = useState("");
@@ -50,6 +51,7 @@ export function BookDeliveryDrawer({ orgId, orgName, onClose }: { orgId: string;
       parcelSize,
       pickupContact: { name: pickupName, phone: pickupPhone },
       dropContact: { name: dropName, phone: dropPhone, note: dropNote },
+      handover,
       pickup: { lat: pickup!.lat, lng: pickup!.lng, address: pickup!.label },
       destination: { lat: dest!.lat, lng: dest!.lng, address: dest!.label },
       readyAt: new Date(readyAt).toISOString(),
@@ -94,6 +96,11 @@ export function BookDeliveryDrawer({ orgId, orgName, onClose }: { orgId: string;
         </div>
         <AddressAutocomplete value={destText} onChange={(v) => { setDestText(v); setDest(null); }} onSelect={(s) => { setDest(s); setDestText(s.label); }} placeholder="Deliver to" data-testid="input-portal-delivery-destination" />
         <Input placeholder="Where to find them: suite, floor, ask at reception…" value={dropNote} onChange={(e) => setDropNote(e.target.value)} data-testid="input-portal-drop-note" />
+        <label className="text-xs font-medium text-muted-foreground">How it changes hands</label>
+        <Select value={handover} onValueChange={(v) => setHandover(v as HandoverKind)}>
+          <SelectTrigger data-testid="select-portal-handover"><SelectValue /></SelectTrigger>
+          <SelectContent>{HANDOVER_KINDS.map((k) => <SelectItem key={k} value={k}>{HANDOVER_LABELS[k]}</SelectItem>)}</SelectContent>
+        </Select>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <label className="text-xs text-muted-foreground">Ready at

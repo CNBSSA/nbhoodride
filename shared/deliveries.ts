@@ -71,6 +71,8 @@ export interface Contact {
 
 export interface DeliveryInput {
   parcelSize: string;
+  /** person | reception | unattended; missing means hand to the person. */
+  handover?: string | null;
   pickupContact: Contact;
   dropContact: Contact;
   /** When the parcel is ready; the window runs from here. */
@@ -88,6 +90,7 @@ const cleanName = (v: unknown) => String((v as any) ?? "").trim().slice(0, 120);
 
 export function validateDelivery(input: DeliveryInput, now: Date = new Date()): { valid: true; window: DeliveryWindow } | { valid: false; error: string } {
   if (!isParcelSize(input.parcelSize)) return { valid: false, error: "Pick what is being sent: envelope, small, medium or large." };
+  if (input.handover !== undefined && input.handover !== null && !isHandoverKind(input.handover)) return { valid: false, error: "How does it change hands? Hand to the person, leave with reception, or leave at the door." };
   if (!cleanName(input.pickupContact?.name)) return { valid: false, error: "Who hands the parcel over? A pickup contact is needed." };
   if (!cleanName(input.dropContact?.name)) return { valid: false, error: "Who receives it? A drop contact is needed." };
   const start = new Date(input.readyAt);
@@ -113,13 +116,86 @@ export function describeParcel(size: string, dropContactName?: string | null): s
   return dropContactName ? `${label} · hand to ${dropContactName}` : label;
 }
 
-export interface DeliveryProof {
-  receivedBy?: string;
-  photoUrl?: string;
-  signedAt?: string;
+
+// ── Handover and proof (2026-09-17) ─────────────────────────────────────────
+//
+// How the parcel changes hands is a field, not a note, because it decides
+// what proof the driver must give. Festus's rule: a photo is required only
+// when nobody signs for it.
+
+export const HANDOVER_KINDS = ["person", "reception", "unattended"] as const;
+export type HandoverKind = (typeof HANDOVER_KINDS)[number];
+export const DEFAULT_HANDOVER: HandoverKind = "person";
+
+export const HANDOVER_LABELS: Record<HandoverKind, string> = {
+  person: "Hand to the named person",
+  reception: "Leave with reception or the front desk",
+  unattended: "Leave at the door (driver takes a photo)",
+};
+
+export const isHandoverKind = (v: unknown): v is HandoverKind => HANDOVER_KINDS.includes(v as HandoverKind);
+export const handoverOf = (v: unknown): HandoverKind => (isHandoverKind(v) ? v : DEFAULT_HANDOVER);
+
+/** The first line on the driver's card. */
+export function describeHandover(handover: unknown, dropName?: string | null): string {
+  switch (handoverOf(handover)) {
+    case "person": return `Hand it to ${dropName || "the named person"} and record their name`;
+    case "reception": return "Leave it with reception or the front desk and record who took it";
+    case "unattended": return "Leave it at the door and take a photo of where you left it";
+  }
 }
 
-/** A delivery is not finished until someone is named as having taken it. */
-export function proofComplete(proof: DeliveryProof | null | undefined): boolean {
-  return !!proof?.receivedBy && !!proof.signedAt;
+export interface ProofRequirement { needsName: boolean; needsPhoto: boolean }
+
+export function proofRequirement(handover: unknown): ProofRequirement {
+  const kind = handoverOf(handover);
+  return { needsName: kind !== "unattended", needsPhoto: kind === "unattended" };
+}
+
+export interface DeliveryProof {
+  receivedBy?: string | null;
+  photoUrl?: string | null;
+  /** The photo is on the driver's phone, not yet uploaded (no signal at the door). */
+  photoPending?: boolean;
+  note?: string | null;
+  signedAt?: string;
+  signedBy?: string;
+  lat?: number | null;
+  lng?: number | null;
+  distanceFromDropMeters?: number | null;
+  /** Recorded further from the drop address than PROOF_DISTANCE_FLAG_METERS. Flagged, never blocked: GPS indoors is unreliable. */
+  farFromDrop?: boolean;
+  /** When the photo reached the server, which can be after the handover (no signal at the door). */
+  photoUploadedAt?: string | null;
+  /** The pending photo never came within a day; ops was paged. */
+  photoNeverArrived?: boolean;
+}
+
+/** A proof recorded this far from the drop address is flagged to the desk. */
+export const PROOF_DISTANCE_FLAG_METERS = 150;
+
+/** Whether a proof meets the handover's requirement; if not, what is missing, in words. */
+export function proofSatisfies(handover: unknown, proof: DeliveryProof | null | undefined): { ok: true } | { ok: false; missing: string } {
+  const need = proofRequirement(handover);
+  if (need.needsName && !String(proof?.receivedBy ?? "").trim()) return { ok: false, missing: "who received it" };
+  if (need.needsPhoto && !proof?.photoUrl && !proof?.photoPending) return { ok: false, missing: "a photo of where it was left" };
+  return { ok: true };
+}
+
+/** A delivery is not finished until its handover is proven the way it was asked for. */
+export function proofComplete(proof: DeliveryProof | null | undefined, handover: unknown = DEFAULT_HANDOVER): boolean {
+  return !!proof?.signedAt && proofSatisfies(handover, proof).ok;
+}
+
+/** What the desk reads on the job row. */
+export function describeProof(proof: DeliveryProof | null | undefined, handover: unknown = DEFAULT_HANDOVER): string | null {
+  if (!proof?.signedAt) return null;
+  const parts: string[] = [];
+  if (proof.receivedBy) parts.push(`received by ${proof.receivedBy}`);
+  else if (handoverOf(handover) === "unattended") parts.push("left at the door");
+  if (proof.photoUrl) parts.push("photo");
+  else if (proof.photoPending) parts.push("photo pending");
+  else if (proof.photoNeverArrived) parts.push("photo never arrived");
+  if (proof.farFromDrop) parts.push("recorded away from the drop address");
+  return parts.join(" · ");
 }

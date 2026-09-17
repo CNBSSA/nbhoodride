@@ -774,6 +774,7 @@ CREATE TABLE IF NOT EXISTS commercial_jobs (
   wait_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00,
   cancellation_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00,
   parcel_size VARCHAR,
+  handover VARCHAR,
   pickup_contact JSONB,
   drop_contact JSONB,
   window_start TIMESTAMP,
@@ -794,6 +795,7 @@ ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS service_date VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS leg VARCHAR NOT NULL DEFAULT 'out';
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS return_of VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS parcel_size VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS handover VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS pickup_contact JSONB;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS drop_contact JSONB;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS window_start TIMESTAMP;

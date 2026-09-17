@@ -14,6 +14,8 @@ import { RideMapView } from "@/components/RideMapView";
 import { SheetPortal } from "@/components/SheetPortal";
 import type { RideMessagePayload } from "@shared/rideChat";
 import { formatPassengerLabel } from "@shared/rideForFriend";
+import { DeliveryProofSheet, type DeliveryForCard } from "@/components/DeliveryProofSheet";
+import { Package } from "lucide-react";
 
 interface ActiveRideCardProps {
   ride: {
@@ -45,6 +47,8 @@ interface ActiveRideCardProps {
       lastName: string;
       rating: string;
     };
+    /** A parcel job: what it is, how it changes hands, who to ask for (server/commercial/deliveries.ts). */
+    delivery?: DeliveryForCard | null;
   };
   incomingRideMessage?: RideMessagePayload | null;
   /** Driver's live position (from the dashboard's geolocation), for the in-app map. */
@@ -53,6 +57,7 @@ interface ActiveRideCardProps {
 
 export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: ActiveRideCardProps) {
   const [isUpdating, setIsUpdating] = useState(false);
+  const [proofOpen, setProofOpen] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { data: fareRates } = useQuery<{ baseFare: number; perMinuteRate: number; perMileRate: number; minimumFare: number }>({
@@ -168,9 +173,14 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
   };
 
   const handleCompleteRide = () => {
+    // A parcel is not delivered until its handover is recorded the way the
+    // desk asked for; the server refuses completion without it. The button
+    // stays the same button — for a parcel it opens the handover sheet first.
+    if (ride.delivery && !proofDone(ride.delivery)) { setProofOpen(true); return; }
     setIsUpdating(true);
     completeRideMutation.mutate(ride.id);
   };
+  const proofDone = (d: DeliveryForCard) => !!d.proof?.signedAt && (!d.needsName || !!d.proof?.receivedBy) && (!d.needsPhoto || !!d.proof?.photoUrl || !!d.proof?.photoPending);
 
   // ── Rider no-show wait timer ──────────────────────────────────────────────
   // Ticks while waiting at pickup; the server enforces the same 5-minute
@@ -370,6 +380,15 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
               In Progress
             </Badge>
 
+            {ride.delivery && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-900 p-3 space-y-1" data-testid={`text-parcel-${ride.id}`}>
+                <p className="text-sm font-medium flex items-center gap-2"><Package className="w-4 h-4" /> {ride.delivery.handoverText}</p>
+                <p className="text-xs text-muted-foreground">{ride.delivery.parcelLabel}{ride.delivery.windowText ? ` · ${ride.delivery.windowText}` : ""}</p>
+                {ride.delivery.dropContact?.note ? <p className="text-xs text-muted-foreground">"{ride.delivery.dropContact.note}"</p> : null}
+                {ride.delivery.dropContact?.phone ? <a className="text-xs underline" href={`tel:${ride.delivery.dropContact.phone}`} data-testid={`link-parcel-call-${ride.id}`}>Call {ride.delivery.dropContact.name}</a> : null}
+              </div>
+            )}
+
             {/* In-app navigation map to the destination (the main driving view). */}
             {ride.destinationLocation?.lat && ride.destinationLocation?.lng && (
               <RideMapView
@@ -463,8 +482,18 @@ export function ActiveRideCard({ ride, incomingRideMessage, driverLocation }: Ac
               data-testid={`button-complete-ride-${ride.id}`}
             >
               <CheckCircle className="w-4 h-4 mr-2" />
-              {isUpdating ? "Completing..." : "Complete Ride"}
+              {isUpdating ? "Completing..." : ride.delivery ? "Confirm delivery" : "Complete Ride"}
             </Button>
+            {ride.delivery && (
+              <DeliveryProofSheet
+                rideId={ride.id}
+                delivery={ride.delivery}
+                driverLocation={driverLocation}
+                open={proofOpen}
+                onClose={() => setProofOpen(false)}
+                onRecorded={() => { setProofOpen(false); setIsUpdating(true); completeRideMutation.mutate(ride.id); }}
+              />
+            )}
           </div>
         );
       default:
