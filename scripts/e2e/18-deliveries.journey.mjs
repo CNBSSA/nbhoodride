@@ -78,10 +78,28 @@ export async function run({ base, db, server }) {
     await driver.req("POST", `/api/driver/rides/${ride.id}/confirm-scheduled`);
     await db.query("UPDATE rides SET scheduled_at = NOW() - interval '5 minutes' WHERE id=$1", [ride.id]);
     check("driver starts the run", (await driver.req("POST", `/api/driver/rides/${ride.id}/start`)).status === 200);
-    const noName = await driver.req("POST", `/api/driver/rides/${ride.id}/proof`, { photoUrl: "https://example.test/parcel.jpg" });
+    // Handover by name (the default): a photo alone is not a signature, an
+    // outside URL is not a photo, and completing without the handover is
+    // refused (2026-09-17). Journey 18b below covers the door.
+    const early = await driver.req("POST", `/api/driver/rides/${ride.id}/complete`, {});
+    check("a parcel cannot be completed before its handover is recorded", early.status === 409 && early.json?.needsProof === true && /who received it/.test(early.json?.message ?? ""), JSON.stringify(early.json));
+    const foreign = await driver.req("POST", `/api/driver/rides/${ride.id}/proof`, { receivedBy: "Ms Rivera", photoUrl: "https://example.test/parcel.jpg" });
+    check("a photo that did not come through PG Ride's upload is refused", foreign.status === 400 && /not a photo PG Ride uploaded/.test(foreign.json?.message ?? ""), JSON.stringify(foreign.json));
+    const noName = await driver.req("POST", `/api/driver/rides/${ride.id}/proof`, { photoUrl: "/api/objects/db-upload/00000000-0000-4000-8000-000000000000" });
     check("a photo alone is not a handover", noName.status === 400 && /who received/i.test(noName.json?.message ?? ""), JSON.stringify(noName.json?.message));
-    const proof = await driver.req("POST", `/api/driver/rides/${ride.id}/proof`, { receivedBy: "Ms Rivera", photoUrl: "https://example.test/parcel.jpg", note: "Left at reception desk" });
-    check("the driver records who took it and the photo", proof.status === 200 && proof.json?.proof?.receivedBy === "Ms Rivera" && proof.json?.proof?.photoUrl === "https://example.test/parcel.jpg", JSON.stringify(proof.json?.proof));
+    // A real photo goes through the same door as driver documents.
+    const up = await driver.req("POST", "/api/objects/upload", {});
+    const objectPath = new URL(up.json?.uploadURL ?? "http://x/").pathname;
+    const put = await driver.req("PUT", objectPath, "not-really-jpeg-bytes", { "Content-Type": "image/jpeg" });
+    check("the driver's phone uploads the photo through PG Ride", up.status === 200 && put.status === 200, `upload=${up.status} put=${put.status} ${objectPath}`);
+    const proof = await driver.req("POST", `/api/driver/rides/${ride.id}/proof`, { receivedBy: "Ms Rivera", photoUrl: up.json?.uploadURL, note: "Left at reception desk", lat: DEST.lat, lng: DEST.lng });
+    check("the proof carries where it was recorded, close to the drop", proof.status === 200 && proof.json?.proof?.photoUrl === objectPath && proof.json?.proof?.farFromDrop === false && Number(proof.json?.proof?.distanceFromDropMeters) < 150, JSON.stringify(proof.json?.proof));
+    const officeDesk = rider; // the rider fixture owns the office account
+    const photo = await officeDesk.text("GET", objectPath);
+    check("the desk that booked the job can see the photo; it belongs to the account", photo.status === 200 && /image\/jpeg/.test(photo.type), `status=${photo.status} type=${photo.type}`);
+    const stranger = new Session(base); await stranger.login(FIXTURES.admin.email);
+    check("an admin can see it too", (await stranger.text("GET", objectPath)).status === 200);
+    check("the driver records who took it and the photo", proof.status === 200 && proof.json?.proof?.receivedBy === "Ms Rivera" && proof.json?.proof?.photoUrl === objectPath, JSON.stringify(proof.json?.proof));
     const { rows: [payBefore] } = await db.query("SELECT COALESCE(virtual_card_balance,'0') AS bal FROM users WHERE id=$1", [FIXTURES.driver.id]);
     check("driver completes it", (await driver.req("POST", `/api/driver/rides/${ride.id}/complete`, {})).status === 200);
 
@@ -109,7 +127,7 @@ export async function run({ base, db, server }) {
     // The requester is the rider of record, so a commercial job is reachable
     // from their own ride history. Before this was caught, that path used the
     // rider fee ladder and tried to take the fee from the requester's wallet.
-    const second = await rider.req("POST", `/api/org/${office.json.id}/deliveries`, { ...body(), readyAt: inMin(120), dropContact: { name: "Mr Chen", phone: "3015550133" } });
+    const second = await rider.req("POST", `/api/org/${office.json.id}/deliveries`, { ...body(), readyAt: inMin(120), dropContact: { name: "Mr Chen", phone: "3015550133" }, handover: "unattended" });
     check("a second delivery is booked", second.status === 201, JSON.stringify(second.json?.message ?? second.status));
     const secondRide = second.json.ride.id; rideIds.push(secondRide);
     const secondJob = second.json.job.id;
@@ -124,6 +142,38 @@ export async function run({ base, db, server }) {
     check("the fee is on the job, so it reaches the statement", onJob.cancellation_fee === "11.00", JSON.stringify(onJob));
     const { rows: [cancelledRide] } = await db.query("SELECT status, stripe_payment_intent_id FROM rides WHERE id=$1", [secondRide]);
     check("the job is cancelled and no card was ever involved", cancelledRide.status === "cancelled" && !cancelledRide.stripe_payment_intent_id, JSON.stringify(cancelledRide));
+    section("At the door, the photo is the signature (Festus: a photo only when nobody signs)");
+    const door = await rider.req("POST", `/api/org/${office.json.id}/deliveries`, { ...body(), readyAt: inMin(100), dropContact: { name: "Mrs Adeyemi", phone: "3015550144", note: "Side door, under the awning" }, handover: "unattended" });
+    check("a leave-at-the-door delivery is booked with its handover recorded", door.status === 201 && door.json?.job?.handover === "unattended", JSON.stringify(door.json?.job?.handover ?? door.json?.message));
+    const doorRide = door.json.ride.id; rideIds.push(doorRide);
+    const doorClaim = await driver.req("POST", `/api/driver/rides/${doorRide}/claim`);
+    check("the driver claims the door delivery", doorClaim.status === 200, JSON.stringify(doorClaim.json?.message ?? doorClaim.status));
+    await driver.req("POST", `/api/driver/rides/${doorRide}/confirm-scheduled`);
+    await db.query("UPDATE rides SET scheduled_at = NOW() - interval '5 minutes' WHERE id=$1", [doorRide]);
+    const card = await driver.req("GET", "/api/driver/active-rides");
+    const onCard = (card.json ?? []).find((r) => r.id === doorRide);
+    check("the driver's card is told how it changes hands and who to ask for", !!onCard?.delivery && onCard.delivery.handover === "unattended" && onCard.delivery.needsPhoto === true && onCard.delivery.needsName === false && /take a photo/.test(onCard.delivery.handoverText) && onCard.delivery.dropContact?.note === "Side door, under the awning", JSON.stringify(onCard?.delivery));
+    const doorStart = await driver.req("POST", `/api/driver/rides/${doorRide}/start`);
+    check("and starts the run", doorStart.status === 200, JSON.stringify(doorStart.json?.message ?? doorStart.status));
+    const noPhoto = await driver.req("POST", `/api/driver/rides/${doorRide}/complete`, {});
+    check("it cannot be completed without a photo of where it was left", noPhoto.status === 409 && /a photo of where it was left/.test(noPhoto.json?.message ?? ""), JSON.stringify(noPhoto.json));
+    const nameOnly = await driver.req("POST", `/api/driver/rides/${doorRide}/proof`, { receivedBy: "the mat" });
+    check("a name alone is not a signature at the door", nameOnly.status === 400 && /needs a photo/.test(nameOnly.json?.message ?? ""), JSON.stringify(nameOnly.json));
+    // No signal at the door: the photo stays on the phone, the job completes
+    // with "photo pending", and the position is recorded — 6 km away here,
+    // which is flagged to the desk and never refused.
+    const pending = await driver.req("POST", `/api/driver/rides/${doorRide}/proof`, { photoPending: true, lat: PICKUP.lat, lng: PICKUP.lng, note: "Left under the awning" });
+    check("a photo still on the phone counts, and the distance is recorded and flagged", pending.status === 200 && pending.json?.proof?.photoPending === true && pending.json?.proof?.farFromDrop === true && Number(pending.json?.proof?.distanceFromDropMeters) > 150, JSON.stringify(pending.json?.proof));
+    check("the delivery completes with the photo pending", (await driver.req("POST", `/api/driver/rides/${doorRide}/complete`, {})).status === 200);
+    const up2 = await driver.req("POST", "/api/objects/upload", {});
+    const path2 = new URL(up2.json?.uploadURL ?? "http://x/").pathname;
+    await driver.req("PUT", path2, "later-jpeg-bytes", { "Content-Type": "image/jpeg" });
+    const followed = await driver.req("POST", `/api/driver/rides/${doorRide}/proof`, { photoUrl: up2.json?.uploadURL });
+    check("when the signal is back the photo follows and 'pending' clears", followed.status === 200 && followed.json?.proof?.photoUrl === path2 && followed.json?.proof?.photoPending === false, JSON.stringify(followed.json?.proof));
+    const deskJobs = await rider.req("GET", `/api/org/${office.json.id}/jobs`);
+    const deskRow = (deskJobs.json ?? []).find((j) => j.rideId === doorRide);
+    check("the desk's job row carries the handover kind, the photo and the far-away flag", deskRow?.handover === "unattended" && deskRow?.proof?.photoUrl === path2 && deskRow?.proof?.farFromDrop === true, JSON.stringify({ handover: deskRow?.handover, proof: deskRow?.proof }));
+
     section("Audit: an SOS names the account so the facility can be rung");
     const third = await rider.req("POST", `/api/org/${office.json.id}/deliveries`, { ...body(), readyAt: inMin(150) });
     const thirdRide = third.json.ride.id; rideIds.push(thirdRide);

@@ -8,6 +8,7 @@ import { DRIVER_PRO_LABELS, type DriverProTier } from "@shared/driverProTier";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
+import { flushProofPhotos } from "@/lib/proofPhoto";
 import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import { useToast } from "@/hooks/use-toast";
 import { useGeolocationWatcher } from "@/hooks/useGeolocation";
@@ -31,6 +32,15 @@ import type { RideMessagePayload } from "@shared/rideChat";
 import { parseRideMessageWsEvent } from "@shared/rideChat";
 
 export default function DriverDashboard() {
+  // A proof photo that could not upload at the door is kept on the phone;
+  // try again whenever the dashboard mounts and every minute after.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = () => { flushProofPhotos().then((n) => { if (!cancelled && n > 0) queryClient.invalidateQueries({ queryKey: ["/api/driver/active-rides"] }); }).catch(() => {}); };
+    tick();
+    const id = setInterval(tick, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
   const [isOnline, setIsOnline] = useState(false);
   // Keep the phone's screen awake while online so requests are never missed
   // because the screen locked mid-shift.

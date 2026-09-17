@@ -169,6 +169,7 @@ try {
   // exact case that shipped broken: the question was visible, the buttons
   // were under the sheet. Seed one live ride per role straight into the DB.
   const rideDb = await connectDb();
+  const stagedRideIds = [];
   const loc = (address, lat, lng) => JSON.stringify({ address, lat, lng });
   const { rows: [riderRide] } = await rideDb.query(
     `INSERT INTO rides (rider_id, status, pickup_location, destination_location, estimated_fare, payment_method)
@@ -192,6 +193,37 @@ try {
     await assertPrimary(page, "Rider cancel dialog (keep)", "btn-cancel-dialog-keep");
     await page.tap('[data-testid="btn-cancel-dialog-keep"]');
 
+    section("Driver: the handover sheet over an in-progress parcel");
+    // A parcel job for the seeded business account, on the road with the
+    // driver. "Confirm delivery" opens the handover sheet; its confirm button
+    // must be a real tap target on a phone (2026-09-17).
+    const { rows: [parcelRide] } = await rideDb.query(
+      `INSERT INTO rides (rider_id, driver_id, status, pickup_location, destination_location, estimated_fare, payment_method, ride_type, passenger_name, started_at)
+       VALUES ($1, $2, 'in_progress', $3, $4, 9.00, 'invoice', 'commercial', 'Ms Rivera', NOW()) RETURNING id`,
+      [FIXTURES.rider.id, FIXTURES.driver.id, loc("Tulip Tree Dr, Lake Arbor, MD", 38.9073, -76.7781), loc("National Harbor, MD", 38.7823, -77.0166)]);
+    await rideDb.query(
+      `INSERT INTO commercial_jobs (ride_id, organization_id, requester_id, job_number, category, parcel_size, handover, drop_contact, pickup_contact, window_start, window_end)
+       VALUES ($1, 'e2e-biz', $2, 990001, 'business', 'small', 'unattended', $3, $4, NOW(), NOW() + interval '2 hours')`,
+      [parcelRide.id, FIXTURES.rider.id, JSON.stringify({ name: "Ms Rivera", phone: "3015550122", note: "Side door, under the awning" }), JSON.stringify({ name: "Front desk" })]).catch((e) => console.log("  (parcel job seed) " + String(e?.message ?? e).split("\n")[0]));
+    stagedRideIds.push(parcelRide.id);
+    try {
+      page = await ctx.newPage();
+      await loginAs(page, server.base, FIXTURES.driver.email);
+      await page.evaluate(() => localStorage.setItem("pgride:lastMode", "driver"));
+      await page.goto(server.base + "/", { waitUntil: "domcontentloaded" });
+      await page.waitForSelector(`[data-testid="text-parcel-${parcelRide.id}"]`, { timeout: 20000 });
+      check("Driver: the parcel card says how it changes hands", /take a photo/.test(await page.locator(`[data-testid="text-parcel-${parcelRide.id}"]`).innerText()));
+      await page.tap(`[data-testid="button-complete-ride-${parcelRide.id}"]`);
+      await page.waitForSelector('[data-testid="delivery-proof-sheet"]', { timeout: 10000 });
+      await assertModalOnTop(page, "Handover sheet", "delivery-proof-sheet");
+      await assertPrimary(page, "Handover sheet", `button-proof-confirm-${parcelRide.id}`);
+      await assertPrimary(page, "Handover sheet (not yet)", `button-proof-cancel-${parcelRide.id}`);
+      check("Driver: at the door, confirm waits for the photo", await page.locator(`[data-testid="button-proof-confirm-${parcelRide.id}"]`).isDisabled());
+      await page.tap(`[data-testid="button-proof-cancel-${parcelRide.id}"]`);
+    } catch (e) {
+      check("Driver: handover sheet audit ran", false, String(e?.message ?? e).split("\n")[0]);
+    }
+
     section("Driver: cancel-ride dialog over the active ride card");
     page = await ctx.newPage();
     await loginAs(page, server.base, FIXTURES.driver.email);
@@ -204,7 +236,8 @@ try {
     await assertPrimary(page, "Driver cancel dialog (keep)", "btn-driver-cancel-keep");
     await page.tap('[data-testid="btn-driver-cancel-keep"]');
   } finally {
-    await rideDb.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [[riderRide.id, driverRide.id]]).catch(() => {});
+    await rideDb.query("DELETE FROM commercial_jobs WHERE ride_id = ANY($1::varchar[])", [stagedRideIds]).catch(() => {});
+    await rideDb.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [[riderRide.id, driverRide.id, ...stagedRideIds]]).catch(() => {});
     await rideDb.end();
   }
 

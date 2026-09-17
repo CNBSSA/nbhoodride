@@ -1433,7 +1433,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!obj) return res.status(404).json({ message: "Not found" });
       const user = await storage.getUser(userId);
       if (obj.ownerUserId !== userId && !user?.isAdmin && !user?.isSuperAdmin) {
-        return res.status(403).json({ message: "Not allowed" });
+        // A proof-of-delivery photo belongs to the organization that booked
+        // the job: its members may see it (2026-09-17).
+        const { userMaySeeProofPhoto } = await import("./commercial/badges");
+        if (!(await userMaySeeProofPhoto(userId, obj.id).catch(() => false))) {
+          return res.status(403).json({ message: "Not allowed" });
+        }
       }
       res.set("Content-Type", obj.contentType);
       res.set("Cache-Control", "private, max-age=3600");
@@ -3203,6 +3208,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
             : "Tips on card rides are added by the rider, not entered by the driver.",
         });
       }
+      // A parcel is not delivered until its handover is proven the way the
+      // desk asked for (shared/deliveries.ts). A ride with a person in it
+      // completes as it always did.
+      if (preCheck?.paymentMethod === 'invoice' && preCheck.status !== 'completed') {
+        const { proofGateForRide } = await import("./commercial/badges");
+        const gate = await proofGateForRide(rideId).catch(() => null);
+        if (gate) return res.status(409).json({ message: gate, needsProof: true });
+      }
       const actualFare: number | undefined = undefined;
       const tipAmount = parsed.tipAmount;
 
@@ -3410,6 +3423,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const rides = await storage.getActiveRidesForDriver(userId);
+      // A parcel job carries what the driver's card needs: what it is, how
+      // it changes hands, who to ask for (2026-09-17). Rides get nothing.
+      const invoiced = rides.filter((r: any) => r.paymentMethod === 'invoice').map((r: any) => r.id);
+      if (invoiced.length > 0) {
+        const { deliveriesForRides } = await import("./commercial/deliveries");
+        const details = await deliveriesForRides(invoiced).catch(() => new Map());
+        return res.json(rides.map((r: any) => ({ ...r, delivery: details.get(r.id) ?? null })));
+      }
       res.json(rides);
     } catch (error) {
       console.error("Error fetching active rides:", error);

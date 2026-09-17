@@ -158,6 +158,8 @@ export interface JobRow {
   notes: string | null;
   driverName: string | null;
   proof: Record<string, unknown> | null;
+  /** person | reception | unattended for a parcel; null for a ride. */
+  handover: string | null;
   /** For a delivery: what it is, who takes it and the window, in one line. */
   delivery: string | null;
   standingOrderId: string | null;
@@ -216,6 +218,7 @@ export async function listJobs(organizationId: string, opts: ListJobsOptions = {
       notes: job.notes,
       driverName: driverFirst ? `${driverFirst} ${(driverLast ?? "").charAt(0)}${driverLast ? "." : ""}`.trim() : null,
       proof: (job.proof ?? null) as Record<string, unknown> | null,
+      handover: job.parcelSize ? (job.handover ?? "person") : null,
       delivery: deliverySummary(job),
       standingOrderId: job.standingOrderId,
       serviceDate: job.serviceDate,

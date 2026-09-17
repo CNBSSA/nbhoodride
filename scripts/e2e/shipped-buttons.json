@@ -121,6 +121,8 @@
     "button-preset-*",
     "button-preset-max",
     "button-prev-card",
+    "button-proof-cancel-*",
+    "button-proof-confirm-*",
     "button-pwa-install-fab",
     "button-quick-login-*",
     "button-quick-rebook",
