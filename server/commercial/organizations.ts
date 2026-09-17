@@ -93,7 +93,7 @@ export async function listOrganizations(): Promise<OrganizationSummary[]> {
     facilityFee: r.facility_fee, contactName: r.contact_name, contactEmail: r.contact_email, contactPhone: r.contact_phone,
     address: r.address, notes: r.notes, stripeCustomerId: r.stripe_customer_id, terms: r.terms,
     defaultPaymentMethodId: r.default_payment_method_id, defaultPaymentMethodKind: r.default_payment_method_kind,
-    defaultPayer: r.default_payer ?? "organization",
+    askRecipientByDefault: !!r.ask_recipient_by_default,
     createdAt: r.created_at, updatedAt: r.updated_at,
     memberCount: Number(r.member_count ?? 0), jobCount: Number(r.job_count ?? 0),
   }));
@@ -104,13 +104,13 @@ export async function getOrganization(id: string): Promise<Organization | undefi
   return row;
 }
 
-export async function updateOrganization(id: string, patch: Partial<OrganizationInput> & { status?: string; billingMode?: string; terms?: unknown; defaultPayer?: string }): Promise<Organization> {
+export async function updateOrganization(id: string, patch: Partial<OrganizationInput> & { status?: string; billingMode?: string; terms?: unknown; askRecipientByDefault?: unknown }): Promise<Organization> {
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (patch.name !== undefined) { const n = clean(patch.name, 120); if (!n) throw new CommercialError("The organization needs a name."); set.name = n; }
   if (patch.category !== undefined) { if (!isCategory(patch.category)) throw new CommercialError("Category must be medical, business or food."); set.category = patch.category; }
   if (patch.status !== undefined) { if (!["active", "paused"].includes(patch.status)) throw new CommercialError("Status must be active or paused."); set.status = patch.status; }
   if (patch.billingMode !== undefined) { if (!["weekly_debit", "net_terms"].includes(patch.billingMode)) throw new CommercialError("Billing must be weekly_debit or net_terms."); set.billingMode = patch.billingMode; }
-  if (patch.defaultPayer !== undefined) { if (!["organization", "recipient"].includes(patch.defaultPayer)) throw new CommercialError("The default payer must be organization or recipient."); set.defaultPayer = patch.defaultPayer; }
+  if (patch.askRecipientByDefault !== undefined) { if (typeof patch.askRecipientByDefault !== "boolean") throw new CommercialError("Ask the recipient by default must be yes or no."); set.askRecipientByDefault = patch.askRecipientByDefault; }
   if (patch.facilityFee !== undefined && patch.facilityFee !== null) { const f = Number(patch.facilityFee); if (!Number.isFinite(f) || f < 0 || f > 100) throw new CommercialError("Facility fee must be between $0 and $100."); set.facilityFee = f.toFixed(2); }
   if (patch.contactName !== undefined) set.contactName = clean(patch.contactName, 120);
   if (patch.contactEmail !== undefined) set.contactEmail = clean(patch.contactEmail, 200)?.toLowerCase() ?? null;

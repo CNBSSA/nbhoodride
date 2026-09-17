@@ -19,7 +19,6 @@ import { commercialJobs, organizations } from "@shared/schema";
 import { estimateRoute } from "@shared/routeEstimate";
 import { SIZE_VEHICLE_HINT, deliveryFare, describeParcel, describeWindow, isParcelSize, validateDelivery, type Contact, type DeliveryInput, handoverOf, describeHandover, proofRequirement, PARCEL_LABELS, type HandoverKind, type DeliveryProof } from "@shared/deliveries";
 import { categoryMayBook } from "@shared/commercial";
-import { payerOf } from "@shared/recipientPay";
 import type { IStorage } from "../storage";
 import type { Location } from "../rideWorkflowService";
 import { CommercialError, getOrganization } from "./organizations";
@@ -35,8 +34,8 @@ export interface BookDeliveryInput extends DeliveryInput {
   poNumber?: string | null;
   /** person | reception | unattended (shared/deliveries.ts). */
   handover?: string | null;
-  /** organization | recipient (shared/recipientPay.ts). The recipient needs a phone to be texted the link. */
-  payer?: string | null;
+  /** Ask the recipient to approve the delivery fee before it is sent (shared/recipientApproval.ts). Needs the recipient's phone. */
+  askRecipient?: boolean | null;
 }
 
 const contact = (c: Contact | undefined | null): Contact | null => {
@@ -60,8 +59,8 @@ export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, 
   const pickupContact = contact(input.pickupContact);
   const dropContact = contact(input.dropContact);
   if (!pickupContact || !dropContact) throw new CommercialError("Both ends of the handover need a name.");
-  const payer = payerOf(input.payer);
-  if (payer === "recipient" && !dropContact.phone) throw new CommercialError("The recipient's phone number is needed when they pay for the delivery: that is where the pay link goes.");
+  const askRecipient = input.askRecipient === true;
+  if (askRecipient && !dropContact.phone) throw new CommercialError("The recipient's phone number is needed to ask them: that is where the link goes.");
 
   const size = String(input.parcelSize);
   const vehicleType = input.vehicleType ?? (isParcelSize(size) ? SIZE_VEHICLE_HINT[size] : "standard");
@@ -86,12 +85,12 @@ export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, 
   }, now);
 
   const handover = handoverOf(input.handover);
-  // Recipient pays: the hold is written with the parcel, in one update, so a
-  // job can never exist billed to the account while the desk was told the
-  // recipient pays (post-implementation audit, 2026-09-17). The text goes
-  // out afterwards (server/commercial/recipientPay.ts).
-  const recipientFields = payer === "recipient"
-    ? { payer: "recipient", recipientPaymentStatus: "awaiting", recipientPayToken: randomBytes(24).toString("hex"), recipientFee: fare.toFixed(2) }
+  // Ask the recipient: the hold is written with the parcel, in one update,
+  // so a job never exists open to drivers while the desk was told the
+  // recipient would be asked. The text goes out afterwards
+  // (server/commercial/recipientApproval.ts).
+  const recipientFields = askRecipient
+    ? { recipientApproval: "awaiting", recipientApprovalToken: randomBytes(24).toString("hex"), recipientFee: fare.toFixed(2) }
     : {};
   const [job] = await db.update(commercialJobs).set({
     parcelSize: size,

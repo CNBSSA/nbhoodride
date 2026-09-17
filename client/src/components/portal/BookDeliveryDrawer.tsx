@@ -16,7 +16,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { DEFAULT_WINDOW_HOURS, PARCEL_LABELS, PARCEL_NOTES, PARCEL_SIZES, describeDeliveryTariff, type ParcelSize, HANDOVER_KINDS, HANDOVER_LABELS, DEFAULT_HANDOVER, type HandoverKind } from "@shared/deliveries";
-import { payerOf, type Payer } from "@shared/recipientPay";
 
 async function json<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await apiRequest(method, url, body);
@@ -26,7 +25,7 @@ async function json<T>(method: string, url: string, body?: unknown): Promise<T> 
 }
 const money = (n: string | number) => `$${Number(n ?? 0).toFixed(2)}`;
 
-export function BookDeliveryDrawer({ orgId, orgName, defaultPayer = "organization", onClose }: { orgId: string; orgName: string; defaultPayer?: string; onClose: () => void }) {
+export function BookDeliveryDrawer({ orgId, orgName, askRecipientByDefault = false, onClose }: { orgId: string; orgName: string; askRecipientByDefault?: boolean; onClose: () => void }) {
   const { toast } = useToast();
   const first = useRef<HTMLInputElement>(null);
   const [parcelSize, setParcelSize] = useState<ParcelSize>("small");
@@ -36,7 +35,7 @@ export function BookDeliveryDrawer({ orgId, orgName, defaultPayer = "organizatio
   const [dropPhone, setDropPhone] = useState("");
   const [dropNote, setDropNote] = useState("");
   const [handover, setHandover] = useState<HandoverKind>(DEFAULT_HANDOVER);
-  const [payer, setPayer] = useState<Payer>(payerOf(defaultPayer));
+  const [askRecipient, setAskRecipient] = useState<boolean>(askRecipientByDefault);
   const [pickupText, setPickupText] = useState("");
   const [pickup, setPickup] = useState<AddressSuggestion | null>(null);
   const [destText, setDestText] = useState("");
@@ -47,14 +46,14 @@ export function BookDeliveryDrawer({ orgId, orgName, defaultPayer = "organizatio
   const [notes, setNotes] = useState("");
   useEffect(() => { first.current?.focus(); }, []);
 
-  const ready = !!(pickupName.trim() && dropName.trim() && pickup && dest && readyAt) && (payer !== "recipient" || dropPhone.trim().length > 0);
+  const ready = !!(pickupName.trim() && dropName.trim() && pickup && dest && readyAt) && (!askRecipient || dropPhone.trim().length > 0);
   const book = useMutation({
-    mutationFn: () => json<{ job: { jobLabel: string }; ride: { estimatedFare: string }; recipientPay: { link: string; textSent: boolean } | null }>("POST", `/api/org/${orgId}/deliveries`, {
+    mutationFn: () => json<{ job: { jobLabel: string }; ride: { estimatedFare: string }; recipientApproval: { link: string; textSent: boolean } | null }>("POST", `/api/org/${orgId}/deliveries`, {
       parcelSize,
       pickupContact: { name: pickupName, phone: pickupPhone },
       dropContact: { name: dropName, phone: dropPhone, note: dropNote },
       handover,
-      payer,
+      askRecipient,
       pickup: { lat: pickup!.lat, lng: pickup!.lng, address: pickup!.label },
       destination: { lat: dest!.lat, lng: dest!.lng, address: dest!.label },
       readyAt: new Date(readyAt).toISOString(),
@@ -63,8 +62,8 @@ export function BookDeliveryDrawer({ orgId, orgName, defaultPayer = "organizatio
     }),
     onSuccess: (r) => {
       queryClient.invalidateQueries({ queryKey: ["/api/org", orgId, "jobs"] });
-      if (r.recipientPay) {
-        toast({ title: `Booked ${r.job.jobLabel} — waiting for the recipient`, description: r.recipientPay.textSent ? `${money(r.ride.estimatedFare)} to be paid by the recipient. They have a text with the link; the job goes to drivers once paid.` : `${money(r.ride.estimatedFare)} to be paid by the recipient. Texts are not set up: copy the pay link from the job row and send it yourself.` });
+      if (r.recipientApproval) {
+        toast({ title: `Booked ${r.job.jobLabel} — waiting for the recipient's approval`, description: r.recipientApproval.textSent ? `${money(r.ride.estimatedFare)}, billed to ${orgName}. The recipient has a text with the link; the job goes to drivers once they approve, or when you send it anyway.` : `${money(r.ride.estimatedFare)}, billed to ${orgName}. Texts are not set up: copy the approval link from the job row and send it yourself.` });
       } else {
         toast({ title: `Booked ${r.job.jobLabel}`, description: `${money(r.ride.estimatedFare)}, billed to ${orgName}.` });
       }
@@ -103,15 +102,8 @@ export function BookDeliveryDrawer({ orgId, orgName, defaultPayer = "organizatio
         </div>
         <AddressAutocomplete value={destText} onChange={(v) => { setDestText(v); setDest(null); }} onSelect={(s) => { setDest(s); setDestText(s.label); }} placeholder="Deliver to" data-testid="input-portal-delivery-destination" />
         <Input placeholder="Where to find them: suite, floor, ask at reception…" value={dropNote} onChange={(e) => setDropNote(e.target.value)} data-testid="input-portal-drop-note" />
-        <label className="text-xs font-medium text-muted-foreground">Who pays the delivery fee</label>
-        <Select value={payer} onValueChange={(v) => setPayer(payerOf(v))}>
-          <SelectTrigger data-testid="select-portal-payer"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="organization">Bill my account</SelectItem>
-            <SelectItem value="recipient">The recipient pays (texted a link; sent once paid)</SelectItem>
-          </SelectContent>
-        </Select>
-        {payer === "recipient" && !dropPhone.trim() ? <p className="text-xs text-amber-700" data-testid="text-portal-payer-needs-phone">The recipient's phone is needed: that is where the pay link goes.</p> : null}
+        <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={askRecipient} onChange={(e) => setAskRecipient(e.target.checked)} data-testid="checkbox-portal-ask-recipient" /><span>Ask the recipient to approve the delivery fee first<span className="block text-xs text-muted-foreground">They are texted the fee and a link; the job goes to drivers once they approve, or when you send it anyway. The fee stays on your account either way.</span></span></label>
+        {askRecipient && !dropPhone.trim() ? <p className="text-xs text-amber-700" data-testid="text-portal-ask-needs-phone">The recipient's phone is needed: that is where the link goes.</p> : null}
         <label className="text-xs font-medium text-muted-foreground">How it changes hands</label>
         <Select value={handover} onValueChange={(v) => setHandover(v as HandoverKind)}>
           <SelectTrigger data-testid="select-portal-handover"><SelectValue /></SelectTrigger>
