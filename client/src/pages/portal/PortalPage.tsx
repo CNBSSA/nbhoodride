@@ -27,16 +27,16 @@ import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { JobsMap } from "@/components/portal/JobsMap";
 import { StandingOrdersView } from "@/components/portal/StandingOrdersView";
 import { BillingView } from "@/components/portal/BillingView";
-import { BookDeliveryDrawer } from "@/components/portal/BookDeliveryDrawer";
+import { BookDeliveryDrawer, type DeliveryPrefill } from "@/components/portal/BookDeliveryDrawer";
 import { describeProof, type DeliveryProof } from "@shared/deliveries";
 import { describePayer } from "@shared/recipientPay";
 import { forgetBusinessHome } from "@/lib/businessHome";
 import { CATEGORY_LABELS, ORG_ROLES, canBook, canManageMembers, canSeeStatement, categoryMayBook, currentMonthKey, formatJobNumber, type CommercialCategory, type OrgRole } from "@shared/commercial";
 import { VEHICLE_TYPES, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 import { BRAND } from "@shared/branding";
-import { CalendarDays, ListChecks, Receipt, Users, Plus, Download, Printer, ArrowLeft, Repeat, Landmark, Package, Car } from "lucide-react";
+import { CalendarDays, ListChecks, Receipt, Users, Plus, Download, Printer, ArrowLeft, Repeat, Landmark, Package, Car, BookUser } from "lucide-react";
 
-interface Org { id: string; name: string; category: CommercialCategory; status: string; facilityFee: string; billingMode: string; defaultPayer?: string }
+interface Org { id: string; name: string; category: CommercialCategory; status: string; facilityFee: string; billingMode: string; defaultPayer?: string; address?: { lat?: number; lng?: number; address?: string } | null }
 interface Membership { organization: Org; role: OrgRole }
 interface JobRow {
   id: string; jobNumber: number; rideId: string; status: string; scheduledAt: string | null; createdAt: string; completedAt: string | null;
@@ -44,12 +44,13 @@ interface JobRow {
   vehicleType: string | null; estimatedFare: string | null; actualFare: string | null; facilityFee: string; waitFee: string; cancellationFee: string;
   poNumber: string | null; notes: string | null; driverName: string | null; total: number; proof?: DeliveryProof | null; delivery?: string | null; handover?: string | null;
   payer?: string; recipientPaymentStatus?: string | null; recipientPayToken?: string | null; recipientFee?: string | null;
+  parcel?: { parcelSize: string; handover: string; pickupContact: { name?: string; phone?: string | null } | null; dropContact: { name?: string; phone?: string | null; note?: string | null } | null } | null;
 }
 interface Member { userId: string; role: OrgRole; firstName: string | null; lastName: string | null; email: string | null }
 interface StatementLine { jobNumber: number; at: string; passenger: string; from: string; to: string; status: string; fare: string | null; facilityFee: string; waitFee: string; cancellationFee: string }
 interface Statement { window: { label: string; monthKey: string }; lines: StatementLine[]; totals: { completed: number; cancelled: number; fares: number; facilityFees: number; waitFees: number; cancellationFees: number; total: number } }
 
-type View = "today" | "jobs" | "standing" | "statement" | "billing" | "people";
+type View = "today" | "jobs" | "standing" | "recipients" | "statement" | "billing" | "people";
 
 const money = (n: number | string | null | undefined) => `$${Number(n ?? 0).toFixed(2)}`;
 const eastern = (iso: string | null | undefined, opts: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) =>
@@ -78,6 +79,8 @@ export default function PortalPage() {
   const [view, setView] = useState<View>("today");
   const [booking, setBooking] = useState(false);
   const [sendingParcel, setSendingParcel] = useState(false);
+  const [parcelPrefill, setParcelPrefill] = useState<DeliveryPrefill | null>(null);
+  const sendAgain = (pre: DeliveryPrefill) => { setParcelPrefill(pre); setSendingParcel(true); };
   const active = useMemo(() => (memberships ?? []).find((m) => m.organization.id === (orgId ?? memberships?.[0]?.organization.id)) ?? null, [memberships, orgId]);
   const { canInstall, install } = usePwaInstallPrompt();
   const { toast } = useToast();
@@ -138,6 +141,7 @@ export default function PortalPage() {
     { id: "today", label: "Next 48 hours", icon: CalendarDays, show: true },
     { id: "jobs", label: "All jobs", icon: ListChecks, show: true },
     { id: "standing", label: "Standing orders", icon: Repeat, show: true },
+    { id: "recipients", label: "Recipients", icon: BookUser, show: parcels && canBook(role) },
     { id: "statement", label: "Statement", icon: Receipt, show: canSeeStatement(role) },
     { id: "billing", label: "Billing", icon: Landmark, show: canSeeStatement(role) },
     { id: "people", label: "People", icon: Users, show: canManageMembers(role) },
@@ -204,7 +208,8 @@ export default function PortalPage() {
 
         <main className="p-4 md:p-6 space-y-6 min-w-0">
           {view === "today" && <TodayBoard org={org} onBook={() => setBooking(true)} canBook={canBook(role)} />}
-          {view === "jobs" && <JobsList org={org} canCancel={canBook(role)} />}
+          {view === "jobs" && <JobsList org={org} canCancel={canBook(role)} onSendAgain={parcels && canBook(role) ? sendAgain : undefined} />}
+          {view === "recipients" && parcels && canBook(role) && <RecipientsView org={org} onSend={sendAgain} />}
           {view === "standing" && <StandingOrdersView orgId={org.id} canBook={canBook(role)} />}
           {view === "statement" && canSeeStatement(role) && <StatementView org={org} />}
           {view === "billing" && canSeeStatement(role) && <BillingView orgId={org.id} />}
@@ -213,7 +218,7 @@ export default function PortalPage() {
       </div>
 
       {booking && <BookJobDrawer org={org} onClose={() => setBooking(false)} />}
-      {sendingParcel && parcels && <BookDeliveryDrawer orgId={org.id} orgName={org.name} defaultPayer={org.defaultPayer} onClose={() => setSendingParcel(false)} />}
+      {sendingParcel && parcels && <BookDeliveryDrawer orgId={org.id} orgName={org.name} defaultPayer={org.defaultPayer} orgAddress={org.address} prefill={parcelPrefill} onClose={() => { setSendingParcel(false); setParcelPrefill(null); }} />}
     </div>
   );
 }
@@ -280,7 +285,7 @@ const RANGES: Array<{ id: string; label: string; from: () => Date; to: () => Dat
   { id: "month", label: "Past 30 days", from: () => new Date(Date.now() - 30 * 86_400_000), to: () => new Date(Date.now() + 30 * 86_400_000) },
 ];
 
-function JobsList({ org, canCancel }: { org: Org; canCancel: boolean }) {
+function JobsList({ org, canCancel, onSendAgain }: { org: Org; canCancel: boolean; onSendAgain?: (pre: DeliveryPrefill) => void }) {
   const { toast } = useToast();
   const [rangeId, setRangeId] = useState("next7");
   const range = RANGES.find((r) => r.id === rangeId) ?? RANGES[0];
@@ -332,6 +337,9 @@ function JobsList({ org, canCancel }: { org: Org; canCancel: boolean }) {
                   <td className="px-3 py-2">{j.driverName ?? "—"}{describeProof(j.proof, j.handover) ? <div className={`text-xs ${j.proof?.farFromDrop ? "text-amber-700" : "text-muted-foreground"}`} data-testid={`text-portal-proof-${j.id}`}>{describeProof(j.proof, j.handover)}{j.proof?.photoUrl ? <> · <a href={j.proof.photoUrl} target="_blank" rel="noreferrer" className="underline" data-testid={`link-portal-proof-photo-${j.id}`}>see photo</a></> : null}</div> : null}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{money(j.total)}</td>
                   <td className="px-3 py-2 text-right">
+                    {onSendAgain && j.parcel && (
+                      <Button variant="ghost" size="sm" onClick={() => onSendAgain({ parcelSize: j.parcel!.parcelSize, handover: j.parcel!.handover, payer: j.payer, pickupContact: j.parcel!.pickupContact, dropContact: j.parcel!.dropContact, pickup: j.pickup, destination: j.destination })} data-testid={`button-portal-send-again-${j.id}`}>Send again</Button>
+                    )}
                     {canCancel && j.payer === "recipient" && (j.recipientPaymentStatus === "awaiting" || j.recipientPaymentStatus === "declined") && j.status === "pending" && (
                       <span className="inline-flex flex-wrap gap-1">
                         {j.recipientPayToken && <Button variant="ghost" size="sm" onClick={() => copyPayLink(j.recipientPayToken!)} data-testid={`button-portal-copy-pay-link-${j.id}`}>Copy pay link</Button>}
@@ -349,6 +357,36 @@ function JobsList({ org, canCancel }: { org: Org; canCancel: boolean }) {
           </table>
         )}
       </div>
+    </section>
+  );
+}
+
+interface SavedRecipientRow { id: string; name: string; phone: string | null; address: { lat: number; lng: number; address: string }; handover: string; note: string | null }
+
+function RecipientsView({ org, onSend }: { org: Org; onSend: (pre: DeliveryPrefill) => void }) {
+  const { toast } = useToast();
+  const { data: recipients = [], isLoading } = useQuery<SavedRecipientRow[]>({ queryKey: ["/api/org", org.id, "recipients"], queryFn: () => json("GET", `/api/org/${org.id}/recipients`) });
+  const remove = useMutation({
+    mutationFn: (id: string) => json("DELETE", `/api/org/${org.id}/recipients/${id}`),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/org", org.id, "recipients"] }); toast({ title: "Recipient removed", description: "Past deliveries keep their details." }); },
+    onError: (e: Error) => toast({ title: "Could not remove them", description: e.message, variant: "destructive" }),
+  });
+  return (
+    <section className="space-y-4 max-w-3xl" data-testid="portal-recipients">
+      <div><h1 className="text-xl font-semibold">Recipients</h1><p className="text-sm text-muted-foreground">The people you send to again and again. Tick "Remember this recipient" when you book a parcel and they appear here; pick them from the parcel form next time, or press Send.</p></div>
+      {isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : recipients.length === 0 ? <p className="text-sm text-muted-foreground" data-testid="portal-recipients-empty">Nobody saved yet.</p> : (
+        <ul className="rounded-lg border bg-card divide-y text-sm">
+          {recipients.map((r) => (
+            <li key={r.id} className="flex items-center justify-between gap-2 px-3 py-2" data-testid={`row-portal-recipient-${r.id}`}>
+              <span className="min-w-0"><span className="font-medium">{r.name}</span>{r.phone ? <span className="text-muted-foreground"> · {r.phone}</span> : null}<div className="truncate text-muted-foreground">{r.address.address}{r.note ? ` · ${r.note}` : ""}</div></span>
+              <span className="flex items-center gap-1 shrink-0">
+                <Button size="sm" onClick={() => onSend({ dropContact: { name: r.name, phone: r.phone, note: r.note }, destination: r.address, handover: r.handover })} disabled={org.status !== "active"} data-testid={`button-portal-send-to-recipient-${r.id}`}>Send</Button>
+                <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Remove ${r.name} from the book? Past deliveries keep their details.`)) remove.mutate(r.id); }} data-testid={`button-portal-remove-recipient-${r.id}`}>Remove</Button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

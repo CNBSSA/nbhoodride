@@ -28,6 +28,7 @@ import { sendOrganizationInviteEmail } from "../emailService";
 import { resolveAppUrl } from "../appUrl";
 import { INVITATION_DAYS } from "@shared/invitations";
 import { bookDelivery } from "./deliveries";
+import { archiveRecipient, listRecipients, saveRecipient } from "./recipients";
 import { confirmRecipientPayment, createRecipientIntent, declineRecipientPay, recipientView, resendPayLink, setReleaseHook, startRecipientPay, switchPayerToOrganization } from "./recipientPay";
 import { isPayer } from "@shared/recipientPay";
 import { buildStatement, statementToCsv, statementToHtml } from "./statements";
@@ -249,6 +250,20 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       res.json({ defaultPayer: org.defaultPayer });
     } catch (err) { fail(res, err, "Could not save the setting"); }
   });
+  // ── The recipient book (shared/recipients.ts) ──
+  app.get("/api/org/:orgId/recipients", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.json(await listRecipients(req.orgId)); }
+    catch (err) { fail(res, err, "Could not list recipients"); }
+  });
+  app.post("/api/org/:orgId/recipients", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.status(201).json(await saveRecipient(req.orgId, req.body ?? {}, userIdOf(req)!)); }
+    catch (err) { fail(res, err, "Could not save the recipient"); }
+  });
+  app.delete("/api/org/:orgId/recipients/:id", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.json({ removed: await archiveRecipient(req.orgId, String(req.params.id)) }); }
+    catch (err) { fail(res, err, "Could not remove the recipient"); }
+  });
+
   app.post("/api/admin/analytics/recipient-pay-sweep", gate, isAdminOrSessionAuth, async (req: any, res) => {
     try { const { sweepRecipientPay } = await import("./recipientPay"); res.json(await sweepRecipientPay(new Date(), resolveAppUrl(`${req.protocol}://${req.get("host")}`))); }
     catch (err) { fail(res, err, "Could not run the sweep"); }
@@ -325,6 +340,14 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
     try {
       const booked = await bookDelivery(storage, { ...(req.body ?? {}), organizationId: req.orgId, requesterId: userIdOf(req)! });
       const org = await getOrganization(req.orgId);
+      // "Remember this recipient": the book fills itself from the booking.
+      // Best effort — a book entry never blocks a delivery.
+      if (req.body?.rememberRecipient === true) {
+        saveRecipient(req.orgId, {
+          name: booked.job.dropContact?.name, phone: booked.job.dropContact?.phone, note: booked.job.dropContact?.note,
+          address: booked.ride.destinationLocation as any, handover: booked.job.handover,
+        }, userIdOf(req)!).catch((err) => console.log(`[recipients] not remembered: ${err?.message ?? err}`));
+      }
       // Recipient pays: the job is HELD — not offered to any driver — until
       // the recipient has paid from the link they are texted
       // (shared/recipientPay.ts). Otherwise drivers hear about it now.

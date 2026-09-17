@@ -976,6 +976,27 @@ export const organizationInvitations = pgTable("organization_invitations", {
 ]);
 export type OrganizationInvitation = typeof organizationInvitations.$inferSelect;
 
+/** The recipient book: people an organization sends parcels to again and again (shared/recipients.ts). */
+export const organizationRecipients = pgTable("organization_recipients", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  name: varchar("name").notNull(),
+  /** Ten digits, or null. */
+  phone: varchar("phone"),
+  address: jsonb("address").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  /** person | reception | unattended (shared/deliveries.ts). */
+  handover: varchar("handover").notNull().default("person"),
+  note: text("note"),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  archivedAt: timestamp("archived_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_organization_recipients_org").on(table.organizationId),
+  uniqueIndex("uq_organization_recipient_phone").on(table.organizationId, table.phone).where(sql`phone IS NOT NULL`),
+]);
+export type OrganizationRecipient = typeof organizationRecipients.$inferSelect;
+
 export const commercialJobs = pgTable("commercial_jobs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   rideId: varchar("ride_id").notNull().unique().references(() => rides.id),

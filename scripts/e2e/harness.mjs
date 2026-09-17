@@ -87,6 +87,12 @@ export async function seedFixtures(db) {
     VALUES ('e2e-held-ride', 'e2e-biz', $1, 990002, 'business', 'small', 'person', $2, $3, NOW() + interval '3 hours', NOW() + interval '5 hours', 'recipient', 'awaiting', $4, 11.80)
     ON CONFLICT (ride_id) DO UPDATE SET payer='recipient', recipient_payment_status='awaiting', recipient_pay_token=$4, recipient_fee=11.80, window_start=NOW() + interval '3 hours', window_end=NOW() + interval '5 hours', recipient_nudged_at=NULL, shop_asked_at=NULL`,
     [FIXTURES.rider.id, JSON.stringify({ name: "Tunde Bakare", phone: "3015550177" }), JSON.stringify({ name: "Mama's Kitchen counter" }), E2E_PAY_TOKEN]).catch((e) => console.log("  (held job seed) " + String(e?.message ?? e).split("\n")[0]));
+  // One saved recipient for the business account, so the Recipients tab and
+  // the parcel form's picker have something to show the audits.
+  await db.query(`INSERT INTO organization_recipients (id, organization_id, name, phone, address, handover, note, created_by, archived_at)
+    VALUES ('e2e-recipient', 'e2e-biz', 'Tunde Bakare', '3015550177', $1, 'person', 'Ring the bell twice', $2, NULL)
+    ON CONFLICT (id) DO UPDATE SET archived_at=NULL, name='Tunde Bakare', phone='3015550177'`,
+    [JSON.stringify({ lat: 38.7823, lng: -77.0166, address: "National Harbor, MD" }), FIXTURES.rider.id]).catch((e) => console.log("  (recipient seed) " + String(e?.message ?? e).split("\n")[0]));
   const { rows: [prof] } = await db.query("SELECT id FROM driver_profiles WHERE user_id=$1", [FIXTURES.driver.id]);
   await db.query(`INSERT INTO vehicles (driver_profile_id, make, model, year, color, license_plate)
     SELECT $1::varchar,'Toyota','Camry',2020,'Blue','E2E0001' WHERE NOT EXISTS (SELECT 1 FROM vehicles WHERE driver_profile_id=$1::varchar)`, [prof.id]);

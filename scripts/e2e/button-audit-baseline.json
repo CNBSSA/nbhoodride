@@ -291,6 +291,9 @@
     "button-portal-resend-pay-link-*": "on the desk's job row for a held recipient-pays job; journey 22 covers it",
     "button-portal-default-payer-organization": "inside the Billing tab for an owner; journey 22 covers the setting",
     "button-portal-default-payer-recipient": "inside the Billing tab for an owner; journey 22 covers the setting",
-    "button-pay-confirm": "inside Stripe's Payment Element after a PaymentIntent exists; the audits run without Stripe"
+    "button-pay-confirm": "inside Stripe's Payment Element after a PaymentIntent exists; the audits run without Stripe",
+    "button-portal-send-again-*": "on a parcel job row inside the All jobs tab; journey 23 covers the payload",
+    "button-portal-send-to-recipient-*": "inside the Recipients tab; journey 23 covers the book",
+    "button-portal-remove-recipient-*": "inside the Recipients tab; archiving is covered by journey 23"
   }
 }

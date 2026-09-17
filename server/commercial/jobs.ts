@@ -160,6 +160,8 @@ export interface JobRow {
   proof: Record<string, unknown> | null;
   /** person | reception | unattended for a parcel; null for a ride. */
   handover: string | null;
+  /** For a parcel: what was sent and to whom, so the desk can send it again. */
+  parcel: { parcelSize: string; handover: string; pickupContact: unknown; dropContact: unknown } | null;
   /** organization | recipient, and where the recipient's payment stands (shared/recipientPay.ts). */
   payer: string;
   recipientPaymentStatus: string | null;
@@ -224,6 +226,7 @@ export async function listJobs(organizationId: string, opts: ListJobsOptions = {
       driverName: driverFirst ? `${driverFirst} ${(driverLast ?? "").charAt(0)}${driverLast ? "." : ""}`.trim() : null,
       proof: (job.proof ?? null) as Record<string, unknown> | null,
       handover: job.parcelSize ? (job.handover ?? "person") : null,
+      parcel: job.parcelSize ? { parcelSize: job.parcelSize, handover: job.handover ?? "person", pickupContact: job.pickupContact ?? null, dropContact: job.dropContact ?? null } : null,
       payer: job.payer ?? "organization",
       recipientPaymentStatus: job.recipientPaymentStatus ?? null,
       recipientPayToken: job.payer === "recipient" && (job.recipientPaymentStatus === "awaiting" || job.recipientPaymentStatus === "declined") && ride.status === "pending" ? job.recipientPayToken ?? null : null,
