@@ -876,10 +876,22 @@ CREATE TABLE IF NOT EXISTS commercial_standing_orders (
   po_number VARCHAR,
   is_active BOOLEAN NOT NULL DEFAULT true,
   paused_at TIMESTAMP,
+  kind VARCHAR NOT NULL DEFAULT 'ride',
+  parcel_size VARCHAR,
+  handover VARCHAR,
+  pickup_contact JSONB,
+  drop_contact JSONB,
+  window_hours INTEGER,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_commercial_standing_orders_org ON commercial_standing_orders (organization_id);
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS kind VARCHAR NOT NULL DEFAULT 'ride';
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS parcel_size VARCHAR;
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS handover VARCHAR;
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS pickup_contact JSONB;
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS drop_contact JSONB;
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS window_hours INTEGER;
 
 CREATE TABLE IF NOT EXISTS reliability_events (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

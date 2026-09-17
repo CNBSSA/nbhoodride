@@ -21,6 +21,9 @@ import type { IStorage } from "../storage";
 import type { Location } from "../rideWorkflowService";
 import { CommercialError, getOrganization } from "./organizations";
 import { bookJob, type BookedJob } from "./jobs";
+import { bookDelivery } from "./deliveries";
+import { categoryMayBook } from "@shared/commercial";
+import { DEFAULT_WINDOW_HOURS, SIZE_VEHICLE_HINT, handoverOf, isHandoverKind, isParcelSize } from "@shared/deliveries";
 
 export interface StandingOrderInput {
   organizationId: string;
@@ -38,7 +41,21 @@ export interface StandingOrderInput {
   vehicleType?: string | null;
   notes?: string | null;
   poNumber?: string | null;
+  /** ride (default) | delivery. A standing delivery books a parcel each service day, billed to the account. */
+  kind?: string | null;
+  parcelSize?: string | null;
+  handover?: string | null;
+  pickupContact?: { name?: string | null; phone?: string | null; note?: string | null } | null;
+  dropContact?: { name?: string | null; phone?: string | null; note?: string | null } | null;
+  windowHours?: number | null;
+  /** Refused: a standing delivery is account-pays only in this version. */
+  payer?: string | null;
 }
+
+const contactOf = (c: { name?: string | null; phone?: string | null; note?: string | null } | null | undefined) => {
+  const name = String(c?.name ?? "").trim().slice(0, 120);
+  return name ? { name, phone: c?.phone ? String(c.phone).trim().slice(0, 40) : null, note: c?.note ? String(c.note).trim().slice(0, 200) : null } : null;
+};
 
 const isLocation = (v: any): v is Location =>
   !!v && Number.isFinite(v.lat) && Number.isFinite(v.lng) && typeof v.address === "string" && v.address.trim().length > 0;
@@ -47,10 +64,27 @@ export async function createStandingOrder(input: StandingOrderInput): Promise<Co
   const org = await getOrganization(input.organizationId);
   if (!org) throw new CommercialError("Organization not found.", 404);
   if (org.status !== "active") throw new CommercialError("This organization is paused.", 409);
-  const passengerName = String(input.passengerName ?? "").trim().slice(0, 120);
+  // A standing delivery: the "passenger" is who receives the parcel, there
+  // is no return leg, and the account pays (a recurring recipient-pays job
+  // would text the recipient every day — not in this version).
+  const kind = input.kind === "delivery" ? "delivery" : "ride";
+  let parcel: { parcelSize: string; handover: string; pickupContact: NonNullable<ReturnType<typeof contactOf>>; dropContact: NonNullable<ReturnType<typeof contactOf>>; windowHours: number } | null = null;
+  if (kind === "delivery") {
+    if (!categoryMayBook(org.category, "delivery")) throw new CommercialError("This account books rides, not deliveries. A delivery account is a business or food account.", 409);
+    if (input.payer === "recipient") throw new CommercialError("A standing delivery is billed to your account. Book a one-off delivery for the recipient to pay.");
+    if (!isParcelSize(input.parcelSize)) throw new CommercialError("Pick what is being sent: envelope, small, medium or large.");
+    if (input.handover != null && !isHandoverKind(input.handover)) throw new CommercialError("How does it change hands? Hand to the person, leave with reception, or leave at the door.");
+    const pickupContact = contactOf(input.pickupContact), dropContact = contactOf(input.dropContact);
+    if (!pickupContact) throw new CommercialError("Who hands the parcel over? A pickup contact is needed.");
+    if (!dropContact) throw new CommercialError("Who receives it? A drop contact is needed.");
+    const windowHours = Number(input.windowHours ?? DEFAULT_WINDOW_HOURS);
+    if (!Number.isFinite(windowHours) || windowHours < 1 || windowHours > 12) throw new CommercialError("The window must be between 1 and 12 hours.");
+    parcel = { parcelSize: String(input.parcelSize), handover: handoverOf(input.handover), pickupContact, dropContact, windowHours };
+  }
+  const passengerName = parcel ? parcel.dropContact.name : String(input.passengerName ?? "").trim().slice(0, 120);
   if (!passengerName) throw new CommercialError("Who rides? A passenger name is needed.");
   if (!isLocation(input.pickup) || !isLocation(input.destination)) throw new CommercialError("Pickup and destination need an address with coordinates.");
-  const schedule = { days: normalizePlanDays(input.days), departureHour: Number(input.departureHour), departureMinute: Number(input.departureMinute), returnMode: input.returnMode, returnHour: input.returnHour ?? null, returnMinute: input.returnMinute ?? null };
+  const schedule = { days: normalizePlanDays(input.days), departureHour: Number(input.departureHour), departureMinute: Number(input.departureMinute), returnMode: parcel ? "none" as ReturnMode : input.returnMode, returnHour: parcel ? null : input.returnHour ?? null, returnMinute: parcel ? null : input.returnMinute ?? null };
   const v = validateStandingSchedule(schedule);
   if (!v.valid) throw new CommercialError(v.error);
   const vehicleType = (input.vehicleType ?? "standard").toString();
@@ -68,9 +102,15 @@ export async function createStandingOrder(input: StandingOrderInput): Promise<Co
     returnMode: schedule.returnMode,
     returnHour: schedule.returnMode === "fixed" ? Number(schedule.returnHour) : null,
     returnMinute: schedule.returnMode === "fixed" ? Number(schedule.returnMinute) : null,
-    vehicleType,
+    vehicleType: parcel && !input.vehicleType ? SIZE_VEHICLE_HINT[parcel.parcelSize as keyof typeof SIZE_VEHICLE_HINT] ?? vehicleType : vehicleType,
     notes: input.notes ? String(input.notes).trim().slice(0, 2000) : null,
     poNumber: input.poNumber ? String(input.poNumber).trim().slice(0, 60) : null,
+    kind,
+    parcelSize: parcel?.parcelSize ?? null,
+    handover: parcel?.handover ?? null,
+    pickupContact: parcel ? { ...parcel.pickupContact, phone: parcel.pickupContact.phone ?? undefined, note: parcel.pickupContact.note ?? undefined } : null,
+    dropContact: parcel ? { ...parcel.dropContact, phone: parcel.dropContact.phone ?? undefined, note: parcel.dropContact.note ?? undefined } : null,
+    windowHours: parcel?.windowHours ?? null,
   }).returning();
   return row;
 }
@@ -109,6 +149,28 @@ export async function materializeStandingOrder(storage: IStorage, order: Commerc
     if (have.has(`${occ.serviceDate}:${occ.leg}`)) continue;
     const outbound = occ.leg === "out";
     try {
+      if (order.kind === "delivery" && order.parcelSize) {
+        const b = await bookDelivery(storage, {
+          organizationId: order.organizationId,
+          requesterId: order.createdBy,
+          parcelSize: order.parcelSize,
+          handover: order.handover,
+          pickupContact: order.pickupContact ?? { name: "Pickup" },
+          dropContact: order.dropContact ?? { name: order.passengerName },
+          readyAt: occ.at,
+          windowHours: order.windowHours ?? DEFAULT_WINDOW_HOURS,
+          pickup: order.pickup,
+          destination: order.destination,
+          vehicleType: order.vehicleType,
+          notes: order.notes,
+          poNumber: order.poNumber,
+          payer: "organization",
+          standing: { orderId: order.id, serviceDate: occ.serviceDate, leg: "out" },
+        }, now);
+        booked += 1;
+        notify?.(b);
+        continue;
+      }
       const b = await bookJob(storage, {
         organizationId: order.organizationId,
         requesterId: order.createdBy,

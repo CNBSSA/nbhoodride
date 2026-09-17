@@ -37,6 +37,8 @@ export interface BookDeliveryInput extends DeliveryInput {
   handover?: string | null;
   /** organization | recipient (shared/recipientPay.ts). The recipient needs a phone to be texted the link. */
   payer?: string | null;
+  /** Booked from a standing delivery: one job per order and service date. */
+  standing?: { orderId: string; serviceDate?: string | null; leg: "out" | "return" };
 }
 
 const contact = (c: Contact | undefined | null): Contact | null => {
@@ -83,6 +85,7 @@ export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, 
     poNumber: input.poNumber,
     allowShortLead: true,
     fareOverride: fare,
+    standing: input.standing,
   }, now);
 
   const handover = handoverOf(input.handover);
