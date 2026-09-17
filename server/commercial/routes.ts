@@ -278,6 +278,10 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
     try { res.json(await declineByRecipient(String(req.params.token))); }
     catch (err) { fail(res, err, "Could not record that"); }
   });
+  app.post("/api/admin/analytics/pending-proof-sweep", gate, isAdminOrSessionAuth, async (_req, res) => {
+    try { const { sweepPendingProofPhotos } = await import("./badges"); res.json(await sweepPendingProofPhotos()); }
+    catch (err) { fail(res, err, "Could not run the sweep"); }
+  });
 
   app.get("/api/org/:orgId/invitations", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
     try { res.json(await listOpenInvitations(req.orgId)); }
