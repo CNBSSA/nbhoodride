@@ -169,6 +169,8 @@ export async function recordProof(rideId: string, driverUserId: string, input: P
   }
 
   const receivedBy = followUpPhotoOnly ? previous?.receivedBy ?? null : (String(input.receivedBy ?? "").trim().slice(0, 120) || previous?.receivedBy || null);
+  // The name comes first: a photo alone is not a handover where someone signs.
+  if (need.needsName && !receivedBy) throw new CommercialError(row.job.parcelSize ? "Type who received the parcel." : "Type who received the passenger.");
   const photoUrl = input.photoUrl ? await verifiedProofPhotoPath(input.photoUrl, driverUserId) : previous?.photoUrl ?? null;
   const photoPending = !photoUrl && need.needsPhoto && (input.photoPending === true || (!!previous?.photoPending && followUpPhotoOnly));
   const lat = Number(input.lat), lng = Number(input.lng);
