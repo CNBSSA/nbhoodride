@@ -14,10 +14,10 @@
 
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db";
+import { opsAlert, formatOpsAlert } from "../telegramOps";
 import { haversineMiles } from "../rideWorkflowService";
-import { ObjectStorageService } from "../objectStorage";
 import { PROOF_DISTANCE_FLAG_METERS, handoverOf, proofComplete, proofRequirement, proofSatisfies, type DeliveryProof } from "@shared/deliveries";
-import { commercialJobs, driverProfiles, organizations, rides, users } from "@shared/schema";
+import { commercialJobs, driverProfiles, organizations, rides, storedObjects, users } from "@shared/schema";
 import { badgeRefusalMessage, driverMayTake, normalizeBadges, type DriverBadge } from "@shared/driverBadges";
 import { kindOfJob, type JobKind } from "@shared/commercial";
 import { formatJobNumber } from "@shared/commercial";
@@ -104,16 +104,25 @@ export async function textPassengerTrackingLink(storage: IStorage, rideId: strin
  * passenger. Stored on the job so the statement and the desk can show it,
  * and so a dispute has an answer.
  */
-/** The photo must have come through PG Ride's own upload; nothing else is a proof. */
-function normalizeProofPhotoUrl(raw: unknown): string {
+/**
+ * A proof photo must be an object the DRIVER uploaded through PG Ride's own
+ * database-backed store, and it must be an image. The shape of a path is
+ * not enough (post-implementation audit, 2026-09-17): a driver could name
+ * someone else's object and hand their organization read access to it, or
+ * upload text/html and have the desk open it same-origin.
+ */
+async function verifiedProofPhotoPath(raw: unknown, driverUserId: string): Promise<string> {
   const text = String(raw ?? "").trim().slice(0, 600);
   if (!text) throw new CommercialError("The photo did not upload. Try again.");
   let parsed: URL;
   try { parsed = new URL(text, "http://pgride.local"); } catch { throw new CommercialError("That is not a photo PG Ride uploaded."); }
-  if (/^\/api\/objects\/db-upload\/[0-9a-f-]{36}$/i.test(parsed.pathname)) return parsed.pathname;
-  if (/^\/objects\//.test(parsed.pathname)) return parsed.pathname;
-  if (parsed.hostname.endsWith("storage.googleapis.com")) return new ObjectStorageService().normalizeObjectEntityPath(text);
-  throw new CommercialError("That is not a photo PG Ride uploaded.");
+  const m = /^\/api\/objects\/db-upload\/([0-9a-f-]{36})$/i.exec(parsed.pathname);
+  if (!m) throw new CommercialError("That is not a photo PG Ride uploaded.");
+  const [obj] = await db.select({ id: storedObjects.id, ownerUserId: storedObjects.ownerUserId, contentType: storedObjects.contentType }).from(storedObjects).where(eq(storedObjects.id, m[1]));
+  if (!obj) throw new CommercialError("The photo did not upload. Try again.");
+  if (obj.ownerUserId !== driverUserId) throw new CommercialError("That photo is not yours.", 403);
+  if (!/^image\//i.test(obj.contentType)) throw new CommercialError("The proof must be a photo.");
+  return `/api/objects/db-upload/${obj.id}`;
 }
 
 export interface ProofInput {
@@ -132,6 +141,11 @@ export interface ProofInput {
  * required (shared/deliveries.ts); a ride without a parcel needs a name, as
  * before. The driver's position is recorded and compared with the drop
  * address: far away is flagged to the desk, never refused — GPS indoors lies.
+ *
+ * Rules (post-implementation audit, 2026-09-17): a proof is first recorded
+ * while the trip is on the road; after completion only the photo that was
+ * pending may follow; the time of the handover is the first signing and is
+ * never rewritten; a photo, once recorded, is not replaced.
  */
 export async function recordProof(rideId: string, driverUserId: string, input: ProofInput, now: Date = new Date()): Promise<DeliveryProof> {
   const [row] = await db.select({ job: commercialJobs, ride: rides }).from(commercialJobs)
@@ -141,28 +155,41 @@ export async function recordProof(rideId: string, driverUserId: string, input: P
   if (row.ride.driverId !== driverUserId) throw new CommercialError("This is not your job.", 403);
   const handover = row.job.parcelSize ? handoverOf(row.job.handover) : "person";
   const need = proofRequirement(handover);
-  const previous = (row.job.proof ?? {}) as DeliveryProof;
+  const previous = (row.job.proof ?? null) as DeliveryProof | null;
+  const onTheRoad = row.ride.status === "in_progress" || row.ride.status === "driver_arriving";
+  const followUpPhotoOnly = !!previous?.signedAt && row.ride.status === "completed";
 
-  const receivedBy = String(input.receivedBy ?? "").trim().slice(0, 120) || previous.receivedBy || null;
-  const photoUrl = input.photoUrl ? normalizeProofPhotoUrl(input.photoUrl) : previous.photoUrl ?? null;
-  const photoPending = !photoUrl && need.needsPhoto && input.photoPending === true;
+  if (!previous?.signedAt && !onTheRoad) throw new CommercialError("Record the handover once you are on the road with it.", 409);
+  if (followUpPhotoOnly) {
+    // After completion only the photo that was pending may arrive; nothing else moves.
+    if (!previous?.photoPending && !previous?.photoNeverArrived) throw new CommercialError("This job is complete and its handover is recorded.", 409);
+    if (!input.photoUrl) throw new CommercialError("Only the pending photo can be added now.", 409);
+  } else if (previous?.photoUrl && input.photoUrl) {
+    throw new CommercialError("This handover already has its photo.", 409);
+  }
+
+  const receivedBy = followUpPhotoOnly ? previous?.receivedBy ?? null : (String(input.receivedBy ?? "").trim().slice(0, 120) || previous?.receivedBy || null);
+  const photoUrl = input.photoUrl ? await verifiedProofPhotoPath(input.photoUrl, driverUserId) : previous?.photoUrl ?? null;
+  const photoPending = !photoUrl && need.needsPhoto && (input.photoPending === true || (!!previous?.photoPending && followUpPhotoOnly));
   const lat = Number(input.lat), lng = Number(input.lng);
-  const hasPosition = Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+  const hasPosition = !followUpPhotoOnly && Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
   const drop = row.ride.destinationLocation as { lat?: number; lng?: number } | null;
   const distanceFromDropMeters = hasPosition && drop && Number.isFinite(drop.lat) && Number.isFinite(drop.lng)
     ? Math.round(haversineMiles(lat, lng, Number(drop.lat), Number(drop.lng)) * 1609.34)
-    : previous.distanceFromDropMeters ?? null;
+    : previous?.distanceFromDropMeters ?? null;
 
   const proof: DeliveryProof = {
-    ...previous,
+    ...(previous ?? {}),
     receivedBy,
     photoUrl,
     photoPending,
-    note: input.note ? String(input.note).trim().slice(0, 300) : previous.note ?? null,
-    signedAt: now.toISOString(),
-    signedBy: driverUserId,
-    lat: hasPosition ? lat : previous.lat ?? null,
-    lng: hasPosition ? lng : previous.lng ?? null,
+    note: followUpPhotoOnly ? previous?.note ?? null : (input.note ? String(input.note).trim().slice(0, 300) : previous?.note ?? null),
+    signedAt: previous?.signedAt ?? now.toISOString(),
+    signedBy: previous?.signedBy ?? driverUserId,
+    photoUploadedAt: photoUrl && !previous?.photoUrl ? now.toISOString() : previous?.photoUploadedAt ?? null,
+    photoNeverArrived: photoUrl ? false : previous?.photoNeverArrived ?? false,
+    lat: hasPosition ? lat : previous?.lat ?? null,
+    lng: hasPosition ? lng : previous?.lng ?? null,
     distanceFromDropMeters,
     farFromDrop: distanceFromDropMeters !== null && distanceFromDropMeters > PROOF_DISTANCE_FLAG_METERS,
   };
@@ -179,7 +206,8 @@ export async function recordProof(rideId: string, driverUserId: string, input: P
 /**
  * Why a parcel cannot be completed yet, or null. A delivery is not finished
  * until its handover is proven the way the desk asked for; a ride with a
- * person in it completes as it always did.
+ * person in it completes as it always did. Throws on a database error: the
+ * caller must fail closed, never complete a parcel it could not check.
  */
 export async function proofGateForRide(rideId: string): Promise<string | null> {
   const [job] = await db.select({ parcelSize: commercialJobs.parcelSize, handover: commercialJobs.handover, proof: commercialJobs.proof })
@@ -193,10 +221,40 @@ export async function proofGateForRide(rideId: string): Promise<string | null> {
 
 /** A member of the organization a proof photo belongs to may see it; so may the driver who took it and an admin. */
 export async function userMaySeeProofPhoto(userId: string, objectId: string): Promise<boolean> {
+  if (!/^[0-9a-f-]{36}$/i.test(objectId)) return false;
   const rows = await db.execute(sql`
     SELECT 1 FROM commercial_jobs cj
     JOIN organization_members om ON om.organization_id = cj.organization_id
-    WHERE om.user_id = ${userId} AND cj.proof->>'photoUrl' LIKE ${"%/" + objectId}
+    WHERE om.user_id = ${userId} AND cj.proof->>'photoUrl' = ${"/api/objects/db-upload/" + objectId}
     LIMIT 1`);
   return ((rows as any).rows ?? rows).length > 0;
+}
+
+/**
+ * A photo that never arrived is not silence. Six hours after a handover was
+ * recorded with the photo still on the phone, ops is paged once; after a day
+ * the proof says "photo never arrived" and ops is paged again. Runs hourly.
+ */
+export async function sweepPendingProofPhotos(now: Date = new Date()): Promise<{ paged: number; expired: number }> {
+  const out = { paged: 0, expired: 0 };
+  const rows = await db.select({ job: commercialJobs, org: organizations }).from(commercialJobs)
+    .innerJoin(organizations, eq(organizations.id, commercialJobs.organizationId))
+    .where(sql`${commercialJobs.proof}->>'photoPending' = 'true'`);
+  for (const { job, org } of rows) {
+    const proof = (job.proof ?? {}) as DeliveryProof & { photoPendingPagedAt?: string | null; photoNeverArrived?: boolean };
+    const signed = proof.signedAt ? new Date(proof.signedAt).getTime() : NaN;
+    if (!Number.isFinite(signed)) continue;
+    const hours = (now.getTime() - signed) / 3_600_000;
+    const fields: Array<[string, string]> = [["Account", org.name], ["Job", formatJobNumber(job.jobNumber)], ["Handover", proof.signedAt ?? ""]];
+    if (hours >= 24) {
+      await db.update(commercialJobs).set({ proof: { ...proof, photoPending: false, photoNeverArrived: true } as Record<string, unknown> }).where(eq(commercialJobs.id, job.id));
+      opsAlert(formatOpsAlert("📷 Proof photo never arrived", [...fields, ["Effect", "The job reads 'photo never arrived'; ask the driver"]]));
+      out.expired += 1;
+    } else if (hours >= 6 && !proof.photoPendingPagedAt) {
+      await db.update(commercialJobs).set({ proof: { ...proof, photoPendingPagedAt: now.toISOString() } as Record<string, unknown> }).where(eq(commercialJobs.id, job.id));
+      opsAlert(formatOpsAlert("📷 Proof photo still on the driver's phone", [...fields, ["Since", `${Math.floor(hours)} h`]]));
+      out.paged += 1;
+    }
+  }
+  return out;
 }

@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { queueProofPhoto, shrinkPhoto, uploadProofPhoto } from "@/lib/proofPhoto";
+import { useAuth } from "@/hooks/useAuth";
 
 export interface DeliveryForCard {
   parcelLabel: string;
@@ -40,7 +41,10 @@ interface Props {
 
 export function DeliveryProofSheet({ rideId, delivery, driverLocation, open, onClose, onRecorded }: Props) {
   const { toast } = useToast();
-  const [receivedBy, setReceivedBy] = useState(delivery.dropContact?.name ?? "");
+  const { user } = useAuth();
+  // Blank on purpose: "who took it" is asked, not assumed (a prefilled name
+  // would record the expected receiver on a one-tap confirm).
+  const [receivedBy, setReceivedBy] = useState("");
   const [note, setNote] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -57,9 +61,13 @@ export function DeliveryProofSheet({ rideId, delivery, driverLocation, open, onC
         shrunk = await shrinkPhoto(photo);
         try {
           photoUrl = await uploadProofPhoto(shrunk);
-        } catch {
-          // No signal at the door: keep it on the phone, complete anyway, it follows.
-          if (delivery.needsPhoto) { await queueProofPhoto(rideId, shrunk); photoPending = true; }
+        } catch (err: any) {
+          // A refusal is not "no signal": say so and stop.
+          if (typeof err?.status === "number" && err.status >= 400 && err.status < 500) throw new Error(`The photo was refused (${err.status}). Try another photo.`);
+          // No signal at the door: keep it on the phone, complete anyway, it
+          // follows. If the phone cannot keep it, this throws and nothing is
+          // marked pending.
+          if (delivery.needsPhoto) { await queueProofPhoto(user?.id ?? "unknown", rideId, shrunk); photoPending = true; }
         }
       }
       const res = await apiRequest("POST", `/api/driver/rides/${rideId}/proof`, {
@@ -98,7 +106,7 @@ export function DeliveryProofSheet({ rideId, delivery, driverLocation, open, onC
           {delivery.needsName ? (
             <div className="space-y-2">
               <Label htmlFor="proof-received-by">Who took it?</Label>
-              <Input id="proof-received-by" value={receivedBy} onChange={(e) => setReceivedBy(e.target.value)} placeholder="Their name" required data-testid="input-proof-received-by" />
+              <Input id="proof-received-by" value={receivedBy} onChange={(e) => setReceivedBy(e.target.value)} placeholder={delivery.dropContact?.name ? `Their name (expecting ${delivery.dropContact.name})` : "Their name"} required data-testid="input-proof-received-by" />
             </div>
           ) : null}
           <div className="space-y-2">
