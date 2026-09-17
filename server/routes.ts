@@ -1373,7 +1373,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // so driver document uploads work with zero external setup. The client
       // contract is identical either way: PUT the file bytes to uploadURL,
       // then save that URL on the driver profile.
-      if (!STORAGE_AVAILABLE) {
+      // Proof-of-delivery photos are verified against the database store
+      // (owner, type) before they count, so their uploader asks for it
+      // explicitly even when cloud storage is configured.
+      if (!STORAGE_AVAILABLE || req.query?.store === "db") {
         const id = randomUUID();
         const base = resolveAppUrl(`${req.protocol}://${req.get("host")}`);
         return res.json({ uploadURL: `${base}/api/objects/db-upload/${id}` });
@@ -1442,6 +1445,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       res.set("Content-Type", obj.contentType);
       res.set("Cache-Control", "private, max-age=3600");
+      // A stored object that is not an image or a PDF is a download, never a
+      // page: nothing a driver uploads can run in a desk's session.
+      if (!/^(image\/|application\/pdf)/i.test(obj.contentType)) res.set("Content-Disposition", `attachment; filename="${obj.id}"`);
       res.send(Buffer.from(obj.dataBase64, "base64"));
     } catch (error) {
       console.error("Error serving stored object:", error);
@@ -3213,7 +3219,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // completes as it always did.
       if (preCheck?.paymentMethod === 'invoice' && preCheck.status !== 'completed') {
         const { proofGateForRide } = await import("./commercial/badges");
-        const gate = await proofGateForRide(rideId).catch(() => null);
+        let gate: string | null;
+        try { gate = await proofGateForRide(rideId); }
+        catch (err) { console.error("[commercial] proof gate could not be checked:", err); return res.status(503).json({ message: "Could not check the handover record. Try again in a moment." }); }
         if (gate) return res.status(409).json({ message: gate, needsProof: true });
       }
       const actualFare: number | undefined = undefined;
@@ -4503,6 +4511,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // aboard; charge the fare actually earned so far (GPS-metered, capped at
       // the quote, discounts preserved) and settle normally.
       if (ride.status === "in_progress") {
+        // Ending a parcel run early completes it, so it needs its handover
+        // recorded like any completion (post-implementation audit, 2026-09-17).
+        if (ride.paymentMethod === "invoice") {
+          const { proofGateForRide } = await import("./commercial/badges");
+          let gate: string | null;
+          try { gate = await proofGateForRide(rideId); }
+          catch (err) { console.error("[commercial] proof gate could not be checked:", err); return res.status(503).json({ message: "Could not check the handover record. Try again in a moment." }); }
+          if (gate) return res.status(409).json({ message: gate, needsProof: true });
+        }
         const completed = await storage.completeRide(rideId, ride.driverId!, undefined, undefined, "metered");
         await settleCardPaymentForCompletedRide(completed, undefined, 0);
         await storage.updateRide(rideId, {
@@ -11124,6 +11141,11 @@ Generate the FAQ list.`;
       // Every 5 minutes; booking is idempotent per (order, service date, leg).
       if (featureFlags.commercialEnabled && now.getMinutes() % 5 === 0) {
         materializeAllStandingOrders(storage, now).catch((err) => console.error("standing order sweep failed:", err));
+      }
+
+      // ── Proof photos still on a phone: page ops at 6 h, give up at 24 h ──
+      if (featureFlags.commercialEnabled && now.getMinutes() === 7) {
+        import("./commercial/badges").then((m) => m.sweepPendingProofPhotos(now)).catch((err) => console.error("pending proof photo sweep failed:", err));
       }
 
       // ── Ride-risk watch: page ops before the rider finds out ──

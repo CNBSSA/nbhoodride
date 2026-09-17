@@ -71,6 +71,8 @@ export interface Contact {
 
 export interface DeliveryInput {
   parcelSize: string;
+  /** person | reception | unattended; missing means hand to the person. */
+  handover?: string | null;
   pickupContact: Contact;
   dropContact: Contact;
   /** When the parcel is ready; the window runs from here. */
@@ -88,6 +90,7 @@ const cleanName = (v: unknown) => String((v as any) ?? "").trim().slice(0, 120);
 
 export function validateDelivery(input: DeliveryInput, now: Date = new Date()): { valid: true; window: DeliveryWindow } | { valid: false; error: string } {
   if (!isParcelSize(input.parcelSize)) return { valid: false, error: "Pick what is being sent: envelope, small, medium or large." };
+  if (input.handover !== undefined && input.handover !== null && !isHandoverKind(input.handover)) return { valid: false, error: "How does it change hands? Hand to the person, leave with reception, or leave at the door." };
   if (!cleanName(input.pickupContact?.name)) return { valid: false, error: "Who hands the parcel over? A pickup contact is needed." };
   if (!cleanName(input.dropContact?.name)) return { valid: false, error: "Who receives it? A drop contact is needed." };
   const start = new Date(input.readyAt);
@@ -162,6 +165,10 @@ export interface DeliveryProof {
   distanceFromDropMeters?: number | null;
   /** Recorded further from the drop address than PROOF_DISTANCE_FLAG_METERS. Flagged, never blocked: GPS indoors is unreliable. */
   farFromDrop?: boolean;
+  /** When the photo reached the server, which can be after the handover (no signal at the door). */
+  photoUploadedAt?: string | null;
+  /** The pending photo never came within a day; ops was paged. */
+  photoNeverArrived?: boolean;
 }
 
 /** A proof recorded this far from the drop address is flagged to the desk. */
@@ -188,6 +195,7 @@ export function describeProof(proof: DeliveryProof | null | undefined, handover:
   else if (handoverOf(handover) === "unattended") parts.push("left at the door");
   if (proof.photoUrl) parts.push("photo");
   else if (proof.photoPending) parts.push("photo pending");
+  else if (proof.photoNeverArrived) parts.push("photo never arrived");
   if (proof.farFromDrop) parts.push("recorded away from the drop address");
   return parts.join(" · ");
 }
