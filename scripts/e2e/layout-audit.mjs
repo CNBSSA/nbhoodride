@@ -8,7 +8,7 @@
  * Run locally: npm run test:layout   (needs a built app + Postgres, like the journeys)
  */
 import { chromium, webkit } from "playwright";
-import { connectDb, seedFixtures, startServer, stopServer, FIXTURES, PASSWORD, check, section, summary, E2E_INVITE_TOKEN, E2E_PAY_TOKEN } from "./harness.mjs";
+import { connectDb, seedFixtures, startServer, stopServer, FIXTURES, PASSWORD, check, section, summary, E2E_INVITE_TOKEN, E2E_APPROVAL_TOKEN } from "./harness.mjs";
 
 const VIEWPORT = { width: 390, height: 844 };
 const executablePath = process.env.PW_CHROMIUM_PATH || undefined;
@@ -336,23 +336,23 @@ if (engine === chromium) {
     check("update-banner audit ran", false, String(e?.message ?? e).split("\n")[0]);
   }
 
-  section("Recipient pays: the page in the text, on a phone");
+  section("Recipient approval: the page in the text, on a phone");
   for (const [label, viewport] of [["phone 390×844", VIEWPORT], ["desk 1280×800", { width: 1280, height: 800 }]]) {
     const ctx = await browser.newContext({ viewport, isMobile: viewport.width < 500, hasTouch: viewport.width < 500 });
     const page = await ctx.newPage();
     try {
-      await page.goto(server.base + `/pay/${E2E_PAY_TOKEN}`, { waitUntil: "domcontentloaded" });
-      const pay = page.locator('[data-testid="button-pay-now"]').first();
+      await page.goto(server.base + `/approve/${E2E_APPROVAL_TOKEN}`, { waitUntil: "domcontentloaded" });
+      const pay = page.locator('[data-testid="button-approve-yes"]').first();
       await pay.waitFor({ timeout: 20000 });
-      const fee = await page.locator('[data-testid="text-pay-fee"]').innerText();
-      check(`pay page ${label}: shows the shop and the fee`, /\$11\.80/.test(fee), fee);
+      const fee = await page.locator('[data-testid="text-approve-fee"]').innerText();
+      check(`approval page ${label}: shows the shop and the fee`, /\$11\.80/.test(fee), fee);
       const box = await pay.boundingBox();
-      check(`pay page ${label}: the pay button is on screen and a tap target`, !!box && box.y >= 0 && box.y + box.height <= viewport.height && box.height >= 44, box ? `top ${Math.round(box.y)} h=${Math.round(box.height)}` : "no box");
-      const no = await page.locator('[data-testid="button-pay-decline"]').first().boundingBox();
-      check(`pay page ${label}: "No thanks" is a tap target`, !!no && no.height >= 44, no ? `h=${Math.round(no.height)}` : "no box");
-      check(`pay page ${label}: no sideways scroll`, await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+      check(`approval page ${label}: the approve button is on screen and a tap target`, !!box && box.y >= 0 && box.y + box.height <= viewport.height && box.height >= 44, box ? `top ${Math.round(box.y)} h=${Math.round(box.height)}` : "no box");
+      const no = await page.locator('[data-testid="button-approve-no"]').first().boundingBox();
+      check(`approval page ${label}: "No thanks" is a tap target`, !!no && no.height >= 44, no ? `h=${Math.round(no.height)}` : "no box");
+      check(`approval page ${label}: no sideways scroll`, await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
     } catch (e) {
-      check(`pay page ${label}: audit ran`, false, String(e?.message ?? e).split("\n")[0]);
+      check(`approval page ${label}: audit ran`, false, String(e?.message ?? e).split("\n")[0]);
     } finally { await ctx.close(); }
   }
 

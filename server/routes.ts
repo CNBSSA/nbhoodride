@@ -460,7 +460,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api/auth/email-login', authLimiter);
   app.use('/api/auth/signup', authLimiter);
   app.use('/api/org/invitations', authLimiter);
-  app.use('/api/pay', authLimiter);
+  app.use('/api/approve', authLimiter);
   app.use('/api/auth/forgot-password', authLimiter);
   app.use('/api/auth/reset-password', authLimiter);
   app.use('/api/auth/forgot-password-sms', authLimiter);
@@ -2744,8 +2744,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
       if (ride.paymentMethod === 'invoice') {
-        const { onCommercialRideEnded } = await import("./commercial/recipientPay");
-        await onCommercialRideEnded(rideId, "the recipient was not there").catch((err) => console.error("[recipient-pay] no-show hook failed:", err));
+        const { onCommercialRideEnded } = await import("./commercial/recipientApproval");
+        await onCommercialRideEnded(rideId, "the recipient was not there").catch((err) => console.error("[recipient-approval] no-show hook failed:", err));
       }
 
       await logRideAudit({
@@ -6981,8 +6981,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (ride.paymentMethod === 'invoice') {
-        const { onCommercialRideEnded } = await import("./commercial/recipientPay");
-        await onCommercialRideEnded(rideId, "cancelled by PG Ride").catch((err) => console.error("[recipient-pay] admin cancel hook failed:", err));
+        const { onCommercialRideEnded } = await import("./commercial/recipientApproval");
+        await onCommercialRideEnded(rideId, "cancelled by PG Ride").catch((err) => console.error("[recipient-approval] admin cancel hook failed:", err));
       }
       res.json({ success: true, ride: await storage.getRide(rideId) });
     } catch (error) {
@@ -10494,11 +10494,6 @@ Generate the FAQ list.`;
             if (ride && ride.paymentStatus !== 'paid_card') {
               await storage.updateRide(rideId, { paymentStatus: 'paid_card' });
             }
-          } else if (pi.metadata?.recipientJobId) {
-            // A recipient paid a delivery fee: release the held job (shared/recipientPay.ts).
-            // Throws on failure so the webhook claim is released and Stripe retries.
-            const { settleRecipientFromIntent } = await import("./commercial/recipientPay");
-            await settleRecipientFromIntent(pi);
           } else if (pi.metadata?.statementId) {
             // A commercial bank debit that cleared days after the charge.
             // Until 2026-09-16 nothing here handled statements, so a
@@ -10532,11 +10527,6 @@ Generate the FAQ list.`;
         }
         case 'payment_intent.payment_failed': {
           const pi = event.data.object as any;
-          if (pi.metadata?.recipientJobId) {
-            const { settleRecipientFromIntent } = await import("./commercial/recipientPay");
-            await settleRecipientFromIntent(pi);
-            break;
-          }
           if (pi.metadata?.statementId) {
             // The account's bank refused the debit after it was in flight:
             // mark the statement failed and page, so it can be retried.
@@ -11145,9 +11135,9 @@ Generate the FAQ list.`;
         materializeAllStandingOrders(storage, now).catch((err) => console.error("standing order sweep failed:", err));
       }
 
-      // ── Recipient pays: nudge, ask the shop, give up, refund (shared/recipientPay.ts) ──
+      // ── Recipient approval: nudge, ask the shop, give up (shared/recipientApproval.ts) ──
       if (featureFlags.commercialEnabled) {
-        import("./commercial/recipientPay").then((m) => m.sweepRecipientPay(now, resolveAppUrl())).catch((err) => console.error("recipient-pay sweep failed:", err));
+        import("./commercial/recipientApproval").then((m) => m.sweepRecipientApproval(now, resolveAppUrl())).catch((err) => console.error("recipient-approval sweep failed:", err));
       }
 
       // ── Ride-risk watch: page ops before the rider finds out ──
@@ -11177,9 +11167,9 @@ Generate the FAQ list.`;
             _gte(ridesT.scheduledAt, now),
             _lte(ridesT.scheduledAt, new Date(now.getTime() + 125 * 60 * 1000)),
             _sql`${ridesT.status} IN ('pending', 'accepted')`,
-            // A delivery the recipient pays for is held until paid: no
-            // driver re-broadcast, no "nobody has claimed" push (shared/recipientPay.ts).
-            _sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${ridesT.id} AND h.payer = 'recipient' AND COALESCE(h.recipient_payment_status, '') <> 'paid')`
+            // A held delivery (recipient not yet approved) gets no driver
+            // re-broadcast and no "nobody has claimed" push (shared/recipientApproval.ts).
+            _sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${ridesT.id} AND h.recipient_approval IN ('awaiting', 'declined'))`
           )
         );
 

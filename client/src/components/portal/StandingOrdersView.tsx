@@ -4,7 +4,7 @@
  * ready". Jobs are booked from them a week ahead; the board shows the jobs.
  */
 import { useState } from "react";
-import { DEFAULT_HANDOVER, DEFAULT_WINDOW_HOURS, HANDOVER_KINDS, HANDOVER_LABELS, PARCEL_LABELS, PARCEL_SIZES, describeParcel, handoverOf, type HandoverKind, type ParcelSize } from "@shared/deliveries";
+import { DEFAULT_HANDOVER, DEFAULT_WINDOW_HOURS, HANDOVER_KINDS, HANDOVER_LABELS, PARCEL_LABELS, PARCEL_SIZES, SIZE_VEHICLE_HINT, handoverOf, type HandoverKind, type ParcelSize } from "@shared/deliveries";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -63,7 +63,7 @@ export function StandingOrdersView({ orgId, canBook, parcels = false }: { orgId:
             <li key={o.id} className="p-4 flex flex-col md:flex-row md:items-center gap-3" data-testid={`row-portal-standing-order-${o.id}`}>
               <div className="flex-1 min-w-0">
                 <div className="font-medium">{o.kind === "delivery" ? <span className="text-xs uppercase tracking-wide text-muted-foreground mr-2">Parcel</span> : null}{o.passengerName} <Badge variant={o.isActive ? "default" : "secondary"} className="ml-2">{o.isActive ? "active" : "paused"}</Badge></div>
-                {o.kind === "delivery" && o.parcelSize ? <div className="text-xs text-muted-foreground">{describeParcel(o.parcelSize, o.dropContact?.name)} · {HANDOVER_LABELS[handoverOf(o.handover)]}</div> : null}
+                {o.kind === "delivery" && o.parcelSize ? <div className="text-xs text-muted-foreground">{PARCEL_LABELS[o.parcelSize as ParcelSize] ?? "Parcel"} · {HANDOVER_LABELS[handoverOf(o.handover)]}</div> : null}
                 <div className="text-sm">{describePlanDays(o.days)} at {describePlanTime(o.departureHour, o.departureMinute)}{o.returnMode === "fixed" && o.returnHour != null ? `, return ${describePlanTime(o.returnHour, o.returnMinute ?? 0)}` : o.returnMode === "will_call" ? ", return when ready" : ""}</div>
                 <div className="text-sm text-muted-foreground truncate">{o.pickup?.address} to {o.destination?.address}</div>
                 <div className="text-xs text-muted-foreground">{VEHICLE_TYPE_LABELS[o.vehicleType as keyof typeof VEHICLE_TYPE_LABELS] ?? o.vehicleType}{o.poNumber ? ` · ${o.poNumber}` : ""}{o.jobCount ? ` · ${o.jobCount} jobs booked so far` : ""}</div>
@@ -128,7 +128,7 @@ function NewStandingOrder({ orgId, parcels = false, onClose, onCreated }: { orgI
         )}
         {kind === "delivery" && (
           <>
-            <Select value={parcelSize} onValueChange={(v) => setParcelSize(v as ParcelSize)}>
+            <Select value={parcelSize} onValueChange={(v) => { setParcelSize(v as ParcelSize); setVehicleType(SIZE_VEHICLE_HINT[v as ParcelSize] ?? "standard"); }}>
               <SelectTrigger data-testid="select-portal-so-parcel"><SelectValue /></SelectTrigger>
               <SelectContent>{PARCEL_SIZES.map((sz) => <SelectItem key={sz} value={sz}>{PARCEL_LABELS[sz]}</SelectItem>)}</SelectContent>
             </Select>
@@ -136,7 +136,7 @@ function NewStandingOrder({ orgId, parcels = false, onClose, onCreated }: { orgI
           </>
         )}
         <Input autoFocus placeholder={kind === "delivery" ? "Who receives it" : "Passenger name"} value={passengerName} onChange={(e) => setPassengerName(e.target.value)} data-testid="input-portal-so-passenger" />
-        <Input placeholder="Passenger phone (optional)" value={passengerPhone} onChange={(e) => setPassengerPhone(e.target.value)} data-testid="input-portal-so-phone" />
+        <Input placeholder={kind === "delivery" ? "Recipient phone (optional)" : "Passenger phone (optional)"} value={passengerPhone} onChange={(e) => setPassengerPhone(e.target.value)} data-testid="input-portal-so-phone" />
         <AddressAutocomplete value={pickupText} onChange={(v) => { setPickupText(v); setPickup(null); }} onSelect={(s) => { setPickup(s); setPickupText(s.label); }} placeholder="Pickup address" data-testid="input-portal-so-pickup" />
         <AddressAutocomplete value={destText} onChange={(v) => { setDestText(v); setDest(null); }} onSelect={(s) => { setDest(s); setDestText(s.label); }} placeholder="Destination address" data-testid="input-portal-so-destination" />
         <div>

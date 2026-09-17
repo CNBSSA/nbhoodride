@@ -23,9 +23,8 @@ export async function run({ base, db }) {
       parcelSize: "small", pickupContact: { name: "Counter" }, dropContact: { name: "Tunde Bakare", phone: "(301) 555-0177", note: "Ring twice" },
       readyAt: inMin(90), windowHours: 2, pickup: PICKUP, destination: DEST, handover: "unattended", rememberRecipient: true,
     });
-    check("the delivery is booked", first.status === 201, JSON.stringify(first.json?.message ?? first.status));
+    check("the delivery is booked and the desk is told the recipient was remembered", first.status === 201 && first.json?.remembered?.ok === true, JSON.stringify(first.json?.remembered ?? first.json?.message ?? first.status));
     rideIds.push(first.json.ride.id);
-    await new Promise((r) => setTimeout(r, 300));
     const book = await rider.req("GET", `/api/org/${orgId}/recipients`);
     const saved = (book.json ?? []).find((r) => r.phone === "3015550177");
     check("the recipient is in the book with their address, handover and note", !!saved && saved.name === "Tunde Bakare" && saved.address?.address === DEST.address && saved.handover === "unattended" && saved.note === "Ring twice", JSON.stringify(book.json));
@@ -37,6 +36,19 @@ export async function run({ base, db }) {
     check("and the book still has one of them", (bookNow.json ?? []).filter((r) => r.phone === "3015550177").length === 1, `n=${(bookNow.json ?? []).length}`);
     const bad = await rider.req("POST", `/api/org/${orgId}/recipients`, { name: "", address: { lat: 1, lng: 1, address: "x" } });
     check("a recipient needs a name", bad.status === 400 && /needs a name/.test(bad.json?.message ?? ""), JSON.stringify(bad.json));
+    const nullIsland = await rider.req("POST", `/api/org/${orgId}/recipients`, { name: "Nobody", address: { lat: null, lng: null, address: "Somewhere" } });
+    check("and a real address, not a blank one that would be Null Island", nullIsland.status === 400, JSON.stringify(nullIsland.json));
+    const phoneless = await rider.req("POST", `/api/org/${orgId}/recipients`, { name: "Tunde B.", address: { lat: DEST.lat, lng: DEST.lng, address: "Oxon Hill, MD" }, note: "Back gate" });
+    check("saving them again without a phone keeps the phone the book already knows", phoneless.status === 201 && phoneless.json?.id === saved?.id && phoneless.json?.phone === "3015550177" && phoneless.json?.note === "Back gate", JSON.stringify(phoneless.json));
+    const twinless = await rider.req("POST", `/api/org/${orgId}/recipients`, { name: "Ada Obi", address: { lat: DEST.lat, lng: DEST.lng, address: "Oxon Hill, MD" } });
+    const twinPhone = await rider.req("POST", `/api/org/${orgId}/recipients`, { name: "Ada Obi", phone: "3015550199", address: { lat: DEST.lat, lng: DEST.lng, address: "Oxon Hill, MD" } });
+    check("a phone added later folds into the phoneless entry instead of making a twin", twinless.status === 201 && twinPhone.status === 201 && twinPhone.json?.id === twinless.json?.id && twinPhone.json?.phone === "3015550199", JSON.stringify([twinless.json?.id, twinPhone.json?.id]));
+    const unrememberable = await rider.req("POST", `/api/org/${orgId}/deliveries`, {
+      parcelSize: "small", pickupContact: { name: "Counter" }, dropContact: { name: "Overseas Guest", phone: "+44 20 7946 0958" },
+      readyAt: inMin(95), windowHours: 2, pickup: PICKUP, destination: DEST, rememberRecipient: true,
+    });
+    if (unrememberable.status === 201) rideIds.push(unrememberable.json.ride.id);
+    check("a booking that cannot be remembered still books, and says why", unrememberable.status === 201 && unrememberable.json?.remembered?.ok === false && /10-digit/.test(unrememberable.json?.remembered?.reason ?? ""), JSON.stringify(unrememberable.json?.remembered ?? unrememberable.json?.message));
 
     section("The job row carries what was sent and to whom, and the past job is untouched by edits");
     const jobs = await rider.req("GET", `/api/org/${orgId}/jobs`);

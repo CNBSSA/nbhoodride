@@ -97,13 +97,11 @@ export interface JobCharges {
   facilityFee?: number | string | null;
   waitFee?: number | string | null;
   cancellationFee?: number | string | null;
-  /** The recipient paid the fare by card (shared/recipientPay.ts): it is shown, not owed. */
-  paidByRecipient?: boolean;
 }
 
 /** What a completed job costs the organization; a cancelled job is only its cancellation fee. */
 export function jobTotal(status: string, c: JobCharges): number {
-  if (status === "completed") return round2((c.paidByRecipient ? 0 : num(c.fare)) + num(c.facilityFee) + num(c.waitFee));
+  if (status === "completed") return round2(num(c.fare) + num(c.facilityFee) + num(c.waitFee));
   if (status === "cancelled" || status === "no_show") return round2(num(c.cancellationFee));
   return 0;
 }
@@ -136,7 +134,7 @@ export function statementTotals(lines: StatementLine[]): StatementTotals {
   for (const l of lines) {
     if (l.status === "completed") {
       t.completed += 1;
-      t.fares += l.paidByRecipient ? 0 : num(l.fare);
+      t.fares += num(l.fare);
       t.facilityFees += num(l.facilityFee);
       t.waitFees += num(l.waitFee);
     } else if (l.status === "cancelled" || l.status === "no_show") {

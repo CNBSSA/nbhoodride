@@ -54,7 +54,11 @@ export interface StandingOrderInput {
 
 const contactOf = (c: { name?: string | null; phone?: string | null; note?: string | null } | null | undefined) => {
   const name = String(c?.name ?? "").trim().slice(0, 120);
-  return name ? { name, phone: c?.phone ? String(c.phone).trim().slice(0, 40) : null, note: c?.note ? String(c.note).trim().slice(0, 200) : null } : null;
+  if (!name) return null;
+  const phone = c?.phone ? String(c.phone).trim().slice(0, 40) : null;
+  // A bad number on a standing order would fail the recipient's text every day; refuse it once, here.
+  if (phone && phone.replace(/\D/g, "").length < 10) throw new CommercialError("A contact phone must be a 10-digit US number.");
+  return { name, phone, note: c?.note ? String(c.note).trim().slice(0, 200) : null };
 };
 
 const isLocation = (v: any): v is Location =>
@@ -164,9 +168,8 @@ export async function materializeStandingOrder(storage: IStorage, order: Commerc
           vehicleType: order.vehicleType,
           notes: order.notes,
           poNumber: order.poNumber,
-          payer: "organization",
-          standing: { orderId: order.id, serviceDate: occ.serviceDate, leg: "out" },
-        }, now);
+          askRecipient: false,
+        }, now, { orderId: order.id, serviceDate: occ.serviceDate, leg: "out" });
         booked += 1;
         notify?.(b);
         continue;
@@ -220,6 +223,7 @@ export async function bookWillCallReturn(storage: IStorage, organizationId: stri
   if (row.job.leg === "return") throw new CommercialError("This is already a return trip.", 409);
   if (row.ride.status === "cancelled" || row.ride.status === "no_show") throw new CommercialError("That trip was cancelled; book a new job instead.", 409);
   const [already] = await db.select({ id: commercialJobs.id }).from(commercialJobs).where(eq(commercialJobs.returnOf, jobId));
+  if (row.job.parcelSize) throw new CommercialError("A parcel has no return leg.", 409);
   if (already) throw new CommercialError("A return is already booked for this trip.", 409);
   const terms = orgTerms(row.org.terms);
   const lead = Math.max(terms.willCallLeadMinutes, Math.round(Number(readyInMinutes) || 0));

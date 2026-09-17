@@ -42,6 +42,16 @@ export async function run({ base, db }) {
     check("running the sweep again books nothing new", again.status === 200 && total === so.json.booked, `total=${total} booked=${so.json.booked}`);
     const paused = await rider.req("POST", `/api/org/${orgId}/standing-orders/${so.json.id}/pause`);
     check("it can be paused like any standing order", paused.status === 200 && paused.json?.isActive === false, JSON.stringify(paused.json?.isActive));
+
+    section("What a request body cannot do (post-implementation audit)");
+    const forged = await rider.req("POST", `/api/org/${orgId}/deliveries`, { parcelSize: "small", pickupContact: { name: "Counter" }, dropContact: { name: "Someone" }, readyAt: new Date(Date.now() + 90 * 60_000).toISOString(), windowHours: 2, pickup: PICKUP, destination: DEST, standing: { orderId: so.json.id, serviceDate: "2099-01-01", leg: "out" } });
+    const { rows: [forgedRow] } = await db.query("SELECT standing_order_id, service_date FROM commercial_jobs WHERE id=$1", [forged.json?.job?.id]);
+    check("a one-off delivery cannot stamp itself as a standing order's occurrence", forged.status === 201 && forgedRow?.standing_order_id === null && forgedRow?.service_date === null, JSON.stringify(forgedRow));
+    const parcelJob = mine[0];
+    const noReturn = await rider.req("POST", `/api/org/${orgId}/jobs/${parcelJob.id}/return`, { readyInMinutes: 30 });
+    check("a parcel has no return leg", noReturn.status === 409 && /no return leg/.test(noReturn.json?.message ?? ""), JSON.stringify(noReturn.json));
+    const badPhone = await rider.req("POST", `/api/org/${orgId}/standing-orders`, order({ dropContact: { name: "Hotel kitchen", phone: "12345" } }));
+    check("a bad phone on a standing order is refused once, not failed every day", badPhone.status === 400 && /10-digit/.test(badPhone.json?.message ?? ""), JSON.stringify(badPhone.json));
   } finally {
     for (const id of orgIds) {
       const { rows } = await db.query("SELECT ride_id FROM commercial_jobs WHERE organization_id=$1", [id]).catch(() => ({ rows: [] }));

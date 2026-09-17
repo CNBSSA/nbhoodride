@@ -41,8 +41,8 @@ export async function connectDb() {
 /** Idempotent: admin, approved rider, approved driver with a vehicle. */
 /** The invitation link the audits open: /org/join/<E2E_INVITE_TOKEN>. Only its hash is stored. */
 export const E2E_INVITE_TOKEN = "e2e0" .repeat(12); // 48 hex chars, the shape a real token has
-/** The pay link the audits open: /pay/<E2E_PAY_TOKEN>, a held recipient-pays delivery on the business account. */
-export const E2E_PAY_TOKEN = "e2e1" .repeat(12);
+/** The approval link the audits open: /approve/<E2E_APPROVAL_TOKEN>, a held delivery on the business account waiting for the recipient. */
+export const E2E_APPROVAL_TOKEN = "e2e1" .repeat(12);
 export async function seedFixtures(db) {
   const hash = await bcrypt.hash(PASSWORD, 10);
   await db.query(`INSERT INTO users (id,email,password,first_name,last_name,is_approved,is_admin,phone,registration_completed_at)
@@ -69,7 +69,7 @@ export async function seedFixtures(db) {
   // membership is dated a day earlier so /api/org/mine (newest first) keeps
   // the medical account as the default the other checks land on; the audits
   // reach this one by ?org=e2e-biz.
-  await db.query(`INSERT INTO organizations (id, name, category, facility_fee) VALUES ('e2e-biz', 'E2E Books Expert LLC', 'business', 0.00) ON CONFLICT (id) DO NOTHING`);
+  await db.query(`INSERT INTO organizations (id, name, category, facility_fee, address) VALUES ('e2e-biz', 'E2E Books Expert LLC', 'business', 0.00, $1) ON CONFLICT (id) DO UPDATE SET address=$1`, [JSON.stringify({ lat: 38.9073, lng: -76.7781, address: "Bowie, MD" })]);
   await db.query(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES ('e2e-biz', $1, 'owner', NOW() - interval '1 day') ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner', created_at=NOW() - interval '1 day'`, [FIXTURES.rider.id]);
   // An open invitation to the medical organization, re-opened on every seed,
   // so the every-button audit can open the join page and press its buttons.
@@ -77,21 +77,21 @@ export async function seedFixtures(db) {
   await db.query(`INSERT INTO organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at, accepted_at, accepted_user_id)
     VALUES ('e2e-invite', 'e2e-org', 'e2e-invitee@example.com', 'requester', $1, $2, NOW() + interval '7 days', NULL, NULL)
     ON CONFLICT (organization_id, email) DO UPDATE SET token_hash=$1, expires_at=NOW() + interval '7 days', accepted_at=NULL, accepted_user_id=NULL`, [inviteHash, FIXTURES.rider.id]);
-  // A delivery the recipient pays for, still waiting: the pay page and the
-  // desk's "We'll pay" / "Copy pay link" / "Text again" have something to show.
+  // A delivery waiting for the recipient's approval: the approval page and
+  // the desk's "Send anyway" / "Copy link" / "Text again" have something to show.
   await db.query(`INSERT INTO rides (id, rider_id, status, pickup_location, destination_location, estimated_fare, payment_method, ride_type, passenger_name, passenger_phone, scheduled_at)
     VALUES ('e2e-held-ride', $1, 'pending', $2, $3, 11.80, 'invoice', 'commercial', 'Tunde Bakare', '3015550177', NOW() + interval '3 hours')
     ON CONFLICT (id) DO UPDATE SET status='pending', driver_id=NULL, scheduled_at=NOW() + interval '3 hours'`,
     [FIXTURES.rider.id, JSON.stringify({ address: "Bowie, MD", lat: 38.9073, lng: -76.7781 }), JSON.stringify({ address: "National Harbor, MD", lat: 38.7823, lng: -77.0166 })]);
-  await db.query(`INSERT INTO commercial_jobs (ride_id, organization_id, requester_id, job_number, category, parcel_size, handover, drop_contact, pickup_contact, window_start, window_end, payer, recipient_payment_status, recipient_pay_token, recipient_fee)
-    VALUES ('e2e-held-ride', 'e2e-biz', $1, 990002, 'business', 'small', 'person', $2, $3, NOW() + interval '3 hours', NOW() + interval '5 hours', 'recipient', 'awaiting', $4, 11.80)
-    ON CONFLICT (ride_id) DO UPDATE SET payer='recipient', recipient_payment_status='awaiting', recipient_pay_token=$4, recipient_fee=11.80, window_start=NOW() + interval '3 hours', window_end=NOW() + interval '5 hours', recipient_nudged_at=NULL, shop_asked_at=NULL`,
-    [FIXTURES.rider.id, JSON.stringify({ name: "Tunde Bakare", phone: "3015550177" }), JSON.stringify({ name: "Mama's Kitchen counter" }), E2E_PAY_TOKEN]).catch((e) => console.log("  (held job seed) " + String(e?.message ?? e).split("\n")[0]));
+  await db.query(`INSERT INTO commercial_jobs (ride_id, organization_id, requester_id, job_number, category, parcel_size, handover, drop_contact, pickup_contact, window_start, window_end, recipient_approval, recipient_approval_token, recipient_fee)
+    VALUES ('e2e-held-ride', 'e2e-biz', $1, 990002, 'business', 'small', 'person', $2, $3, NOW() + interval '3 hours', NOW() + interval '5 hours', 'awaiting', $4, 11.80)
+    ON CONFLICT (ride_id) DO UPDATE SET recipient_approval='awaiting', recipient_approval_token=$4, recipient_fee=11.80, window_start=NOW() + interval '3 hours', window_end=NOW() + interval '5 hours', recipient_nudged_at=NULL, shop_asked_at=NULL`,
+    [FIXTURES.rider.id, JSON.stringify({ name: "Tunde Bakare", phone: "3015550177" }), JSON.stringify({ name: "Mama's Kitchen counter" }), E2E_APPROVAL_TOKEN]).catch((e) => console.log("  (held job seed) " + String(e?.message ?? e).split("\n")[0]));
   // One saved recipient for the business account, so the Recipients tab and
   // the parcel form's picker have something to show the audits.
   await db.query(`INSERT INTO organization_recipients (id, organization_id, name, phone, address, handover, note, created_by, archived_at)
     VALUES ('e2e-recipient', 'e2e-biz', 'Tunde Bakare', '3015550177', $1, 'person', 'Ring the bell twice', $2, NULL)
-    ON CONFLICT (id) DO UPDATE SET archived_at=NULL, name='Tunde Bakare', phone='3015550177'`,
+    ON CONFLICT (id) DO UPDATE SET archived_at=NULL, name='Tunde Bakare', phone='3015550177', address=$1, handover='person', note='Ring the bell twice'`,
     [JSON.stringify({ lat: 38.7823, lng: -77.0166, address: "National Harbor, MD" }), FIXTURES.rider.id]).catch((e) => console.log("  (recipient seed) " + String(e?.message ?? e).split("\n")[0]));
   const { rows: [prof] } = await db.query("SELECT id FROM driver_profiles WHERE user_id=$1", [FIXTURES.driver.id]);
   await db.query(`INSERT INTO vehicles (driver_profile_id, make, model, year, color, license_plate)
@@ -169,6 +169,7 @@ export async function deleteOrgs(db, orgIds) {
   await db.query("DELETE FROM commercial_jobs WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
   await deleteRides(db, rows.map((r) => r.ride_id)).catch(() => {});
   await db.query("DELETE FROM commercial_standing_orders WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+  await db.query("DELETE FROM organization_recipients WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
   await db.query("DELETE FROM organization_members WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
   await db.query("DELETE FROM organizations WHERE id = ANY($1::varchar[])", [orgIds]).catch(() => {});
 }
