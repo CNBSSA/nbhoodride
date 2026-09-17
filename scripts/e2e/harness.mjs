@@ -6,6 +6,7 @@
  * fails the whole run — this is the regression net for "it worked yesterday".
  */
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createWriteStream, readFileSync } from "node:fs";
 import pg from "pg";
 import bcrypt from "bcrypt";
@@ -38,6 +39,8 @@ export async function connectDb() {
 }
 
 /** Idempotent: admin, approved rider, approved driver with a vehicle. */
+/** The invitation link the audits open: /org/join/<E2E_INVITE_TOKEN>. Only its hash is stored. */
+export const E2E_INVITE_TOKEN = "e2e0" .repeat(12); // 48 hex chars, the shape a real token has
 export async function seedFixtures(db) {
   const hash = await bcrypt.hash(PASSWORD, 10);
   await db.query(`INSERT INTO users (id,email,password,first_name,last_name,is_approved,is_admin,phone,registration_completed_at)
@@ -66,6 +69,12 @@ export async function seedFixtures(db) {
   // reach this one by ?org=e2e-biz.
   await db.query(`INSERT INTO organizations (id, name, category, facility_fee) VALUES ('e2e-biz', 'E2E Books Expert LLC', 'business', 0.00) ON CONFLICT (id) DO NOTHING`);
   await db.query(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES ('e2e-biz', $1, 'owner', NOW() - interval '1 day') ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner', created_at=NOW() - interval '1 day'`, [FIXTURES.rider.id]);
+  // An open invitation to the medical organization, re-opened on every seed,
+  // so the every-button audit can open the join page and press its buttons.
+  const inviteHash = createHash("sha256").update(E2E_INVITE_TOKEN).digest("hex");
+  await db.query(`INSERT INTO organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at, accepted_at, accepted_user_id)
+    VALUES ('e2e-invite', 'e2e-org', 'e2e-invitee@example.com', 'requester', $1, $2, NOW() + interval '7 days', NULL, NULL)
+    ON CONFLICT (organization_id, email) DO UPDATE SET token_hash=$1, expires_at=NOW() + interval '7 days', accepted_at=NULL, accepted_user_id=NULL`, [inviteHash, FIXTURES.rider.id]);
   const { rows: [prof] } = await db.query("SELECT id FROM driver_profiles WHERE user_id=$1", [FIXTURES.driver.id]);
   await db.query(`INSERT INTO vehicles (driver_profile_id, make, model, year, color, license_plate)
     SELECT $1::varchar,'Toyota','Camry',2020,'Blue','E2E0001' WHERE NOT EXISTS (SELECT 1 FROM vehicles WHERE driver_profile_id=$1::varchar)`, [prof.id]);

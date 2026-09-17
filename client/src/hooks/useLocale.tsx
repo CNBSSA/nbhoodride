@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { getQueryFn } from "@/lib/queryClient";
 import { isLocale, t, type Locale, type TranslationKey } from "@shared/i18n";
 
 interface LocaleContextValue {
@@ -13,8 +14,14 @@ const LocaleContext = createContext<LocaleContextValue>({
 });
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
-  const { data: prefs } = useQuery<{ preferredLanguage: string }>({
+  // Signed out, this is a 401 — and the app-wide 401 handler treats any 401
+  // as "your session died" and bounces to /login?expired=1. That is how a
+  // visitor opening the portal address or an invitation link landed on the
+  // rider login with a "session expired" banner (2026-09-16). A visitor
+  // simply reads English.
+  const { data: prefs } = useQuery<{ preferredLanguage: string } | null>({
     queryKey: ["/api/user/ride-preferences"],
+    queryFn: getQueryFn<{ preferredLanguage: string } | null>({ on401: "returnNull" }),
     retry: false,
   });
   const preferred = prefs?.preferredLanguage ?? "en";

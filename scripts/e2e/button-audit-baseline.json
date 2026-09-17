@@ -280,6 +280,9 @@
     "button-portal-toggle-standing-order-*": "one per standing order; journeys create and clean their own",
     "button-driver-badge-*": "one pair per approved driver in the admin drivers panel; a fresh database has one approved driver and the audit does not grant badges",
     "button-portal-add-payment-method": "starts a Stripe SetupIntent; Stripe is unreachable from the audit's sandbox",
-    "button-portal-submit-delivery": "disabled until both contacts, both addresses and a ready time are filled"
+    "button-portal-submit-delivery": "disabled until both contacts, both addresses and a ready time are filled",
+    "button-business-landing": "on the SPA landing page, which the audit does not open: the bare domain serves the static business page (same as button-signup)",
+    "button-join-attach-existing": "shown only when the invited email already holds an account; journey 21 covers the path",
+    "button-portal-copy-invite-*": "appears only in the desk session that just created the invitation; journey 21 covers the link"
   }
 }

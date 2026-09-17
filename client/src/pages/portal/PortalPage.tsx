@@ -28,10 +28,11 @@ import { JobsMap } from "@/components/portal/JobsMap";
 import { StandingOrdersView } from "@/components/portal/StandingOrdersView";
 import { BillingView } from "@/components/portal/BillingView";
 import { BookDeliveryDrawer } from "@/components/portal/BookDeliveryDrawer";
+import { forgetBusinessHome } from "@/lib/businessHome";
 import { CATEGORY_LABELS, ORG_ROLES, canBook, canManageMembers, canSeeStatement, categoryMayBook, currentMonthKey, formatJobNumber, type CommercialCategory, type OrgRole } from "@shared/commercial";
 import { VEHICLE_TYPES, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 import { BRAND } from "@shared/branding";
-import { CalendarDays, ListChecks, Receipt, Users, Plus, Download, Printer, ArrowLeft, Repeat, Landmark, Package } from "lucide-react";
+import { CalendarDays, ListChecks, Receipt, Users, Plus, Download, Printer, ArrowLeft, Repeat, Landmark, Package, Car } from "lucide-react";
 
 interface Org { id: string; name: string; category: CommercialCategory; status: string; facilityFee: string; billingMode: string }
 interface Membership { organization: Org; role: OrgRole }
@@ -97,7 +98,7 @@ export default function PortalPage() {
     // themselves is how this page read the first time it was used for real.
     return (
       <div className="min-h-screen bg-background p-8 max-w-xl mx-auto space-y-4" data-testid="portal-empty">
-        <Link href="/" className="inline-flex items-center gap-1 text-sm text-muted-foreground"><ArrowLeft className="h-4 w-4" /> Back to the app</Link>
+        <Link href="/" onClick={forgetBusinessHome} className="inline-flex items-center gap-1 text-sm text-muted-foreground"><ArrowLeft className="h-4 w-4" /> Back to the app</Link>
         <h1 className="text-2xl font-bold">{BRAND.appName} for organizations</h1>
         {isAdmin ? (
           <>
@@ -143,7 +144,7 @@ export default function PortalPage() {
     <div className="min-h-screen bg-background text-foreground" data-testid="portal">
       <header className="border-b bg-card">
         <div className="flex items-center gap-3 px-4 md:px-6 h-14">
-          <Link href="/" className="text-muted-foreground hover:text-foreground" title="Back to the app" data-testid="link-portal-back"><ArrowLeft className="h-5 w-5" /></Link>
+          <Link href="/" onClick={forgetBusinessHome} className="text-muted-foreground hover:text-foreground" title="Back to the app" data-testid="link-portal-back"><ArrowLeft className="h-5 w-5" /></Link>
           <div className="font-semibold truncate">{BRAND.appName}</div>
           <span className="text-muted-foreground hidden sm:inline">·</span>
           {memberships.length > 1 ? (
@@ -171,6 +172,9 @@ export default function PortalPage() {
               </Button>
             )}
             <span className="text-xs text-muted-foreground hidden md:inline">{user?.firstName}</span>
+            <Button size="sm" variant="ghost" asChild data-testid="button-portal-to-rider" title="Switch to the rider app" aria-label="Switch to the rider app">
+              <Link href="/" onClick={forgetBusinessHome}><Car className="h-4 w-4 md:mr-1" /><span className="hidden md:inline">Rider app</span></Link>
+            </Button>
           </div>
         </div>
       </header>
@@ -367,6 +371,9 @@ function StatementView({ org }: { org: Org }) {
   );
 }
 
+interface Invitation { id: string; email: string; role: OrgRole; expiresAt: string; createdAt: string }
+interface InvitedResponse { invited: true; email: string; role: OrgRole; link: string; emailSent: boolean; expiresAt: string }
+
 function PeopleView({ org }: { org: Org }) {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -374,11 +381,34 @@ function PeopleView({ org }: { org: Org }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<OrgRole>("requester");
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["/api/org", org.id, "members"] });
+  const { data: invitations = [] } = useQuery<Invitation[]>({ queryKey: ["/api/org", org.id, "invitations"], queryFn: () => json("GET", `/api/org/${org.id}/invitations`) });
+  const refreshInvites = () => queryClient.invalidateQueries({ queryKey: ["/api/org", org.id, "invitations"] });
+  const [lastLink, setLastLink] = useState<{ email: string; link: string; emailSent: boolean } | null>(null);
   const add = useMutation({
-    mutationFn: () => json<Member>("POST", `/api/org/${org.id}/members`, { email, role }),
-    onSuccess: (m) => { setEmail(""); refresh(); toast({ title: "Person added", description: `${m.firstName ?? ""} ${m.lastName ?? ""} is now ${m.role} for ${org.name}.` }); },
+    mutationFn: () => json<Member | InvitedResponse>("POST", `/api/org/${org.id}/members`, { email, role }),
+    onSuccess: (m) => {
+      setEmail("");
+      if ("invited" in m && m.invited) {
+        refreshInvites();
+        setLastLink({ email: m.email, link: m.link, emailSent: m.emailSent });
+        toast({ title: m.emailSent ? "Invitation sent" : "Invitation ready", description: m.emailSent ? `${m.email} has an email with a link to join ${org.name}.` : `Send ${m.email} the link shown below to join ${org.name}.` });
+        return;
+      }
+      const member = m as Member;
+      refresh();
+      toast({ title: "Person added", description: `${member.firstName ?? ""} ${member.lastName ?? ""} is now ${member.role} for ${org.name}.` });
+    },
     onError: (e: Error) => toast({ title: "Could not add them", description: e.message, variant: "destructive" }),
   });
+  const revoke = useMutation({
+    mutationFn: (id: string) => json("DELETE", `/api/org/${org.id}/invitations/${id}`),
+    onSuccess: () => { refreshInvites(); setLastLink(null); toast({ title: "Invitation revoked" }); },
+    onError: (e: Error) => toast({ title: "Could not revoke it", description: e.message, variant: "destructive" }),
+  });
+  const copyLink = async (link: string) => {
+    try { await navigator.clipboard.writeText(link); toast({ title: "Link copied", description: "Paste it into a text or email to them." }); }
+    catch { toast({ title: "Copy it from the box below", description: link }); }
+  };
   const remove = useMutation({
     mutationFn: (userId: string) => json("DELETE", `/api/org/${org.id}/members/${userId}`),
     onSuccess: () => { refresh(); toast({ title: "Person removed" }); },
@@ -386,15 +416,38 @@ function PeopleView({ org }: { org: Org }) {
   });
   return (
     <section className="space-y-4 max-w-3xl" data-testid="portal-people">
-      <div><h1 className="text-xl font-semibold">People</h1><p className="text-sm text-muted-foreground">Owners do everything. Requesters book. Billing sees statements. Each person needs a {BRAND.appName} account first, signed up with the email you enter here.</p></div>
+      <div><h1 className="text-xl font-semibold">People</h1><p className="text-sm text-muted-foreground">Owners do everything. Requesters book. Billing sees statements. Enter their email: someone with a {BRAND.appName} account is added at once; anyone else gets an invitation link to set up their sign-in and land straight in this desk.</p></div>
       <div className="flex flex-col sm:flex-row gap-2">
-        <Input placeholder="Email of their PG Ride account" type="email" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && email.trim()) add.mutate(); }} data-testid="input-portal-member-email" />
+        <Input placeholder="Their email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && email.trim()) add.mutate(); }} data-testid="input-portal-member-email" />
         <Select value={role} onValueChange={(v) => setRole(v as OrgRole)}>
           <SelectTrigger className="sm:w-40" data-testid="select-portal-member-role"><SelectValue /></SelectTrigger>
           <SelectContent>{ORG_ROLES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
         </Select>
         <Button disabled={!email.trim() || add.isPending} onClick={() => add.mutate()} data-testid="button-portal-add-member">Add</Button>
       </div>
+      {lastLink && (
+        <div className="rounded-lg border bg-muted/40 p-3 text-sm space-y-2" data-testid="portal-invite-link">
+          <p>{lastLink.emailSent ? `Emailed to ${lastLink.email}. You can also send them this link yourself:` : `Email is not set up on this server, so send ${lastLink.email} this link yourself:`}</p>
+          <Input readOnly value={lastLink.link} onFocus={(e) => e.currentTarget.select()} data-testid="input-portal-invite-link" />
+        </div>
+      )}
+      {invitations.length > 0 && (
+        <div className="space-y-2" data-testid="portal-invitations">
+          <h2 className="text-sm font-medium text-muted-foreground">Invited, not yet joined</h2>
+          <ul className="rounded-lg border bg-card divide-y text-sm">
+            {invitations.map((i) => (
+              <li key={i.id} className="flex items-center justify-between gap-2 px-3 py-2" data-testid={`row-portal-invitation-${i.id}`}>
+                <span><span className="font-medium">{i.email}</span> <span className="text-muted-foreground">expires {new Date(i.expiresAt).toLocaleDateString()}</span></span>
+                <span className="flex items-center gap-2">
+                  <Badge variant="outline">{i.role}</Badge>
+                  {lastLink?.email === i.email && <Button variant="ghost" size="sm" onClick={() => copyLink(lastLink.link)} data-testid={`button-portal-copy-invite-${i.id}`}>Copy link</Button>}
+                  <Button variant="ghost" size="sm" onClick={() => revoke.mutate(i.id)} data-testid={`button-portal-revoke-invite-${i.id}`}>Revoke</Button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <ul className="rounded-lg border bg-card divide-y text-sm">
         {members.map((m) => (
           <li key={m.userId} className="flex items-center justify-between gap-2 px-3 py-2" data-testid={`row-portal-member-${m.userId}`}>

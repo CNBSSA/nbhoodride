@@ -20,7 +20,7 @@
 import { chromium } from "playwright";
 import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { connectDb, seedFixtures, startServer, stopServer, FIXTURES, PASSWORD, check, section, summary } from "./harness.mjs";
+import { connectDb, seedFixtures, startServer, stopServer, FIXTURES, PASSWORD, check, section, summary, E2E_INVITE_TOKEN } from "./harness.mjs";
 
 const VIEWPORT = { width: 390, height: 844 };
 const executablePath = process.env.PW_CHROMIUM_PATH || undefined;
@@ -45,6 +45,11 @@ const CLICKABLE = [
 
 const SCREENS = [
   { role: "visitor", path: "/" }, { role: "visitor", path: "/login" }, { role: "visitor", path: "/signup" },
+  // The business door (2026-09-16): signed-out portal shows the business
+  // sign-in, and the invitation link opens the join page.
+  { role: "visitor", path: "/org/login" }, { role: "visitor", path: "/org" }, { role: "visitor", path: `/org/join/${E2E_INVITE_TOKEN}` },
+  // A link that is the right shape but matches nothing: the "invitation not found" state and its way to the sign-in.
+  { role: "visitor", path: `/org/join/${"0".repeat(48)}` },
   { role: "visitor", path: "/forgot-password" }, { role: "visitor", path: "/terms" }, { role: "visitor", path: "/privacy" },
   { role: "rider", path: "/" }, { role: "rider", path: "/ratings" }, { role: "rider", path: "/payments" }, { role: "rider", path: "/card-setup" },
   { role: "driver", path: "/" }, { role: "driver", path: "/driver/insights" },
@@ -258,6 +263,13 @@ async function auditScreen(browser, base, screen) {
   load.stop();
   const name = `${screen.role} ${screen.path}`;
   const results = [[`${name}: screen loads clean`, loadProblems.length === 0, loadProblems.join("; ")]];
+  // A screen that quietly redirects elsewhere used to pass: the audit then
+  // pressed the buttons of wherever it landed and reported that screen as
+  // fine. A signed-out visit to the portal bounced to /login?expired=1 for a
+  // whole slice before anyone noticed (2026-09-16). Stay where you were opened.
+  const wanted = new URL(base + screen.path).pathname;
+  const landed = new URL(page.url()).pathname;
+  results.push([`${name}: stays on its own screen`, landed === wanted, landed === wanted ? "" : `landed on ${landed}${new URL(page.url()).search}`]);
 
   const broken = [];
   const baseline = oneOfEach(await visibleClickables(page));
