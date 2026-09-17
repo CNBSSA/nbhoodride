@@ -69,7 +69,7 @@ export async function seedFixtures(db) {
   // membership is dated a day earlier so /api/org/mine (newest first) keeps
   // the medical account as the default the other checks land on; the audits
   // reach this one by ?org=e2e-biz.
-  await db.query(`INSERT INTO organizations (id, name, category, facility_fee) VALUES ('e2e-biz', 'E2E Books Expert LLC', 'business', 0.00) ON CONFLICT (id) DO NOTHING`);
+  await db.query(`INSERT INTO organizations (id, name, category, facility_fee, address) VALUES ('e2e-biz', 'E2E Books Expert LLC', 'business', 0.00, $1) ON CONFLICT (id) DO UPDATE SET address=$1`, [JSON.stringify({ lat: 38.9073, lng: -76.7781, address: "Bowie, MD" })]);
   await db.query(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES ('e2e-biz', $1, 'owner', NOW() - interval '1 day') ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner', created_at=NOW() - interval '1 day'`, [FIXTURES.rider.id]);
   // An open invitation to the medical organization, re-opened on every seed,
   // so the every-button audit can open the join page and press its buttons.
@@ -87,6 +87,12 @@ export async function seedFixtures(db) {
     VALUES ('e2e-held-ride', 'e2e-biz', $1, 990002, 'business', 'small', 'person', $2, $3, NOW() + interval '3 hours', NOW() + interval '5 hours', 'awaiting', $4, 11.80)
     ON CONFLICT (ride_id) DO UPDATE SET recipient_approval='awaiting', recipient_approval_token=$4, recipient_fee=11.80, window_start=NOW() + interval '3 hours', window_end=NOW() + interval '5 hours', recipient_nudged_at=NULL, shop_asked_at=NULL`,
     [FIXTURES.rider.id, JSON.stringify({ name: "Tunde Bakare", phone: "3015550177" }), JSON.stringify({ name: "Mama's Kitchen counter" }), E2E_APPROVAL_TOKEN]).catch((e) => console.log("  (held job seed) " + String(e?.message ?? e).split("\n")[0]));
+  // One saved recipient for the business account, so the Recipients tab and
+  // the parcel form's picker have something to show the audits.
+  await db.query(`INSERT INTO organization_recipients (id, organization_id, name, phone, address, handover, note, created_by, archived_at)
+    VALUES ('e2e-recipient', 'e2e-biz', 'Tunde Bakare', '3015550177', $1, 'person', 'Ring the bell twice', $2, NULL)
+    ON CONFLICT (id) DO UPDATE SET archived_at=NULL, name='Tunde Bakare', phone='3015550177', address=$1, handover='person', note='Ring the bell twice'`,
+    [JSON.stringify({ lat: 38.7823, lng: -77.0166, address: "National Harbor, MD" }), FIXTURES.rider.id]).catch((e) => console.log("  (recipient seed) " + String(e?.message ?? e).split("\n")[0]));
   const { rows: [prof] } = await db.query("SELECT id FROM driver_profiles WHERE user_id=$1", [FIXTURES.driver.id]);
   await db.query(`INSERT INTO vehicles (driver_profile_id, make, model, year, color, license_plate)
     SELECT $1::varchar,'Toyota','Camry',2020,'Blue','E2E0001' WHERE NOT EXISTS (SELECT 1 FROM vehicles WHERE driver_profile_id=$1::varchar)`, [prof.id]);
@@ -163,6 +169,7 @@ export async function deleteOrgs(db, orgIds) {
   await db.query("DELETE FROM commercial_jobs WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
   await deleteRides(db, rows.map((r) => r.ride_id)).catch(() => {});
   await db.query("DELETE FROM commercial_standing_orders WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
+  await db.query("DELETE FROM organization_recipients WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
   await db.query("DELETE FROM organization_members WHERE organization_id = ANY($1::varchar[])", [orgIds]).catch(() => {});
   await db.query("DELETE FROM organizations WHERE id = ANY($1::varchar[])", [orgIds]).catch(() => {});
 }

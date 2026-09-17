@@ -28,6 +28,7 @@ import { sendOrganizationInviteEmail } from "../emailService";
 import { resolveAppUrl } from "../appUrl";
 import { INVITATION_DAYS } from "@shared/invitations";
 import { bookDelivery } from "./deliveries";
+import { archiveRecipient, listRecipients, saveRecipient } from "./recipients";
 import { approvalView, approveByRecipient, declineByRecipient, resendApprovalLink, sendAnyway, setReleaseHook, startRecipientApproval } from "./recipientApproval";
 import { buildStatement, statementToCsv, statementToHtml } from "./statements";
 import { cancelJob } from "./cancel";
@@ -246,6 +247,20 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       res.json({ askRecipientByDefault: org.askRecipientByDefault });
     } catch (err) { fail(res, err, "Could not save the setting"); }
   });
+  // ── The recipient book (shared/recipients.ts) ──
+  app.get("/api/org/:orgId/recipients", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.json(await listRecipients(req.orgId)); }
+    catch (err) { fail(res, err, "Could not list recipients"); }
+  });
+  app.post("/api/org/:orgId/recipients", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.status(201).json(await saveRecipient(req.orgId, req.body ?? {}, userIdOf(req)!)); }
+    catch (err) { fail(res, err, "Could not save the recipient"); }
+  });
+  app.delete("/api/org/:orgId/recipients/:id", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.json({ removed: await archiveRecipient(req.orgId, String(req.params.id)) }); }
+    catch (err) { fail(res, err, "Could not remove the recipient"); }
+  });
+
   app.post("/api/admin/analytics/recipient-approval-sweep", gate, isAdminOrSessionAuth, async (req: any, res) => {
     try { const { sweepRecipientApproval } = await import("./recipientApproval"); res.json(await sweepRecipientApproval(new Date(), resolveAppUrl(`${req.protocol}://${req.get("host")}`))); }
     catch (err) { fail(res, err, "Could not run the sweep"); }
@@ -322,6 +337,22 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
     try {
       const booked = await bookDelivery(storage, { ...(req.body ?? {}), organizationId: req.orgId, requesterId: userIdOf(req)! });
       const org = await getOrganization(req.orgId);
+      // "Remember this recipient": the book fills itself from the booking.
+      // A book entry never blocks a delivery, but a failure is reported so
+      // the desk is told, not left to wonder (post-implementation audit).
+      let remembered: { ok: boolean; reason?: string } | null = null;
+      if (req.body?.rememberRecipient === true) {
+        try {
+          await saveRecipient(req.orgId, {
+            name: booked.job.dropContact?.name, phone: booked.job.dropContact?.phone, note: booked.job.dropContact?.note,
+            address: booked.ride.destinationLocation as any, handover: booked.job.handover,
+          }, userIdOf(req)!);
+          remembered = { ok: true };
+        } catch (err: any) {
+          remembered = { ok: false, reason: err instanceof CommercialError ? err.message : "the book could not be written" };
+          console.log(`[recipients] not remembered: ${remembered.reason}`);
+        }
+      }
       // Ask the recipient: the job is HELD — not offered to any driver —
       // until the recipient approves the fee from the link they are texted,
       // or the shop sends it anyway (shared/recipientApproval.ts).
@@ -341,7 +372,7 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
         ["Fare", `$${Number(booked.ride.estimatedFare ?? 0).toFixed(2)}`],
         ["Recipient", recipientApproval ? "asked to approve the fee (held until they do)" : "not asked"],
       ]));
-      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: formatJobNumber(booked.job.jobNumber), recipientApproval: recipientApproval ? "awaiting" : "none" }, recipientApproval });
+      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: formatJobNumber(booked.job.jobNumber), recipientApproval: recipientApproval ? "awaiting" : "none" }, recipientApproval, remembered });
     } catch (err) { fail(res, err, "Could not book the delivery"); }
   });
 

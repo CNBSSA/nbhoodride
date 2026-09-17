@@ -6,7 +6,7 @@
  * receives it, and the window it must land in.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
-import { DEFAULT_WINDOW_HOURS, PARCEL_LABELS, PARCEL_NOTES, PARCEL_SIZES, describeDeliveryTariff, type ParcelSize, HANDOVER_KINDS, HANDOVER_LABELS, DEFAULT_HANDOVER, type HandoverKind } from "@shared/deliveries";
+import { DEFAULT_WINDOW_HOURS, PARCEL_LABELS, PARCEL_NOTES, PARCEL_SIZES, describeDeliveryTariff, type ParcelSize, HANDOVER_KINDS, HANDOVER_LABELS, DEFAULT_HANDOVER, type HandoverKind, handoverOf } from "@shared/deliveries";
 
 async function json<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await apiRequest(method, url, body);
@@ -25,21 +25,44 @@ async function json<T>(method: string, url: string, body?: unknown): Promise<T> 
 }
 const money = (n: string | number) => `$${Number(n ?? 0).toFixed(2)}`;
 
-export function BookDeliveryDrawer({ orgId, orgName, askRecipientByDefault = false, onClose }: { orgId: string; orgName: string; askRecipientByDefault?: boolean; onClose: () => void }) {
+export interface DeliveryPrefill {
+  parcelSize?: string; handover?: string; askRecipient?: boolean;
+  pickupContact?: { name?: string | null; phone?: string | null } | null;
+  dropContact?: { name?: string | null; phone?: string | null; note?: string | null } | null;
+  pickup?: { lat: number; lng: number; address: string } | null;
+  destination?: { lat: number; lng: number; address: string } | null;
+}
+interface SavedRecipient { id: string; name: string; phone: string | null; address: { lat: number; lng: number; address: string }; handover: string; note: string | null }
+
+export function BookDeliveryDrawer({ orgId, orgName, askRecipientByDefault = false, orgAddress, prefill, onClose }: { orgId: string; orgName: string; askRecipientByDefault?: boolean; orgAddress?: { lat?: number; lng?: number; address?: string } | null; prefill?: DeliveryPrefill | null; onClose: () => void }) {
   const { toast } = useToast();
   const first = useRef<HTMLInputElement>(null);
-  const [parcelSize, setParcelSize] = useState<ParcelSize>("small");
-  const [pickupName, setPickupName] = useState("");
-  const [pickupPhone, setPickupPhone] = useState("");
-  const [dropName, setDropName] = useState("");
-  const [dropPhone, setDropPhone] = useState("");
-  const [dropNote, setDropNote] = useState("");
-  const [handover, setHandover] = useState<HandoverKind>(DEFAULT_HANDOVER);
-  const [askRecipient, setAskRecipient] = useState<boolean>(askRecipientByDefault);
-  const [pickupText, setPickupText] = useState("");
-  const [pickup, setPickup] = useState<AddressSuggestion | null>(null);
-  const [destText, setDestText] = useState("");
-  const [dest, setDest] = useState<AddressSuggestion | null>(null);
+  // "Send again" opens the drawer filled from a past job; otherwise the
+  // pickup starts at the organization's own address when it has one.
+  const startPickup = prefill?.pickup ?? (orgAddress?.address && Number.isFinite(orgAddress.lat) && Number.isFinite(orgAddress.lng) ? { lat: Number(orgAddress.lat), lng: Number(orgAddress.lng), address: String(orgAddress.address) } : null);
+  const toSuggestion = (l: { lat: number; lng: number; address: string } | null | undefined): AddressSuggestion | null => l ? { lat: l.lat, lng: l.lng, label: l.address } : null;
+  const [parcelSize, setParcelSize] = useState<ParcelSize>((prefill?.parcelSize as ParcelSize) ?? "small");
+  const [pickupName, setPickupName] = useState(prefill?.pickupContact?.name ?? "");
+  const [pickupPhone, setPickupPhone] = useState(prefill?.pickupContact?.phone ?? "");
+  const [dropName, setDropName] = useState(prefill?.dropContact?.name ?? "");
+  const [dropPhone, setDropPhone] = useState(prefill?.dropContact?.phone ?? "");
+  const [dropNote, setDropNote] = useState(prefill?.dropContact?.note ?? "");
+  const [handover, setHandover] = useState<HandoverKind>(handoverOf(prefill?.handover));
+  const [askRecipient, setAskRecipient] = useState<boolean>(prefill?.askRecipient ?? askRecipientByDefault);
+  const [pickupText, setPickupText] = useState(startPickup?.address ?? "");
+  const [pickup, setPickup] = useState<AddressSuggestion | null>(toSuggestion(startPickup));
+  const [destText, setDestText] = useState(prefill?.destination?.address ?? "");
+  const [dest, setDest] = useState<AddressSuggestion | null>(toSuggestion(prefill?.destination));
+  const [remember, setRemember] = useState(true);
+  const [recipientId, setRecipientId] = useState("");
+  const { data: recipients = [] } = useQuery<SavedRecipient[]>({ queryKey: ["/api/org", orgId, "recipients"], queryFn: () => json("GET", `/api/org/${orgId}/recipients`) });
+  const pickRecipient = (id: string) => {
+    setRecipientId(id);
+    const r = recipients.find((x) => x.id === id);
+    if (!r) return;
+    setDropName(r.name); setDropPhone(r.phone ?? ""); setDropNote(r.note ?? ""); setHandover(handoverOf(r.handover));
+    setDest(toSuggestion(r.address)); setDestText(r.address.address);
+  };
   const [readyAt, setReadyAt] = useState("");
   const [windowHours, setWindowHours] = useState("2");
   const [poNumber, setPoNumber] = useState("");
@@ -48,7 +71,7 @@ export function BookDeliveryDrawer({ orgId, orgName, askRecipientByDefault = fal
 
   const ready = !!(pickupName.trim() && dropName.trim() && pickup && dest && readyAt) && (!askRecipient || dropPhone.trim().length > 0);
   const book = useMutation({
-    mutationFn: () => json<{ job: { jobLabel: string }; ride: { estimatedFare: string }; recipientApproval: { link: string; textSent: boolean } | null }>("POST", `/api/org/${orgId}/deliveries`, {
+    mutationFn: () => json<{ job: { jobLabel: string }; ride: { estimatedFare: string }; recipientApproval: { link: string; textSent: boolean } | null; remembered: { ok: boolean; reason?: string } | null }>("POST", `/api/org/${orgId}/deliveries`, {
       parcelSize,
       pickupContact: { name: pickupName, phone: pickupPhone },
       dropContact: { name: dropName, phone: dropPhone, note: dropNote },
@@ -59,9 +82,12 @@ export function BookDeliveryDrawer({ orgId, orgName, askRecipientByDefault = fal
       readyAt: new Date(readyAt).toISOString(),
       windowHours: Number(windowHours) || DEFAULT_WINDOW_HOURS,
       poNumber, notes,
+      rememberRecipient: remember,
     }),
     onSuccess: (r) => {
       queryClient.invalidateQueries({ queryKey: ["/api/org", orgId, "jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/org", orgId, "recipients"] });
+      if (r.remembered && !r.remembered.ok) toast({ title: "Booked, but not added to the recipient book", description: r.remembered.reason ?? "The book could not be written.", variant: "destructive" });
       if (r.recipientApproval) {
         toast({ title: `Booked ${r.job.jobLabel} — waiting for the recipient's approval`, description: r.recipientApproval.textSent ? `${money(r.ride.estimatedFare)}, billed to ${orgName}. The recipient has a text with the link; the job goes to drivers once they approve, or when you send it anyway.` : `${money(r.ride.estimatedFare)}, billed to ${orgName}. Texts are not set up: copy the approval link from the job row and send it yourself.` });
       } else {
@@ -97,11 +123,18 @@ export function BookDeliveryDrawer({ orgId, orgName, askRecipientByDefault = fal
         <AddressAutocomplete value={pickupText} onChange={(v) => { setPickupText(v); setPickup(null); }} onSelect={(s) => { setPickup(s); setPickupText(s.label); }} placeholder="Collect from" data-testid="input-portal-delivery-pickup" />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {recipients.length > 0 && (
+            <Select value={recipientId} onValueChange={pickRecipient}>
+              <SelectTrigger data-testid="select-portal-recipient"><SelectValue placeholder="Deliver to a saved recipient…" /></SelectTrigger>
+              <SelectContent>{recipients.map((r) => <SelectItem key={r.id} value={r.id}>{r.name}{r.phone ? ` · ${r.phone}` : ""} · {r.address.address}</SelectItem>)}</SelectContent>
+            </Select>
+          )}
           <Input placeholder="Who receives it" value={dropName} onChange={(e) => setDropName(e.target.value)} data-testid="input-portal-drop-contact" />
           <Input placeholder="Their phone (optional)" value={dropPhone} onChange={(e) => setDropPhone(e.target.value)} data-testid="input-portal-drop-phone" />
         </div>
         <AddressAutocomplete value={destText} onChange={(v) => { setDestText(v); setDest(null); }} onSelect={(s) => { setDest(s); setDestText(s.label); }} placeholder="Deliver to" data-testid="input-portal-delivery-destination" />
         <Input placeholder="Where to find them: suite, floor, ask at reception…" value={dropNote} onChange={(e) => setDropNote(e.target.value)} data-testid="input-portal-drop-note" />
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} data-testid="checkbox-portal-remember-recipient" /> Remember this recipient for next time</label>
         <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={askRecipient} onChange={(e) => setAskRecipient(e.target.checked)} data-testid="checkbox-portal-ask-recipient" /><span>Ask the recipient to approve the delivery fee first<span className="block text-xs text-muted-foreground">They are texted the fee and a link; the job goes to drivers once they approve, or when you send it anyway. The fee stays on your account either way.</span></span></label>
         {askRecipient && !dropPhone.trim() ? <p className="text-xs text-amber-700" data-testid="text-portal-ask-needs-phone">The recipient's phone is needed: that is where the link goes.</p> : null}
         <label className="text-xs font-medium text-muted-foreground">How it changes hands</label>

@@ -747,6 +747,21 @@ CREATE TABLE IF NOT EXISTS organization_members (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_organization_member ON organization_members (organization_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_organization_members_user ON organization_members (user_id);
+CREATE TABLE IF NOT EXISTS organization_recipients (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id),
+  name VARCHAR NOT NULL,
+  phone VARCHAR,
+  address JSONB NOT NULL,
+  handover VARCHAR NOT NULL DEFAULT 'person',
+  note TEXT,
+  created_by VARCHAR NOT NULL REFERENCES users(id),
+  archived_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_organization_recipients_org ON organization_recipients (organization_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_organization_recipient_phone ON organization_recipients (organization_id, phone) WHERE phone IS NOT NULL;
 CREATE TABLE IF NOT EXISTS organization_invitations (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id VARCHAR NOT NULL REFERENCES organizations(id),
