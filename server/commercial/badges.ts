@@ -65,7 +65,7 @@ export async function workOfRide(rideId: string): Promise<{ category: string; ki
 export async function assertDriverMayTakeRide(userId: string, rideId: string): Promise<void> {
   const work = await workOfRide(rideId);
   if (!work) return;
-  const [held] = await db.select({ payer: commercialJobs.payer, status: commercialJobs.recipientPaymentStatus }).from(commercialJobs).where(eq(commercialJobs.rideId, rideId));
+  const [held] = await db.select({ payer: commercialJobs.payer, recipientPaymentStatus: commercialJobs.recipientPaymentStatus }).from(commercialJobs).where(eq(commercialJobs.rideId, rideId));
   if (held && isHeld(held)) throw new CommercialError("This delivery is waiting for the recipient to pay; it opens to drivers once paid.", 409);
   if (!driverMayTake(await badgesFor(userId), work.category, work.kind)) {
     throw new CommercialError(badgeRefusalMessage(work.category, work.kind), 403);
