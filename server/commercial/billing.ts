@@ -100,6 +100,7 @@ export async function issueStatement(organizationId: string, weekKey: string): P
     to: ride.destinationLocation?.address ?? "",
     status: ride.status ?? "completed",
     fare: ride.actualFare ?? ride.estimatedFare,
+    paidByRecipient: job.payer === "recipient" && job.recipientPaymentStatus === "paid",
     facilityFee: job.facilityFee,
     waitFee: job.waitFee,
     cancellationFee: Number(job.cancellationFee) > 0 ? job.cancellationFee : (ride.cancellationFee ?? "0.00"),

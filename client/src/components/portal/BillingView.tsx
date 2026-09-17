@@ -18,7 +18,7 @@ interface Statement {
   id: string; periodKey: string; periodLabel: string; jobCount: number; total: string;
   status: string; attempts: number; lastError: string | null; statusText: string; paidAt: string | null;
 }
-interface Detail { billingText?: string; hasPaymentMethod?: boolean; billingMode?: string }
+interface Detail { billingText?: string; hasPaymentMethod?: boolean; billingMode?: string; role?: string; defaultPayer?: string }
 
 const money = (n: string | number) => `$${Number(n ?? 0).toFixed(2)}`;
 const tone: Record<string, "default" | "secondary" | "destructive" | "outline"> = { paid: "default", charging: "secondary", failed: "destructive", void: "outline", open: "outline" };
@@ -28,6 +28,25 @@ async function json<T>(method: string, url: string, body?: unknown): Promise<T> 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data as any)?.message || `${res.status}`);
   return data as T;
+}
+
+function DefaultPayerSetting({ orgId, current }: { orgId: string; current: string }) {
+  const { toast } = useToast();
+  const save = useMutation({
+    mutationFn: (defaultPayer: string) => json<{ defaultPayer: string }>("PATCH", `/api/org/${orgId}/settings`, { defaultPayer }),
+    onSuccess: (r) => { queryClient.invalidateQueries({ queryKey: ["/api/org", orgId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/org/mine"] }); toast({ title: r.defaultPayer === "recipient" ? "Deliveries default to recipient pays" : "Deliveries default to your account" }); },
+    onError: (e: Error) => toast({ title: "Could not save that", description: e.message, variant: "destructive" }),
+  });
+  return (
+    <div className="rounded-lg border bg-card p-4 space-y-2" data-testid="portal-default-payer">
+      <h2 className="font-medium">Who pays for deliveries</h2>
+      <p className="text-sm text-muted-foreground">The choice the parcel form starts on. Either way you can change it per delivery. When the recipient pays, they are texted a link and the job goes to drivers once they have paid.</p>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant={current === "organization" ? "default" : "outline"} disabled={save.isPending} onClick={() => save.mutate("organization")} data-testid="button-portal-default-payer-organization">Bill my account</Button>
+        <Button size="sm" variant={current === "recipient" ? "default" : "outline"} disabled={save.isPending} onClick={() => save.mutate("recipient")} data-testid="button-portal-default-payer-recipient">The recipient pays</Button>
+      </div>
+    </div>
+  );
 }
 
 export function BillingView({ orgId }: { orgId: string }) {
@@ -50,6 +69,7 @@ export function BillingView({ orgId }: { orgId: string }) {
 
   return (
     <section className="space-y-4 max-w-4xl" data-testid="portal-billing">
+      {detail?.role === "owner" && <DefaultPayerSetting orgId={orgId} current={detail.defaultPayer ?? "organization"} />}
       <div>
         <h1 className="text-xl font-semibold">Billing</h1>
         <p className="text-sm text-muted-foreground" data-testid="text-portal-billing-how">{detail?.billingText ?? "Loading…"}</p>

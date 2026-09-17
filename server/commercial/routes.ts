@@ -28,6 +28,8 @@ import { sendOrganizationInviteEmail } from "../emailService";
 import { resolveAppUrl } from "../appUrl";
 import { INVITATION_DAYS } from "@shared/invitations";
 import { bookDelivery } from "./deliveries";
+import { confirmRecipientPayment, createRecipientIntent, declineRecipientPay, recipientView, resendPayLink, setReleaseHook, startRecipientPay, switchPayerToOrganization } from "./recipientPay";
+import { isPayer } from "@shared/recipientPay";
 import { buildStatement, statementToCsv, statementToHtml } from "./statements";
 import { cancelJob } from "./cancel";
 import { bookWillCallReturn, createStandingOrder, listStandingOrders, materializeAllStandingOrders, materializeStandingOrder, setStandingOrderActive, standingOrderJobCounts } from "./standingOrders";
@@ -70,6 +72,9 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
     if (!featureFlags.commercialEnabled) return res.status(404).json({ message: "Not found" });
     next();
   };
+  // A held delivery, once the recipient has paid, is offered to drivers the
+  // same way a freshly booked one is.
+  setReleaseHook((ride, pickupCounty) => deps.notifyDriversOfScheduledRide(ride, pickupCounty));
 
   /** Load the caller's role in :orgId; 403 when they hold none. */
   const requireMember = (allowed?: (role: OrgRole) => boolean): Handler => async (req: any, res, next) => {
@@ -225,6 +230,47 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       res.status(202).json({ invited: true, ...inv, emailSent });
     } catch (err) { fail(res, err, "Could not add the member"); }
   });
+  // ── Recipient pays (shared/recipientPay.ts) ──
+  app.post("/api/org/:orgId/jobs/:jobId/payer", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try {
+      if (req.body?.payer !== "organization") return res.status(400).json({ message: "Only switching the fee to your account is possible here." });
+      res.json(await switchPayerToOrganization(req.orgId, String(req.params.jobId)));
+    } catch (err) { fail(res, err, "Could not change who pays"); }
+  });
+  app.post("/api/org/:orgId/jobs/:jobId/resend-pay-link", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.json(await resendPayLink(req.orgId, String(req.params.jobId), resolveAppUrl(`${req.protocol}://${req.get("host")}`))); }
+    catch (err) { fail(res, err, "Could not resend the link"); }
+  });
+  app.patch("/api/org/:orgId/settings", gate, isAuthenticated, requireMember((r) => r === "owner"), async (req: any, res) => {
+    try {
+      const patch: Record<string, unknown> = {};
+      if (req.body?.defaultPayer !== undefined) patch.defaultPayer = req.body.defaultPayer;
+      const org = await updateOrganization(req.orgId, patch);
+      res.json({ defaultPayer: org.defaultPayer });
+    } catch (err) { fail(res, err, "Could not save the setting"); }
+  });
+  app.post("/api/admin/analytics/recipient-pay-sweep", gate, isAdminOrSessionAuth, async (req: any, res) => {
+    try { const { sweepRecipientPay } = await import("./recipientPay"); res.json(await sweepRecipientPay(new Date(), resolveAppUrl(`${req.protocol}://${req.get("host")}`))); }
+    catch (err) { fail(res, err, "Could not run the sweep"); }
+  });
+  // The recipient's side: no account, the token is the capability. Rate-limited in routes.ts.
+  app.get("/api/pay/:token", gate, async (req, res) => {
+    try { res.json(await recipientView(String(req.params.token))); }
+    catch (err) { fail(res, err, "Could not read this delivery"); }
+  });
+  app.post("/api/pay/:token/intent", gate, async (req, res) => {
+    try { res.json(await createRecipientIntent(String(req.params.token))); }
+    catch (err) { fail(res, err, "Could not start the payment"); }
+  });
+  app.post("/api/pay/:token/confirm", gate, async (req, res) => {
+    try { res.json(await confirmRecipientPayment(String(req.params.token), String(req.body?.paymentIntentId ?? ""))); }
+    catch (err) { fail(res, err, "Could not confirm the payment"); }
+  });
+  app.post("/api/pay/:token/decline", gate, async (req, res) => {
+    try { res.json(await declineRecipientPay(String(req.params.token))); }
+    catch (err) { fail(res, err, "Could not record that"); }
+  });
+
   app.get("/api/org/:orgId/invitations", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
     try { res.json(await listOpenInvitations(req.orgId)); }
     catch (err) { fail(res, err, "Could not list invitations"); }
@@ -278,16 +324,26 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
   app.post("/api/org/:orgId/deliveries", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
     try {
       const booked = await bookDelivery(storage, { ...(req.body ?? {}), organizationId: req.orgId, requesterId: userIdOf(req)! });
-      deps.notifyDriversOfScheduledRide(booked.ride, booked.pickupCounty);
       const org = await getOrganization(req.orgId);
+      // Recipient pays: the job is HELD — not offered to any driver — until
+      // the recipient has paid from the link they are texted
+      // (shared/recipientPay.ts). Otherwise drivers hear about it now.
+      let recipientPay: { link: string; textSent: boolean; state: string } | null = null;
+      if (isPayer(req.body?.payer) && req.body.payer === "recipient") {
+        const started = await startRecipientPay(booked.job.id, resolveAppUrl(`${req.protocol}://${req.get("host")}`));
+        recipientPay = { link: started.link, textSent: started.textSent, state: "awaiting" };
+      } else {
+        deps.notifyDriversOfScheduledRide(booked.ride, booked.pickupCounty);
+      }
       opsAlert(formatOpsAlert("📦 Delivery booked", [
         ["Account", org?.name ?? req.orgId],
         ["Job", formatJobNumber(booked.job.jobNumber)],
         ["Parcel", booked.job.parcelSize],
         ["To", booked.job.dropContact?.name],
         ["Fare", `$${Number(booked.ride.estimatedFare ?? 0).toFixed(2)}`],
+        ["Paid by", recipientPay ? "the recipient (held until paid)" : "the account"],
       ]));
-      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: formatJobNumber(booked.job.jobNumber) } });
+      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: formatJobNumber(booked.job.jobNumber), payer: recipientPay ? "recipient" : "organization", recipientPaymentStatus: recipientPay ? "awaiting" : null }, recipientPay });
     } catch (err) { fail(res, err, "Could not book the delivery"); }
   });
 

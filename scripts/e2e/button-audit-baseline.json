@@ -285,6 +285,12 @@
     "button-join-attach-existing": "shown only when the invited email already holds an account; journey 21 covers the path",
     "button-portal-copy-invite-*": "appears only in the desk session that just created the invitation; journey 21 covers the link",
     "button-proof-confirm-*": "inside the handover sheet, which needs an in-progress parcel on the driver's card; the layout audit stages one and journey 18 covers the rules",
-    "button-proof-cancel-*": "inside the handover sheet (see button-proof-confirm-*)"
+    "button-proof-cancel-*": "inside the handover sheet (see button-proof-confirm-*)",
+    "button-portal-we-pay-*": "on the desk's job row for a held recipient-pays job, inside the All jobs tab; journey 22 covers it",
+    "button-portal-copy-pay-link-*": "on the desk's job row for a held recipient-pays job; journey 22 covers the link",
+    "button-portal-resend-pay-link-*": "on the desk's job row for a held recipient-pays job; journey 22 covers it",
+    "button-portal-default-payer-organization": "inside the Billing tab for an owner; journey 22 covers the setting",
+    "button-portal-default-payer-recipient": "inside the Billing tab for an owner; journey 22 covers the setting",
+    "button-pay-confirm": "inside Stripe's Payment Element after a PaymentIntent exists; the audits run without Stripe"
   }
 }

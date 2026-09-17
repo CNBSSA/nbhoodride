@@ -735,7 +735,8 @@ CREATE TABLE IF NOT EXISTS organizations (
   default_payment_method_kind VARCHAR,
   terms JSONB,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  default_payer VARCHAR NOT NULL DEFAULT 'organization'
 );
 CREATE TABLE IF NOT EXISTS organization_members (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -775,6 +776,14 @@ CREATE TABLE IF NOT EXISTS commercial_jobs (
   cancellation_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00,
   parcel_size VARCHAR,
   handover VARCHAR,
+  payer VARCHAR NOT NULL DEFAULT 'organization',
+  recipient_payment_status VARCHAR,
+  recipient_pay_token VARCHAR,
+  recipient_payment_intent_id VARCHAR,
+  recipient_fee NUMERIC(8,2),
+  recipient_paid_at TIMESTAMP,
+  recipient_nudged_at TIMESTAMP,
+  shop_asked_at TIMESTAMP,
   pickup_contact JSONB,
   drop_contact JSONB,
   window_start TIMESTAMP,
@@ -796,6 +805,16 @@ ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS leg VARCHAR NOT NULL DEFAUL
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS return_of VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS parcel_size VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS handover VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS payer VARCHAR NOT NULL DEFAULT 'organization';
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_payment_status VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_pay_token VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_payment_intent_id VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_fee NUMERIC(8,2);
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_paid_at TIMESTAMP;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_nudged_at TIMESTAMP;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS shop_asked_at TIMESTAMP;
+CREATE INDEX IF NOT EXISTS idx_commercial_jobs_recipient_token ON commercial_jobs (recipient_pay_token);
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS default_payer VARCHAR NOT NULL DEFAULT 'organization';
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS pickup_contact JSONB;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS drop_contact JSONB;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS window_start TIMESTAMP;

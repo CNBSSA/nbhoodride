@@ -460,6 +460,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api/auth/email-login', authLimiter);
   app.use('/api/auth/signup', authLimiter);
   app.use('/api/org/invitations', authLimiter);
+  app.use('/api/pay', authLimiter);
   app.use('/api/auth/forgot-password', authLimiter);
   app.use('/api/auth/reset-password', authLimiter);
   app.use('/api/auth/forgot-password-sms', authLimiter);
@@ -10485,6 +10486,10 @@ Generate the FAQ list.`;
             if (ride && ride.paymentStatus !== 'paid_card') {
               await storage.updateRide(rideId, { paymentStatus: 'paid_card' });
             }
+          } else if (pi.metadata?.recipientJobId) {
+            // A recipient paid a delivery fee: release the held job (shared/recipientPay.ts).
+            const { settleRecipientFromIntent } = await import("./commercial/recipientPay");
+            await settleRecipientFromIntent(pi).catch((e) => console.error("[recipient-pay] settle failed:", e));
           } else if (pi.metadata?.statementId) {
             // A commercial bank debit that cleared days after the charge.
             // Until 2026-09-16 nothing here handled statements, so a
@@ -10518,6 +10523,11 @@ Generate the FAQ list.`;
         }
         case 'payment_intent.payment_failed': {
           const pi = event.data.object as any;
+          if (pi.metadata?.recipientJobId) {
+            const { settleRecipientFromIntent } = await import("./commercial/recipientPay");
+            await settleRecipientFromIntent(pi).catch((e) => console.error("[recipient-pay] fail-settle failed:", e));
+            break;
+          }
           if (pi.metadata?.statementId) {
             // The account's bank refused the debit after it was in flight:
             // mark the statement failed and page, so it can be retried.
@@ -11124,6 +11134,11 @@ Generate the FAQ list.`;
       // Every 5 minutes; booking is idempotent per (order, service date, leg).
       if (featureFlags.commercialEnabled && now.getMinutes() % 5 === 0) {
         materializeAllStandingOrders(storage, now).catch((err) => console.error("standing order sweep failed:", err));
+      }
+
+      // ── Recipient pays: nudge, ask the shop, give up, refund (shared/recipientPay.ts) ──
+      if (featureFlags.commercialEnabled) {
+        import("./commercial/recipientPay").then((m) => m.sweepRecipientPay(now, resolveAppUrl())).catch((err) => console.error("recipient-pay sweep failed:", err));
       }
 
       // ── Ride-risk watch: page ops before the rider finds out ──

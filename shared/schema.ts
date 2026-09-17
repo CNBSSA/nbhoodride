@@ -938,6 +938,8 @@ export const organizations = pgTable("organizations", {
   defaultPaymentMethodKind: varchar("default_payment_method_kind"),
   /** Cancellation / no-show terms, per agreement (slice 3). */
   terms: jsonb("terms").$type<Record<string, unknown>>(),
+  /** organization | recipient — who pays a delivery by default when the desk books one (shared/recipientPay.ts). */
+  defaultPayer: varchar("default_payer").notNull().default("organization"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -993,6 +995,17 @@ export const commercialJobs = pgTable("commercial_jobs", {
   parcelSize: varchar("parcel_size"),
   /** person | reception | unattended — how the parcel changes hands, which decides the proof (shared/deliveries.ts). */
   handover: varchar("handover"),
+  /** organization | recipient — who pays the delivery fee (shared/recipientPay.ts). */
+  payer: varchar("payer").notNull().default("organization"),
+  /** awaiting | paid | declined | refunded | refund_pending | expired, for a recipient-paid job. */
+  recipientPaymentStatus: varchar("recipient_payment_status"),
+  /** The link the recipient pays from: /pay/<token>. Known to the desk that booked it. */
+  recipientPayToken: varchar("recipient_pay_token"),
+  recipientPaymentIntentId: varchar("recipient_payment_intent_id"),
+  recipientFee: decimal("recipient_fee", { precision: 8, scale: 2 }),
+  recipientPaidAt: timestamp("recipient_paid_at"),
+  recipientNudgedAt: timestamp("recipient_nudged_at"),
+  shopAskedAt: timestamp("shop_asked_at"),
   pickupContact: jsonb("pickup_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
   dropContact: jsonb("drop_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
   windowStart: timestamp("window_start"),
@@ -1012,6 +1025,7 @@ export const commercialJobs = pgTable("commercial_jobs", {
   statementId: varchar("statement_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
+  index("idx_commercial_jobs_recipient_token").on(table.recipientPayToken),
   index("idx_commercial_jobs_org").on(table.organizationId),
   // One job per standing order, service date and leg: the sweep can run as
   // often as it likes and never books the same trip twice.

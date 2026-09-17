@@ -1231,6 +1231,9 @@ export class DatabaseStorage implements IStorage {
       isNotNull(rides.scheduledAt),
       gt(rides.scheduledAt, sql`now()`),
       sql`${rides.driverId} IS NULL`,
+      // A delivery the recipient pays for is HELD until they have paid: no
+      // driver sees it before then (shared/recipientPay.ts).
+      sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${rides.id} AND h.payer = 'recipient' AND COALESCE(h.recipient_payment_status, '') <> 'paid')`,
       // Circuit seats are claimed as a whole RUN via the circuit-runs claim
       // board — listing them individually here would let one driver claim a
       // single seat and split the run.

@@ -43,6 +43,7 @@ export async function buildStatement(organizationId: string, monthKey: string): 
       waitFee: j.waitFee,
       cancellationFee: j.cancellationFee,
       receivedBy: (j.proof as any)?.receivedBy ?? null,
+      paidByRecipient: j.payer === "recipient" && j.recipientPaymentStatus === "paid",
     }));
   return {
     organization: { id: org.id, name: org.name, category: org.category, contactName: org.contactName, contactEmail: org.contactEmail },
@@ -67,7 +68,7 @@ export function statementToHtml(s: Statement): string {
     const completed = l.status === "completed";
     return `<tr>
       <td>${esc(formatJobNumber(l.jobNumber))}</td><td>${esc(when(l.at))}</td><td>${esc(l.passenger)}</td>
-      <td>${esc(l.from)}<br><span class="to">to ${esc(l.to)}</span></td><td>${esc(l.status)}</td><td>${esc(l.receivedBy ?? "")}</td>
+      <td>${esc(l.from)}<br><span class="to">to ${esc(l.to)}</span></td><td>${esc(l.status)}${l.paidByRecipient ? " · paid by recipient" : ""}</td><td>${esc(l.receivedBy ?? "")}</td>
       <td class="n">${completed ? money(l.fare) : ""}</td><td class="n">${completed ? money(l.facilityFee) : ""}</td>
       <td class="n">${completed ? money(l.waitFee) : ""}</td><td class="n">${completed ? "" : money(l.cancellationFee)}</td>
       <td class="n">${money(completed ? Number(l.fare ?? 0) + Number(l.facilityFee ?? 0) + Number(l.waitFee ?? 0) : l.cancellationFee)}</td>
