@@ -62,6 +62,7 @@ export async function pageAtRiskRides(now: Date = new Date()): Promise<RiskPage[
     WHERE r.scheduled_at IS NOT NULL
       AND r.scheduled_at >= ${now} AND r.scheduled_at <= ${horizon}
       AND r.status IN ('pending', 'accepted')
+      AND COALESCE(cj.recipient_approval, 'none') NOT IN ('awaiting', 'declined')
     ORDER BY r.scheduled_at
   `);
 

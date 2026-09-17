@@ -460,6 +460,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api/auth/email-login', authLimiter);
   app.use('/api/auth/signup', authLimiter);
   app.use('/api/org/invitations', authLimiter);
+  app.use('/api/approve', authLimiter);
   app.use('/api/auth/forgot-password', authLimiter);
   app.use('/api/auth/reset-password', authLimiter);
   app.use('/api/auth/forgot-password-sms', authLimiter);
@@ -2748,6 +2749,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const split = await routeFeeWithFairnessSplit(commercialNoShowFee ?? collected, userId, rideId);
       const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
+      if (ride.paymentMethod === 'invoice') {
+        const { onCommercialRideEnded } = await import("./commercial/recipientApproval");
+        await onCommercialRideEnded(rideId, "the recipient was not there").catch((err) => console.error("[recipient-approval] no-show hook failed:", err));
+      }
 
       await logRideAudit({
         rideId,
@@ -6992,6 +6997,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (ws?.readyState === WebSocket.OPEN) ws.send(cancelMessage);
       }
 
+      if (ride.paymentMethod === 'invoice') {
+        const { onCommercialRideEnded } = await import("./commercial/recipientApproval");
+        await onCommercialRideEnded(rideId, "cancelled by PG Ride").catch((err) => console.error("[recipient-approval] admin cancel hook failed:", err));
+      }
       res.json({ success: true, ride: await storage.getRide(rideId) });
     } catch (error) {
       console.error("Error in admin ride cancellation:", error);
@@ -11143,6 +11152,11 @@ Generate the FAQ list.`;
         materializeAllStandingOrders(storage, now).catch((err) => console.error("standing order sweep failed:", err));
       }
 
+      // ── Recipient approval: nudge, ask the shop, give up (shared/recipientApproval.ts) ──
+      if (featureFlags.commercialEnabled) {
+        import("./commercial/recipientApproval").then((m) => m.sweepRecipientApproval(now, resolveAppUrl())).catch((err) => console.error("recipient-approval sweep failed:", err));
+      }
+
       // ── Proof photos still on a phone: page ops at 6 h, give up at 24 h ──
       if (featureFlags.commercialEnabled && now.getMinutes() === 7) {
         import("./commercial/badges").then((m) => m.sweepPendingProofPhotos(now)).catch((err) => console.error("pending proof photo sweep failed:", err));
@@ -11174,7 +11188,10 @@ Generate the FAQ list.`;
             _isNotNull(ridesT.scheduledAt),
             _gte(ridesT.scheduledAt, now),
             _lte(ridesT.scheduledAt, new Date(now.getTime() + 125 * 60 * 1000)),
-            _sql`${ridesT.status} IN ('pending', 'accepted')`
+            _sql`${ridesT.status} IN ('pending', 'accepted')`,
+            // A held delivery (recipient not yet approved) gets no driver
+            // re-broadcast and no "nobody has claimed" push (shared/recipientApproval.ts).
+            _sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${ridesT.id} AND h.recipient_approval IN ('awaiting', 'declined'))`
           )
         );
 

@@ -1231,6 +1231,9 @@ export class DatabaseStorage implements IStorage {
       isNotNull(rides.scheduledAt),
       gt(rides.scheduledAt, sql`now()`),
       sql`${rides.driverId} IS NULL`,
+      // A delivery the recipient must approve is HELD until they do, or
+      // the shop sends it anyway (shared/recipientApproval.ts).
+      sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${rides.id} AND h.recipient_approval IN ('awaiting', 'declined'))`,
       // Circuit seats are claimed as a whole RUN via the circuit-runs claim
       // board — listing them individually here would let one driver claim a
       // single seat and split the run.
@@ -1336,7 +1339,10 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(rides.id, rideId),
-          sql`${rides.driverId} IS NULL`
+          sql`${rides.driverId} IS NULL`,
+          // A held delivery cannot be claimed, whatever board or push the
+          // driver saw it on (shared/recipientApproval.ts).
+          sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${rides.id} AND h.recipient_approval IN ('awaiting', 'declined'))`
         )
       )
       .returning();

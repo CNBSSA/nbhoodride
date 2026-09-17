@@ -18,7 +18,7 @@ interface Statement {
   id: string; periodKey: string; periodLabel: string; jobCount: number; total: string;
   status: string; attempts: number; lastError: string | null; statusText: string; paidAt: string | null;
 }
-interface Detail { billingText?: string; hasPaymentMethod?: boolean; billingMode?: string }
+interface Detail { billingText?: string; hasPaymentMethod?: boolean; billingMode?: string; role?: string; askRecipientByDefault?: boolean }
 
 const money = (n: string | number) => `$${Number(n ?? 0).toFixed(2)}`;
 const tone: Record<string, "default" | "secondary" | "destructive" | "outline"> = { paid: "default", charging: "secondary", failed: "destructive", void: "outline", open: "outline" };
@@ -28,6 +28,25 @@ async function json<T>(method: string, url: string, body?: unknown): Promise<T> 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data as any)?.message || `${res.status}`);
   return data as T;
+}
+
+function AskRecipientSetting({ orgId, current }: { orgId: string; current: boolean }) {
+  const { toast } = useToast();
+  const save = useMutation({
+    mutationFn: (askRecipientByDefault: boolean) => json<{ askRecipientByDefault: boolean }>("PATCH", `/api/org/${orgId}/settings`, { askRecipientByDefault }),
+    onSuccess: (r) => { queryClient.invalidateQueries({ queryKey: ["/api/org", orgId, "detail"] }); queryClient.invalidateQueries({ queryKey: ["/api/org/mine"] }); toast({ title: r.askRecipientByDefault ? "New parcels ask the recipient first" : "New parcels go straight to drivers" }); },
+    onError: (e: Error) => toast({ title: "Could not save that", description: e.message, variant: "destructive" }),
+  });
+  return (
+    <div className="rounded-lg border bg-card p-4 space-y-2" data-testid="portal-ask-recipient">
+      <h2 className="font-medium">Ask the recipient before sending?</h2>
+      <p className="text-sm text-muted-foreground">Where the parcel form starts. When you pass the delivery fee on to your customer, they are texted the fee and a link, and the job goes to drivers once they approve or you send it anyway. The fee is on your account either way; you collect it from your customer.</p>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant={!current ? "default" : "outline"} disabled={save.isPending} onClick={() => save.mutate(false)} data-testid="button-portal-ask-recipient-no">Send straight away</Button>
+        <Button size="sm" variant={current ? "default" : "outline"} disabled={save.isPending} onClick={() => save.mutate(true)} data-testid="button-portal-ask-recipient-yes">Ask the recipient first</Button>
+      </div>
+    </div>
+  );
 }
 
 export function BillingView({ orgId }: { orgId: string }) {
@@ -50,6 +69,7 @@ export function BillingView({ orgId }: { orgId: string }) {
 
   return (
     <section className="space-y-4 max-w-4xl" data-testid="portal-billing">
+      {detail?.role === "owner" && <AskRecipientSetting orgId={orgId} current={!!detail.askRecipientByDefault} />}
       <div>
         <h1 className="text-xl font-semibold">Billing</h1>
         <p className="text-sm text-muted-foreground" data-testid="text-portal-billing-how">{detail?.billingText ?? "Loading…"}</p>

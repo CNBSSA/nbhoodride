@@ -735,7 +735,8 @@ CREATE TABLE IF NOT EXISTS organizations (
   default_payment_method_kind VARCHAR,
   terms JSONB,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  ask_recipient_by_default BOOLEAN NOT NULL DEFAULT false
 );
 CREATE TABLE IF NOT EXISTS organization_members (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -775,6 +776,12 @@ CREATE TABLE IF NOT EXISTS commercial_jobs (
   cancellation_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00,
   parcel_size VARCHAR,
   handover VARCHAR,
+  recipient_approval VARCHAR NOT NULL DEFAULT 'none',
+  recipient_approval_token VARCHAR,
+  recipient_fee NUMERIC(8,2),
+  recipient_approved_at TIMESTAMP,
+  recipient_nudged_at TIMESTAMP,
+  shop_asked_at TIMESTAMP,
   pickup_contact JSONB,
   drop_contact JSONB,
   window_start TIMESTAMP,
@@ -796,6 +803,14 @@ ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS leg VARCHAR NOT NULL DEFAUL
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS return_of VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS parcel_size VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS handover VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_approval VARCHAR NOT NULL DEFAULT 'none';
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_approval_token VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_fee NUMERIC(8,2);
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_approved_at TIMESTAMP;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_nudged_at TIMESTAMP;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS shop_asked_at TIMESTAMP;
+CREATE INDEX IF NOT EXISTS idx_commercial_jobs_recipient_token ON commercial_jobs (recipient_approval_token);
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS ask_recipient_by_default BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS pickup_contact JSONB;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS drop_contact JSONB;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS window_start TIMESTAMP;

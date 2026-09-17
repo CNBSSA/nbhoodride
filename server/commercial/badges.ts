@@ -20,6 +20,7 @@ import { PROOF_DISTANCE_FLAG_METERS, handoverOf, proofComplete, proofRequirement
 import { commercialJobs, driverProfiles, organizations, rides, storedObjects, users } from "@shared/schema";
 import { badgeRefusalMessage, driverMayTake, normalizeBadges, type DriverBadge } from "@shared/driverBadges";
 import { kindOfJob, type JobKind } from "@shared/commercial";
+import { isHeld } from "@shared/recipientApproval";
 import { formatJobNumber } from "@shared/commercial";
 import { createTrackingLink } from "../agents/smsBooking";
 import { sendSms } from "../smsService";
@@ -64,6 +65,8 @@ export async function workOfRide(rideId: string): Promise<{ category: string; ki
 export async function assertDriverMayTakeRide(userId: string, rideId: string): Promise<void> {
   const work = await workOfRide(rideId);
   if (!work) return;
+  const [held] = await db.select({ recipientApproval: commercialJobs.recipientApproval }).from(commercialJobs).where(eq(commercialJobs.rideId, rideId));
+  if (held && isHeld(held)) throw new CommercialError("This delivery is waiting for the recipient to approve the fee; it opens to drivers once they do, or once the shop sends it anyway.", 409);
   if (!driverMayTake(await badgesFor(userId), work.category, work.kind)) {
     throw new CommercialError(badgeRefusalMessage(work.category, work.kind), 403);
   }

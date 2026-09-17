@@ -29,19 +29,21 @@ import { StandingOrdersView } from "@/components/portal/StandingOrdersView";
 import { BillingView } from "@/components/portal/BillingView";
 import { BookDeliveryDrawer } from "@/components/portal/BookDeliveryDrawer";
 import { describeProof, type DeliveryProof } from "@shared/deliveries";
+import { describeApproval } from "@shared/recipientApproval";
 import { forgetBusinessHome } from "@/lib/businessHome";
 import { CATEGORY_LABELS, ORG_ROLES, canBook, canManageMembers, canSeeStatement, categoryMayBook, currentMonthKey, formatJobNumber, type CommercialCategory, type OrgRole } from "@shared/commercial";
 import { VEHICLE_TYPES, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 import { BRAND } from "@shared/branding";
 import { CalendarDays, ListChecks, Receipt, Users, Plus, Download, Printer, ArrowLeft, Repeat, Landmark, Package, Car } from "lucide-react";
 
-interface Org { id: string; name: string; category: CommercialCategory; status: string; facilityFee: string; billingMode: string }
+interface Org { id: string; name: string; category: CommercialCategory; status: string; facilityFee: string; billingMode: string; askRecipientByDefault?: boolean }
 interface Membership { organization: Org; role: OrgRole }
 interface JobRow {
   id: string; jobNumber: number; rideId: string; status: string; scheduledAt: string | null; createdAt: string; completedAt: string | null;
   passengerName: string | null; passengerPhone: string | null; pickup: { lat: number; lng: number; address: string }; destination: { lat: number; lng: number; address: string };
   vehicleType: string | null; estimatedFare: string | null; actualFare: string | null; facilityFee: string; waitFee: string; cancellationFee: string;
   poNumber: string | null; notes: string | null; driverName: string | null; total: number; proof?: DeliveryProof | null; delivery?: string | null; handover?: string | null;
+  recipientApproval?: string; recipientApprovalToken?: string | null; recipientFee?: string | null;
 }
 interface Member { userId: string; role: OrgRole; firstName: string | null; lastName: string | null; email: string | null }
 interface StatementLine { jobNumber: number; at: string; passenger: string; from: string; to: string; status: string; fare: string | null; facilityFee: string; waitFee: string; cancellationFee: string }
@@ -211,7 +213,7 @@ export default function PortalPage() {
       </div>
 
       {booking && <BookJobDrawer org={org} onClose={() => setBooking(false)} />}
-      {sendingParcel && parcels && <BookDeliveryDrawer orgId={org.id} orgName={org.name} onClose={() => setSendingParcel(false)} />}
+      {sendingParcel && parcels && <BookDeliveryDrawer orgId={org.id} orgName={org.name} askRecipientByDefault={org.askRecipientByDefault} onClose={() => setSendingParcel(false)} />}
     </div>
   );
 }
@@ -286,6 +288,21 @@ function JobsList({ org, canCancel }: { org: Org; canCancel: boolean }) {
   const bounds = useMemo(() => ({ from: range.from(), to: range.to() }), [rangeId]);
   void window_;
   const { data: jobs = [], isLoading } = useJobs(org.id, bounds.from, bounds.to);
+  const sendAnyway = useMutation({
+    mutationFn: (jobId: string) => json("POST", `/api/org/${org.id}/jobs/${jobId}/send-anyway`),
+    onSuccess: () => { invalidateJobs(org.id); toast({ title: "Sent", description: "The job is now open to drivers." }); },
+    onError: (e: Error) => toast({ title: "Could not send it", description: e.message, variant: "destructive" }),
+  });
+  const resendLink = useMutation({
+    mutationFn: (jobId: string) => json<{ textSent: boolean; link: string }>("POST", `/api/org/${org.id}/jobs/${jobId}/resend-approval-link`),
+    onSuccess: (r) => toast({ title: r.textSent ? "Text sent again" : "Texts are not set up", description: r.textSent ? "The recipient has the link again." : r.link }),
+    onError: (e: Error) => toast({ title: "Could not resend it", description: e.message, variant: "destructive" }),
+  });
+  const copyApprovalLink = async (token: string) => {
+    const link = `${window.location.origin}/approve/${token}`;
+    try { await navigator.clipboard.writeText(link); toast({ title: "Approval link copied", description: "Paste it into a text or WhatsApp to the recipient." }); }
+    catch { toast({ title: "Copy this link", description: link }); }
+  };
   const cancel = useMutation({
     mutationFn: (jobId: string) => json<{ cancellationFee: string }>("POST", `/api/org/${org.id}/jobs/${jobId}/cancel`, { reason: "Cancelled by the organization" }),
     onSuccess: (r) => { invalidateJobs(org.id); toast({ title: "Job cancelled", description: Number(r.cancellationFee) > 0 ? `A ${money(r.cancellationFee)} cancellation fee applies.` : "No fee." }); },
@@ -311,10 +328,17 @@ function JobsList({ org, canCancel }: { org: Org; canCancel: boolean }) {
                   <td className="px-3 py-2 font-mono whitespace-nowrap">{formatJobNumber(j.jobNumber)}{j.poNumber ? <div className="text-xs text-muted-foreground truncate">{j.poNumber}</div> : null}</td>
                   <td className="px-3 py-2 truncate">{j.passengerName}</td>
                   <td className="px-3 py-2"><div className="truncate">{j.pickup?.address}</div><div className="truncate text-muted-foreground">to {j.destination?.address}</div>{j.delivery ? <div className="truncate text-xs text-muted-foreground">{j.delivery}</div> : null}</td>
-                  <td className="px-3 py-2"><Badge variant={tone[j.status] ?? "outline"} className="whitespace-nowrap">{STATUS_WORDS[j.status] ?? j.status}</Badge></td>
+                  <td className="px-3 py-2"><Badge variant={tone[j.status] ?? "outline"} className="whitespace-nowrap">{STATUS_WORDS[j.status] ?? j.status}</Badge>{describeApproval(j) ? <div className={`text-xs mt-1 ${j.recipientApproval === "approved" ? "text-green-700" : "text-amber-700"}`} data-testid={`text-portal-approval-${j.id}`}>{describeApproval(j)}</div> : null}</td>
                   <td className="px-3 py-2">{j.driverName ?? "—"}{describeProof(j.proof, j.handover) ? <div className={`text-xs ${j.proof?.farFromDrop ? "text-amber-700" : "text-muted-foreground"}`} data-testid={`text-portal-proof-${j.id}`}>{describeProof(j.proof, j.handover)}{j.proof?.photoUrl ? <> · <a href={j.proof.photoUrl} target="_blank" rel="noreferrer" className="underline" data-testid={`link-portal-proof-photo-${j.id}`}>see photo</a></> : null}</div> : null}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{money(j.total)}</td>
                   <td className="px-3 py-2 text-right">
+                    {canCancel && (j.recipientApproval === "awaiting" || j.recipientApproval === "declined") && j.status === "pending" && (
+                      <span className="inline-flex flex-wrap gap-1">
+                        {j.recipientApprovalToken && <Button variant="ghost" size="sm" onClick={() => copyApprovalLink(j.recipientApprovalToken!)} data-testid={`button-portal-copy-approval-link-${j.id}`}>Copy link</Button>}
+                        <Button variant="ghost" size="sm" onClick={() => resendLink.mutate(j.id)} data-testid={`button-portal-resend-approval-link-${j.id}`}>Text again</Button>
+                        <Button variant="outline" size="sm" onClick={() => { if (window.confirm(`Send ${formatJobNumber(j.jobNumber)} without waiting for the recipient's approval? It goes to drivers at once.`)) sendAnyway.mutate(j.id); }} data-testid={`button-portal-send-anyway-${j.id}`}>Send anyway</Button>
+                      </span>
+                    )}
                     {canCancel && CANCELLABLE.has(j.status) && (
                       <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Cancel ${formatJobNumber(j.jobNumber)} for ${j.passengerName ?? "this passenger"}?`)) cancel.mutate(j.id); }} data-testid={`button-portal-cancel-job-${j.id}`}>Cancel</Button>
                     )}
