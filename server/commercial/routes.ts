@@ -288,7 +288,7 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
     try {
       const photo = await deliveredPhoto(String(req.params.token));
       if (!photo) return res.status(404).json({ message: "No photo." });
-      res.set("Content-Type", photo.contentType); res.set("Cache-Control", "private, max-age=3600"); res.send(photo.bytes);
+      res.set("Content-Type", photo.contentType); res.set("Cache-Control", "private, max-age=3600"); res.set("X-Content-Type-Options", "nosniff"); res.set("Content-Security-Policy", "sandbox"); res.send(photo.bytes);
     } catch (err) { fail(res, err, "Could not read the photo"); }
   });
   app.post("/api/admin/analytics/retire-proof-photos", gate, isAdminOrSessionAuth, async (_req, res) => {

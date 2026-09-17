@@ -27,6 +27,10 @@ export async function run({ base, db, server }) {
     check("PG Ride revokes their approval", (await admin.req("POST", `/api/admin/users/${u.id}/revoke-approval`)).status === 200);
     check("and both devices are signed out at once — not when their cookies happen to expire", (await phoneA.req("GET", "/api/auth/user")).status === 401 && (await phoneB.req("GET", "/api/auth/user")).status === 401);
     check("re-approved, they can sign in again", (await admin.req("POST", `/api/admin/users/${u.id}/approve`)).status === 200 && (await new Session(base).login(email)).status === 200);
+    const phoneC = new Session(base); await phoneC.login(email);
+    const stringFlag = await admin.req("PATCH", `/api/admin/users/${u.id}`, { isSuspended: "true" });
+    check("a suspension sent as a string still ends the sessions (post-implementation audit)", stringFlag.status === 200 && (await phoneC.req("GET", "/api/auth/user")).status === 401, `patch=${stringFlag.status}`);
+    await admin.req("PATCH", `/api/admin/users/${u.id}`, { isSuspended: false, isApproved: true });
 
     section("The receiver is told it was delivered, with a link to the proof");
     const shop = await admin.req("POST", "/api/admin/organizations", { name: "Corner Bakery", category: "food" });
@@ -52,13 +56,34 @@ export async function run({ base, db, server }) {
     const view = await guest.req("GET", `/api/delivered/${token}`);
     check("the delivered page shows the shop, the handover and that there is a photo — never the goods", view.status === 200 && view.json?.shopName === "Corner Bakery" && /received by Ngozi/.test(view.json?.handoverText ?? "") && view.json?.hasPhoto === true && !!view.json?.deliveredAt, JSON.stringify(view.json));
     const photo = await fetch(base + `/api/delivered/${token}/photo`, { headers: { "X-Forwarded-Proto": "https" } });
-    check("and serves the photo to whoever holds the link", photo.status === 200 && /image\/jpeg/.test(photo.headers.get("content-type") ?? ""), `${photo.status} ${photo.headers.get("content-type")}`);
+    check("and serves the photo to whoever holds the link, never as a page", photo.status === 200 && /image\/jpeg/.test(photo.headers.get("content-type") ?? "") && photo.headers.get("x-content-type-options") === "nosniff" && /sandbox/.test(photo.headers.get("content-security-policy") ?? ""), `${photo.status} ${photo.headers.get("content-type")} ${photo.headers.get("content-security-policy")}`);
+    // A second parcel ended early is a completion too, and the receiver is told once.
+    const second = await rider.req("POST", `/api/org/${orgId}/deliveries`, { parcelSize: "small", pickupContact: { name: "Counter" }, dropContact: { name: "Ada", phone: "3015550189" }, readyAt: inMin(95), windowHours: 2, pickup: PICKUP, destination: DEST, handover: "person" });
+    const secondRide = second.json.ride.id; rideIds.push(secondRide);
+    await driver.req("POST", `/api/driver/rides/${secondRide}/claim`); await driver.req("POST", `/api/driver/rides/${secondRide}/confirm-scheduled`);
+    await db.query("UPDATE rides SET scheduled_at = NOW() - interval '5 minutes' WHERE id=$1", [secondRide]);
+    await driver.req("POST", `/api/driver/rides/${secondRide}/start`);
+    const reuse = await driver.req("POST", `/api/driver/rides/${secondRide}/proof`, { receivedBy: "Ada", photoUrl: up.json?.uploadURL });
+    check("a photo that already proves another job is refused for this one", reuse.status === 400 && /already the proof/.test(reuse.json?.message ?? ""), JSON.stringify(reuse.json));
+    const upSvg = await driver.req("POST", "/api/objects/upload?store=db", {});
+    const svgPath = new URL(upSvg.json?.uploadURL ?? "http://x/").pathname;
+    await driver.req("PUT", svgPath, "<svg onload='alert(1)'/>", { "Content-Type": "image/svg+xml" });
+    const svg = await driver.req("POST", `/api/driver/rides/${secondRide}/proof`, { receivedBy: "Ada", photoUrl: svgPath });
+    check("an SVG is not a photo", svg.status === 400 && /JPEG, PNG/.test(svg.json?.message ?? ""), JSON.stringify(svg.json));
+    await driver.req("POST", `/api/driver/rides/${secondRide}/proof`, { receivedBy: "Ada" });
+    const early = await driver.req("POST", `/api/rides/${secondRide}/cancel`, { reason: "ended early after the handover" });
+    await new Promise((r) => setTimeout(r, 400));
+    const earlyLines = serverLog(server).split("\n").filter((l) => l.includes("[delivered] J-") && l.includes("→") && /received by Ada/.test(l));
+    check("ending the run early after the handover completes it and tells the receiver, once", early.status === 200 && earlyLines.length === 1, `status=${early.status} texts=${earlyLines.length}`);
+    const again = await driver.req("POST", `/api/driver/rides/${secondRide}/complete`, {});
+    await new Promise((r) => setTimeout(r, 300));
+    check("a retry of Complete on the finished job does not text again", again.status === 200 && serverLog(server).split("\n").filter((l) => l.includes("[delivered] J-") && l.includes("→") && /received by Ada/.test(l)).length === 1);
     check("a made-up link is not valid", (await guest.req("GET", `/api/delivered/${"0".repeat(48)}`)).status === 404);
 
     section("Photos are kept 90 days; the record stays");
     const { rows: [jobRow] } = await db.query("SELECT id FROM commercial_jobs WHERE ride_id=$1", [rideId]);
-    const early = await admin.req("POST", "/api/admin/analytics/retire-proof-photos");
-    check("a fresh photo is not touched", early.status === 200 && (await guest.req("GET", `/api/delivered/${token}`)).json?.hasPhoto === true, JSON.stringify(early.json));
+    const earlySweep = await admin.req("POST", "/api/admin/analytics/retire-proof-photos");
+    check("a fresh photo is not touched", earlySweep.status === 200 && (await guest.req("GET", `/api/delivered/${token}`)).json?.hasPhoto === true, JSON.stringify(earlySweep.json));
     await db.query("UPDATE commercial_jobs SET proof = jsonb_set(proof, '{signedAt}', to_jsonb((NOW() - interval '91 days')::text)) WHERE id=$1", [jobRow.id]);
     const retire = await admin.req("POST", "/api/admin/analytics/retire-proof-photos");
     check("ninety-one days on, the photo is retired", retire.status === 200 && retire.json?.retired >= 1, JSON.stringify(retire.json));

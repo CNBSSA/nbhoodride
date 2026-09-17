@@ -1047,6 +1047,7 @@ export const commercialJobs = pgTable("commercial_jobs", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("idx_commercial_jobs_recipient_token").on(table.recipientApprovalToken),
+  index("idx_commercial_jobs_proof_share_token").on(table.proofShareToken),
   index("idx_commercial_jobs_org").on(table.organizationId),
   // One job per standing order, service date and leg: the sweep can run as
   // often as it likes and never books the same trip twice.

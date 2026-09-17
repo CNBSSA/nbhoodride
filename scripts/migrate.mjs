@@ -824,6 +824,7 @@ ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_approval_token VA
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_fee NUMERIC(8,2);
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_approved_at TIMESTAMP;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS proof_share_token VARCHAR;
+CREATE INDEX IF NOT EXISTS idx_commercial_jobs_proof_share_token ON commercial_jobs (proof_share_token);
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_nudged_at TIMESTAMP;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS shop_asked_at TIMESTAMP;
 CREATE INDEX IF NOT EXISTS idx_commercial_jobs_recipient_token ON commercial_jobs (recipient_approval_token);

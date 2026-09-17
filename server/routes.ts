@@ -1450,6 +1450,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // A stored object that is not an image or a PDF is a download, never a
       // page: nothing a driver uploads can run in a desk's session.
       if (!/^(image\/|application\/pdf)/i.test(obj.contentType)) res.set("Content-Disposition", `attachment; filename="${obj.id}"`);
+      res.set("X-Content-Type-Options", "nosniff");
+      res.set("Content-Security-Policy", "sandbox");
       res.send(Buffer.from(obj.dataBase64, "base64"));
     } catch (error) {
       console.error("Error serving stored object:", error);
@@ -3244,6 +3246,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // driver as success so the driver is never trapped on a finished trip.
         const existing = await storage.getRide(rideId);
         if (existing && existing.status === "completed" && existing.driverId === userId) {
+          // A retry after a crash between completion and the receiver's text still sends it (once; the text stamps itself).
+          if (existing.paymentMethod === 'invoice') import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch(() => {});
           return res.json(existing);
         }
         throw err;
@@ -4530,6 +4534,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (gate) return res.status(409).json({ message: gate, needsProof: true });
         }
         const completed = await storage.completeRide(rideId, ride.driverId!, undefined, undefined, "metered");
+        if (ride.paymentMethod === "invoice") {
+          import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch((err) => console.error("[delivered] text failed:", err));
+        }
         await settleCardPaymentForCompletedRide(completed, undefined, 0);
         await storage.updateRide(rideId, {
           cancellationReason: reason || `Ride ended early by ${role}`,

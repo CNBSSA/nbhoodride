@@ -124,8 +124,13 @@ async function verifiedProofPhotoPath(raw: unknown, driverUserId: string): Promi
   const [obj] = await db.select({ id: storedObjects.id, ownerUserId: storedObjects.ownerUserId, contentType: storedObjects.contentType }).from(storedObjects).where(eq(storedObjects.id, m[1]));
   if (!obj) throw new CommercialError("The photo did not upload. Try again.");
   if (obj.ownerUserId !== driverUserId) throw new CommercialError("That photo is not yours.", 403);
-  if (!/^image\//i.test(obj.contentType)) throw new CommercialError("The proof must be a photo.");
-  return `/api/objects/db-upload/${obj.id}`;
+  // A photo, and only a raster one: an SVG is a document that can carry a script.
+  if (!/^image\/(jpeg|jpg|png|webp|heic|heif|gif)$/i.test(obj.contentType)) throw new CommercialError("The proof must be a photo (JPEG, PNG, WebP or HEIC).");
+  const path = `/api/objects/db-upload/${obj.id}`;
+  // One upload proves one job: a photo shared between jobs would be retired from under the younger one.
+  const [used] = await db.select({ id: commercialJobs.id }).from(commercialJobs).where(sql`${commercialJobs.proof}->>'photoUrl' = ${path}`).limit(1);
+  if (used) throw new CommercialError("That photo is already the proof for another job. Take a new one.");
+  return path;
 }
 
 export interface ProofInput {

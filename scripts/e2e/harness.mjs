@@ -99,7 +99,7 @@ export async function seedFixtures(db) {
   await db.query(`INSERT INTO rides (id, rider_id, driver_id, status, pickup_location, destination_location, estimated_fare, actual_fare, payment_method, ride_type, passenger_name, completed_at)
     VALUES ('e2e-delivered-ride', $1, $2, 'completed', $3, $4, 11.80, 11.80, 'invoice', 'commercial', 'Tunde Bakare', NOW() - interval '1 hour')
     ON CONFLICT (id) DO UPDATE SET status='completed', completed_at=NOW() - interval '1 hour'`,
-    [FIXTURES.rider.id, FIXTURES.driver.id, JSON.stringify({ address: "Bowie, MD", lat: 38.9073, lng: -76.7781 }), JSON.stringify({ address: "National Harbor, MD", lat: 38.7823, lng: -77.0166 })]);
+    [FIXTURES.rider.id, FIXTURES.driver.id, JSON.stringify({ address: "Bowie, MD", lat: 38.9073, lng: -76.7781 }), JSON.stringify({ address: "National Harbor, MD", lat: 38.7823, lng: -77.0166 })]).catch((e) => console.log("  (delivered ride seed) " + String(e?.message ?? e).split("\\n")[0]));
   await db.query(`INSERT INTO commercial_jobs (ride_id, organization_id, requester_id, job_number, category, parcel_size, handover, drop_contact, pickup_contact, window_start, window_end, proof, proof_share_token)
     VALUES ('e2e-delivered-ride', 'e2e-biz', $1, 990003, 'business', 'small', 'person', $2, $3, NOW() - interval '3 hours', NOW() - interval '1 hour', $4, $5)
     ON CONFLICT (ride_id) DO UPDATE SET proof=$4, proof_share_token=$5`,
