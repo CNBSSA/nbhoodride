@@ -88,7 +88,7 @@ export default function PortalPage() {
   // N opens the booking form from anywhere on the page; Escape closes it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setBooking(false); setSendingParcel(false); return; }
+      if (e.key === "Escape") { setBooking(false); setSendingParcel(false); setParcelPrefill(null); return; }
       const plain = !e.metaKey && !e.ctrlKey && !e.altKey && !isTyping() && active && canBook(active.role);
       if ((e.key === "n" || e.key === "N") && plain) { e.preventDefault(); setBooking(true); }
       if ((e.key === "p" || e.key === "P") && plain && categoryMayBook(active.organization.category, "delivery")) { e.preventDefault(); setSendingParcel(true); }

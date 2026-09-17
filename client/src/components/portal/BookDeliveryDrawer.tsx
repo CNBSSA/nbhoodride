@@ -15,9 +15,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
-import { DEFAULT_WINDOW_HOURS, PARCEL_LABELS, PARCEL_NOTES, PARCEL_SIZES, describeDeliveryTariff, type ParcelSize, HANDOVER_KINDS, HANDOVER_LABELS, DEFAULT_HANDOVER, type HandoverKind } from "@shared/deliveries";
+import { DEFAULT_WINDOW_HOURS, PARCEL_LABELS, PARCEL_NOTES, PARCEL_SIZES, describeDeliveryTariff, type ParcelSize, HANDOVER_KINDS, HANDOVER_LABELS, DEFAULT_HANDOVER, type HandoverKind, handoverOf } from "@shared/deliveries";
 import { payerOf, type Payer } from "@shared/recipientPay";
-import { handoverOf } from "@shared/deliveries";
 
 async function json<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await apiRequest(method, url, body);
@@ -73,7 +72,7 @@ export function BookDeliveryDrawer({ orgId, orgName, defaultPayer = "organizatio
 
   const ready = !!(pickupName.trim() && dropName.trim() && pickup && dest && readyAt) && (payer !== "recipient" || dropPhone.trim().length > 0);
   const book = useMutation({
-    mutationFn: () => json<{ job: { jobLabel: string }; ride: { estimatedFare: string }; recipientPay: { link: string; textSent: boolean } | null }>("POST", `/api/org/${orgId}/deliveries`, {
+    mutationFn: () => json<{ job: { jobLabel: string }; ride: { estimatedFare: string }; recipientPay: { link: string; textSent: boolean } | null; remembered: { ok: boolean; reason?: string } | null }>("POST", `/api/org/${orgId}/deliveries`, {
       parcelSize,
       pickupContact: { name: pickupName, phone: pickupPhone },
       dropContact: { name: dropName, phone: dropPhone, note: dropNote },
@@ -89,6 +88,7 @@ export function BookDeliveryDrawer({ orgId, orgName, defaultPayer = "organizatio
     onSuccess: (r) => {
       queryClient.invalidateQueries({ queryKey: ["/api/org", orgId, "jobs"] });
       queryClient.invalidateQueries({ queryKey: ["/api/org", orgId, "recipients"] });
+      if (r.remembered && !r.remembered.ok) toast({ title: "Booked, but not added to the recipient book", description: r.remembered.reason ?? "The book could not be written.", variant: "destructive" });
       if (r.recipientPay) {
         toast({ title: `Booked ${r.job.jobLabel} — waiting for the recipient`, description: r.recipientPay.textSent ? `${money(r.ride.estimatedFare)} to be paid by the recipient. They have a text with the link; the job goes to drivers once paid.` : `${money(r.ride.estimatedFare)} to be paid by the recipient. Texts are not set up: copy the pay link from the job row and send it yourself.` });
       } else {

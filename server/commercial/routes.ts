@@ -341,12 +341,20 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       const booked = await bookDelivery(storage, { ...(req.body ?? {}), organizationId: req.orgId, requesterId: userIdOf(req)! });
       const org = await getOrganization(req.orgId);
       // "Remember this recipient": the book fills itself from the booking.
-      // Best effort — a book entry never blocks a delivery.
+      // A book entry never blocks a delivery, but a failure is reported so
+      // the desk is told, not left to wonder (post-implementation audit).
+      let remembered: { ok: boolean; reason?: string } | null = null;
       if (req.body?.rememberRecipient === true) {
-        saveRecipient(req.orgId, {
-          name: booked.job.dropContact?.name, phone: booked.job.dropContact?.phone, note: booked.job.dropContact?.note,
-          address: booked.ride.destinationLocation as any, handover: booked.job.handover,
-        }, userIdOf(req)!).catch((err) => console.log(`[recipients] not remembered: ${err?.message ?? err}`));
+        try {
+          await saveRecipient(req.orgId, {
+            name: booked.job.dropContact?.name, phone: booked.job.dropContact?.phone, note: booked.job.dropContact?.note,
+            address: booked.ride.destinationLocation as any, handover: booked.job.handover,
+          }, userIdOf(req)!);
+          remembered = { ok: true };
+        } catch (err: any) {
+          remembered = { ok: false, reason: err instanceof CommercialError ? err.message : "the book could not be written" };
+          console.log(`[recipients] not remembered: ${remembered.reason}`);
+        }
       }
       // Recipient pays: the job is HELD — not offered to any driver — until
       // the recipient has paid from the link they are texted
@@ -366,7 +374,7 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
         ["Fare", `$${Number(booked.ride.estimatedFare ?? 0).toFixed(2)}`],
         ["Paid by", recipientPay ? "the recipient (held until paid)" : "the account"],
       ]));
-      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: formatJobNumber(booked.job.jobNumber), payer: recipientPay ? "recipient" : "organization", recipientPaymentStatus: recipientPay ? "awaiting" : null }, recipientPay });
+      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: formatJobNumber(booked.job.jobNumber), payer: recipientPay ? "recipient" : "organization", recipientPaymentStatus: recipientPay ? "awaiting" : null }, recipientPay, remembered });
     } catch (err) { fail(res, err, "Could not book the delivery"); }
   });
 

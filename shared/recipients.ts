@@ -41,8 +41,8 @@ export function normalizeRecipient(input: RecipientInput): { valid: true; recipi
   const rawPhone = clean(input.phone, 40);
   const phone = rawPhone ? recipientPhoneKey(rawPhone) : null;
   if (rawPhone && !phone) return { valid: false, error: "The phone must be a 10-digit US number." };
-  const lat = Number(input.address?.lat), lng = Number(input.address?.lng);
+  const lat = input.address?.lat, lng = input.address?.lng;
   const addr = clean(input.address?.address, 200);
-  if (!addr || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return { valid: false, error: "Pick the recipient's address from the suggestions." };
+  if (!addr || typeof lat !== "number" || typeof lng !== "number" || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) return { valid: false, error: "Pick the recipient's address from the suggestions." };
   return { valid: true, recipient: { name, phone, address: { lat, lng, address: addr }, handover: handoverOf(input.handover), note: clean(input.note, 200) || null } };
 }
