@@ -291,6 +291,7 @@
     "button-portal-resend-approval-link-*": "on the desk's job row for a held delivery; journey 22 covers it",
     "button-portal-ask-recipient-no": "inside the Billing tab for an owner; journey 22 covers the setting",
     "button-portal-ask-recipient-yes": "inside the Billing tab for an owner; journey 22 covers the setting",
-    "button-approve-yes": "the audit presses 'No thanks' first and the page becomes 'Declined'; the layout audit measures the approve button and journey 22 covers both answers"
+    "button-approve-yes": "on the approval page, whichever answer the audit presses first changes the page so the other disappears; the layout audit measures both and journey 22 covers both answers",
+    "button-approve-no": "on the approval page, whichever answer the audit presses first changes the page so the other disappears; the layout audit measures both and journey 22 covers both answers"
   }
 }
