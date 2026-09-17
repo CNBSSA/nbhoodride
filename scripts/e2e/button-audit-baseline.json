@@ -291,6 +291,7 @@
     "button-portal-resend-pay-link-*": "on the desk's job row for a held recipient-pays job; journey 22 covers it",
     "button-portal-default-payer-organization": "inside the Billing tab for an owner; journey 22 covers the setting",
     "button-portal-default-payer-recipient": "inside the Billing tab for an owner; journey 22 covers the setting",
-    "button-pay-confirm": "inside Stripe's Payment Element after a PaymentIntent exists; the audits run without Stripe"
+    "button-pay-confirm": "inside Stripe's Payment Element after a PaymentIntent exists; the audits run without Stripe",
+    "button-pay-now": "the audit presses 'No thanks' first and the page becomes 'Declined'; the layout audit measures the pay button and journey 22 covers decline and pay"
   }
 }
