@@ -3218,6 +3218,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async adminUpdateUser(userId: string, updates: Partial<{ isAdmin: boolean; isSuperAdmin: boolean; isApproved: boolean; approvedBy: string; isSuspended: boolean; isVerified: boolean; isDriver: boolean }>): Promise<User> {
+    // Revoking approval or suspending ends every session the person holds,
+    // on every device, at once (standard practice, 2026-09-17): a revoked
+    // account does not keep working until its cookie happens to expire.
+    if (updates.isApproved === false || updates.isSuspended === true) {
+      await db.execute(sql`DELETE FROM sessions WHERE sess->>'userId' = ${userId} OR sess->>'testUserId' = ${userId}`)
+        .then(() => console.log(`[AUDIT] sessions_ended userId=${userId} reason=${updates.isSuspended ? "suspended" : "approval_revoked"}`))
+        .catch((err) => console.error(`[AUDIT] could not end sessions for ${userId}:`, err));
+    }
     const [user] = await db.update(users).set({ ...updates, updatedAt: new Date() }).where(eq(users.id, userId)).returning();
     return user;
   }

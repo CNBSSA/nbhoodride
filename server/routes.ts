@@ -461,6 +461,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api/auth/signup', authLimiter);
   app.use('/api/org/invitations', authLimiter);
   app.use('/api/approve', authLimiter);
+  app.use('/api/delivered', authLimiter);
   app.use('/api/auth/forgot-password', authLimiter);
   app.use('/api/auth/reset-password', authLimiter);
   app.use('/api/auth/forgot-password-sms', authLimiter);
@@ -3297,6 +3298,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (ride.paymentMethod === 'invoice') {
         const waiting = await recordWaitingForCompletedRide(rideId)
           .catch((err) => { console.error(`[complete] waiting charge failed for ride ${rideId}:`, err); return null; });
+        // The receiver is told it was delivered, with a link to the proof
+        // (server/commercial/delivered.ts). Best effort; never blocks.
+        import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch((err) => console.error("[delivered] text failed:", err));
         try {
           await payDriverForCompletedJob(storage, ride);
           if (waiting && waiting.waitFee > 0) await payDriverForWaiting(storage, ride, waiting.waitFee);
@@ -11155,6 +11159,11 @@ Generate the FAQ list.`;
       // ── Recipient approval: nudge, ask the shop, give up (shared/recipientApproval.ts) ──
       if (featureFlags.commercialEnabled) {
         import("./commercial/recipientApproval").then((m) => m.sweepRecipientApproval(now, resolveAppUrl())).catch((err) => console.error("recipient-approval sweep failed:", err));
+      }
+
+      // ── Proof photos are kept 90 days, the record forever (standard practice, 2026-09-17) ──
+      if (featureFlags.commercialEnabled && now.getMinutes() === 41) {
+        import("./commercial/delivered").then((m) => m.retireOldProofPhotos(now)).catch((err) => console.error("proof photo retention failed:", err));
       }
 
       // ── Proof photos still on a phone: page ops at 6 h, give up at 24 h ──
