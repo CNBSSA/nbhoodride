@@ -332,6 +332,25 @@ export async function sendPasswordResetEmail(
   );
 }
 
+/** An owner invited this email to book for their organization (shared/invitations.ts). */
+export async function sendOrganizationInviteEmail(params: {
+  email: string; organizationName: string; inviterName: string | null; link: string; days: number;
+}): Promise<void> {
+  const who = params.inviterName ? `${params.inviterName} at ${params.organizationName}` : params.organizationName;
+  await sendEmail(
+    params.email,
+    `${params.organizationName} invited you to book rides on PG Ride`,
+    baseTemplate(`
+      <p>Hi,</p>
+      <p>${who} has invited you to book rides and deliveries for <strong>${params.organizationName}</strong> on PG Ride. Set up your sign-in and you land straight in their booking desk:</p>
+      <a href="${params.link}" class="btn">Join ${params.organizationName}</a>
+      <p>This link is for this email address only and expires in <strong>${params.days} days</strong>. If you were not expecting it, you can ignore this email.</p>
+      <p style="font-size:13px; color:#6b7280;">If the button above doesn't work, copy and paste this link into your browser:<br/>
+      <a href="${params.link}" style="color:#2563eb; word-break:break-all;">${params.link}</a></p>
+    `)
+  );
+}
+
 // 3. Ride accepted by driver
 export async function sendRideAcceptedEmail(params: {
   riderEmail: string | null;

@@ -954,6 +954,26 @@ export const organizationMembers = pgTable("organization_members", {
   index("idx_organization_members_user").on(table.userId),
 ]);
 
+/** An email invited to an organization before it holds an account (shared/invitations.ts). */
+export const organizationInvitations = pgTable("organization_invitations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  email: varchar("email").notNull(),
+  /** owner | requester | billing */
+  role: varchar("role").notNull().default("requester"),
+  /** sha256 of the link token; the token itself is never stored. */
+  tokenHash: varchar("token_hash").notNull(),
+  invitedBy: varchar("invited_by").notNull().references(() => users.id),
+  expiresAt: timestamp("expires_at").notNull(),
+  acceptedAt: timestamp("accepted_at"),
+  acceptedUserId: varchar("accepted_user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_organization_invitation_email").on(table.organizationId, table.email),
+  index("idx_organization_invitations_token").on(table.tokenHash),
+]);
+export type OrganizationInvitation = typeof organizationInvitations.$inferSelect;
+
 export const commercialJobs = pgTable("commercial_jobs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   rideId: varchar("ride_id").notNull().unique().references(() => rides.id),

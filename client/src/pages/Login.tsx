@@ -133,6 +133,14 @@ export default function Login() {
                 </span>
               </Link>
             </p>
+            <p className="mt-2 text-muted-foreground">
+              Signing in for a business?{' '}
+              <Link href="/org/login">
+                <span className="text-primary hover:underline cursor-pointer" data-testid="link-business-login">
+                  Business sign-in
+                </span>
+              </Link>
+            </p>
           </div>
         </CardContent>
       </Card>
