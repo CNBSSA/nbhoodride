@@ -18,6 +18,9 @@
  *                 the organization is already charged for them
  *   a no-show     the ordinary fee split (routed by the caller), because the
  *                 driver drove there and waited either way
+ *   a late cancel the ordinary fee split too: the driver held the job inside
+ *                 the organization's free window and lost the slot, exactly
+ *                 as when a rider cancels late (rates audit, 2026-09-18)
  *   facility fee  nothing. It pays for the account, the desk portal and the
  *                 statement — office work, not driving.
  */
@@ -25,6 +28,7 @@
 import { splitFare } from "@shared/payoutPolicy";
 import type { Ride } from "@shared/schema";
 import type { IStorage } from "../storage";
+import { FAIRNESS_FUND_RATE } from "../rideWorkflowService";
 
 /** Ledger reason for the driver's share of waiting at the door. */
 export const WAITING_REASON = "commercial_waiting";
@@ -65,4 +69,28 @@ export async function payDriverForWaiting(storage: IStorage, ride: Ride, waitFee
   await storage.addVirtualCardBalance(ride.driverId, driverCut, WAITING_REASON, ride.id);
   console.log(`[commercial] driver paid for waiting :: ride ${ride.id.slice(0, 8)} | $${driverCut.toFixed(2)} of $${fee.toFixed(2)}`);
   return driverCut;
+}
+
+/** Ledger reason for the driver's share of a cancellation fee, shared with the rider ladder. */
+export const CANCEL_FEE_REASON = "cancellation_fee";
+
+/**
+ * Credit the driver their share of the organization's late-cancel fee: the
+ * same split as a rider's late cancel — the bulk to the driver, the fairness
+ * slice to the community pool, nothing to PG Ride. The organization pays the
+ * fee on its statement; the driver is paid now. Guarded on the ledger so a
+ * retry pays once. Returns the driver's cut, or 0 when nothing was due.
+ */
+export async function payDriverForLateCancel(storage: IStorage, ride: Ride, fee: number): Promise<{ driverCut: number; fundCut: number }> {
+  const none = { driverCut: 0, fundCut: 0 };
+  if (ride.paymentMethod !== "invoice" || !ride.driverId) return none;
+  const amount = money(fee);
+  if (amount <= 0) return none;
+  if (await storage.hasWalletTransaction(ride.id, CANCEL_FEE_REASON)) return none;
+  const fundCut = Number((amount * FAIRNESS_FUND_RATE).toFixed(2));
+  const driverCut = Number((amount - fundCut).toFixed(2));
+  if (driverCut > 0) await storage.addVirtualCardBalance(ride.driverId, driverCut, CANCEL_FEE_REASON, ride.id);
+  if (fundCut > 0) await storage.fundCommunityBonusPool(fundCut);
+  console.log(`[commercial] driver paid for a late cancel :: ride ${ride.id.slice(0, 8)} | $${driverCut.toFixed(2)} of $${amount.toFixed(2)}`);
+  return { driverCut, fundCut };
 }

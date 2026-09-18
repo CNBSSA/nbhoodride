@@ -96,6 +96,11 @@ export async function run({ base, db, server }) {
     await db.query("UPDATE rides SET scheduled_at = NOW() + interval '90 minutes' WHERE id=$1", [late.rideId]);
     const lateCancel = await rider.req("POST", `/api/org/${A.json.id}/jobs/${late.id}/cancel`, { reason: "Changed plans" });
     check("with a driver and inside the free window: the organization's late fee", lateCancel.status === 200 && lateCancel.json?.cancellationFee === "12.00", JSON.stringify(lateCancel.json?.cancellationFee));
+    // The driver held that job and lost the slot. The organization pays the
+    // fee on its statement; the driver's cut of it is theirs now, the same
+    // split as a rider's late cancel (rates audit, 2026-09-18).
+    const { rows: lateCut } = await db.query("SELECT amount FROM wallet_transactions WHERE ride_id=$1 AND reason='cancellation_fee'", [late.rideId]);
+    check("the driver who held the job gets their cut of the late fee at once: $9.60 of $12.00", lateCut.length === 1 && lateCut[0].amount === "9.60", JSON.stringify(lateCut));
     const ns = fromOrder.sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt))[3];
     check("driver claims another", (await driver.req("POST", `/api/driver/rides/${ns.rideId}/claim`)).status === 200);
     await driver.req("POST", `/api/driver/rides/${ns.rideId}/confirm-scheduled`);
