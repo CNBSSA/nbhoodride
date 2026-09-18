@@ -84,9 +84,9 @@ export async function run({ base, db }) {
     await db.query("INSERT INTO processed_webhook_events (provider, event_id, event_type) VALUES ('ride_tip', $1, 'tip')", [claimed]);
     const whileClaimed = await rider.req("POST", `/api/rides/${claimed}/tip`, { amount: 5 });
     check("a ride another request is tipping right now is refused as already tipped", whileClaimed.status === 409 && whileClaimed.json?.reason === "already_tipped", JSON.stringify(whileClaimed.json));
-    await db.query("UPDATE processed_webhook_events SET processed_at = NOW() - interval '2 minutes' WHERE provider='ride_tip' AND event_id=$1", [claimed]);
+    await db.query("UPDATE processed_webhook_events SET processed_at = NOW() - interval '10 minutes' WHERE provider='ride_tip' AND event_id=$1", [claimed]);
     const afterStale = await rider.req("POST", `/api/rides/${claimed}/tip`, { amount: 5 });
-    check("a claim left behind by a request that died is released after a minute; the attempt reaches Stripe and fails in words", afterStale.status === 503, `${afterStale.status} ${JSON.stringify(afterStale.json)}`);
+    check("a claim left behind by a request that died is released once it is old enough; the attempt reaches Stripe and fails in words", afterStale.status === 503, `${afterStale.status} ${JSON.stringify(afterStale.json)}`);
     const { rows: claimRows } = await db.query("SELECT 1 FROM processed_webhook_events WHERE provider='ride_tip' AND event_id=$1", [claimed]);
     check("and a failed charge leaves no claim behind", claimRows.length === 0, `claims=${claimRows.length}`);
 
@@ -128,6 +128,7 @@ export async function run({ base, db }) {
     check("the same tip told again is not credited twice", (await tipRows(card)).length === 1 && Math.abs((await balance()) - beforeHook - 5) < 0.011, String(await balance()));
     const afterHookTip = await rider.req("POST", `/api/rides/${card}/tip`, { amount: 3 });
     check("and the rider cannot add another", afterHookTip.status === 409 && afterHookTip.json?.reason === "already_tipped", JSON.stringify(afterHookTip.json));
+    check("the refusal came from the ledger, before the card was touched: the tip on the ride is untouched", (await db.query("SELECT tip_amount FROM rides WHERE id=$1", [card])).rows[0].tip_amount === "5.00");
     await signedPost(tipEvent("tip-unsettled", unsettled, 300));
     const { rows: [stillFailed] } = await db.query("SELECT payment_status FROM rides WHERE id=$1", [unsettled]);
     check("a tip event never marks a failed settlement as paid", stillFailed.payment_status === "settlement_failed", JSON.stringify(stillFailed));
