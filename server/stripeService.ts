@@ -142,22 +142,29 @@ export class StripeService {
 
   /**
    * A tip after the ride: its own off-session charge on the card on file,
-   * never folded into the fare. Idempotent per ride on Stripe's side; the
-   * once-per-ride guarantee is the ledger (storage.recordRideTipOnce).
+   * never folded into the fare. The once-per-ride guarantee is the ledger
+   * (storage.recordRideTipOnce); Stripe's key only makes a network retry of
+   * the same request replay the same charge. It carries the amount and the
+   * card, so a rider whose card was declined can try another card or amount
+   * at once instead of being told the same "no" for a day.
    */
   async chargeTip(params: { amount: number; customerId: string; paymentMethodId: string; rideId: string; riderId: string }): Promise<Stripe.PaymentIntent> {
     const { amount, customerId, paymentMethodId, rideId, riderId } = params;
+    const cents = Math.round(amount * 100);
     return await requireStripe().paymentIntents.create({
-      amount: Math.round(amount * 100),
+      amount: cents,
       currency: "usd",
       customer: customerId,
       payment_method: paymentMethodId,
       capture_method: 'automatic',
       confirm: true,
       off_session: true,
+      // A card that wants the rider present cannot be charged off-session;
+      // say so as a decline rather than leave an intent waiting on nobody.
+      error_on_requires_action: true,
       description: "PG Ride tip for your driver",
-      metadata: { rideId, riderId, type: 'tip' },
-    }, { idempotencyKey: `ride_tip_${rideId}` });
+      metadata: { rideId, riderId, type: 'tip', tipAmount: amount.toFixed(2) },
+    }, { idempotencyKey: `ride_tip_${rideId}_${cents}_${paymentMethodId}` });
   }
 
   async capturePaymentIntent(paymentIntentId: string, amountToCapture?: number): Promise<Stripe.PaymentIntent> {

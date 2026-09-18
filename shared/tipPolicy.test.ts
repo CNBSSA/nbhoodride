@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { TIP_MAX, TIP_MIN, TIP_PRESETS, TIP_WINDOW_DAYS, describeTipRefusal, normalizeTip, tipRefusal } from "./tipPolicy";
 
 const now = new Date("2026-09-18T12:00:00Z");
-const ride = { status: "completed", paymentMethod: "card", completedAt: "2026-09-17T12:00:00Z", tipAmount: "0.00", driverId: "d1" };
+const ride = { status: "completed", paymentMethod: "card", paymentStatus: "paid_card", completedAt: "2026-09-17T12:00:00Z", tipAmount: "0.00", driverId: "d1", refundedAmount: null };
 
 describe("tipRefusal", () => {
   it("allows a completed card ride within the window, tipped once", () => {
@@ -13,11 +13,15 @@ describe("tipRefusal", () => {
     expect(tipRefusal({ ...ride, paymentMethod: "cash" }, now)).toBe("not_card");
     expect(tipRefusal({ ...ride, paymentMethod: "invoice" }, now)).toBe("not_card");
     expect(tipRefusal({ ...ride, driverId: null }, now)).toBe("no_driver");
+    expect(tipRefusal({ ...ride, paymentStatus: "settlement_failed" }, now)).toBe("not_settled");
+    expect(tipRefusal({ ...ride, paymentStatus: "disputed" }, now)).toBe("not_settled");
+    expect(tipRefusal({ ...ride, paymentStatus: "authorized" }, now)).toBe("not_settled");
+    expect(tipRefusal({ ...ride, refundedAmount: "5.00" }, now)).toBe("refunded");
     expect(tipRefusal({ ...ride, tipAmount: "5.00" }, now)).toBe("already_tipped");
     expect(tipRefusal({ ...ride, tipAmount: 2 }, now)).toBe("already_tipped");
     expect(tipRefusal({ ...ride, completedAt: "2026-09-01T12:00:00Z" }, now)).toBe("window_closed");
     expect(tipRefusal({ ...ride, completedAt: null }, now)).toBe("window_closed");
-    for (const why of ["not_completed", "not_card", "no_driver", "already_tipped", "window_closed"] as const) {
+    for (const why of ["not_completed", "not_card", "no_driver", "not_settled", "refunded", "already_tipped", "window_closed"] as const) {
       expect(describeTipRefusal(why).length).toBeGreaterThan(10);
     }
   });

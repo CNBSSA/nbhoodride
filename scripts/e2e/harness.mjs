@@ -121,7 +121,7 @@ export async function startServer(env = {}) {
       NODE_ENV: "production", PORT: String(port), DATABASE_URL, SESSION_SECRET: "e2e-secret",
       // Production-like: card-only, Stripe armed (unreachable here), email "configured",
       // Telegram + Twilio dummies so every alert/SMS path executes and fails gracefully.
-      WALLET_ENABLED: "false", STRIPE_SECRET_KEY: "sk_test_e2e_fake",
+      WALLET_ENABLED: "false", STRIPE_SECRET_KEY: "sk_test_e2e_fake", STRIPE_WEBHOOK_SECRET: "whsec_e2e_fake",
       // Commercial riders is off in production until proven; journeys exercise
       // it on. Overridable so the flag-off state — what production actually
       // runs — can be re-proved on demand, not just argued about.

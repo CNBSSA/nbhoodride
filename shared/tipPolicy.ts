@@ -25,25 +25,40 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 export interface TippableRide {
   status?: string | null;
   paymentMethod?: string | null;
+  /** The fare must have settled (paid_card) before a tip is taken on top of it. */
+  paymentStatus?: string | null;
   completedAt?: Date | string | null;
   tipAmount?: number | string | null;
   driverId?: string | null;
+  /** A ride refunded after a dispute is not tipped. */
+  refundedAmount?: number | string | null;
 }
 
 export type TipRefusal =
   | "not_completed"
   | "not_card"
   | "no_driver"
+  | "not_settled"
+  | "refunded"
   | "already_tipped"
   | "window_closed";
+
+const money = (v: number | string | null | undefined): number => {
+  const n = typeof v === "number" ? v : parseFloat(String(v ?? "0"));
+  return Number.isFinite(n) ? n : 0;
+};
 
 /** Why a tip cannot be added to this ride, or null when it can. */
 export function tipRefusal(ride: TippableRide, now: Date = new Date()): TipRefusal | null {
   if (ride.status !== "completed") return "not_completed";
   if (ride.paymentMethod !== "card") return "not_card";
   if (!ride.driverId) return "no_driver";
-  const existing = typeof ride.tipAmount === "number" ? ride.tipAmount : parseFloat(String(ride.tipAmount ?? "0"));
-  if (Number.isFinite(existing) && existing > 0) return "already_tipped";
+  // Only a settled fare takes a tip on top: a ride whose settlement failed
+  // or is disputed is the operator's to sort out first, and a tip's own
+  // charge must never be mistaken for the fare's.
+  if (ride.paymentStatus !== "paid_card") return "not_settled";
+  if (money(ride.refundedAmount) > 0) return "refunded";
+  if (money(ride.tipAmount) > 0) return "already_tipped";
   const completed = ride.completedAt ? new Date(ride.completedAt).getTime() : NaN;
   if (!Number.isFinite(completed) || now.getTime() - completed > TIP_WINDOW_DAYS * 86_400_000) return "window_closed";
   return null;
@@ -54,6 +69,8 @@ export function describeTipRefusal(why: TipRefusal): string {
     case "not_completed": return "You can tip once the ride is completed.";
     case "not_card": return "Tips on a cash ride are handed to the driver.";
     case "no_driver": return "This ride had no driver to tip.";
+    case "not_settled": return "This ride's payment is still being sorted out. You can tip once it has gone through.";
+    case "refunded": return "This ride was refunded, so it does not take a tip.";
     case "already_tipped": return "You already tipped for this ride. Thank you.";
     case "window_closed": return `Tips can be added up to ${TIP_WINDOW_DAYS} days after a ride.`;
   }

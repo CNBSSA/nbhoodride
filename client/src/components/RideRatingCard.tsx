@@ -81,7 +81,11 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
     onSuccess: (data: any) => {
       setTipped(Number(data?.tipAmount ?? tipAmount));
       queryClient.invalidateQueries({ queryKey: ["/api/rides/for-rating"] });
-      toast({ title: "Tip sent", description: `${otherPersonName} gets all of it. Thank you.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/rides"] });
+      toast({
+        title: data?.pending ? "Tip on its way" : "Tip sent",
+        description: data?.pending ? String(data?.message ?? "It will show once your bank confirms it.") : `${otherPersonName} gets all of it. Thank you.`,
+      });
     },
     onError: (error: any) => {
       const text = String(error?.message ?? '');
@@ -130,8 +134,20 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
     }
   });
 
-  const doSubmitRating = () => {
+  const doSubmitRating = async () => {
     setIsSubmitting(true);
+    // A tip chosen but not yet sent goes with the rating: rating is the last
+    // tap on this card, and the card leaves the screen once it is rated. If
+    // the tip does not go through, the rating waits so the rider can fix the
+    // card or clear the tip; nothing is lost.
+    if (canTip && tipAmount !== null) {
+      try {
+        await tipMutation.mutateAsync(tipAmount);
+      } catch {
+        setIsSubmitting(false);
+        return;
+      }
+    }
     submitRatingMutation.mutate({
       rating,
       review: review.trim() || undefined
@@ -263,7 +279,7 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
         {canTip && (
           <div className="space-y-2 p-3 rounded-lg border" data-testid={`tip-block-${ride.id}`}>
             <p className="font-medium">Add a tip for {otherPersonName}?</p>
-            <p className="text-sm text-muted-foreground">All of it goes to them. Charged to your card on file.</p>
+            <p className="text-sm text-muted-foreground">All of it goes to them. Charged to your card on file. A tip you choose here is sent with your rating too.</p>
             <div className="flex flex-wrap gap-2">
               {TIP_PRESETS.map((p) => (
                 <Button
@@ -308,7 +324,7 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
               onClick={() => { if (tipAmount !== null) tipMutation.mutate(tipAmount); }}
               data-testid={`button-tip-send-${ride.id}`}
             >
-              {tipMutation.isPending ? 'Sending…' : tipAmount !== null ? `Tip $${tipAmount.toFixed(2)}` : 'Choose a tip'}
+              {tipMutation.isPending ? 'Sending…' : tipAmount !== null ? `Tip $${tipAmount.toFixed(2)} now` : 'Choose a tip'}
             </Button>
           </div>
         )}

@@ -5214,17 +5214,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let intentId: string;
       try {
         const intent = await stripeService.chargeTip({ amount, customerId: rider.stripeCustomerId, paymentMethodId: rider.stripePaymentMethodId, rideId, riderId: userId });
+        if (intent.status === "processing") {
+          // Rare on a card, but real: the money is on its way. The webhook
+          // records the tip when Stripe says it succeeded (below), so the
+          // rider is told "pending", never "declined", and never charged twice.
+          console.log(`[tip] ride ${rideId}: charge ${intent.id} is processing; the webhook will record it`);
+          return res.status(202).json({ pending: true, rideId, tipAmount: amount, message: "Your tip is on its way. It will show once your bank confirms it." });
+        }
         if (intent.status !== "succeeded") {
           console.warn(`[tip] ride ${rideId}: charge ${intent.id} is ${intent.status}, not recorded`);
           return res.status(402).json({ message: "Your card did not go through. Try another card in Payments." });
         }
         intentId = intent.id;
       } catch (chargeErr: any) {
-        const declined = chargeErr?.type === "StripeCardError";
-        console.error(`[tip] ride ${rideId}: charge failed (${chargeErr?.type ?? "unknown"}):`, chargeErr?.message ?? chargeErr);
-        return res.status(declined ? 402 : 503).json({
-          message: declined ? "Your card was declined. Try another card in Payments." : "Tips are not available right now. Please try again later.",
-        });
+        const type = String(chargeErr?.type ?? "unknown");
+        console.error(`[tip] ride ${rideId}: charge failed (${type}):`, chargeErr?.message ?? chargeErr);
+        if (type === "StripeCardError") return res.status(402).json({ message: "Your card was declined. Try another card in Payments." });
+        // The card on file is gone or unusable (detached, expired): the fix is
+        // in Payments, not "try later".
+        if (type === "StripeInvalidRequestError") return res.status(400).json({ message: "The card on file could not be used. Add a card in Payments, then tip." });
+        return res.status(503).json({ message: "Tips are not available right now. Please try again later." });
       }
 
       const recorded = await storage.recordRideTipOnce(rideId, ride.driverId!, amount);
@@ -10583,7 +10592,19 @@ Generate the FAQ list.`;
         case 'payment_intent.succeeded': {
           const pi = event.data.object as any;
           const rideId = pi.metadata?.rideId;
-          if (rideId) {
+          if (pi.metadata?.type === 'tip') {
+            // A tip is its own charge and never the fare's: it must not mark a
+            // ride paid. Recording it here is the server-side fallback for a
+            // charge that came back "processing", or a request that died
+            // between Stripe and the ledger; recordRideTipOnce is idempotent,
+            // so the ordinary path and this one credit the driver once.
+            const tipRide = rideId ? await storage.getRide(rideId) : undefined;
+            const tipCents = Number(pi.amount_received ?? pi.amount ?? 0);
+            if (tipRide?.driverId && tipCents > 0) {
+              const recorded = await storage.recordRideTipOnce(rideId, tipRide.driverId, Math.round(tipCents) / 100);
+              if (recorded) console.log(`[tip] ride ${rideId}: $${(tipCents / 100).toFixed(2)} recorded from webhook ${pi.id}`);
+            }
+          } else if (rideId) {
             const ride = await storage.getRide(rideId);
             if (ride && ride.paymentStatus !== 'paid_card') {
               await storage.updateRide(rideId, { paymentStatus: 'paid_card' });

@@ -529,6 +529,7 @@ export default function DriverDashboard() {
       // A rider tipped after a card ride: all of it is the driver's, and it
       // is in their wallet already (shared/tipPolicy.ts).
       queryClient.invalidateQueries({ queryKey: ["/api/driver/earnings/today"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/driver/earnings/week"] });
       toast({
         title: "You got a tip",
         description: String(lastMessage.message ?? `A rider tipped you $${Number(lastMessage.amount ?? 0).toFixed(2)}.`),
