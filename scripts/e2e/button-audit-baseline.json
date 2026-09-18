@@ -172,6 +172,8 @@
     "button-switch-drive",
     "button-test-call",
     "button-test-sms",
+    "button-tip-other-*",
+    "button-tip-preset-*",
     "button-toggle-earnings",
     "button-toggle-organization-status",
     "button-topup-*",

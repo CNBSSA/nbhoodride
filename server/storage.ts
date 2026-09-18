@@ -296,6 +296,7 @@ export interface IStorage {
   deductVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
   addVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
   creditDriverEarningsOnce(rideId: string, driverId: string, amount: number): Promise<boolean>;
+  recordRideTipOnce(rideId: string, driverId: string, amount: number): Promise<boolean>;
   splitDeductForRide(userId: string, totalAmount: number, rideId: string): Promise<{ virtualDeducted: number; stripeAmount: number }>;
   getVirtualCardBalance(userId: string): Promise<number>;
   consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
@@ -2786,6 +2787,56 @@ export class DatabaseStorage implements IStorage {
         amount: amount.toFixed(2),
         balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0").toFixed(2),
         reason: "ride_earnings",
+        rideId,
+      });
+      return true;
+    });
+  }
+
+  /**
+   * A rider's tip after a card ride, recorded once: the ride carries it
+   * (tip_amount, and driver_earnings grows by it so every earnings screen
+   * agrees), and the driver's wallet is credited all of it under `tip`.
+   * Locked per ride, so two taps or a retried request pay the driver once.
+   * Returns false when the tip was already recorded.
+   */
+  async recordRideTipOnce(rideId: string, driverId: string, amount: number): Promise<boolean> {
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error("Amount must be a positive number");
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'ride_tip:' + rideId}))`);
+      const existing = await tx
+        .select({ id: walletTransactions.id })
+        .from(walletTransactions)
+        .where(and(eq(walletTransactions.rideId, rideId), eq(walletTransactions.reason, "tip")))
+        .limit(1);
+      if (existing.length > 0) return false;
+
+      const [updatedRide] = await tx
+        .update(rides)
+        .set({
+          tipAmount: amount.toFixed(2),
+          driverEarnings: sql`(CAST(COALESCE(${rides.driverEarnings}, ${rides.actualFare}, '0') AS DECIMAL(10,2)) + ${amount})`,
+          updatedAt: new Date(),
+        } as any)
+        .where(and(eq(rides.id, rideId), eq(rides.driverId, driverId)))
+        .returning({ id: rides.id });
+      if (!updatedRide) throw new Error("Ride not found for this driver");
+
+      const [updatedUser] = await tx
+        .update(users)
+        .set({
+          virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) + ${amount})`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, driverId))
+        .returning();
+      if (!updatedUser) throw new Error("Driver not found");
+
+      await tx.insert(walletTransactions).values({
+        userId: driverId,
+        amount: amount.toFixed(2),
+        balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0").toFixed(2),
+        reason: "tip",
         rideId,
       });
       return true;
