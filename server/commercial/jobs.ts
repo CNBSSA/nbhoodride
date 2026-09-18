@@ -105,15 +105,18 @@ export async function bookJob(storage: IStorage, input: BookJobInput, now: Date 
   // is a bare insert, so nothing is lost by doing it inside the transaction.
   // This insert is the one place a ride is written without going through
   // storage.createRide (it must share the job's transaction), so the rule it
-  // would have applied is applied here: cash is not taken (2026-09-18).
-  if (!mayCreateWithPaymentMethod("invoice")) throw new CommercialError(CASH_DISCONTINUED_MESSAGE, 400);
+  // would have applied is applied here: cash is not taken (2026-09-18). The
+  // value checked is the value written, so the two cannot drift apart if a
+  // later change makes the method something a caller chooses.
+  const paymentMethod = "invoice";
+  if (!mayCreateWithPaymentMethod(paymentMethod)) throw new CommercialError(CASH_DISCONTINUED_MESSAGE, 400);
   const { ride, job } = await db.transaction(async (tx) => {
   const [ride] = await tx.insert(rides).values({
     riderId: input.requesterId,
     pickupLocation: input.pickup,
     destinationLocation: input.destination,
     estimatedFare: fare.toFixed(2),
-    paymentMethod: "invoice",
+    paymentMethod,
     status: "pending",
     scheduledAt: new Date(input.scheduledAt),
     pickupCounty: validation.pickupCounty ?? null,

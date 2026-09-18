@@ -158,7 +158,9 @@ export function buildRideReceipt(ride: RideReceiptInput, driverName: string, opt
     sharedDiscount: round2(sharedDiscount),
     tip: round2(tip),
     totalCharged: round2(totalCharged),
-    paymentMethod: ride.paymentMethod ?? "card",
+    // A ride with nothing recorded settled in cash (shared/paymentMethods.ts),
+    // so the field and the label below say the same thing about it.
+    paymentMethod: ride.paymentMethod ?? "cash",
     paymentMethodLabel: formatPaymentMethodLabel(ride.paymentMethod, opts),
     paymentStatus: ride.paymentStatus ?? "unknown",
     riderRating: ride.riderRating,
