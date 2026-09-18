@@ -2130,7 +2130,7 @@ export class DatabaseStorage implements IStorage {
       originalFare: ride.originalFare,
       // A plan rate is only a plan rate when a plan booked the ride
       // (server/weeklyPlans.ts is the one writer of planId).
-      rideType: (ride as any).planId ? ride.rideType : null,
+      rideType: ride.planId ? ride.rideType : null,
       promoDiscount: ride.promoDiscountApplied,
       meteredGross,
       meteredUnscaled,
