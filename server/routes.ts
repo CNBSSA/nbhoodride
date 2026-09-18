@@ -5182,11 +5182,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // A tip after a card ride (shared/tipPolicy.ts): the rider's own charge on
-  // the card on file, once per ride, all of it to the driver. The card is
-  // charged before anything is written, and the write is locked per ride,
-  // so a double tap or a retry can neither charge twice nor pay twice —
-  // Stripe's idempotency key returns the first charge, the ledger refuses
-  // a second credit.
+  // the card on file, once per ride, all of it to the driver. The ride is
+  // claimed before the card is charged, so two requests racing (two amounts,
+  // two devices) charge once: the loser is told "already tipped" without
+  // reaching Stripe. The card is charged before anything is written, the
+  // write is locked per ride, and a charge that somehow finds a tip already
+  // on the ledger is refunded on the spot — money never sits with no home.
   app.post('/api/rides/:rideId/tip', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -5211,6 +5212,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(503).json({ message: "Tips are not available right now. Please try again later." });
       }
 
+      // One request at a time per ride: the claim is taken before the card is
+      // charged and released only when nothing was charged, so a second
+      // request racing this one (another amount, another device) is told
+      // "already tipped" instead of raising its own charge. A stale claim
+      // from a request that died mid-flight is released after a minute; the
+      // ledger, not the claim, is the truth of whether a tip was recorded.
+      await storage.releaseStaleWebhookEvent("ride_tip", rideId, 60).catch(() => {});
+      if (!(await storage.claimWebhookEvent("ride_tip", rideId, "tip"))) {
+        return res.status(409).json({ message: describeTipRefusal("already_tipped"), reason: "already_tipped" });
+      }
+      const release = () => storage.releaseWebhookEvent("ride_tip", rideId).catch(() => {});
+
       let intentId: string;
       try {
         const intent = await stripeService.chargeTip({ amount, customerId: rider.stripeCustomerId, paymentMethodId: rider.stripePaymentMethodId, rideId, riderId: userId });
@@ -5218,15 +5231,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Rare on a card, but real: the money is on its way. The webhook
           // records the tip when Stripe says it succeeded (below), so the
           // rider is told "pending", never "declined", and never charged twice.
+          // The claim stays: a second charge must not be raised meanwhile.
           console.log(`[tip] ride ${rideId}: charge ${intent.id} is processing; the webhook will record it`);
           return res.status(202).json({ pending: true, rideId, tipAmount: amount, message: "Your tip is on its way. It will show once your bank confirms it." });
         }
         if (intent.status !== "succeeded") {
           console.warn(`[tip] ride ${rideId}: charge ${intent.id} is ${intent.status}, not recorded`);
+          await release();
           return res.status(402).json({ message: "Your card did not go through. Try another card in Payments." });
         }
         intentId = intent.id;
       } catch (chargeErr: any) {
+        await release();
         const type = String(chargeErr?.type ?? "unknown");
         console.error(`[tip] ride ${rideId}: charge failed (${type}):`, chargeErr?.message ?? chargeErr);
         if (type === "StripeCardError") return res.status(402).json({ message: "Your card was declined. Try another card in Payments." });
@@ -5236,11 +5252,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(503).json({ message: "Tips are not available right now. Please try again later." });
       }
 
-      const recorded = await storage.recordRideTipOnce(rideId, ride.driverId!, amount);
+      let recorded: boolean;
+      try {
+        recorded = await storage.recordRideTipOnce(rideId, ride.driverId!, amount);
+      } catch (recordErr) {
+        // Charged and not recorded: the webhook (below) records it when
+        // Stripe reports the charge, and the claim stays until then. Paged,
+        // so it is never a surprise at payout time.
+        console.error(`[tip] ride ${rideId}: charge ${intentId} succeeded but the tip could not be recorded:`, recordErr);
+        opsAlert(formatOpsAlert("💸 Tip charged, not yet recorded", [["Ride", rideId.slice(0, 8)], ["Charge", intentId], ["Amount", `$${amount.toFixed(2)}`], ["Next", "The Stripe webhook records it; if it does not, credit the driver by hand"]]));
+        return res.status(503).json({ message: "Your tip was taken but could not be recorded yet. It will show shortly; you will not be charged again." });
+      }
       await logRideAudit({ rideId, event: "tip_added", actorId: userId, details: { amount, intentId, recorded } });
       if (!recorded) {
-        // The charge is the same one (idempotency key) and the driver was paid
-        // by the request that got there first.
+        // A tip was already on the ledger (the webhook got there first with
+        // the same charge, or another path did). If this charge is not the
+        // one recorded, it has no home: give it straight back.
+        try {
+          await stripeService.refundPaymentIntent(intentId, `tip already recorded for ride ${rideId}`);
+          console.warn(`[tip] ride ${rideId}: charge ${intentId} refunded — a tip was already on the ledger`);
+        } catch (refundErr) {
+          console.error(`[tip] ride ${rideId}: could not refund duplicate charge ${intentId}:`, refundErr);
+          opsAlert(formatOpsAlert("💸 Duplicate tip charge not refunded", [["Ride", rideId.slice(0, 8)], ["Charge", intentId], ["Amount", `$${amount.toFixed(2)}`], ["Fix", "Refund it in the Stripe dashboard"]]));
+        }
         return res.status(409).json({ message: describeTipRefusal("already_tipped"), reason: "already_tipped" });
       }
       console.log(`[tip] ride ${rideId.slice(0, 8)}: rider tipped $${amount.toFixed(2)} → driver ${ride.driverId} (charge ${intentId})`);
@@ -10602,7 +10636,16 @@ Generate the FAQ list.`;
             const tipCents = Number(pi.amount_received ?? pi.amount ?? 0);
             if (tipRide?.driverId && tipCents > 0) {
               const recorded = await storage.recordRideTipOnce(rideId, tipRide.driverId, Math.round(tipCents) / 100);
-              if (recorded) console.log(`[tip] ride ${rideId}: $${(tipCents / 100).toFixed(2)} recorded from webhook ${pi.id}`);
+              if (recorded) {
+                console.log(`[tip] ride ${rideId}: $${(tipCents / 100).toFixed(2)} recorded from webhook ${pi.id}`);
+              } else if (Math.abs(Number(tipRide.tipAmount ?? 0) * 100 - tipCents) >= 1) {
+                // A different charge from the tip already on the ledger has no
+                // home: give it back rather than keep money nobody was paid.
+                await stripeService.refundPaymentIntent(pi.id, `tip already recorded for ride ${rideId}`)
+                  .then(() => console.warn(`[tip] ride ${rideId}: webhook charge ${pi.id} refunded — a different tip was already on the ledger`))
+                  .catch((e) => console.error(`[tip] ride ${rideId}: duplicate charge ${pi.id} not refunded:`, e));
+              }
+              await storage.releaseWebhookEvent("ride_tip", rideId).catch(() => {});
             }
           } else if (rideId) {
             const ride = await storage.getRide(rideId);

@@ -167,6 +167,11 @@ export class StripeService {
     }, { idempotencyKey: `ride_tip_${rideId}_${cents}_${paymentMethodId}` });
   }
 
+  /** Give a charge back in full: for a tip that succeeded but has no home on the ledger. */
+  async refundPaymentIntent(paymentIntentId: string, reason: string): Promise<Stripe.Refund> {
+    return await requireStripe().refunds.create({ payment_intent: paymentIntentId, metadata: { reason } }, { idempotencyKey: `refund_${paymentIntentId}` });
+  }
+
   async capturePaymentIntent(paymentIntentId: string, amountToCapture?: number): Promise<Stripe.PaymentIntent> {
     const captureParams: Stripe.PaymentIntentCaptureParams = {};
     if (amountToCapture !== undefined) {

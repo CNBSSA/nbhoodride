@@ -75,6 +75,21 @@ export async function run({ base, db }) {
     check("nothing is written on the ride", afterFail.tip_amount === "0.00" && afterFail.driver_earnings === "19.73", JSON.stringify(afterFail));
     check("and the driver's wallet is untouched", (await tipRows(card)).length === 0 && await balance() === before, String(await balance()));
 
+    section("One tip at a time: a second request is refused before the card is touched");
+    // The claim is taken before Stripe is called and released only when
+    // nothing was charged. With Stripe unreachable every attempt releases
+    // it, so the ride is not locked by a failed try; a claim someone else
+    // holds is a 409 without a charge.
+    const claimed = await seed(); ids.push(claimed);
+    await db.query("INSERT INTO processed_webhook_events (provider, event_id, event_type) VALUES ('ride_tip', $1, 'tip')", [claimed]);
+    const whileClaimed = await rider.req("POST", `/api/rides/${claimed}/tip`, { amount: 5 });
+    check("a ride another request is tipping right now is refused as already tipped", whileClaimed.status === 409 && whileClaimed.json?.reason === "already_tipped", JSON.stringify(whileClaimed.json));
+    await db.query("UPDATE processed_webhook_events SET processed_at = NOW() - interval '2 minutes' WHERE provider='ride_tip' AND event_id=$1", [claimed]);
+    const afterStale = await rider.req("POST", `/api/rides/${claimed}/tip`, { amount: 5 });
+    check("a claim left behind by a request that died is released after a minute; the attempt reaches Stripe and fails in words", afterStale.status === 503, `${afterStale.status} ${JSON.stringify(afterStale.json)}`);
+    const { rows: claimRows } = await db.query("SELECT 1 FROM processed_webhook_events WHERE provider='ride_tip' AND event_id=$1", [claimed]);
+    check("and a failed charge leaves no claim behind", claimRows.length === 0, `claims=${claimRows.length}`);
+
     section("A tip already on the ledger is refused before the card is touched");
     const tipped = await seed({ tip: "0.00" }); ids.push(tipped);
     await db.query("INSERT INTO wallet_transactions (user_id, amount, balance_after, reason, ride_id) VALUES ($1, '5.00', '0.00', 'tip', $2)", [FIXTURES.driver.id, tipped]);

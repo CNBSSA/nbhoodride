@@ -140,7 +140,7 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
     // tap on this card, and the card leaves the screen once it is rated. If
     // the tip does not go through, the rating waits so the rider can fix the
     // card or clear the tip; nothing is lost.
-    if (canTip && tipAmount !== null) {
+    if (canTip && tipAmount !== null && !tipMutation.isPending) {
       try {
         await tipMutation.mutateAsync(tipAmount);
       } catch {
@@ -320,7 +320,7 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
             <Button
               type="button"
               className="w-full h-11"
-              disabled={tipAmount === null || tipMutation.isPending}
+              disabled={tipAmount === null || tipMutation.isPending || isSubmitting}
               onClick={() => { if (tipAmount !== null) tipMutation.mutate(tipAmount); }}
               data-testid={`button-tip-send-${ride.id}`}
             >
