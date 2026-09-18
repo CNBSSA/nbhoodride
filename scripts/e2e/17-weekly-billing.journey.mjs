@@ -109,8 +109,9 @@ export async function run({ base, db, server }) {
     const fin = await admin.req("GET", `/api/admin/finances?year=${new Date().getFullYear()}`);
     const f = fin.json ?? {};
     check("gross revenue is still there, and beside it PG Ride's share, what was collected, and the drivers' share",
-      fin.status === 200 && typeof f.totalRevenue === "number" && typeof f.platformShare === "number" && typeof f.platformShareCollected === "number" && typeof f.driverShare === "number" && typeof f.feesToDriversAndPool === "number",
+      fin.status === 200 && typeof f.totalRevenue === "number" && typeof f.platformShare === "number" && typeof f.platformShareCollected === "number" && typeof f.driverShare === "number",
       JSON.stringify(Object.keys(f)));
+    check("the duplicate fee field is gone; the cancellation total stands on its own", !("feesToDriversAndPool" in f), JSON.stringify(Object.keys(f)));
     check("PG Ride's share is never more than the gross, and collected never more than the share", f.platformShare <= f.totalRevenue + 0.011 && f.platformShareCollected <= f.platformShare + 0.011 && Math.abs((f.platformShare - f.platformShareCollected) - f.platformShareUncollected) < 0.011, JSON.stringify({ share: f.platformShare, collected: f.platformShareCollected, uncollected: f.platformShareUncollected, gross: f.totalRevenue }));
 
     section("A job finished after its week was issued rolls onto the next statement");

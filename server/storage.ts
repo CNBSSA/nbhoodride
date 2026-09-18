@@ -3784,7 +3784,6 @@ export class DatabaseStorage implements IStorage {
     platformShareCollected: number;
     platformShareUncollected: number;
     driverShare: number;
-    feesToDriversAndPool: number;
   }> {
     const yearStart = new Date(year || new Date().getFullYear(), 0, 1);
     const yearEnd = new Date((year || new Date().getFullYear()) + 1, 0, 1);
@@ -3850,7 +3849,6 @@ export class DatabaseStorage implements IStorage {
       platformShareCollected: round2(platformShareCollected),
       platformShareUncollected: round2(platformShare - platformShareCollected),
       driverShare: round2(driverShare),
-      feesToDriversAndPool: round2(totalCancelFees),
     };
   }
 

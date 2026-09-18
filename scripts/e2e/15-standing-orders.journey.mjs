@@ -101,6 +101,12 @@ export async function run({ base, db, server }) {
     // split as a rider's late cancel (rates audit, 2026-09-18).
     const { rows: lateCut } = await db.query("SELECT amount FROM wallet_transactions WHERE ride_id=$1 AND reason='cancellation_fee'", [late.rideId]);
     check("the driver who held the job gets their cut of the late fee at once: $9.60 of $12.00", lateCut.length === 1 && lateCut[0].amount === "9.60", JSON.stringify(lateCut));
+    // Marked like every other cancel that carried a fee, so the operator's
+    // figures count it with the rest (rates audit, 2026-09-18).
+    const { rows: [lateRow] } = await db.query("SELECT payment_status FROM rides WHERE id=$1", [late.rideId]);
+    check("and the ride is marked as carrying a fee, like any other", lateRow.payment_status === "cancelled_with_fee", JSON.stringify(lateRow));
+    const { rows: [freeRow] } = await db.query("SELECT payment_status FROM rides WHERE id=$1", [tomorrow.rideId]);
+    check("a free cancel is not", freeRow.payment_status === "cancelled", JSON.stringify(freeRow));
     const ns = fromOrder.sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt))[3];
     check("driver claims another", (await driver.req("POST", `/api/driver/rides/${ns.rideId}/claim`)).status === 200);
     await driver.req("POST", `/api/driver/rides/${ns.rideId}/confirm-scheduled`);

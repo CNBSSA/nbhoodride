@@ -53,6 +53,10 @@ export async function cancelJob(organizationId: string, jobId: string, actorUser
     status: "cancelled",
     cancellationReason: String(reason || "Cancelled by the organization").slice(0, 300),
     cancellationFee: feeText,
+    // Marked like any other cancel that carried a fee, so the fee is counted
+    // where every other cancellation fee is counted (rates audit, 2026-09-18).
+    // Nothing collects from a card on this path: the fee is on the statement.
+    paymentStatus: charged.fee > 0 ? "cancelled_with_fee" : "cancelled",
     cancelledBy: actorUserId,
     cancelledByRole: "rider",
     updatedAt: now,

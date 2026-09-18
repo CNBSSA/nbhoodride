@@ -1980,7 +1980,7 @@ function FinancesPanel() {
     totalRevenue: number; totalFares: number; totalTips: number;
     totalCancellationFees: number; rideCount: number;
     platformShare?: number; platformShareCollected?: number; platformShareUncollected?: number;
-    driverShare?: number; feesToDriversAndPool?: number;
+    driverShare?: number;
   }>({ queryKey: [`/api/admin/finances?year=${year}`] });
 
   if (isLoading) return <div data-testid="loading-finances">Loading finances...</div>;

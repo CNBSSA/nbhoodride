@@ -2759,8 +2759,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const commercialNoShowFee = ride.paymentMethod === 'invoice'
         ? await recordNoShowForRide(rideId).catch((err) => { console.error(`[no-show] commercial fee failed for ride ${rideId}:`, err); return null; })
         : null;
-      const noShowFee = commercialNoShowFee ?? RIDER_NO_SHOW_FEE;
-      const collected = commercialNoShowFee === null ? await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE) : 0;
+      // A commercial job's fee is its account's, on its statement. If it could
+      // not be written there, nobody is billed — and nothing is taken from the
+      // requester's own wallet to cover it, which is what the rider ladder
+      // would do. It is paged instead (rates audit, 2026-09-18).
+      const billedToOrganization = ride.paymentMethod === 'invoice' && commercialNoShowFee !== null;
+      if (ride.paymentMethod === 'invoice' && commercialNoShowFee === null) {
+        opsAlert(formatOpsAlert("🏢 Commercial no-show not billed", [
+          ["Ride", rideId.slice(0, 8)],
+          ["Driver", userId],
+          ["Why", "the organization's no-show fee could not be written to the job"],
+          ["Fix", "Put the fee on the account's statement by hand, and pay the driver their cut"],
+        ]));
+      }
+      const noShowFee = commercialNoShowFee ?? (ride.paymentMethod === 'invoice' ? 0 : RIDER_NO_SHOW_FEE);
+      const collected = ride.paymentMethod === 'invoice' ? 0 : await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE);
       const split = await routeFeeWithFairnessSplit(commercialNoShowFee ?? collected, userId, rideId);
       const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
@@ -2775,7 +2788,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         actorId: userId,
         details: {
           fee: noShowFee,
-          billedTo: ride.paymentMethod === 'invoice' ? 'organization' : 'rider',
+          billedTo: billedToOrganization ? 'organization' : ride.paymentMethod === 'invoice' ? 'nobody' : 'rider',
           collected,
           driverCut: split.driverCut,
           fairnessFundCut: split.fundCut,
@@ -2816,9 +2829,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       deliverUserNotification(ride.riderId, {
         type: "ride-no-show",
         title: "Missed Ride",
-        body: ride.paymentMethod === 'invoice'
+        body: billedToOrganization
           ? `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point. A $${noShowFee.toFixed(2)} no-show fee goes on your organization's statement.`
-          : `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point. A $${noShowFee.toFixed(2)} no-show fee was applied.`,
+          : ride.paymentMethod === 'invoice'
+            ? `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point.`
+            : `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point. A $${noShowFee.toFixed(2)} no-show fee was applied.`,
         tag: "ride-no-show",
         url: "/",
         data: { rideId, fee: noShowFee },

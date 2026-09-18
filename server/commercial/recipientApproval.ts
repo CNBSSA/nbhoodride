@@ -61,7 +61,9 @@ export async function startRecipientApproval(jobId: string, appUrl: string): Pro
     token = token ?? randomBytes(24).toString("hex");
     // Re-asked: the fee is what the shop is billed for the delivery, fare
     // plus the account's facility fee, as when the job was booked.
-    const reFee = Math.round((parseFloat(String(row.ride.estimatedFare ?? "0")) + Math.max(0, parseFloat(String(row.job.facilityFee ?? "0")) || 0)) * 100) / 100;
+    const reFare = Number.parseFloat(String(row.ride.estimatedFare ?? "0"));
+    const reFacility = Number.parseFloat(String(row.job.facilityFee ?? "0"));
+    const reFee = Math.round(((Number.isFinite(reFare) ? reFare : 0) + (Number.isFinite(reFacility) ? Math.max(0, reFacility) : 0)) * 100) / 100;
     await db.update(commercialJobs).set({ recipientApproval: "awaiting", recipientApprovalToken: token, recipientFee: reFee.toFixed(2), recipientNudgedAt: null, shopAskedAt: null }).where(eq(commercialJobs.id, jobId));
   }
   const link = approvalLink(appUrl, token);
