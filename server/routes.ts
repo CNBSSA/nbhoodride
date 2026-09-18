@@ -188,7 +188,7 @@ import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
 import { TIP_MAX, TIP_MIN, describeTipRefusal, normalizeTip, tipRefusal } from "@shared/tipPolicy";
-import { CASH_DISCONTINUED_MESSAGE, isDiscontinuedPaymentMethod } from "@shared/paymentMethods";
+import { CASH_DISCONTINUED_MESSAGE, isDiscontinuedPaymentMethod, settlesInCash } from "@shared/paymentMethods";
 
 // What a booking request may say about a ride: where, when, for whom, in
 // what car, and the app's own route figures. Every other ride column — money,
@@ -3308,7 +3308,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // A tip may be entered here only for a ride that was taken in cash —
       // rides booked before cash was discontinued. On a card ride the rider
       // adds it themselves (shared/tipPolicy.ts).
-      if (parsed.tipAmount !== undefined && parsed.tipAmount > 0 && !isDiscontinuedPaymentMethod(preCheck?.paymentMethod)) {
+      if (parsed.tipAmount !== undefined && parsed.tipAmount > 0 && !settlesInCash(preCheck?.paymentMethod)) {
         return res.status(400).json({
           message: preCheck?.paymentMethod === 'invoice'
             ? "Tips are not taken on jobs billed to an organization."

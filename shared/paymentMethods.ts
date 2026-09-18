@@ -7,7 +7,9 @@
  * booking door writes `card`, and `POST /api/rides` refuses anything else —
  * but the ride table still defaulted to cash, so a row written without a
  * payment method was born a cash ride. That door is closed here, and nothing
- * in the product creates a cash ride any more.
+ * in the product creates a cash ride any more: `storage.createRide` refuses
+ * it, and so does the one write that cannot go through it (a commercial job,
+ * which shares its transaction).
  *
  * What is NOT removed: every screen and route that handles a cash ride keeps
  * working, because rides taken before today still have to be finished, paid,
@@ -52,5 +54,3 @@ export function settlesInCash(method: string | null | undefined): boolean {
 /** What to tell whoever tried to pay a way PG Ride no longer takes. */
 export const CASH_DISCONTINUED_MESSAGE = "PG Ride no longer takes cash. Rides are paid by card.";
 
-/** What the desk and the operator are told about a ride that predates the change. */
-export const CASH_LEGACY_NOTE = "Cash is no longer taken; this ride was booked when it was.";

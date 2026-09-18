@@ -134,7 +134,7 @@ import {
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { resolveCompletedFare, type FarePricing } from "@shared/farePolicy";
 import { splitFare, driverBasisFor } from "@shared/payoutPolicy";
-import { CASH_DISCONTINUED_MESSAGE, isDiscontinuedPaymentMethod, mayCreateWithPaymentMethod, settlesInCash } from "@shared/paymentMethods";
+import { CASH_DISCONTINUED_MESSAGE, mayCreateWithPaymentMethod, settlesInCash } from "@shared/paymentMethods";
 import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
 import { db } from "./db";
 import { isUniqueViolation } from "./pgErrors";
@@ -3907,7 +3907,7 @@ export class DatabaseStorage implements IStorage {
         ? r.paymentStatus === "paid_card"
         : r.paymentMethod === "invoice" ? r.billedStatus === "paid" : false;
       if (collected) platformShareCollected += fee;
-      if (isDiscontinuedPaymentMethod(r.paymentMethod)) {
+      if (settlesInCash(r.paymentMethod)) {
         cashRides += 1;
         if (r.paymentStatus !== "paid_cash") cashRidesUnsettled += 1;
       }

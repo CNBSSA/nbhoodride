@@ -1,5 +1,7 @@
 /** Structured ride receipt (shared by API + download). */
 
+import { settlesInCash } from "./paymentMethods";
+
 export const RECEIPT_FARE_RATES = {
   minimumFare: 7.65,
   baseFare: 4.0,
@@ -84,7 +86,9 @@ export interface PaymentLabelOptions {
 
 export function formatPaymentMethodLabel(method: string | null | undefined, opts: PaymentLabelOptions = {}): string {
   if (method === "card") return opts.walletEnabled ? "PG Card (virtual wallet)" : "Card on file";
-  if (method === "cash") return "Cash";
+  // Cash, and a ride from before the payment method was recorded: the driver
+  // took the money in hand either way (shared/paymentMethods.ts).
+  if (settlesInCash(method)) return "Cash";
   // A commercial job is billed to the organization on its weekly statement;
   // the person who booked it is never charged.
   if (method === "invoice") return "Billed to the organization";

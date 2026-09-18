@@ -69,6 +69,8 @@ export async function run({ base, db }) {
     check("a ride with no payment method recorded stays that way", blank.payment_method === null, JSON.stringify(blank));
     const blankConfirm = await driver.req("POST", `/api/rides/${blank.id}/confirm-payment`, { tipAmount: 2 });
     check("and its driver can still confirm the money they took", blankConfirm.status === 200 && blankConfirm.json?.success === true, JSON.stringify(blankConfirm.json?.message ?? blankConfirm.status));
+    const blankReceipt = await rider.req("GET", `/api/rides/${blank.id}/receipt`);
+    check("its receipt calls it Cash, not a card that was never charged", blankReceipt.status === 200 && /"?paymentMethodLabel"?:"Cash"/.test(JSON.stringify(blankReceipt.json)), JSON.stringify(blankReceipt.json?.paymentMethodLabel ?? blankReceipt.status));
 
     section("A card ride cannot be marked paid in cash");
     // Before this the driver's confirm would take any completed ride, which
@@ -86,6 +88,8 @@ export async function run({ base, db }) {
 
     section("The operator can watch the tail run out");
     const fin = await admin.req("GET", `/api/admin/finances?year=${new Date().getFullYear()}`);
+    // Including a ride from before the method was recorded: it is money in a
+    // driver's hand like any other cash ride, so the operator must see it.
     check("the figures count the cash rides and how many are still unconfirmed", fin.status === 200 && typeof fin.json?.cashRides === "number" && typeof fin.json?.cashRidesUnsettled === "number" && fin.json.cashRides >= 1, JSON.stringify({ cash: fin.json?.cashRides, unsettled: fin.json?.cashRidesUnsettled }));
     const unsettledBefore = fin.json.cashRidesUnsettled;
     await legacy();
