@@ -16,7 +16,9 @@ import {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest } from '@/lib/queryClient';
+import { Input } from '@/components/ui/input';
 import { MapPin, Star, User } from 'lucide-react';
+import { TIP_MAX, TIP_MIN, TIP_PRESETS, normalizeTip, tipRefusal } from '@shared/tipPolicy';
 
 interface RideRatingCardProps {
   ride: {
@@ -31,6 +33,9 @@ interface RideRatingCardProps {
     };
     actualFare?: string;
     completedAt: string;
+    status?: string;
+    paymentMethod?: string;
+    tipAmount?: string | null;
     rider?: {
       firstName: string;
       lastName: string;
@@ -58,6 +63,38 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
   const isRider = ride.riderId === currentUserId;
   const otherPerson = isRider ? ride.driver : ride.rider;
   const role = isRider ? 'driver' : 'rider';
+  const otherPersonName = otherPerson?.firstName || `your ${role}`;
+
+  // A tip for the driver, after a card ride: presets or any amount, charged
+  // to the card on file, all of it to the driver (shared/tipPolicy.ts).
+  const [tipChoice, setTipChoice] = useState<number | null>(null);
+  const [tipOther, setTipOther] = useState('');
+  const [tipOtherOpen, setTipOtherOpen] = useState(false);
+  const [tipped, setTipped] = useState<number | null>(null);
+  const tipAmount = tipOtherOpen ? normalizeTip(tipOther) : tipChoice;
+  const canTip = isRider && tipped === null && tipRefusal(ride) === null;
+  const tipMutation = useMutation({
+    mutationFn: async (amount: number) => {
+      const response = await apiRequest('POST', `/api/rides/${ride.id}/tip`, { amount });
+      return response.json();
+    },
+    onSuccess: (data: any) => {
+      setTipped(Number(data?.tipAmount ?? tipAmount));
+      queryClient.invalidateQueries({ queryKey: ["/api/rides/for-rating"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rides"] });
+      toast({
+        title: data?.pending ? "Tip on its way" : "Tip sent",
+        description: data?.pending ? String(data?.message ?? "It will show once your bank confirms it.") : `${otherPersonName} gets all of it. Thank you.`,
+      });
+    },
+    onError: (error: any) => {
+      const text = String(error?.message ?? '');
+      const body = text.replace(/^\d{3}:\s*/, '');
+      let description = "We couldn't add the tip. Please try again.";
+      try { description = JSON.parse(body)?.message ?? description; } catch { if (body) description = body; }
+      toast({ title: "Tip not added", description, variant: "destructive" });
+    },
+  });
 
   const submitRatingMutation = useMutation({
     mutationFn: async (data: { rating: number; review?: string }) => {
@@ -97,8 +134,20 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
     }
   });
 
-  const doSubmitRating = () => {
+  const doSubmitRating = async () => {
     setIsSubmitting(true);
+    // A tip chosen but not yet sent goes with the rating: rating is the last
+    // tap on this card, and the card leaves the screen once it is rated. If
+    // the tip does not go through, the rating waits so the rider can fix the
+    // card or clear the tip; nothing is lost.
+    if (canTip && tipAmount !== null && !tipMutation.isPending) {
+      try {
+        await tipMutation.mutateAsync(tipAmount);
+      } catch {
+        setIsSubmitting(false);
+        return;
+      }
+    }
     submitRatingMutation.mutate({
       rating,
       review: review.trim() || undefined
@@ -224,6 +273,63 @@ export function RideRatingCard({ ride, currentUserId }: RideRatingCardProps) {
               </p>
             </div>
           </div>
+        )}
+
+        {/* Tip, after a card ride */}
+        {canTip && (
+          <div className="space-y-2 p-3 rounded-lg border" data-testid={`tip-block-${ride.id}`}>
+            <p className="font-medium">Add a tip for {otherPersonName}?</p>
+            <p className="text-sm text-muted-foreground">All of it goes to them. Charged to your card on file. A tip you choose here is sent with your rating too.</p>
+            <div className="flex flex-wrap gap-2">
+              {TIP_PRESETS.map((p) => (
+                <Button
+                  key={p}
+                  type="button"
+                  variant={!tipOtherOpen && tipChoice === p ? 'default' : 'outline'}
+                  className="h-11 min-w-[64px]"
+                  onClick={() => { setTipOtherOpen(false); setTipChoice(p); }}
+                  data-testid={`button-tip-preset-${p}-${ride.id}`}
+                >
+                  ${p}
+                </Button>
+              ))}
+              <Button
+                type="button"
+                variant={tipOtherOpen ? 'default' : 'outline'}
+                className="h-11 min-w-[64px]"
+                onClick={() => setTipOtherOpen((v: boolean) => !v)}
+                data-testid={`button-tip-other-${ride.id}`}
+              >
+                Other
+              </Button>
+            </div>
+            {tipOtherOpen && (
+              <Input
+                type="number"
+                inputMode="decimal"
+                min={TIP_MIN}
+                max={TIP_MAX}
+                step="0.5"
+                placeholder={`$${TIP_MIN} to $${TIP_MAX}`}
+                value={tipOther}
+                onChange={(e) => setTipOther(e.target.value)}
+                className="h-11"
+                data-testid={`input-tip-other-${ride.id}`}
+              />
+            )}
+            <Button
+              type="button"
+              className="w-full h-11"
+              disabled={tipAmount === null || tipMutation.isPending || isSubmitting}
+              onClick={() => { if (tipAmount !== null) tipMutation.mutate(tipAmount); }}
+              data-testid={`button-tip-send-${ride.id}`}
+            >
+              {tipMutation.isPending ? 'Sending…' : tipAmount !== null ? `Tip $${tipAmount.toFixed(2)} now` : 'Choose a tip'}
+            </Button>
+          </div>
+        )}
+        {isRider && tipped !== null && (
+          <p className="text-sm text-green-700" data-testid={`text-tipped-${ride.id}`}>You tipped ${tipped.toFixed(2)}. Thank you.</p>
         )}
 
         {/* Rating Input */}

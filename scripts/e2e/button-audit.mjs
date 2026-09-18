@@ -34,7 +34,7 @@ const BASELINE_PATH = join(ROOT, "scripts/e2e/button-audit-baseline.json");
  * suspended the fixture driver from the admin screen and the next journey
  * could not go online.
  */
-const NEVER = /logout|sign-?out|delete|remove-account|sos|emergency|panic|911|error-reload|call-|dial|share-native|open-maps|navigate-external|install-app|suspend|unsuspend|ban|reject|revoke|deactivate|disable|refund|payout|reset-password|force-/i;
+const NEVER = /logout|sign-?out|delete|remove-account|sos|emergency|panic|911|error-reload|call-|dial|share-native|open-maps|navigate-external|install-app|suspend|unsuspend|ban|reject|revoke|deactivate|disable|refund|payout|reset-password|force-|tip-send/i;
 
 /** What a rider can tap. Order matters: testid keys are stable, text keys are the fallback. */
 const CLICKABLE = [
@@ -204,7 +204,7 @@ let pressCount = 0;
 async function pressOne(page, base, screen, opts, target, path) {
   const label = [...path, target.text || target.key].join(" → ");
   const testid = target.testid;
-  if (testid && NEVER.test(testid)) { skipped.set(testid, "never pressed (leaves the app, calls for help, or destroys data)"); return null; }
+  if (testid && NEVER.test(testid)) { skipped.set(testid, "never pressed (leaves the app, calls for help, charges a card, or destroys data)"); return null; }
   if (!testid && NEVER.test(target.text)) { skipped.set(target.key, "never pressed"); return null; }
   const loc = locatorFor(page, target.key);
   if (!(await loc.isVisible().catch(() => false))) return null;
