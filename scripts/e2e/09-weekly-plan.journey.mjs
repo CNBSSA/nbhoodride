@@ -98,6 +98,20 @@ export async function run({ base, db }) {
   const again = await rider.req("POST", `/api/rider/weekly-plans/${planId}/pause`);
   check("pausing twice is a clean 404, not a crash", again.status === 404);
 
+  section("The plan rate is PG Ride's: the driver is paid on the full fare");
+  // The confirmed ride is driven: the rider pays the plan price, the driver
+  // drove one ordinary trip and is paid 85% of the one-off fare — the 10%
+  // is what PG Ride spends to keep a rider, not the driver's to fund
+  // (shared/payoutPolicy.ts, rates audit 2026-09-18).
+  await db.query("UPDATE rides SET scheduled_at = NOW() - interval '5 minutes' WHERE id=$1", [firstRide]);
+  check("driver starts the plan ride", (await driver.req("POST", `/api/driver/rides/${firstRide}/start`)).status === 200);
+  const donePlan = await driver.req("POST", `/api/driver/rides/${firstRide}/complete`, {});
+  const full = Number(plan.fullFare);
+  const expectDriver = Math.round((full - Math.round(full * 15) / 100) * 100) / 100;
+  check("the rider is charged the plan price", donePlan.status === 200 && Number(donePlan.json?.actualFare) === expected.perRide, `actualFare=${donePlan.json?.actualFare} expected=${expected.perRide}`);
+  check(`the driver is paid 85% of the one-off fare: $${expectDriver.toFixed(2)}`, Math.abs(Number(donePlan.json?.driverEarnings) - expectDriver) < 0.011, `driverEarnings=${donePlan.json?.driverEarnings}`);
+  check("PG Ride's share carries the plan discount", Math.abs(Number(donePlan.json?.platformFee) - (expected.perRide - expectDriver)) < 0.011, `platformFee=${donePlan.json?.platformFee}`);
+
   await deleteRides(db, rideRows.map((r) => r.id));
   await db.query("DELETE FROM weekly_ride_plans WHERE id=$1", [planId]);
 }

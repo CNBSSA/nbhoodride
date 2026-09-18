@@ -188,6 +188,18 @@ import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
 
+// What a booking request may say about a ride: where, when, for whom, in
+// what car, and the app's own route figures. Every other ride column — money,
+// splits, holds, links to a plan or group, state — is the server's and is
+// never read from a request body (post-implementation audit, 2026-09-18).
+const RIDER_BOOKING_FIELDS = [
+  "pickupLocation", "destinationLocation", "stops", "pickupInstructions",
+  "estimatedFare", "distance", "duration", "scheduledAt",
+  "requestedVehicleType", "driverId", "wantsSharedRide",
+  "bookedForFriend", "passengerName", "passengerPhone", "rideType", "paymentMethod",
+] as const;
+const RIDER_PICKABLE_RIDE_TYPES = new Set(["solo", "multi_stop", "shared_schedule"]);
+
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
 let _anthropic: Anthropic | null = null;
@@ -3115,6 +3127,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }
 
+  // A commercial ride is paid for by the organization's statement, so the
+  // driver is credited here, when the work is done, whichever door completed
+  // the ride: the ordinary Complete, or an early end mid-trip. The waiting at
+  // the door is priced onto the job first so the driver's share of it can be
+  // paid in the same breath. Never throws: an unpaid driver is paged rather
+  // than swallowed — it is not something to discover at payout time.
+  async function payCommercialDriverForCompletedRide(ride: Ride): Promise<void> {
+    if (ride.paymentMethod !== 'invoice') return;
+    const rideId = ride.id;
+    // An invoice ride is a commercial job or it is nothing: with no job there
+    // is no organization to bill, so nobody pays the driver's share but
+    // PG Ride. Paged below; never paid.
+    const waiting = await recordWaitingForCompletedRide(rideId)
+      .catch((err) => { console.error(`[complete] waiting charge failed for ride ${rideId}:`, err); return null; });
+    try {
+      // The job lookup itself may fail (database); that is the ordinary
+      // "driver not paid" page below with the real error, not "no job".
+      const job = await commercialJobForRide(rideId);
+      if (!job) {
+        console.error(`[complete] invoice ride ${rideId} has no commercial job — driver not paid from PG Ride's float`);
+        opsAlert(formatOpsAlert("💸 Invoice ride with no job", [
+          ["Ride", rideId.slice(0, 8)],
+          ["Driver", ride.driverId ?? "—"],
+          ["Why", "paymentMethod is invoice but no commercial_jobs row exists; nobody is billed for it"],
+          ["Fix", "Decide who pays, then credit the driver by hand in the admin wallet panel"],
+        ]));
+        return;
+      }
+      await payDriverForCompletedJob(storage, ride);
+      if (waiting && waiting.waitFee > 0) await payDriverForWaiting(storage, ride, waiting.waitFee);
+    } catch (payErr) {
+      console.error(`[complete] DRIVER NOT PAID for commercial ride ${rideId}:`, payErr);
+      opsAlert(formatOpsAlert("💸 Driver not paid for commercial work", [
+        ["Ride", rideId.slice(0, 8)],
+        ["Driver", ride.driverId ?? "—"],
+        ["Owed", `$${Number(ride.driverEarnings ?? 0).toFixed(2)}`],
+        ["Reason", String((payErr as any)?.message ?? payErr).slice(0, 200)],
+        ["Fix", "Credit the driver by hand in the admin wallet panel"],
+      ]));
+    }
+  }
+
   // Split a collected cancellation/no-show fee: the driver keeps the bulk,
   // and FAIRNESS_FUND_RATE of it feeds the community bonus pool that pays
   // for goodwill credits when a driver lets a rider down (see /cancel).
@@ -3141,7 +3195,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // nothing: driver-initiated cancels, admin cancels, requeue-for-rematch.
   async function refundRideAuthorizationInFull(ride: Ride): Promise<void> {
     const virtualAuthorized = parseFloat(ride.virtualAmountAuthorized || "0");
-    if (virtualAuthorized > 0) {
+    // A wallet hold only ever exists alongside the authorization that took it
+    // (setRidePaymentAuthorization writes both); a row that carries an amount
+    // and no authorization never held anything, and gives nothing back.
+    if (virtualAuthorized > 0 && !ride.stripePaymentIntentId) {
+      console.error(`[refund] ride ${ride.id}: virtualAmountAuthorized $${virtualAuthorized.toFixed(2)} with no authorization on record — not refunded`);
+    }
+    if (virtualAuthorized > 0 && ride.stripePaymentIntentId) {
       await storage.addVirtualCardBalance(ride.riderId, virtualAuthorized, "cancellation_refund", ride.id);
     }
     const hasRealStripeAuth =
@@ -3251,8 +3311,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // driver as success so the driver is never trapped on a finished trip.
         const existing = await storage.getRide(rideId);
         if (existing && existing.status === "completed" && existing.driverId === userId) {
-          // A retry after a crash between completion and the receiver's text still sends it (once; the text stamps itself).
-          if (existing.paymentMethod === 'invoice') import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch(() => {});
+          // A retry after a crash between completion and the receiver's text still sends it (once; the text stamps itself),
+          // and still pays the driver (once; the ledger refuses a second credit).
+          if (existing.paymentMethod === 'invoice') {
+            import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch(() => {});
+            await payCommercialDriverForCompletedRide(existing);
+          }
           return res.json(existing);
         }
         throw err;
@@ -3305,24 +3369,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Never blocks the completion response, but an unpaid driver is paged
       // rather than swallowed: it is not something to discover at payout time.
       if (ride.paymentMethod === 'invoice') {
-        const waiting = await recordWaitingForCompletedRide(rideId)
-          .catch((err) => { console.error(`[complete] waiting charge failed for ride ${rideId}:`, err); return null; });
         // The receiver is told it was delivered, with a link to the proof
         // (server/commercial/delivered.ts). Best effort; never blocks.
         import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch((err) => console.error("[delivered] text failed:", err));
-        try {
-          await payDriverForCompletedJob(storage, ride);
-          if (waiting && waiting.waitFee > 0) await payDriverForWaiting(storage, ride, waiting.waitFee);
-        } catch (payErr) {
-          console.error(`[complete] DRIVER NOT PAID for commercial ride ${rideId}:`, payErr);
-          opsAlert(formatOpsAlert("💸 Driver not paid for commercial work", [
-            ["Ride", rideId.slice(0, 8)],
-            ["Driver", ride.driverId ?? "—"],
-            ["Owed", `$${Number(ride.driverEarnings ?? 0).toFixed(2)}`],
-            ["Reason", String((payErr as any)?.message ?? payErr).slice(0, 200)],
-            ["Fix", "Credit the driver by hand in the admin wallet panel"],
-          ]));
-        }
+        await payCommercialDriverForCompletedRide(ride);
       }
 
       // If ride uses card payment, settle against the auth taken at accept time.
@@ -3974,15 +4024,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: validation.error });
       }
 
+      // Only the fields a rider may set are read from the body; a request that
+      // names its own originalFare, promo, plan, wallet hold, split or status
+      // is ignored on those keys. The driver's pay basis reads originalFare
+      // and a cancel refunds virtualAmountAuthorized, so neither may ever be
+      // a number a client chose.
+      const clientBody: any = {};
+      for (const key of RIDER_BOOKING_FIELDS) if (req.body && key in req.body) clientBody[key] = req.body[key];
+      const clientRideType = typeof req.body?.rideType === 'string' && RIDER_PICKABLE_RIDE_TYPES.has(req.body.rideType) ? req.body.rideType : 'solo';
+
       // Convert numeric fare to string for decimal field
       const bodyData = {
-        ...req.body,
+        ...clientBody,
         paymentMethod: 'card', // Force virtual card payment
         bookedForFriend,
         passengerName: bookedForFriend ? passengerName : undefined,
         passengerPhone: bookedForFriend ? passengerPhone : undefined,
         requestedVehicleType,
-        rideType: bookedForFriend ? 'friend' : (req.body.rideType ?? 'solo'),
+        rideType: bookedForFriend ? 'friend' : clientRideType,
         // "No driver chosen" arrives as an empty string from the schedule
         // modal — normalize it away or the insert trips the users FK.
         driverId: req.body.driverId || undefined,
@@ -4538,9 +4597,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           catch (err) { console.error("[commercial] proof gate could not be checked:", err); return res.status(503).json({ message: "Could not check the handover record. Try again in a moment." }); }
           if (gate) return res.status(409).json({ message: gate, needsProof: true });
         }
-        const completed = await storage.completeRide(rideId, ride.driverId!, undefined, undefined, "metered");
+        let completed: Ride;
+        try {
+          completed = await storage.completeRide(rideId, ride.driverId!, undefined, undefined, "metered");
+        } catch (completeErr) {
+          // Complete and an early end racing: the other door finished the ride
+          // first. That is the outcome this door wanted too.
+          const already = await storage.getRide(rideId);
+          if (already?.status === "completed") return res.json({ success: true, endedEarly: true, ride: already, actualFare: already.actualFare });
+          throw completeErr;
+        }
         if (ride.paymentMethod === "invoice") {
           import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch((err) => console.error("[delivered] text failed:", err));
+          // An early end is a completion: the organization is billed the
+          // metered fare, so the driver is paid their share of it now, exactly
+          // as on the ordinary Complete (rates audit, 2026-09-18).
+          await payCommercialDriverForCompletedRide(completed);
         }
         await settleCardPaymentForCompletedRide(completed, undefined, 0);
         await storage.updateRide(rideId, {

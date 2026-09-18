@@ -133,7 +133,7 @@ import {
 } from "@shared/schema";
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { resolveCompletedFare, type FarePricing } from "@shared/farePolicy";
-import { splitFare } from "@shared/payoutPolicy";
+import { splitFare, driverBasisFor } from "@shared/payoutPolicy";
 import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
 import { db } from "./db";
 import { isUniqueViolation } from "./pgErrors";
@@ -2043,6 +2043,9 @@ export class DatabaseStorage implements IStorage {
     // The same GPS price before any promotion came off it — what the driver is
     // paid on when a ride ends early on a promo trip.
     let meteredGross: number | undefined;
+    // And before any rate discount (group, shared, plan) was re-applied — the
+    // basis for a plan ride, whose discount is PG Ride's (shared/payoutPolicy.ts).
+    let meteredUnscaled: number | undefined;
 
     if (routePath.length >= 2 && ride.startedAt) {
       // Calculate actual distance from GPS waypoints
@@ -2071,6 +2074,7 @@ export class DatabaseStorage implements IStorage {
         // completion settlement even charges the rider extra to erase it).
         const originalFareNum = parseFloat(ride.originalFare || "0");
         const estimatedFareNum = parseFloat(ride.estimatedFare || "0");
+        meteredUnscaled = Math.round(fareAmount * 100) / 100;
         if (originalFareNum > 0 && estimatedFareNum > 0 && estimatedFareNum < originalFareNum) {
           fareAmount = fareAmount * (estimatedFareNum / originalFareNum);
         }
@@ -2115,21 +2119,23 @@ export class DatabaseStorage implements IStorage {
     const fareForSplit = parseFloat(updateData.actualFare ?? ride.actualFare ?? ride.estimatedFare ?? "0");
     const tipForSplit = tipAmount !== undefined ? tipAmount : parseFloat(ride.tipAmount ?? "0");
 
-    // A welcome credit or promotion is what PG Ride spends to win a rider, not
-    // a cut in the driver's pay: they drove the same miles either way, so they
-    // are paid on the fare before the discount and PG Ride's share absorbs it.
-    // An explicit fare is what an admin says the ride cost, discount and all,
-    // so it is taken at face value.
-    const promo = Math.max(0, parseFloat(ride.promoDiscountApplied || "0"));
-    let driverBasis = fareForSplit;
-    if (promo > 0 && resolved && resolved.basis !== "explicit") {
-      const quotedGross = parseFloat(ride.estimatedFare || "0");
-      const grossOfBasis = resolved.basis === "metered" && meteredGross !== undefined ? meteredGross : quotedGross;
-      // A metered fare is capped at the quote, so the basis is capped with it —
-      // the driver is never paid on more than the rider was ever quoted.
-      const capped = quotedGross > 0 ? Math.min(grossOfBasis, quotedGross) : grossOfBasis;
-      driverBasis = Math.max(fareForSplit, capped);
-    }
+    // A welcome credit, a promotion or a plan rate is what PG Ride spends to
+    // win or keep a rider, not a cut in the driver's pay: they drove the same
+    // miles either way, so they are paid on the fare before the discount and
+    // PG Ride's share absorbs it. Which discounts are PG Ride's, and that an
+    // explicit fare is taken at face value, is decided in shared/payoutPolicy.ts.
+    const driverBasis = driverBasisFor({
+      charged: fareForSplit,
+      basis: resolved?.basis ?? "quoted",
+      quotedFare: ride.estimatedFare,
+      originalFare: ride.originalFare,
+      // A plan rate is only a plan rate when a plan booked the ride
+      // (server/weeklyPlans.ts is the one writer of planId).
+      rideType: ride.planId ? ride.rideType : null,
+      promoDiscount: ride.promoDiscountApplied,
+      meteredGross,
+      meteredUnscaled,
+    });
     const split = splitFare(fareForSplit, tipForSplit, { driverBasis });
     if (driverBasis > fareForSplit) {
       console.log(`[fare] ride ${rideId}: driver paid on $${driverBasis.toFixed(2)} (pre-discount), rider charged $${fareForSplit.toFixed(2)}; PG Ride's share $${split.platformFee.toFixed(2)}`);
@@ -2137,13 +2143,19 @@ export class DatabaseStorage implements IStorage {
     updateData.platformFee = split.platformFee.toFixed(2);
     updateData.driverEarnings = split.driverEarnings.toFixed(2);
 
-    // Update ride status to completed
+    // Update ride status to completed — only from in_progress, so two
+    // completions racing (Complete and an early end) finish the ride once
+    // and only the winner goes on to pay the driver.
     const [updatedRide] = await db
       .update(rides)
       .set(updateData)
-      .where(eq(rides.id, rideId))
+      .where(and(eq(rides.id, rideId), eq(rides.status, "in_progress")))
       .returning();
-    
+    if (!updatedRide) {
+      const now = await this.getRide(rideId);
+      throw new Error("Ride cannot be completed. Current status: " + (now?.status ?? "unknown"));
+    }
+
     return updatedRide;
   }
 

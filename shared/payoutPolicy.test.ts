@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DRIVER_SHARE, PLATFORM_SHARE, splitFare } from "./payoutPolicy";
+import { DRIVER_SHARE, PLATFORM_SHARE, driverBasisFor, platformAbsorbsRate, splitFare } from "./payoutPolicy";
 
 describe("splitFare", () => {
   it("is 85 / 15 on the fare", () => {
@@ -71,5 +71,53 @@ describe("a discount is PG Ride's, not the driver's", () => {
     const s = splitFare(18, "5.00", { driverBasis: 23 });
     expect(s.tip).toBe(5);
     expect(s.driverEarnings).toBe(24.55);
+  });
+});
+
+describe("driverBasisFor: which discounts are PG Ride's", () => {
+  it("an ordinary ride is paid on what the rider paid", () => {
+    expect(driverBasisFor({ charged: 23.21, basis: "quoted", quotedFare: "23.21" })).toBe(23.21);
+  });
+
+  it("a welcome credit is PG Ride's: the driver is paid on the quote", () => {
+    expect(driverBasisFor({ charged: 18.21, basis: "quoted", quotedFare: "23.21", promoDiscount: "5.00" })).toBe(23.21);
+  });
+
+  it("a weekly-plan rate is PG Ride's: the driver is paid on the full fare", () => {
+    expect(platformAbsorbsRate("weekly_plan")).toBe(true);
+    expect(driverBasisFor({ charged: 22.5, basis: "quoted", quotedFare: "22.50", originalFare: "25.00", rideType: "weekly_plan" })).toBe(25);
+  });
+
+  it("a plan ride with a welcome credit restores both", () => {
+    expect(driverBasisFor({ charged: 17.5, basis: "quoted", quotedFare: "22.50", originalFare: "25.00", rideType: "weekly_plan", promoDiscount: "5.00" })).toBe(25);
+  });
+
+  it("a coworker group or shared seat is a rate, not a discount: paid on the seat price", () => {
+    expect(platformAbsorbsRate("shared_schedule")).toBe(false);
+    expect(driverBasisFor({ charged: 16.25, basis: "quoted", quotedFare: "16.25", originalFare: "23.21", rideType: "shared_schedule" })).toBe(16.25);
+    expect(driverBasisFor({ charged: 16.25, basis: "quoted", quotedFare: "16.25", originalFare: "23.21", rideType: "solo" })).toBe(16.25);
+  });
+
+  it("an explicit fare is taken at face value", () => {
+    expect(driverBasisFor({ charged: 30, basis: "explicit", quotedFare: "22.50", originalFare: "25.00", rideType: "weekly_plan", promoDiscount: "5.00" })).toBe(30);
+  });
+
+  it("an early end on a plan ride is paid on the metered fare before the plan rate, never above the full quote", () => {
+    // Metered $12 before the plan rate, $10.80 after it; the rider is charged $10.80.
+    expect(driverBasisFor({ charged: 10.8, basis: "metered", quotedFare: "22.50", originalFare: "25.00", rideType: "weekly_plan", meteredGross: 10.8, meteredUnscaled: 12 })).toBe(12);
+    // A GPS figure above the quote is capped at the full quote.
+    expect(driverBasisFor({ charged: 22.5, basis: "metered", quotedFare: "22.50", originalFare: "25.00", rideType: "weekly_plan", meteredGross: 40, meteredUnscaled: 44 })).toBe(25);
+    // A promo ride ended early is paid on the metered fare before the promo, as before.
+    expect(driverBasisFor({ charged: 7, basis: "metered", quotedFare: "23.21", promoDiscount: "5.00", meteredGross: 12, meteredUnscaled: 12 })).toBe(12);
+  });
+
+  it("never pays more than the plan's own discount, whatever originalFare says", () => {
+    // A $22.50 plan fare can only have come from a $25.00 trip at 10% off.
+    expect(driverBasisFor({ charged: 22.5, basis: "quoted", quotedFare: "22.50", originalFare: "500.00", rideType: "weekly_plan" })).toBe(25);
+    expect(driverBasisFor({ charged: 20, basis: "quoted", quotedFare: "20.00", originalFare: "500.00", rideType: "weekly_plan" })).toBe(22.22);
+  });
+
+  it("is never below what the rider paid", () => {
+    expect(driverBasisFor({ charged: 30, basis: "quoted", quotedFare: "22.50", originalFare: "25.00", rideType: "weekly_plan" })).toBe(30);
   });
 });

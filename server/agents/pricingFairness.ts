@@ -63,6 +63,9 @@ export async function evaluateUndersupply(
  * We only create the bonus_allocation row when the deduction returned
  * true.
  */
+/** Ledger reason for a community bonus credited to a driver's wallet. */
+export const BONUS_REASON = "community_bonus";
+
 export async function allocateDriverBonus(
   storage: IStorage,
   driverId: string,
@@ -77,6 +80,19 @@ export async function allocateDriverBonus(
   const deducted = await storage.tryDeductCommunityBonusPool(amount);
   if (!deducted) {
     return { allocated: false, amount: 0 };
+  }
+  // The bonus is money, not a row: it reaches the driver's wallet now, so it
+  // is paid out on payday like everything else they earned (rates audit,
+  // 2026-09-18 — before this the pool was debited and the allocation
+  // recorded, and nothing ever reached the driver). If the wallet cannot be
+  // credited (no such driver, database error) the pool gets its money back
+  // and nothing is recorded, so a retry does not debit the pool twice.
+  try {
+    await storage.addVirtualCardBalance(driverId, amount, BONUS_REASON, rideId);
+  } catch (creditErr) {
+    await storage.fundCommunityBonusPool(amount).catch((refundErr) =>
+      console.error(`[fairness] pool not refunded after a failed bonus credit ($${amount.toFixed(2)} for ${driverId}):`, refundErr));
+    throw creditErr;
   }
   await storage.createBonusAllocation({
     driverId,
