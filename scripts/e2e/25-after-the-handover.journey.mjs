@@ -75,9 +75,16 @@ export async function run({ base, db, server }) {
     await new Promise((r) => setTimeout(r, 400));
     const earlyLines = serverLog(server).split("\n").filter((l) => l.includes("[delivered] J-") && l.includes("→") && /received by Ada/.test(l));
     check("ending the run early after the handover completes it and tells the receiver, once", early.status === 200 && earlyLines.length === 1, `status=${early.status} texts=${earlyLines.length}`);
+    // An early end is a completion: the organization is billed the metered
+    // fare, so the driver is paid their share of it now, as on Complete.
+    const { rows: [earlyRow] } = await db.query("SELECT driver_earnings FROM rides WHERE id=$1", [secondRide]);
+    const { rows: earlyPaid } = await db.query("SELECT amount FROM wallet_transactions WHERE ride_id=$1 AND reason='ride_earnings'", [secondRide]);
+    check("the driver is paid for a run ended early, exactly as for one completed", earlyPaid.length === 1 && Number(earlyRow?.driver_earnings) > 0 && earlyPaid[0].amount === earlyRow.driver_earnings, JSON.stringify({ earlyPaid, earlyRow }));
     const again = await driver.req("POST", `/api/driver/rides/${secondRide}/complete`, {});
     await new Promise((r) => setTimeout(r, 300));
     check("a retry of Complete on the finished job does not text again", again.status === 200 && serverLog(server).split("\n").filter((l) => l.includes("[delivered] J-") && l.includes("→") && /received by Ada/.test(l)).length === 1);
+    const { rows: stillOnce } = await db.query("SELECT amount FROM wallet_transactions WHERE ride_id=$1 AND reason='ride_earnings'", [secondRide]);
+    check("and does not pay the driver twice", stillOnce.length === 1);
     check("a made-up link is not valid", (await guest.req("GET", `/api/delivered/${"0".repeat(48)}`)).status === 404);
 
     section("Photos are kept 90 days; the record stays");

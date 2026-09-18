@@ -335,7 +335,7 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       const org = await getOrganization(req.orgId);
       const job = await jobForRide(result.ride.id);
       const label = job ? formatJobNumber(job.jobNumber) : result.ride.id;
-      console.log(`[commercial] job cancelled :: Account: ${org?.name ?? req.orgId} | Job: ${label} | fee ${result.cancellationFee}${result.driverId ? ` | driver ${result.driverId}` : ""}`);
+      console.log(`[commercial] job cancelled :: Account: ${org?.name ?? req.orgId} | Job: ${label} | fee ${result.cancellationFee}${result.driverId ? ` | driver ${result.driverId} paid ${result.driverCut.toFixed(2)}` : ""}`);
       if (result.driverId) {
         deps.notifyUser(result.driverId, {
           type: "ride_cancelled",

@@ -159,6 +159,30 @@ export async function run({ base, db }) {
   const promoDelta = Number(afterB.json?.fare) - Number(beforeB.json?.fare ?? 0);
   check("and their earnings screen shows the whole $19.73, not the discounted share", Math.abs(promoDelta - 19.73) < 0.011, `fare +${promoDelta.toFixed(2)}`);
 
+  section("Which discounts are PG Ride's: a shared seat is not, and a label is not a plan");
+  const seedTyped = async (rideType, original, quoted) => {
+    const { rows: [r] } = await db.query(
+      `INSERT INTO rides (rider_id, driver_id, status, pickup_location, destination_location, estimated_fare, original_fare, ride_type, payment_method)
+       VALUES ($1, $2, 'accepted', $3, $4, $5, $6, $7, 'cash') RETURNING id`,
+      [FIXTURES.rider.id, FIXTURES.driver.id, loc(PICKUP), loc(DEST), quoted, original, rideType]);
+    return r.id;
+  };
+  // A ride that merely SAYS it is a plan ride, with an originalFare nobody's
+  // plan wrote, is paid on what the rider paid: a plan rate is only a plan
+  // rate when a plan booked the ride (journey 09 completes a real one).
+  const planRide = await seedTyped("weekly_plan", "500.00", "22.50");
+  await driver.req("POST", `/api/driver/rides/${planRide}/start`);
+  const donePlan = await driver.req("POST", `/api/driver/rides/${planRide}/complete`, {});
+  check("a ride only labelled as a plan ride charges its fare", donePlan.status === 200 && Number(donePlan.json?.actualFare) === 22.5, `actualFare=${donePlan.json?.actualFare}`);
+  check("and pays the driver on that fare, not on a number nobody's plan wrote: $19.12", Number(donePlan.json?.driverEarnings) === 19.12 && Number(donePlan.json?.platformFee) === 3.38, `driverEarnings=${donePlan.json?.driverEarnings} platformFee=${donePlan.json?.platformFee}`);
+  // A coworker seat is a rate: three seats at 70% in one drive. The driver is
+  // paid 85% of each seat, as a shared trip is priced everywhere.
+  const seatRide = await seedTyped("shared_schedule", "23.21", "16.25");
+  await driver.req("POST", `/api/driver/rides/${seatRide}/start`);
+  const doneSeat = await driver.req("POST", `/api/driver/rides/${seatRide}/complete`, {});
+  check("a coworker seat charges the seat price and pays the driver 85% of it: $13.81", doneSeat.status === 200 && Number(doneSeat.json?.actualFare) === 16.25 && Number(doneSeat.json?.driverEarnings) === 13.81 && Number(doneSeat.json?.platformFee) === 2.44, JSON.stringify({ fare: doneSeat.json?.actualFare, driver: doneSeat.json?.driverEarnings, pg: doneSeat.json?.platformFee }));
+  await deleteRides(db, [planRide, seatRide]).catch(() => {});
+
   section("Ride ended early mid-trip is metered, never above the quote");
   const rideC = await seed();
   await driver.req("POST", `/api/driver/rides/${rideC}/start`);
