@@ -248,7 +248,9 @@ export const rides = pgTable("rides", {
   destinationLocation: jsonb("destination_location").$type<{lat: number, lng: number, address: string}>().notNull(),
   pickupInstructions: text("pickup_instructions"),
   status: rideStatusEnum("status").default("pending"),
-  paymentMethod: paymentMethodEnum("payment_method").default("cash"),
+  // Cash is no longer taken (shared/paymentMethods.ts). The enum keeps `cash`
+  // because rides booked before that still carry it and must still settle.
+  paymentMethod: paymentMethodEnum("payment_method").default("card"),
   estimatedFare: decimal("estimated_fare", { precision: 8, scale: 2 }),
   actualFare: decimal("actual_fare", { precision: 8, scale: 2 }),
   distance: decimal("distance", { precision: 8, scale: 2 }),

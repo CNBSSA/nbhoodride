@@ -188,6 +188,7 @@ import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
 import { TIP_MAX, TIP_MIN, describeTipRefusal, normalizeTip, tipRefusal } from "@shared/tipPolicy";
+import { CASH_DISCONTINUED_MESSAGE, isDiscontinuedPaymentMethod, settlesInCash } from "@shared/paymentMethods";
 
 // What a booking request may say about a ride: where, when, for whom, in
 // what car, and the app's own route figures. Every other ride column — money,
@@ -3304,7 +3305,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "The fare is the amount quoted at booking; it can't be set at completion." });
       }
       const preCheck = await storage.getRide(rideId);
-      if (parsed.tipAmount !== undefined && parsed.tipAmount > 0 && preCheck?.paymentMethod !== 'cash') {
+      // A tip may be entered here only for a ride that was taken in cash —
+      // rides booked before cash was discontinued. On a card ride the rider
+      // adds it themselves (shared/tipPolicy.ts).
+      if (parsed.tipAmount !== undefined && parsed.tipAmount > 0 && !settlesInCash(preCheck?.paymentMethod)) {
         return res.status(400).json({
           message: preCheck?.paymentMethod === 'invoice'
             ? "Tips are not taken on jobs billed to an organization."
@@ -3995,9 +3999,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
-      // SECURITY: Enforce virtual card as the only payment method
+      // Cash is no longer taken and an organization's work is booked from the
+      // desk, so a ride booked here is a card ride (shared/paymentMethods.ts).
       if (req.body.paymentMethod && req.body.paymentMethod !== 'card') {
-        return res.status(400).json({ message: "Only virtual card payment is supported" });
+        return res.status(400).json({
+          message: isDiscontinuedPaymentMethod(req.body.paymentMethod) ? CASH_DISCONTINUED_MESSAGE : "Only virtual card payment is supported",
+        });
       }
 
       const bookingRider = await storage.getUser(userId);
@@ -5521,7 +5528,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(400).json({ message: "Invalid payment data" });
       } else if (error instanceof Error && error.message.includes("not found")) {
         res.status(404).json({ message: error.message });
-      } else if (error instanceof Error && (error.message.includes("Only the driver") || error.message.includes("already been confirmed"))) {
+      } else if (error instanceof Error && (error.message.includes("Only the driver") || error.message.includes("already been confirmed") || error.message.includes("not paid in cash") || error.message.includes("must be completed"))) {
         res.status(400).json({ message: error.message });
       } else {
         res.status(500).json({ message: "Failed to confirm payment" });

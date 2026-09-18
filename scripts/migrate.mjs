@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS rides (
   destination_location JSONB NOT NULL,
   pickup_instructions TEXT,
   status ride_status DEFAULT 'pending',
-  payment_method payment_method DEFAULT 'cash',
+  payment_method payment_method DEFAULT 'card',
   estimated_fare DECIMAL(8,2),
   actual_fare DECIMAL(8,2),
   distance DECIMAL(8,2),

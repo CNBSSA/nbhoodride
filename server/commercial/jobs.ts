@@ -25,6 +25,7 @@ import { deliverySummary } from "./deliveries";
 import { estimateFare, validateRideRequest, type Location } from "../rideWorkflowService";
 import type { IStorage } from "../storage";
 import { CommercialError, getOrganization } from "./organizations";
+import { CASH_DISCONTINUED_MESSAGE, mayCreateWithPaymentMethod } from "@shared/paymentMethods";
 
 export interface BookJobInput {
   /** A parcel: written with the job in one transaction, so a job never exists without its parcel (post-implementation audit, 2026-09-17). */
@@ -102,13 +103,20 @@ export async function bookJob(storage: IStorage, input: BookJobInput, now: Date 
   // no job — never billed, and with no category it would look like an
   // ordinary ride to every driver (daily audit, #380). storage.createRide
   // is a bare insert, so nothing is lost by doing it inside the transaction.
+  // This insert is the one place a ride is written without going through
+  // storage.createRide (it must share the job's transaction), so the rule it
+  // would have applied is applied here: cash is not taken (2026-09-18). The
+  // value checked is the value written, so the two cannot drift apart if a
+  // later change makes the method something a caller chooses.
+  const paymentMethod = "invoice";
+  if (!mayCreateWithPaymentMethod(paymentMethod)) throw new CommercialError(CASH_DISCONTINUED_MESSAGE, 400);
   const { ride, job } = await db.transaction(async (tx) => {
   const [ride] = await tx.insert(rides).values({
     riderId: input.requesterId,
     pickupLocation: input.pickup,
     destinationLocation: input.destination,
     estimatedFare: fare.toFixed(2),
-    paymentMethod: "invoice",
+    paymentMethod,
     status: "pending",
     scheduledAt: new Date(input.scheduledAt),
     pickupCounty: validation.pickupCounty ?? null,

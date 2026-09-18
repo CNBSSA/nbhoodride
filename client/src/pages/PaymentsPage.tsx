@@ -68,8 +68,8 @@ export function PaymentsPage() {
               No Payments Pending
             </CardTitle>
             <CardDescription data-testid="no-payments-description">
-              All your ride payments have been confirmed. 
-              New rides will appear here when they need payment confirmation.
+              All your ride payments have been confirmed.
+              PG Ride no longer takes cash, so nothing new arrives here — a card ride pays itself when you complete it.
             </CardDescription>
           </CardContent>
         </Card>
@@ -83,6 +83,9 @@ export function PaymentsPage() {
         <h1 className="text-2xl font-bold mb-2">Payment Confirmations</h1>
         <p className="text-muted-foreground">
           Confirm cash payments from {ridesAwaitingPayment.length} completed ride{ridesAwaitingPayment.length !== 1 ? 's' : ''}
+        </p>
+        <p className="text-sm text-muted-foreground mt-1" data-testid="text-cash-discontinued">
+          PG Ride no longer takes cash. These were booked before that; card rides pay themselves.
         </p>
       </div>
 
