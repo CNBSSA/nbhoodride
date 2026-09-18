@@ -101,6 +101,12 @@ export async function run({ base, db, server }) {
     // split as a rider's late cancel (rates audit, 2026-09-18).
     const { rows: lateCut } = await db.query("SELECT amount FROM wallet_transactions WHERE ride_id=$1 AND reason='cancellation_fee'", [late.rideId]);
     check("the driver who held the job gets their cut of the late fee at once: $9.60 of $12.00", lateCut.length === 1 && lateCut[0].amount === "9.60", JSON.stringify(lateCut));
+    // Marked like every other cancel that carried a fee, so the operator's
+    // figures count it with the rest (rates audit, 2026-09-18).
+    const { rows: [lateRow] } = await db.query("SELECT payment_status FROM rides WHERE id=$1", [late.rideId]);
+    check("and the ride is marked as carrying a fee, like any other", lateRow.payment_status === "cancelled_with_fee", JSON.stringify(lateRow));
+    const { rows: [freeRow] } = await db.query("SELECT payment_status FROM rides WHERE id=$1", [tomorrow.rideId]);
+    check("a free cancel is not", freeRow.payment_status === "cancelled", JSON.stringify(freeRow));
     const ns = fromOrder.sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt))[3];
     check("driver claims another", (await driver.req("POST", `/api/driver/rides/${ns.rideId}/claim`)).status === 200);
     await driver.req("POST", `/api/driver/rides/${ns.rideId}/confirm-scheduled`);
@@ -109,6 +115,7 @@ export async function run({ base, db, server }) {
     await db.query("UPDATE rides SET arrived_at = NOW() - interval '10 minutes' WHERE id=$1", [ns.rideId]);
     const noShow = await driver.req("POST", `/api/driver/rides/${ns.rideId}/no-show`, { driverLat: PICKUP.lat, driverLng: PICKUP.lng });
     check("driver reports a no-show", noShow.status === 200, JSON.stringify(noShow.json?.message ?? noShow.status));
+    check("and is told the organization's fee, not the rider ladder's", Number(noShow.json?.fee) === 15, `fee=${noShow.json?.fee}`);
     await new Promise((r) => setTimeout(r, 400));
     const { rows: [nsj] } = await db.query("SELECT c.cancellation_fee, r.status, r.stripe_payment_intent_id FROM commercial_jobs c JOIN rides r ON r.id=c.ride_id WHERE c.id=$1", [ns.id]);
     check("the organization's no-show fee is on the job; nothing was charged to anyone's card", nsj.cancellation_fee === "15.00" && nsj.status === "no_show" && !nsj.stripe_payment_intent_id, JSON.stringify(nsj));

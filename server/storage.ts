@@ -129,6 +129,7 @@ import {
   type DriverRateCard,
   platformRateCard,
   type PlatformRateCard,
+  commercialJobs,
 } from "@shared/schema";
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { resolveCompletedFare, type FarePricing } from "@shared/farePolicy";
@@ -3816,12 +3817,24 @@ export class DatabaseStorage implements IStorage {
   // FINANCIAL SUMMARY
   // ============================================================
 
+  // "Total revenue" here has always been the GROSS: every fare, tip and fee
+  // that passed through PG Ride, 85% of which belongs to drivers. It stays,
+  // because it is what the screen has always shown; beside it now sit the
+  // numbers an operator needs to run the company (rates audit, 2026-09-18):
+  // PG Ride's own share of the fares, how much of that share has actually
+  // been collected (a card that settled, a statement that was paid), what
+  // went to drivers, and that cancellation fees go to drivers and the
+  // community pool, not to PG Ride.
   async getFinancialSummary(year?: number): Promise<{
     totalRevenue: number;
     totalFares: number;
     totalTips: number;
     totalCancellationFees: number;
     rideCount: number;
+    platformShare: number;
+    platformShareCollected: number;
+    platformShareUncollected: number;
+    driverShare: number;
   }> {
     const yearStart = new Date(year || new Date().getFullYear(), 0, 1);
     const yearEnd = new Date((year || new Date().getFullYear()) + 1, 0, 1);
@@ -3830,7 +3843,12 @@ export class DatabaseStorage implements IStorage {
       fare: rides.actualFare,
       tip: rides.tipAmount,
       cancelFee: rides.cancellationFee,
-    }).from(rides).where(
+      platformFee: rides.platformFee,
+      driverEarnings: rides.driverEarnings,
+      paymentMethod: rides.paymentMethod,
+      paymentStatus: rides.paymentStatus,
+      billedStatus: commercialJobs.billedStatus,
+    }).from(rides).leftJoin(commercialJobs, eq(commercialJobs.rideId, rides.id)).where(
       and(
         eq(rides.status, "completed"),
         gte(rides.completedAt, yearStart),
@@ -3849,13 +3867,28 @@ export class DatabaseStorage implements IStorage {
     );
 
     let totalFares = 0, totalTips = 0, totalCancelFees = 0;
+    let platformShare = 0, platformShareCollected = 0, driverShare = 0;
     for (const r of completedRides) {
       totalFares += parseFloat(r.fare || "0");
       totalTips += parseFloat(r.tip || "0");
+      const fee = parseFloat(r.platformFee || "0");
+      // A pre-policy ride has no split recorded; the driver was credited the
+      // whole fare, so PG Ride's share of it is 0 and the driver's is the fare.
+      const earned = r.driverEarnings != null ? parseFloat(r.driverEarnings) - parseFloat(r.tip || "0") : parseFloat(r.fare || "0");
+      platformShare += fee;
+      driverShare += Math.max(0, earned);
+      // Collected: a card that settled, or an invoice job whose statement was
+      // paid. A cash fare is the driver's in hand — nothing of it reached
+      // PG Ride — and a statement still charging or failed has not either.
+      const collected = r.paymentMethod === "card"
+        ? r.paymentStatus === "paid_card"
+        : r.paymentMethod === "invoice" ? r.billedStatus === "paid" : false;
+      if (collected) platformShareCollected += fee;
     }
     for (const r of cancelledWithFeeRides) {
       totalCancelFees += parseFloat(r.cancelFee || "0");
     }
+    const round2 = (n: number) => Math.round(n * 100) / 100;
 
     return {
       totalRevenue: totalFares + totalTips + totalCancelFees,
@@ -3863,6 +3896,10 @@ export class DatabaseStorage implements IStorage {
       totalTips,
       totalCancellationFees: totalCancelFees,
       rideCount: completedRides.length,
+      platformShare: round2(platformShare),
+      platformShareCollected: round2(platformShareCollected),
+      platformShareUncollected: round2(platformShare - platformShareCollected),
+      driverShare: round2(driverShare),
     };
   }
 
