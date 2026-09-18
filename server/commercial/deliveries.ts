@@ -73,8 +73,12 @@ export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, 
   // transaction as the job, so a job never exists open to drivers while the
   // desk was told the recipient would be asked. The text goes out afterwards
   // (server/commercial/recipientApproval.ts).
+  // The fee the recipient is asked to approve is what the shop is billed for
+  // the delivery: the tariff plus the account's facility fee, if it has one.
+  // Waiting at the door is not known yet and is the shop's to explain.
+  const recipientFee = Math.round((fare + Math.max(0, parseFloat(String(org.facilityFee ?? "0")) || 0)) * 100) / 100;
   const recipientFields = askRecipient
-    ? { recipientApproval: "awaiting", recipientApprovalToken: randomBytes(24).toString("hex"), recipientFee: fare.toFixed(2) }
+    ? { recipientApproval: "awaiting", recipientApprovalToken: randomBytes(24).toString("hex"), recipientFee: recipientFee.toFixed(2) }
     : {};
   const booked = await bookJob(storage, {
     organizationId: org.id,

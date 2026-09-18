@@ -59,7 +59,10 @@ export async function startRecipientApproval(jobId: string, appUrl: string): Pro
   let token = row.job.recipientApprovalToken;
   if (approvalOf(row.job.recipientApproval) !== "awaiting" || !token) {
     token = token ?? randomBytes(24).toString("hex");
-    await db.update(commercialJobs).set({ recipientApproval: "awaiting", recipientApprovalToken: token, recipientFee: String(row.ride.estimatedFare ?? "0"), recipientNudgedAt: null, shopAskedAt: null }).where(eq(commercialJobs.id, jobId));
+    // Re-asked: the fee is what the shop is billed for the delivery, fare
+    // plus the account's facility fee, as when the job was booked.
+    const reFee = Math.round((parseFloat(String(row.ride.estimatedFare ?? "0")) + Math.max(0, parseFloat(String(row.job.facilityFee ?? "0")) || 0)) * 100) / 100;
+    await db.update(commercialJobs).set({ recipientApproval: "awaiting", recipientApprovalToken: token, recipientFee: reFee.toFixed(2), recipientNudgedAt: null, shopAskedAt: null }).where(eq(commercialJobs.id, jobId));
   }
   const link = approvalLink(appUrl, token);
   const textSent = await text(phone, approvalText({ shopName: row.org.name, fee: row.job.recipientFee ?? row.ride.estimatedFare ?? 0, windowText: windowText(row.job), link }), `approval link for ${jobLabel(row.job)}`);

@@ -2762,7 +2762,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         event: "rider_no_show",
         actorId: userId,
         details: {
-          fee: RIDER_NO_SHOW_FEE,
+          fee: noShowFee,
+          billedTo: ride.paymentMethod === 'invoice' ? 'organization' : 'rider',
           collected,
           driverCut: split.driverCut,
           fairnessFundCut: split.fundCut,
@@ -2788,10 +2789,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("No-show reliability check failed (non-fatal):", reliabilityErr);
       }
 
+      // The fee named here is the one that was applied: the rider ladder's,
+      // or the organization's own from its terms, on its statement.
       const noShowMessage = JSON.stringify({
         type: 'ride_no_show',
         rideId,
-        fee: RIDER_NO_SHOW_FEE,
+        fee: noShowFee,
       });
       for (const partyId of [ride.riderId, userId]) {
         const ws = activeConnections.get(partyId);
@@ -2801,13 +2804,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       deliverUserNotification(ride.riderId, {
         type: "ride-no-show",
         title: "Missed Ride",
-        body: `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point. A $${RIDER_NO_SHOW_FEE.toFixed(2)} no-show fee was applied.`,
+        body: ride.paymentMethod === 'invoice'
+          ? `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point. A $${noShowFee.toFixed(2)} no-show fee goes on your organization's statement.`
+          : `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point. A $${noShowFee.toFixed(2)} no-show fee was applied.`,
         tag: "ride-no-show",
         url: "/",
-        data: { rideId, fee: RIDER_NO_SHOW_FEE },
+        data: { rideId, fee: noShowFee },
       }).catch(console.error);
 
-      res.json({ success: true, ride: updated, fee: RIDER_NO_SHOW_FEE, driverCut: split.driverCut });
+      res.json({ success: true, ride: updated, fee: noShowFee, driverCut: split.driverCut });
     } catch (error) {
       console.error("Error reporting no-show:", error);
       if (error instanceof Error) {
@@ -7318,7 +7323,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           destinationLocation: circuit.destination,
           estimatedFare: circuit.farePerSeat,
           originalFare: circuit.farePerSeat,
-          paymentMethod: req.body?.paymentMethod || "card",
+          paymentMethod: "card", // every seat is paid by card, as every booking is
           rideType: "circuit",
           groupId: group.id,
           scheduledAt: w.runAt,
