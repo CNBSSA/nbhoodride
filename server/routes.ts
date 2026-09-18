@@ -5184,6 +5184,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
   /** How long a tip claim is honoured before it is treated as abandoned. */
   const TIP_CLAIM_STALE_SECONDS = 300;
 
+  // Called when a tip could not be recorded because one was already there.
+  // The ride is re-read first: the tip on it may be THIS charge, recorded a
+  // moment sooner by the other path, and refunding that would take back money
+  // the driver has been paid. Only a charge for some other amount is homeless.
+  // If the ride cannot be read, nothing is refunded and ops are told — a
+  // database blip is not a reason to reverse a rider's tip.
+  async function refundIfNotTheRecordedTip(rideId: string, intentId: string, amount: number): Promise<void> {
+    let recordedCents: number | null = null;
+    try {
+      const fresh = await storage.getRide(rideId);
+      if (fresh) recordedCents = Math.round(Number(fresh.tipAmount ?? 0) * 100);
+    } catch (readErr) {
+      console.error(`[tip] ride ${rideId}: could not re-read the ride to judge charge ${intentId}:`, readErr);
+    }
+    if (recordedCents === null) {
+      opsAlert(formatOpsAlert("💸 Tip charge of unknown standing", [
+        ["Ride", rideId.slice(0, 8)],
+        ["Charge", intentId],
+        ["Amount", `$${amount.toFixed(2)}`],
+        ["Why", "a tip was already recorded but the ride could not be re-read, so this charge was left alone"],
+        ["Fix", "Compare it with the ride's tip; refund it in Stripe if it is a second one"],
+      ]));
+      return;
+    }
+    if (Math.abs(recordedCents - Math.round(amount * 100)) < 1) return;
+    await refundHomelessTip(rideId, intentId, amount);
+  }
+
   // A tip charge that no ledger row claims is money with nobody paid: give it
   // straight back, and page when it cannot be given back.
   async function refundHomelessTip(rideId: string, intentId: string, amount: number): Promise<void> {
@@ -5236,8 +5264,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // charged and released only when nothing was charged, so a second
       // request racing this one (another amount, another device) is told
       // "already tipped" instead of raising its own charge. A stale claim
-      // from a request that died mid-flight is released after a minute; the
-      // ledger, not the claim, is the truth of whether a tip was recorded.
+      // from a request that died mid-flight is released once it is older than
+      // any Stripe call can take; the ledger, not the claim, is the truth of
+      // whether a tip was recorded.
       // Longer than a Stripe call can take (the SDK waits 80s and retries
       // twice), so a charge still in flight is never treated as abandoned.
       await storage.releaseStaleWebhookEvent("ride_tip", rideId, TIP_CLAIM_STALE_SECONDS).catch(() => {});
@@ -5291,11 +5320,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // by the webhook a moment sooner — the rider is tipped, the driver is
         // paid, and there is nothing to give back. Only a charge for some
         // other amount has no home, and that one is refunded.
-        const fresh = await storage.getRide(rideId).catch(() => undefined);
-        const recordedCents = Math.round(Number(fresh?.tipAmount ?? 0) * 100);
-        if (Math.abs(recordedCents - Math.round(amount * 100)) >= 1) {
-          await refundHomelessTip(rideId, intentId, amount);
-        }
+        await refundIfNotTheRecordedTip(rideId, intentId, amount);
         return res.status(409).json({ message: describeTipRefusal("already_tipped"), reason: "already_tipped" });
       }
       console.log(`[tip] ride ${rideId.slice(0, 8)}: rider tipped $${amount.toFixed(2)} → driver ${ride.driverId} (charge ${intentId})`);
@@ -10659,10 +10684,11 @@ Generate the FAQ list.`;
               const recorded = await storage.recordRideTipOnce(rideId, tipRide.driverId, Math.round(tipCents) / 100);
               if (recorded) {
                 console.log(`[tip] ride ${rideId}: $${(tipCents / 100).toFixed(2)} recorded from webhook ${pi.id}`);
-              } else if (Math.abs(Number(tipRide.tipAmount ?? 0) * 100 - tipCents) >= 1) {
-                // A different charge from the tip already on the ledger has no
-                // home: give it back rather than keep money nobody was paid.
-                await refundHomelessTip(rideId, pi.id, Math.round(tipCents) / 100);
+              } else {
+                // A tip was already there. It may be THIS charge, recorded by
+                // the route a moment sooner (tipRide was read before the write
+                // above), so the ride is re-read before anything is given back.
+                await refundIfNotTheRecordedTip(rideId, pi.id, Math.round(tipCents) / 100);
               }
               await storage.releaseWebhookEvent("ride_tip", rideId).catch(() => {});
             }
