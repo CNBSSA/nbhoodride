@@ -42,7 +42,7 @@ export async function run({ base, db }) {
     const asDriver = await driver.req("POST", `/api/rides/${card}/tip`, { amount: 5 });
     check("the driver cannot tip themselves", asDriver.status === 403, `${asDriver.status}`);
     const onCash = await rider.req("POST", `/api/rides/${cash}/tip`, { amount: 5 });
-    check("a cash ride's tip is handed to the driver, not charged", onCash.status === 400 && /handed to the driver/.test(onCash.json?.message ?? ""), JSON.stringify(onCash.json));
+    check("a ride not paid by card takes no tip here", onCash.status === 400 && /not paid by card/.test(onCash.json?.message ?? ""), JSON.stringify(onCash.json));
     const tooOld = await rider.req("POST", `/api/rides/${old}/tip`, { amount: 5 });
     check("a ride ten days back is past the window", tooOld.status === 400 && /7 days/.test(tooOld.json?.message ?? ""), JSON.stringify(tooOld.json));
     const notDone = await rider.req("POST", `/api/rides/${onRoad}/tip`, { amount: 5 });

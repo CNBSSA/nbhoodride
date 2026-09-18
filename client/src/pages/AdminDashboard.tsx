@@ -1980,7 +1980,7 @@ function FinancesPanel() {
     totalRevenue: number; totalFares: number; totalTips: number;
     totalCancellationFees: number; rideCount: number;
     platformShare?: number; platformShareCollected?: number; platformShareUncollected?: number;
-    driverShare?: number;
+    driverShare?: number; cashRides?: number; cashRidesUnsettled?: number;
   }>({ queryKey: [`/api/admin/finances?year=${year}`] });
 
   if (isLoading) return <div data-testid="loading-finances">Loading finances...</div>;
@@ -2023,6 +2023,18 @@ function FinancesPanel() {
             <p className="text-xs text-muted-foreground mt-1">
               Of PG Ride's share: cards that settled and statements that were paid.
               {(summary?.platformShareUncollected || 0) > 0 ? ` $${(summary?.platformShareUncollected || 0).toFixed(2)} not collected (cash fares, statements still owed).` : ""}
+            </p>
+          </CardContent>
+        </Card>
+        <Card data-testid="stat-cash-tail">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Cash Rides (discontinued)</p>
+            <p className="text-2xl font-bold">{summary?.cashRides ?? 0}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              PG Ride no longer takes cash.
+              {(summary?.cashRidesUnsettled || 0) > 0
+                ? ` ${summary?.cashRidesUnsettled} still waiting for a driver to confirm the money.`
+                : " Every one of them is settled."}
             </p>
           </CardContent>
         </Card>

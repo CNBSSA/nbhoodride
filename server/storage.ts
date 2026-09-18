@@ -134,6 +134,7 @@ import {
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { resolveCompletedFare, type FarePricing } from "@shared/farePolicy";
 import { splitFare, driverBasisFor } from "@shared/payoutPolicy";
+import { CASH_DISCONTINUED_MESSAGE, isDiscontinuedPaymentMethod, mayCreateWithPaymentMethod } from "@shared/paymentMethods";
 import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
 import { db } from "./db";
 import { isUniqueViolation } from "./pgErrors";
@@ -1079,9 +1080,16 @@ export class DatabaseStorage implements IStorage {
 
   // Ride operations
   async createRide(ride: InsertRide): Promise<Ride> {
+    // Cash is no longer taken (shared/paymentMethods.ts, 2026-09-18). Every
+    // booking door writes card or invoice; this is the one place they all
+    // pass through, so no future door can quietly bring cash back.
+    const method = (ride as any).paymentMethod ?? "card";
+    if (!mayCreateWithPaymentMethod(method)) {
+      throw new Error(`${CASH_DISCONTINUED_MESSAGE} (asked for: ${String(method)})`);
+    }
     const [newRide] = await db
       .insert(rides)
-      .values(ride as any)
+      .values({ ...(ride as any), paymentMethod: method })
       .returning();
     return newRide;
   }
@@ -2364,6 +2372,13 @@ export class DatabaseStorage implements IStorage {
     // Check if payment already confirmed
     if (ride.paymentStatus === "paid_cash") {
       throw new Error("Payment has already been confirmed");
+    }
+
+    // Only a ride that was actually taken in cash is settled this way. Cash is
+    // discontinued, so this serves rides booked before the change and must
+    // never be a way to mark a card ride paid without charging the card.
+    if (!isDiscontinuedPaymentMethod(ride.paymentMethod)) {
+      throw new Error("This ride is not paid in cash; it settles on the card the rider booked with.");
     }
 
     const updateData: any = {
@@ -3835,6 +3850,10 @@ export class DatabaseStorage implements IStorage {
     platformShareCollected: number;
     platformShareUncollected: number;
     driverShare: number;
+    /** Rides taken in cash before it was discontinued, not yet confirmed by their driver. */
+    cashRidesUnsettled: number;
+    /** Rides taken in cash at all this year, so the tail can be watched out. */
+    cashRides: number;
   }> {
     const yearStart = new Date(year || new Date().getFullYear(), 0, 1);
     const yearEnd = new Date((year || new Date().getFullYear()) + 1, 0, 1);
@@ -3868,6 +3887,10 @@ export class DatabaseStorage implements IStorage {
 
     let totalFares = 0, totalTips = 0, totalCancelFees = 0;
     let platformShare = 0, platformShareCollected = 0, driverShare = 0;
+    // Cash is discontinued (shared/paymentMethods.ts). These two say how much
+    // of that tail is left: how many cash rides there were this year, and how
+    // many of them a driver has still not confirmed the money for.
+    let cashRides = 0, cashRidesUnsettled = 0;
     for (const r of completedRides) {
       totalFares += parseFloat(r.fare || "0");
       totalTips += parseFloat(r.tip || "0");
@@ -3884,6 +3907,10 @@ export class DatabaseStorage implements IStorage {
         ? r.paymentStatus === "paid_card"
         : r.paymentMethod === "invoice" ? r.billedStatus === "paid" : false;
       if (collected) platformShareCollected += fee;
+      if (isDiscontinuedPaymentMethod(r.paymentMethod)) {
+        cashRides += 1;
+        if (r.paymentStatus !== "paid_cash") cashRidesUnsettled += 1;
+      }
     }
     for (const r of cancelledWithFeeRides) {
       totalCancelFees += parseFloat(r.cancelFee || "0");
@@ -3900,6 +3927,8 @@ export class DatabaseStorage implements IStorage {
       platformShareCollected: round2(platformShareCollected),
       platformShareUncollected: round2(platformShare - platformShareCollected),
       driverShare: round2(driverShare),
+      cashRides,
+      cashRidesUnsettled,
     };
   }
 

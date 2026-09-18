@@ -67,7 +67,7 @@ export function tipRefusal(ride: TippableRide, now: Date = new Date()): TipRefus
 export function describeTipRefusal(why: TipRefusal): string {
   switch (why) {
     case "not_completed": return "You can tip once the ride is completed.";
-    case "not_card": return "Tips on a cash ride are handed to the driver.";
+    case "not_card": return "This ride is not paid by card, so a tip cannot be added here.";
     case "no_driver": return "This ride had no driver to tip.";
     case "not_settled": return "This ride's payment is still being sorted out. You can tip once it has gone through.";
     case "refunded": return "This ride was refunded, so it does not take a tip.";
