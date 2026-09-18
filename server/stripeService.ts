@@ -140,6 +140,26 @@ export class StripeService {
     });
   }
 
+  /**
+   * A tip after the ride: its own off-session charge on the card on file,
+   * never folded into the fare. Idempotent per ride on Stripe's side; the
+   * once-per-ride guarantee is the ledger (storage.recordRideTipOnce).
+   */
+  async chargeTip(params: { amount: number; customerId: string; paymentMethodId: string; rideId: string; riderId: string }): Promise<Stripe.PaymentIntent> {
+    const { amount, customerId, paymentMethodId, rideId, riderId } = params;
+    return await requireStripe().paymentIntents.create({
+      amount: Math.round(amount * 100),
+      currency: "usd",
+      customer: customerId,
+      payment_method: paymentMethodId,
+      capture_method: 'automatic',
+      confirm: true,
+      off_session: true,
+      description: "PG Ride tip for your driver",
+      metadata: { rideId, riderId, type: 'tip' },
+    }, { idempotencyKey: `ride_tip_${rideId}` });
+  }
+
   async capturePaymentIntent(paymentIntentId: string, amountToCapture?: number): Promise<Stripe.PaymentIntent> {
     const captureParams: Stripe.PaymentIntentCaptureParams = {};
     if (amountToCapture !== undefined) {

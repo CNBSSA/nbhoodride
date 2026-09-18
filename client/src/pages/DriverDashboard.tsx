@@ -525,6 +525,14 @@ export default function DriverDashboard() {
         description: "A ride has been cancelled by the rider.",
         variant: "destructive",
       });
+    } else if (lastMessage.type === 'tip_received') {
+      // A rider tipped after a card ride: all of it is the driver's, and it
+      // is in their wallet already (shared/tipPolicy.ts).
+      queryClient.invalidateQueries({ queryKey: ["/api/driver/earnings/today"] });
+      toast({
+        title: "You got a tip",
+        description: String(lastMessage.message ?? `A rider tipped you $${Number(lastMessage.amount ?? 0).toFixed(2)}.`),
+      });
     }
   }, [lastMessage, user?.id, refetchPendingRides, refetchActiveRides, refetchScheduledRides, queryClient, toast]);
 

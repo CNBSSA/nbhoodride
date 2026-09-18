@@ -187,6 +187,7 @@ import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadge
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
+import { TIP_MAX, TIP_MIN, describeTipRefusal, normalizeTip, tipRefusal } from "@shared/tipPolicy";
 
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
@@ -5177,6 +5178,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching ride:", error);
       res.status(500).json({ message: "Failed to fetch ride" });
+    }
+  });
+
+  // A tip after a card ride (shared/tipPolicy.ts): the rider's own charge on
+  // the card on file, once per ride, all of it to the driver. The card is
+  // charged before anything is written, and the write is locked per ride,
+  // so a double tap or a retry can neither charge twice nor pay twice —
+  // Stripe's idempotency key returns the first charge, the ledger refuses
+  // a second credit.
+  app.post('/api/rides/:rideId/tip', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const amount = normalizeTip(req.body?.amount);
+      if (amount === null) {
+        return res.status(400).json({ message: `A tip is between $${TIP_MIN} and $${TIP_MAX}.` });
+      }
+      const ride = await storage.getRide(rideId);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+      if (ride.riderId !== userId) return res.status(403).json({ message: "Only the rider can tip for this ride." });
+      const why = tipRefusal(ride);
+      if (why) return res.status(why === "already_tipped" ? 409 : 400).json({ message: describeTipRefusal(why), reason: why });
+      if (await storage.hasWalletTransaction(rideId, "tip")) {
+        return res.status(409).json({ message: describeTipRefusal("already_tipped"), reason: "already_tipped" });
+      }
+      const rider = await storage.getUser(userId);
+      if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
+        return res.status(400).json({ message: "Add a card in Payments first, then tip." });
+      }
+      if (!stripeService.isEnabled) {
+        return res.status(503).json({ message: "Tips are not available right now. Please try again later." });
+      }
+
+      let intentId: string;
+      try {
+        const intent = await stripeService.chargeTip({ amount, customerId: rider.stripeCustomerId, paymentMethodId: rider.stripePaymentMethodId, rideId, riderId: userId });
+        if (intent.status !== "succeeded") {
+          console.warn(`[tip] ride ${rideId}: charge ${intent.id} is ${intent.status}, not recorded`);
+          return res.status(402).json({ message: "Your card did not go through. Try another card in Payments." });
+        }
+        intentId = intent.id;
+      } catch (chargeErr: any) {
+        const declined = chargeErr?.type === "StripeCardError";
+        console.error(`[tip] ride ${rideId}: charge failed (${chargeErr?.type ?? "unknown"}):`, chargeErr?.message ?? chargeErr);
+        return res.status(declined ? 402 : 503).json({
+          message: declined ? "Your card was declined. Try another card in Payments." : "Tips are not available right now. Please try again later.",
+        });
+      }
+
+      const recorded = await storage.recordRideTipOnce(rideId, ride.driverId!, amount);
+      await logRideAudit({ rideId, event: "tip_added", actorId: userId, details: { amount, intentId, recorded } });
+      if (!recorded) {
+        // The charge is the same one (idempotency key) and the driver was paid
+        // by the request that got there first.
+        return res.status(409).json({ message: describeTipRefusal("already_tipped"), reason: "already_tipped" });
+      }
+      console.log(`[tip] ride ${rideId.slice(0, 8)}: rider tipped $${amount.toFixed(2)} → driver ${ride.driverId} (charge ${intentId})`);
+      const driverWs = ride.driverId ? activeConnections.get(ride.driverId) : undefined;
+      if (driverWs?.readyState === WebSocket.OPEN) {
+        driverWs.send(JSON.stringify({ type: "tip_received", rideId, amount, message: `${rider.firstName || "Your rider"} tipped you $${amount.toFixed(2)}. All of it is yours.` }));
+      }
+      res.json({ success: true, rideId, tipAmount: amount });
+    } catch (error) {
+      console.error("[tip] failed:", error);
+      res.status(500).json({ message: "Could not add the tip." });
     }
   });
 
