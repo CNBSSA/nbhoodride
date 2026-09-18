@@ -159,7 +159,7 @@ export async function run({ base, db }) {
   const promoDelta = Number(afterB.json?.fare) - Number(beforeB.json?.fare ?? 0);
   check("and their earnings screen shows the whole $19.73, not the discounted share", Math.abs(promoDelta - 19.73) < 0.011, `fare +${promoDelta.toFixed(2)}`);
 
-  section("Which discounts are PG Ride's: a plan rate is, a shared seat is not");
+  section("Which discounts are PG Ride's: a shared seat is not, and a label is not a plan");
   const seedTyped = async (rideType, original, quoted) => {
     const { rows: [r] } = await db.query(
       `INSERT INTO rides (rider_id, driver_id, status, pickup_location, destination_location, estimated_fare, original_fare, ride_type, payment_method)
@@ -167,15 +167,14 @@ export async function run({ base, db }) {
       [FIXTURES.rider.id, FIXTURES.driver.id, loc(PICKUP), loc(DEST), quoted, original, rideType]);
     return r.id;
   };
-  // A weekly plan takes 10% off a $25.00 trip: the rider pays $22.50, the
-  // driver drove one ordinary trip and is paid on the $25.00 — the plan rate
-  // is what PG Ride spends to keep a rider, not the driver's to fund.
-  const planRide = await seedTyped("weekly_plan", "25.00", "22.50");
+  // A ride that merely SAYS it is a plan ride, with an originalFare nobody's
+  // plan wrote, is paid on what the rider paid: a plan rate is only a plan
+  // rate when a plan booked the ride (journey 09 completes a real one).
+  const planRide = await seedTyped("weekly_plan", "500.00", "22.50");
   await driver.req("POST", `/api/driver/rides/${planRide}/start`);
   const donePlan = await driver.req("POST", `/api/driver/rides/${planRide}/complete`, {});
-  check("a plan ride charges the plan price", donePlan.status === 200 && Number(donePlan.json?.actualFare) === 22.5, `actualFare=${donePlan.json?.actualFare}`);
-  check("and pays the driver 85% of the full fare: $21.25", Number(donePlan.json?.driverEarnings) === 21.25, `driverEarnings=${donePlan.json?.driverEarnings}`);
-  check("PG Ride's share carries the plan discount: $1.25", Number(donePlan.json?.platformFee) === 1.25, `platformFee=${donePlan.json?.platformFee}`);
+  check("a ride only labelled as a plan ride charges its fare", donePlan.status === 200 && Number(donePlan.json?.actualFare) === 22.5, `actualFare=${donePlan.json?.actualFare}`);
+  check("and pays the driver on that fare, not on a number nobody's plan wrote: $19.12", Number(donePlan.json?.driverEarnings) === 19.12 && Number(donePlan.json?.platformFee) === 3.38, `driverEarnings=${donePlan.json?.driverEarnings} platformFee=${donePlan.json?.platformFee}`);
   // A coworker seat is a rate: three seats at 70% in one drive. The driver is
   // paid 85% of each seat, as a shared trip is priced everywhere.
   const seatRide = await seedTyped("shared_schedule", "23.21", "16.25");

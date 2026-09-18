@@ -30,6 +30,8 @@
  *                            and carries several seats in one drive.
  */
 
+import { WEEKLY_PLAN_DISCOUNT } from "./weeklyPlan";
+
 export const PLATFORM_SHARE = 0.15;
 export const DRIVER_SHARE = 1 - PLATFORM_SHARE;
 
@@ -116,7 +118,13 @@ export function driverBasisFor(input: DriverBasisInput): number {
   if (input.basis === "explicit") return charged;
   const quoted = round2(num(input.quotedFare));
   const original = round2(num(input.originalFare));
-  const planDiscount = platformAbsorbsRate(input.rideType) && original > quoted ? round2(original - quoted) : 0;
+  // The plan discount is what the plan actually gives (shared/weeklyPlan.ts),
+  // never more: originalFare is a stored number, and a basis must not be
+  // something a client could have named.
+  const planDiscountCeiling = round2(quoted * WEEKLY_PLAN_DISCOUNT / (1 - WEEKLY_PLAN_DISCOUNT));
+  const planDiscount = platformAbsorbsRate(input.rideType) && original > quoted
+    ? Math.min(round2(original - quoted), planDiscountCeiling)
+    : 0;
   const promo = round2(num(input.promoDiscount));
   if (promo + planDiscount <= 0) return charged;
   // What the rider was quoted before anything PG Ride absorbs came off.

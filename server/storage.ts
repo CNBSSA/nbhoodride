@@ -2128,7 +2128,9 @@ export class DatabaseStorage implements IStorage {
       basis: resolved?.basis ?? "quoted",
       quotedFare: ride.estimatedFare,
       originalFare: ride.originalFare,
-      rideType: ride.rideType,
+      // A plan rate is only a plan rate when a plan booked the ride
+      // (server/weeklyPlans.ts is the one writer of planId).
+      rideType: (ride as any).planId ? ride.rideType : null,
       promoDiscount: ride.promoDiscountApplied,
       meteredGross,
       meteredUnscaled,
@@ -2140,13 +2142,19 @@ export class DatabaseStorage implements IStorage {
     updateData.platformFee = split.platformFee.toFixed(2);
     updateData.driverEarnings = split.driverEarnings.toFixed(2);
 
-    // Update ride status to completed
+    // Update ride status to completed — only from in_progress, so two
+    // completions racing (Complete and an early end) finish the ride once
+    // and only the winner goes on to pay the driver.
     const [updatedRide] = await db
       .update(rides)
       .set(updateData)
-      .where(eq(rides.id, rideId))
+      .where(and(eq(rides.id, rideId), eq(rides.status, "in_progress")))
       .returning();
-    
+    if (!updatedRide) {
+      const now = await this.getRide(rideId);
+      throw new Error("Ride cannot be completed. Current status: " + (now?.status ?? "unknown"));
+    }
+
     return updatedRide;
   }
 

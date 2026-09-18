@@ -188,6 +188,20 @@ import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
 
+// Ride columns a booking request may never set: money, splits, links to a
+// plan or group, and state. The server writes every one of them itself.
+const SERVER_OWNED_RIDE_FIELDS = [
+  "originalFare", "promoDiscountApplied", "sharedFareDiscount", "groupDiscountAmount",
+  "groupId", "planId", "actualFare", "driverEarnings", "platformFee", "tipAmount",
+  "cancellationFee", "cancellationReason", "cancelledBy", "cancelledByRole", "refundedAmount",
+  "status", "paymentStatus", "paymentMethod", "stripePaymentIntentId", "cashReceivedAt", "paidBy",
+  "riderId", "riderRating", "driverRating", "riderReview", "driverReview",
+  "acceptedAt", "startedAt", "arrivedAt", "completedAt", "reminderStamps", "routePath",
+  "driverTraveledDistance", "driverTraveledTime", "vehicleFareMultiplier", "pickupCounty",
+] as const;
+// The ride types a rider may choose at booking; anything else books as solo.
+const RIDER_PICKABLE_RIDE_TYPES = new Set(["solo", "multi_stop", "shared_schedule"]);
+
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
 let _anthropic: Anthropic | null = null;
@@ -3272,8 +3286,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // driver as success so the driver is never trapped on a finished trip.
         const existing = await storage.getRide(rideId);
         if (existing && existing.status === "completed" && existing.driverId === userId) {
-          // A retry after a crash between completion and the receiver's text still sends it (once; the text stamps itself).
-          if (existing.paymentMethod === 'invoice') import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch(() => {});
+          // A retry after a crash between completion and the receiver's text still sends it (once; the text stamps itself),
+          // and still pays the driver (once; the ledger refuses a second credit).
+          if (existing.paymentMethod === 'invoice') {
+            import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch(() => {});
+            await payCommercialDriverForCompletedRide(existing);
+          }
           return res.json(existing);
         }
         throw err;
@@ -3981,15 +3999,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: validation.error });
       }
 
+      // What a rider may say about a ride is where, when, for whom and in
+      // what car. Everything that carries money or a state is the server's:
+      // a body that names its own originalFare, promo, plan, group, split or
+      // status is ignored on those keys (post-implementation audit,
+      // 2026-09-18 — the driver's pay basis reads originalFare, so it must
+      // never be a number a client chose).
+      const clientBody: any = { ...(req.body ?? {}) };
+      for (const key of SERVER_OWNED_RIDE_FIELDS) delete clientBody[key];
+      const clientRideType = typeof req.body?.rideType === 'string' && RIDER_PICKABLE_RIDE_TYPES.has(req.body.rideType) ? req.body.rideType : 'solo';
+
       // Convert numeric fare to string for decimal field
       const bodyData = {
-        ...req.body,
+        ...clientBody,
         paymentMethod: 'card', // Force virtual card payment
         bookedForFriend,
         passengerName: bookedForFriend ? passengerName : undefined,
         passengerPhone: bookedForFriend ? passengerPhone : undefined,
         requestedVehicleType,
-        rideType: bookedForFriend ? 'friend' : (req.body.rideType ?? 'solo'),
+        rideType: bookedForFriend ? 'friend' : clientRideType,
         // "No driver chosen" arrives as an empty string from the schedule
         // modal — normalize it away or the insert trips the users FK.
         driverId: req.body.driverId || undefined,

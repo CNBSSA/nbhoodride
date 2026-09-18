@@ -111,6 +111,12 @@ describe("driverBasisFor: which discounts are PG Ride's", () => {
     expect(driverBasisFor({ charged: 7, basis: "metered", quotedFare: "23.21", promoDiscount: "5.00", meteredGross: 12, meteredUnscaled: 12 })).toBe(12);
   });
 
+  it("never pays more than the plan's own discount, whatever originalFare says", () => {
+    // A $22.50 plan fare can only have come from a $25.00 trip at 10% off.
+    expect(driverBasisFor({ charged: 22.5, basis: "quoted", quotedFare: "22.50", originalFare: "500.00", rideType: "weekly_plan" })).toBe(25);
+    expect(driverBasisFor({ charged: 20, basis: "quoted", quotedFare: "20.00", originalFare: "500.00", rideType: "weekly_plan" })).toBe(22.22);
+  });
+
   it("is never below what the rider paid", () => {
     expect(driverBasisFor({ charged: 30, basis: "quoted", quotedFare: "22.50", originalFare: "25.00", rideType: "weekly_plan" })).toBe(30);
   });

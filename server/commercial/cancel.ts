@@ -10,7 +10,7 @@
  * A job already on the road cannot be cancelled here: the desk calls PG Ride.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 import { db } from "../db";
 import { commercialJobs, organizations, rides, type Ride } from "@shared/schema";
 import { orgTerms, organizationCancellationFee } from "@shared/commercialTerms";
@@ -46,6 +46,9 @@ export async function cancelJob(organizationId: string, jobId: string, actorUser
   const charged = organizationCancellationFee({ scheduledAt: ride.scheduledAt, driverId: ride.driverId }, orgTerms(row.org.terms), now);
   const feeText = charged.fee.toFixed(2);
 
+  // Cancelled once: the row moves out of an open status in one statement,
+  // so two desks (or the desk and the app) cancelling at the same moment
+  // write one cancel and pay the driver once.
   const [updated] = await db.update(rides).set({
     status: "cancelled",
     cancellationReason: String(reason || "Cancelled by the organization").slice(0, 300),
@@ -53,7 +56,12 @@ export async function cancelJob(organizationId: string, jobId: string, actorUser
     cancelledBy: actorUserId,
     cancelledByRole: "rider",
     updatedAt: now,
-  } as any).where(eq(rides.id, ride.id)).returning();
+  } as any).where(and(eq(rides.id, ride.id), notInArray(rides.status, ["in_progress", "completed", "cancelled", "no_show"]))).returning();
+  if (!updated) {
+    const [again] = await db.select({ status: rides.status }).from(rides).where(eq(rides.id, ride.id));
+    if (again?.status === "in_progress") throw new CommercialError("This job is on the road. Call PG Ride to change it.", 409);
+    throw new CommercialError(`This job is already ${(again?.status ?? "").replace("_", " ")}.`, 409);
+  }
   await db.update(commercialJobs).set({ cancellationFee: feeText }).where(eq(commercialJobs.id, jobId));
   // An open approval link is closed so nobody answers for a job that will
   // not happen (shared/recipientApproval.ts).
