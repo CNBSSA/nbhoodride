@@ -2764,17 +2764,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // requester's own wallet to cover it, which is what the rider ladder
       // would do. It is paged instead (rates audit, 2026-09-18).
       const billedToOrganization = ride.paymentMethod === 'invoice' && commercialNoShowFee !== null;
-      if (ride.paymentMethod === 'invoice' && commercialNoShowFee === null) {
+      const commercialFeeUnwritten = ride.paymentMethod === 'invoice' && commercialNoShowFee === null;
+      if (commercialFeeUnwritten) {
         opsAlert(formatOpsAlert("🏢 Commercial no-show not billed", [
           ["Ride", rideId.slice(0, 8)],
           ["Driver", userId],
           ["Why", "the organization's no-show fee could not be written to the job"],
-          ["Fix", "Put the fee on the account's statement by hand, and pay the driver their cut"],
+          ["Driver", `paid the ordinary cut of $${RIDER_NO_SHOW_FEE.toFixed(2)} from PG Ride's float; they drove there and waited`],
+          ["Fix", "Put the account's own fee on its statement by hand"],
         ]));
       }
       const noShowFee = commercialNoShowFee ?? (ride.paymentMethod === 'invoice' ? 0 : RIDER_NO_SHOW_FEE);
       const collected = ride.paymentMethod === 'invoice' ? 0 : await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE);
-      const split = await routeFeeWithFairnessSplit(commercialNoShowFee ?? collected, userId, rideId);
+      // The driver drove there and waited. What they are paid does not hang on
+      // a billing write succeeding: when the account's fee could not be
+      // recorded, PG Ride carries the ordinary cut out of its own float and
+      // sorts the account's statement out afterwards (post-implementation
+      // audit, 2026-09-18 — the same rule as every other commercial payment).
+      const splitOn = commercialFeeUnwritten ? RIDER_NO_SHOW_FEE : (commercialNoShowFee ?? collected);
+      const split = await routeFeeWithFairnessSplit(splitOn, userId, rideId);
       const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
       if (ride.paymentMethod === 'invoice') {
