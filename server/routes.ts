@@ -3133,21 +3133,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const rideId = ride.id;
     // An invoice ride is a commercial job or it is nothing: with no job there
     // is no organization to bill, so nobody pays the driver's share but
-    // PG Ride. Page it; do not pay it.
-    const job = await commercialJobForRide(rideId).catch(() => null);
-    if (!job) {
-      console.error(`[complete] invoice ride ${rideId} has no commercial job — driver not paid from PG Ride's float`);
-      opsAlert(formatOpsAlert("💸 Invoice ride with no job", [
-        ["Ride", rideId.slice(0, 8)],
-        ["Driver", ride.driverId ?? "—"],
-        ["Why", "paymentMethod is invoice but no commercial_jobs row exists; nobody is billed for it"],
-        ["Fix", "Decide who pays, then credit the driver by hand in the admin wallet panel"],
-      ]));
-      return;
-    }
+    // PG Ride. Paged below; never paid.
     const waiting = await recordWaitingForCompletedRide(rideId)
       .catch((err) => { console.error(`[complete] waiting charge failed for ride ${rideId}:`, err); return null; });
     try {
+      // The job lookup itself may fail (database); that is the ordinary
+      // "driver not paid" page below with the real error, not "no job".
+      const job = await commercialJobForRide(rideId);
+      if (!job) {
+        console.error(`[complete] invoice ride ${rideId} has no commercial job — driver not paid from PG Ride's float`);
+        opsAlert(formatOpsAlert("💸 Invoice ride with no job", [
+          ["Ride", rideId.slice(0, 8)],
+          ["Driver", ride.driverId ?? "—"],
+          ["Why", "paymentMethod is invoice but no commercial_jobs row exists; nobody is billed for it"],
+          ["Fix", "Decide who pays, then credit the driver by hand in the admin wallet panel"],
+        ]));
+        return;
+      }
       await payDriverForCompletedJob(storage, ride);
       if (waiting && waiting.waitFee > 0) await payDriverForWaiting(storage, ride, waiting.waitFee);
     } catch (payErr) {
