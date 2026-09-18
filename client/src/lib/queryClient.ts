@@ -88,7 +88,7 @@ function handleAuthError(error: unknown) {
   const path = window.location.pathname;
   if (path.startsWith("/login") || path.startsWith("/signup") ||
       path.startsWith("/forgot-password") || path.startsWith("/reset-password") ||
-      path.startsWith("/org/login") || path.startsWith("/org/join")) {
+      path.startsWith("/org/login") || path.startsWith("/org/join") || path.startsWith("/approve/") || path.startsWith("/delivered/")) {
     return;
   }
   if (redirectingForAuth) return;

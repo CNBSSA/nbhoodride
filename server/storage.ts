@@ -1231,6 +1231,9 @@ export class DatabaseStorage implements IStorage {
       isNotNull(rides.scheduledAt),
       gt(rides.scheduledAt, sql`now()`),
       sql`${rides.driverId} IS NULL`,
+      // A delivery the recipient must approve is HELD until they do, or
+      // the shop sends it anyway (shared/recipientApproval.ts).
+      sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${rides.id} AND h.recipient_approval IN ('awaiting', 'declined'))`,
       // Circuit seats are claimed as a whole RUN via the circuit-runs claim
       // board — listing them individually here would let one driver claim a
       // single seat and split the run.
@@ -1336,7 +1339,10 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(rides.id, rideId),
-          sql`${rides.driverId} IS NULL`
+          sql`${rides.driverId} IS NULL`,
+          // A held delivery cannot be claimed, whatever board or push the
+          // driver saw it on (shared/recipientApproval.ts).
+          sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${rides.id} AND h.recipient_approval IN ('awaiting', 'declined'))`
         )
       )
       .returning();
@@ -3212,7 +3218,23 @@ export class DatabaseStorage implements IStorage {
   }
 
   async adminUpdateUser(userId: string, updates: Partial<{ isAdmin: boolean; isSuperAdmin: boolean; isApproved: boolean; approvedBy: string; isSuspended: boolean; isVerified: boolean; isDriver: boolean }>): Promise<User> {
+    // Flags arrive from admin routes as-is; a string "true" must mean true
+    // here as much as it does to the database (post-implementation audit).
+    for (const k of ["isAdmin", "isSuperAdmin", "isApproved", "isSuspended", "isVerified", "isDriver"] as const) {
+      if (updates[k] !== undefined && typeof updates[k] !== "boolean") (updates as any)[k] = String(updates[k]) === "true" || String(updates[k]) === "1";
+    }
+    const revoking = updates.isApproved === false || updates.isSuspended === true;
+    const endSessions = async () => {
+      // Revoking approval or suspending ends every session the person holds,
+      // on every device, at once (standard practice, 2026-09-17): a revoked
+      // account does not keep working until its cookie happens to expire.
+      // After the row is written, so a login that lands in between cannot survive.
+      await db.execute(sql`DELETE FROM sessions WHERE sess->>'userId' = ${userId} OR sess->>'testUserId' = ${userId}`)
+        .then(() => console.log(`[AUDIT] sessions_ended userId=${userId} reason=${updates.isSuspended ? "suspended" : "approval_revoked"}`))
+        .catch((err) => console.error(`[AUDIT] could not end sessions for ${userId}:`, err));
+    };
     const [user] = await db.update(users).set({ ...updates, updatedAt: new Date() }).where(eq(users.id, userId)).returning();
+    if (revoking) await endSessions();
     return user;
   }
 

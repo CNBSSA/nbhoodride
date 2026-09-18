@@ -98,6 +98,7 @@ export async function collectRiderPromiseMetrics(window: ReviewWindow, now: Date
     FROM rides
     WHERE status = 'pending' AND driver_id IS NULL
       AND scheduled_at IS NOT NULL AND scheduled_at > ${now} AND scheduled_at <= ${horizon}
+      AND NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = rides.id AND h.recipient_approval IN ('awaiting', 'declined'))
   `);
   const a = (ahead.rows?.[0] ?? {}) as Record<string, unknown>;
   const plans = await db.execute(sql`SELECT count(*)::int AS n FROM weekly_ride_plans WHERE is_active`);

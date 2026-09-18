@@ -20,7 +20,7 @@
 import { chromium } from "playwright";
 import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { connectDb, seedFixtures, startServer, stopServer, FIXTURES, PASSWORD, check, section, summary, E2E_INVITE_TOKEN } from "./harness.mjs";
+import { connectDb, seedFixtures, startServer, stopServer, FIXTURES, PASSWORD, check, section, summary, E2E_INVITE_TOKEN, E2E_APPROVAL_TOKEN, E2E_DELIVERED_TOKEN } from "./harness.mjs";
 
 const VIEWPORT = { width: 390, height: 844 };
 const executablePath = process.env.PW_CHROMIUM_PATH || undefined;
@@ -50,6 +50,10 @@ const SCREENS = [
   { role: "visitor", path: "/org/login" }, { role: "visitor", path: "/org" }, { role: "visitor", path: `/org/join/${E2E_INVITE_TOKEN}` },
   // A link that is the right shape but matches nothing: the "invitation not found" state and its way to the sign-in.
   { role: "visitor", path: `/org/join/${"0".repeat(48)}` },
+  // A delivery waiting for the recipient's approval (2026-09-17): the page from the text.
+  { role: "visitor", path: `/approve/${E2E_APPROVAL_TOKEN}` },
+  // The receiver's "delivered" page (2026-09-17).
+  { role: "visitor", path: `/delivered/${E2E_DELIVERED_TOKEN}` },
   { role: "visitor", path: "/forgot-password" }, { role: "visitor", path: "/terms" }, { role: "visitor", path: "/privacy" },
   { role: "rider", path: "/" }, { role: "rider", path: "/ratings" }, { role: "rider", path: "/payments" }, { role: "rider", path: "/card-setup" },
   { role: "driver", path: "/" }, { role: "driver", path: "/driver/insights" },

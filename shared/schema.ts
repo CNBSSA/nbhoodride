@@ -938,6 +938,8 @@ export const organizations = pgTable("organizations", {
   defaultPaymentMethodKind: varchar("default_payment_method_kind"),
   /** Cancellation / no-show terms, per agreement (slice 3). */
   terms: jsonb("terms").$type<Record<string, unknown>>(),
+  /** Whether the parcel form starts with "ask the recipient to approve the delivery fee first" (shared/recipientApproval.ts). */
+  askRecipientByDefault: boolean("ask_recipient_by_default").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -974,6 +976,27 @@ export const organizationInvitations = pgTable("organization_invitations", {
 ]);
 export type OrganizationInvitation = typeof organizationInvitations.$inferSelect;
 
+/** The recipient book: people an organization sends parcels to again and again (shared/recipients.ts). */
+export const organizationRecipients = pgTable("organization_recipients", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  name: varchar("name").notNull(),
+  /** Ten digits, or null. */
+  phone: varchar("phone"),
+  address: jsonb("address").$type<{ lat: number; lng: number; address: string }>().notNull(),
+  /** person | reception | unattended (shared/deliveries.ts). */
+  handover: varchar("handover").notNull().default("person"),
+  note: text("note"),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  archivedAt: timestamp("archived_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_organization_recipients_org").on(table.organizationId),
+  uniqueIndex("uq_organization_recipient_phone").on(table.organizationId, table.phone).where(sql`phone IS NOT NULL`),
+]);
+export type OrganizationRecipient = typeof organizationRecipients.$inferSelect;
+
 export const commercialJobs = pgTable("commercial_jobs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   rideId: varchar("ride_id").notNull().unique().references(() => rides.id),
@@ -993,6 +1016,17 @@ export const commercialJobs = pgTable("commercial_jobs", {
   parcelSize: varchar("parcel_size"),
   /** person | reception | unattended — how the parcel changes hands, which decides the proof (shared/deliveries.ts). */
   handover: varchar("handover"),
+  /** none | awaiting | approved | declined | expired | cancelled — the recipient's answer to the delivery fee (shared/recipientApproval.ts). No money moves. */
+  recipientApproval: varchar("recipient_approval").notNull().default("none"),
+  /** The link the recipient answers from: /approve/<token>. Known to the desk that booked it. */
+  recipientApprovalToken: varchar("recipient_approval_token"),
+  /** The delivery fee shown to the recipient, frozen at booking. */
+  recipientFee: decimal("recipient_fee", { precision: 8, scale: 2 }),
+  recipientApprovedAt: timestamp("recipient_approved_at"),
+  /** The link the receiver opens from the "delivered" text: /delivered/<token> (server/commercial/delivered.ts). */
+  proofShareToken: varchar("proof_share_token"),
+  recipientNudgedAt: timestamp("recipient_nudged_at"),
+  shopAskedAt: timestamp("shop_asked_at"),
   pickupContact: jsonb("pickup_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
   dropContact: jsonb("drop_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
   windowStart: timestamp("window_start"),
@@ -1012,6 +1046,8 @@ export const commercialJobs = pgTable("commercial_jobs", {
   statementId: varchar("statement_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
+  index("idx_commercial_jobs_recipient_token").on(table.recipientApprovalToken),
+  index("idx_commercial_jobs_proof_share_token").on(table.proofShareToken),
   index("idx_commercial_jobs_org").on(table.organizationId),
   // One job per standing order, service date and leg: the sweep can run as
   // often as it likes and never books the same trip twice.
@@ -1066,6 +1102,13 @@ export const commercialStandingOrders = pgTable("commercial_standing_orders", {
   vehicleType: varchar("vehicle_type").notNull().default("standard"),
   notes: text("notes"),
   poNumber: varchar("po_number"),
+  /** ride | delivery — a standing delivery books a parcel each service day (slice 4 of the delivery plan, 2026-09-17). */
+  kind: varchar("kind").notNull().default("ride"),
+  parcelSize: varchar("parcel_size"),
+  handover: varchar("handover"),
+  pickupContact: jsonb("pickup_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
+  dropContact: jsonb("drop_contact").$type<{ name: string; phone?: string | null; note?: string | null }>(),
+  windowHours: integer("window_hours"),
   isActive: boolean("is_active").notNull().default(true),
   pausedAt: timestamp("paused_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

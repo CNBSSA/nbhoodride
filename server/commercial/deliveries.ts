@@ -12,6 +12,7 @@
  * uses; a delivery additionally wants a photo.
  */
 
+import { randomBytes } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "../db";
 import { commercialJobs, organizations } from "@shared/schema";
@@ -33,6 +34,8 @@ export interface BookDeliveryInput extends DeliveryInput {
   poNumber?: string | null;
   /** person | reception | unattended (shared/deliveries.ts). */
   handover?: string | null;
+  /** Ask the recipient to approve the delivery fee before it is sent (shared/recipientApproval.ts). Needs the recipient's phone. */
+  askRecipient?: boolean | null;
 }
 
 const contact = (c: Contact | undefined | null): Contact | null => {
@@ -45,7 +48,8 @@ const contact = (c: Contact | undefined | null): Contact | null => {
   };
 };
 
-export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, now: Date = new Date()): Promise<BookedJob> {
+/** `standing` is set only by the standing-order sweep, never from a request body (post-implementation audit, 2026-09-17). */
+export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, now: Date = new Date(), standing?: { orderId: string; serviceDate?: string | null; leg: "out" | "return" }): Promise<BookedJob> {
   const org = await getOrganization(input.organizationId);
   if (!org) throw new CommercialError("Organization not found.", 404);
   if (!categoryMayBook(org.category, "delivery")) {
@@ -56,12 +60,22 @@ export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, 
   const pickupContact = contact(input.pickupContact);
   const dropContact = contact(input.dropContact);
   if (!pickupContact || !dropContact) throw new CommercialError("Both ends of the handover need a name.");
+  const askRecipient = input.askRecipient === true;
+  if (askRecipient && !dropContact.phone) throw new CommercialError("The recipient's phone number is needed to ask them: that is where the link goes.");
 
   const size = String(input.parcelSize);
   const vehicleType = input.vehicleType ?? (isParcelSize(size) ? SIZE_VEHICLE_HINT[size] : "standard");
   const route = estimateRoute([input.pickup, input.destination]);
   const fare = deliveryFare(route.miles);
 
+  const handover = handoverOf(input.handover);
+  // Ask the recipient: the hold is written with the parcel, in the same
+  // transaction as the job, so a job never exists open to drivers while the
+  // desk was told the recipient would be asked. The text goes out afterwards
+  // (server/commercial/recipientApproval.ts).
+  const recipientFields = askRecipient
+    ? { recipientApproval: "awaiting", recipientApprovalToken: randomBytes(24).toString("hex"), recipientFee: fare.toFixed(2) }
+    : {};
   const booked = await bookJob(storage, {
     organizationId: org.id,
     requesterId: input.requesterId,
@@ -77,17 +91,10 @@ export async function bookDelivery(storage: IStorage, input: BookDeliveryInput, 
     poNumber: input.poNumber,
     allowShortLead: true,
     fareOverride: fare,
+    standing,
+    delivery: { parcelSize: size, handover, pickupContact, dropContact, windowStart: checked.window.start, windowEnd: checked.window.end, ...recipientFields },
   }, now);
-
-  const handover = handoverOf(input.handover);
-  const [job] = await db.update(commercialJobs).set({
-    parcelSize: size,
-    handover,
-    pickupContact,
-    dropContact,
-    windowStart: checked.window.start,
-    windowEnd: checked.window.end,
-  }).where(eq(commercialJobs.id, booked.job.id)).returning();
+  const job = booked.job;
 
   console.log(`[commercial] delivery booked :: ${org.name} | job ${job.jobNumber} | ${describeParcel(size, dropContact.name)} | ${describeWindow(checked.window)} | $${fare.toFixed(2)}`);
   return { ...booked, job };

@@ -460,6 +460,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use('/api/auth/email-login', authLimiter);
   app.use('/api/auth/signup', authLimiter);
   app.use('/api/org/invitations', authLimiter);
+  app.use('/api/approve', authLimiter);
+  app.use('/api/delivered', authLimiter);
   app.use('/api/auth/forgot-password', authLimiter);
   app.use('/api/auth/reset-password', authLimiter);
   app.use('/api/auth/forgot-password-sms', authLimiter);
@@ -1448,6 +1450,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // A stored object that is not an image or a PDF is a download, never a
       // page: nothing a driver uploads can run in a desk's session.
       if (!/^(image\/|application\/pdf)/i.test(obj.contentType)) res.set("Content-Disposition", `attachment; filename="${obj.id}"`);
+      res.set("X-Content-Type-Options", "nosniff");
+      res.set("Content-Security-Policy", "sandbox");
       res.send(Buffer.from(obj.dataBase64, "base64"));
     } catch (error) {
       console.error("Error serving stored object:", error);
@@ -2748,6 +2752,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const split = await routeFeeWithFairnessSplit(commercialNoShowFee ?? collected, userId, rideId);
       const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
+      if (ride.paymentMethod === 'invoice') {
+        const { onCommercialRideEnded } = await import("./commercial/recipientApproval");
+        await onCommercialRideEnded(rideId, "the recipient was not there").catch((err) => console.error("[recipient-approval] no-show hook failed:", err));
+      }
 
       await logRideAudit({
         rideId,
@@ -3238,6 +3246,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // driver as success so the driver is never trapped on a finished trip.
         const existing = await storage.getRide(rideId);
         if (existing && existing.status === "completed" && existing.driverId === userId) {
+          // A retry after a crash between completion and the receiver's text still sends it (once; the text stamps itself).
+          if (existing.paymentMethod === 'invoice') import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch(() => {});
           return res.json(existing);
         }
         throw err;
@@ -3292,6 +3302,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (ride.paymentMethod === 'invoice') {
         const waiting = await recordWaitingForCompletedRide(rideId)
           .catch((err) => { console.error(`[complete] waiting charge failed for ride ${rideId}:`, err); return null; });
+        // The receiver is told it was delivered, with a link to the proof
+        // (server/commercial/delivered.ts). Best effort; never blocks.
+        import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch((err) => console.error("[delivered] text failed:", err));
         try {
           await payDriverForCompletedJob(storage, ride);
           if (waiting && waiting.waitFee > 0) await payDriverForWaiting(storage, ride, waiting.waitFee);
@@ -4521,6 +4534,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (gate) return res.status(409).json({ message: gate, needsProof: true });
         }
         const completed = await storage.completeRide(rideId, ride.driverId!, undefined, undefined, "metered");
+        if (ride.paymentMethod === "invoice") {
+          import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch((err) => console.error("[delivered] text failed:", err));
+        }
         await settleCardPaymentForCompletedRide(completed, undefined, 0);
         await storage.updateRide(rideId, {
           cancellationReason: reason || `Ride ended early by ${role}`,
@@ -6992,6 +7008,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (ws?.readyState === WebSocket.OPEN) ws.send(cancelMessage);
       }
 
+      if (ride.paymentMethod === 'invoice') {
+        const { onCommercialRideEnded } = await import("./commercial/recipientApproval");
+        await onCommercialRideEnded(rideId, "cancelled by PG Ride").catch((err) => console.error("[recipient-approval] admin cancel hook failed:", err));
+      }
       res.json({ success: true, ride: await storage.getRide(rideId) });
     } catch (error) {
       console.error("Error in admin ride cancellation:", error);
@@ -11143,6 +11163,16 @@ Generate the FAQ list.`;
         materializeAllStandingOrders(storage, now).catch((err) => console.error("standing order sweep failed:", err));
       }
 
+      // ── Recipient approval: nudge, ask the shop, give up (shared/recipientApproval.ts) ──
+      if (featureFlags.commercialEnabled) {
+        import("./commercial/recipientApproval").then((m) => m.sweepRecipientApproval(now, resolveAppUrl())).catch((err) => console.error("recipient-approval sweep failed:", err));
+      }
+
+      // ── Proof photos are kept 90 days, the record forever (standard practice, 2026-09-17) ──
+      if (featureFlags.commercialEnabled && now.getMinutes() === 41) {
+        import("./commercial/delivered").then((m) => m.retireOldProofPhotos(now)).catch((err) => console.error("proof photo retention failed:", err));
+      }
+
       // ── Proof photos still on a phone: page ops at 6 h, give up at 24 h ──
       if (featureFlags.commercialEnabled && now.getMinutes() === 7) {
         import("./commercial/badges").then((m) => m.sweepPendingProofPhotos(now)).catch((err) => console.error("pending proof photo sweep failed:", err));
@@ -11174,7 +11204,10 @@ Generate the FAQ list.`;
             _isNotNull(ridesT.scheduledAt),
             _gte(ridesT.scheduledAt, now),
             _lte(ridesT.scheduledAt, new Date(now.getTime() + 125 * 60 * 1000)),
-            _sql`${ridesT.status} IN ('pending', 'accepted')`
+            _sql`${ridesT.status} IN ('pending', 'accepted')`,
+            // A held delivery (recipient not yet approved) gets no driver
+            // re-broadcast and no "nobody has claimed" push (shared/recipientApproval.ts).
+            _sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${ridesT.id} AND h.recipient_approval IN ('awaiting', 'declined'))`
           )
         );
 

@@ -285,6 +285,16 @@
     "button-join-attach-existing": "shown only when the invited email already holds an account; journey 21 covers the path",
     "button-portal-copy-invite-*": "appears only in the desk session that just created the invitation; journey 21 covers the link",
     "button-proof-confirm-*": "inside the handover sheet, which needs an in-progress parcel on the driver's card; the layout audit stages one and journey 18 covers the rules",
-    "button-proof-cancel-*": "inside the handover sheet (see button-proof-confirm-*)"
+    "button-proof-cancel-*": "inside the handover sheet (see button-proof-confirm-*)",
+    "button-portal-send-anyway-*": "on the desk's job row for a held delivery, inside the All jobs tab; journey 22 covers it",
+    "button-portal-copy-approval-link-*": "on the desk's job row for a held delivery; journey 22 covers the link",
+    "button-portal-resend-approval-link-*": "on the desk's job row for a held delivery; journey 22 covers it",
+    "button-portal-ask-recipient-no": "inside the Billing tab for an owner; journey 22 covers the setting",
+    "button-portal-ask-recipient-yes": "inside the Billing tab for an owner; journey 22 covers the setting",
+    "button-approve-yes": "on the approval page, whichever answer the audit presses first changes the page so the other disappears; the layout audit measures both and journey 22 covers both answers",
+    "button-approve-no": "on the approval page, whichever answer the audit presses first changes the page so the other disappears; the layout audit measures both and journey 22 covers both answers",
+    "button-portal-send-again-*": "on a parcel job row inside the All jobs tab; journey 23 covers the payload",
+    "button-portal-send-to-recipient-*": "inside the Recipients tab; journey 23 covers the book",
+    "button-portal-remove-recipient-*": "inside the Recipients tab; archiving is covered by journey 23"
   }
 }

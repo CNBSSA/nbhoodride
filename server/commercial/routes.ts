@@ -28,6 +28,9 @@ import { sendOrganizationInviteEmail } from "../emailService";
 import { resolveAppUrl } from "../appUrl";
 import { INVITATION_DAYS } from "@shared/invitations";
 import { bookDelivery } from "./deliveries";
+import { archiveRecipient, listRecipients, saveRecipient } from "./recipients";
+import { deliveredPhoto, deliveredView, retireOldProofPhotos } from "./delivered";
+import { approvalView, approveByRecipient, declineByRecipient, resendApprovalLink, sendAnyway, setReleaseHook, startRecipientApproval } from "./recipientApproval";
 import { buildStatement, statementToCsv, statementToHtml } from "./statements";
 import { cancelJob } from "./cancel";
 import { bookWillCallReturn, createStandingOrder, listStandingOrders, materializeAllStandingOrders, materializeStandingOrder, setStandingOrderActive, standingOrderJobCounts } from "./standingOrders";
@@ -70,6 +73,9 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
     if (!featureFlags.commercialEnabled) return res.status(404).json({ message: "Not found" });
     next();
   };
+  // A held delivery, once the recipient has paid, is offered to drivers the
+  // same way a freshly booked one is.
+  setReleaseHook((ride, pickupCounty) => deps.notifyDriversOfScheduledRide(ride, pickupCounty));
 
   /** Load the caller's role in :orgId; 403 when they hold none. */
   const requireMember = (allowed?: (role: OrgRole) => boolean): Handler => async (req: any, res, next) => {
@@ -225,6 +231,70 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       res.status(202).json({ invited: true, ...inv, emailSent });
     } catch (err) { fail(res, err, "Could not add the member"); }
   });
+  // ── Recipient approval (shared/recipientApproval.ts) ──
+  app.post("/api/org/:orgId/jobs/:jobId/send-anyway", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.json(await sendAnyway(req.orgId, String(req.params.jobId))); }
+    catch (err) { fail(res, err, "Could not send it"); }
+  });
+  app.post("/api/org/:orgId/jobs/:jobId/resend-approval-link", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.json(await resendApprovalLink(req.orgId, String(req.params.jobId), resolveAppUrl(`${req.protocol}://${req.get("host")}`))); }
+    catch (err) { fail(res, err, "Could not resend the link"); }
+  });
+  app.patch("/api/org/:orgId/settings", gate, isAuthenticated, requireMember((r) => r === "owner"), async (req: any, res) => {
+    try {
+      const patch: Record<string, unknown> = {};
+      if (req.body?.askRecipientByDefault !== undefined) patch.askRecipientByDefault = req.body.askRecipientByDefault;
+      const org = await updateOrganization(req.orgId, patch);
+      res.json({ askRecipientByDefault: org.askRecipientByDefault });
+    } catch (err) { fail(res, err, "Could not save the setting"); }
+  });
+  // ── The recipient book (shared/recipients.ts) ──
+  app.get("/api/org/:orgId/recipients", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.json(await listRecipients(req.orgId)); }
+    catch (err) { fail(res, err, "Could not list recipients"); }
+  });
+  app.post("/api/org/:orgId/recipients", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.status(201).json(await saveRecipient(req.orgId, req.body ?? {}, userIdOf(req)!)); }
+    catch (err) { fail(res, err, "Could not save the recipient"); }
+  });
+  app.delete("/api/org/:orgId/recipients/:id", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
+    try { res.json({ removed: await archiveRecipient(req.orgId, String(req.params.id)) }); }
+    catch (err) { fail(res, err, "Could not remove the recipient"); }
+  });
+
+  app.post("/api/admin/analytics/recipient-approval-sweep", gate, isAdminOrSessionAuth, async (req: any, res) => {
+    try { const { sweepRecipientApproval } = await import("./recipientApproval"); res.json(await sweepRecipientApproval(new Date(), resolveAppUrl(`${req.protocol}://${req.get("host")}`))); }
+    catch (err) { fail(res, err, "Could not run the sweep"); }
+  });
+  // The recipient's side: no account, the token is the capability. Rate-limited in routes.ts.
+  app.get("/api/approve/:token", gate, async (req, res) => {
+    try { res.json(await approvalView(String(req.params.token))); }
+    catch (err) { fail(res, err, "Could not read this delivery"); }
+  });
+  app.post("/api/approve/:token/approve", gate, async (req, res) => {
+    try { res.json(await approveByRecipient(String(req.params.token))); }
+    catch (err) { fail(res, err, "Could not record that"); }
+  });
+  app.post("/api/approve/:token/decline", gate, async (req, res) => {
+    try { res.json(await declineByRecipient(String(req.params.token))); }
+    catch (err) { fail(res, err, "Could not record that"); }
+  });
+  // ── Delivered: the receiver's proof page, and photo retention ──
+  app.get("/api/delivered/:token", gate, async (req, res) => {
+    try { res.json(await deliveredView(String(req.params.token))); }
+    catch (err) { fail(res, err, "Could not read this delivery"); }
+  });
+  app.get("/api/delivered/:token/photo", gate, async (req, res) => {
+    try {
+      const photo = await deliveredPhoto(String(req.params.token));
+      if (!photo) return res.status(404).json({ message: "No photo." });
+      res.set("Content-Type", photo.contentType); res.set("Cache-Control", "private, max-age=3600"); res.set("X-Content-Type-Options", "nosniff"); res.set("Content-Security-Policy", "sandbox"); res.send(photo.bytes);
+    } catch (err) { fail(res, err, "Could not read the photo"); }
+  });
+  app.post("/api/admin/analytics/retire-proof-photos", gate, isAdminOrSessionAuth, async (_req, res) => {
+    try { res.json(await retireOldProofPhotos()); }
+    catch (err) { fail(res, err, "Could not run the sweep"); }
+  });
   app.post("/api/admin/analytics/pending-proof-sweep", gate, isAdminOrSessionAuth, async (_req, res) => {
     try { const { sweepPendingProofPhotos } = await import("./badges"); res.json(await sweepPendingProofPhotos()); }
     catch (err) { fail(res, err, "Could not run the sweep"); }
@@ -282,17 +352,54 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
   // ── Deliveries: a job with no passenger ──
   app.post("/api/org/:orgId/deliveries", gate, isAuthenticated, requireMember(canBook), async (req: any, res) => {
     try {
-      const booked = await bookDelivery(storage, { ...(req.body ?? {}), organizationId: req.orgId, requesterId: userIdOf(req)! });
-      deps.notifyDriversOfScheduledRide(booked.ride, booked.pickupCounty);
+      // Picked field by field: nothing in a request body may stamp a job as a
+      // standing-order occurrence or set anything the desk did not choose.
+      const b = req.body ?? {};
+      const booked = await bookDelivery(storage, {
+        organizationId: req.orgId, requesterId: userIdOf(req)!,
+        parcelSize: b.parcelSize, handover: b.handover, askRecipient: b.askRecipient === true,
+        pickupContact: b.pickupContact, dropContact: b.dropContact,
+        readyAt: b.readyAt, windowHours: b.windowHours,
+        pickup: b.pickup, destination: b.destination,
+        vehicleType: b.vehicleType, notes: b.notes, poNumber: b.poNumber,
+      });
       const org = await getOrganization(req.orgId);
+      // "Remember this recipient": the book fills itself from the booking.
+      // A book entry never blocks a delivery, but a failure is reported so
+      // the desk is told, not left to wonder (post-implementation audit).
+      let remembered: { ok: boolean; reason?: string } | null = null;
+      if (req.body?.rememberRecipient === true) {
+        try {
+          await saveRecipient(req.orgId, {
+            name: booked.job.dropContact?.name, phone: booked.job.dropContact?.phone, note: booked.job.dropContact?.note,
+            address: booked.ride.destinationLocation as any, handover: booked.job.handover,
+          }, userIdOf(req)!);
+          remembered = { ok: true };
+        } catch (err: any) {
+          remembered = { ok: false, reason: err instanceof CommercialError ? err.message : "the book could not be written" };
+          console.log(`[recipients] not remembered: ${remembered.reason}`);
+        }
+      }
+      // Ask the recipient: the job is HELD — not offered to any driver —
+      // until the recipient approves the fee from the link they are texted,
+      // or the shop sends it anyway (shared/recipientApproval.ts).
+      // Otherwise drivers hear about it now.
+      let recipientApproval: { link: string; textSent: boolean; state: string } | null = null;
+      if (req.body?.askRecipient === true) {
+        const started = await startRecipientApproval(booked.job.id, resolveAppUrl(`${req.protocol}://${req.get("host")}`));
+        recipientApproval = { link: started.link, textSent: started.textSent, state: "awaiting" };
+      } else {
+        deps.notifyDriversOfScheduledRide(booked.ride, booked.pickupCounty);
+      }
       opsAlert(formatOpsAlert("📦 Delivery booked", [
         ["Account", org?.name ?? req.orgId],
         ["Job", formatJobNumber(booked.job.jobNumber)],
         ["Parcel", booked.job.parcelSize],
         ["To", booked.job.dropContact?.name],
         ["Fare", `$${Number(booked.ride.estimatedFare ?? 0).toFixed(2)}`],
+        ["Recipient", recipientApproval ? "asked to approve the fee (held until they do)" : "not asked"],
       ]));
-      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: formatJobNumber(booked.job.jobNumber) } });
+      res.status(201).json({ ride: booked.ride, job: { ...booked.job, jobLabel: formatJobNumber(booked.job.jobNumber), recipientApproval: recipientApproval ? "awaiting" : "none" }, recipientApproval, remembered });
     } catch (err) { fail(res, err, "Could not book the delivery"); }
   });
 
@@ -310,7 +417,7 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       const booked = await materializeStandingOrder(storage, order, new Date(), (b) => deps.notifyDriversOfScheduledRide(b.ride, b.pickupCounty));
       const org = await getOrganization(req.orgId);
       console.log(`[commercial] standing order created :: Account: ${org?.name ?? req.orgId} | order ${order.id} | ${booked} job${booked === 1 ? "" : "s"} booked`);
-      opsAlert(formatOpsAlert("🗓 Standing order created", [["Account", org?.name ?? req.orgId], ["Passenger", order.passengerName], ["Jobs booked", booked]]));
+      opsAlert(formatOpsAlert("🗓 Standing order created", [["Account", org?.name ?? req.orgId], [order.kind === "delivery" ? "Recipient" : "Passenger", order.passengerName], ["Jobs booked", booked]]));
       res.status(201).json({ ...order, booked });
     } catch (err) { fail(res, err, "Could not create the standing order"); }
   });

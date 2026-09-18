@@ -49,15 +49,21 @@ export async function run({ base, db }) {
   // rider kept booking until they happened to log out. And two doors
   // (multi-stop, shared schedule) went through no re-check at all. All
   // three must refuse with the same words the login gate uses.
+  // 2026-09-17 (standard practice): revoking now also ends every session the
+  // rider holds, so the same session is signed out outright — 401 at every
+  // door — and the booking funnel's own re-check stands behind that.
   const PENDING = /pending approval by an administrator/;
+  void PENDING;
   check("revoke", (await admin.req("POST", `/api/admin/users/${u.id}/revoke-approval`)).status === 200);
   const revokedSolo = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 20, paymentMethod: "card" });
-  check("a revoked rider cannot book a ride on the same session", revokedSolo.status === 400 && PENDING.test(revokedSolo.json?.message ?? ""), `${revokedSolo.status} ${JSON.stringify(revokedSolo.json?.message)}`);
+  check("a revoked rider is signed out on the same session, so the booking door is closed", revokedSolo.status === 401, `${revokedSolo.status} ${JSON.stringify(revokedSolo.json?.message)}`);
   const revokedMulti = await rider.req("POST", "/api/rides/multi-stop", { pickupLocation: PICKUP, destinationLocation: DEST, pickupStops: [PICKUP], estimatedFare: 20 });
-  check("nor a multi-stop ride, which used to skip every re-check", revokedMulti.status === 400 && PENDING.test(revokedMulti.json?.message ?? ""), `${revokedMulti.status} ${JSON.stringify(revokedMulti.json?.message)}`);
+  check("nor a multi-stop ride, which used to skip every re-check", revokedMulti.status === 401, `${revokedMulti.status} ${JSON.stringify(revokedMulti.json?.message)}`);
   const revokedGroup = await rider.req("POST", "/api/rides/create-shared-schedule", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 20, scheduledAt: new Date(Date.now() + 5 * 3600e3).toISOString() });
-  check("nor a coworker group, which used to skip every re-check", revokedGroup.status === 400 && PENDING.test(revokedGroup.json?.message ?? ""), `${revokedGroup.status} ${JSON.stringify(revokedGroup.json?.message)}`);
+  check("nor a coworker group, which used to skip every re-check", revokedGroup.status === 401, `${revokedGroup.status} ${JSON.stringify(revokedGroup.json?.message)}`);
+  check("and they cannot sign in again while revoked", (await new Session(base).login(email)).status === 403);
   check("re-approve", (await admin.req("POST", `/api/admin/users/${u.id}/approve`)).status === 200);
+  check("once re-approved they sign in again", (await rider.login(email)).status === 200);
   const restored = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 20, paymentMethod: "card" });
   check("and booking works again the moment approval is restored", restored.status === 200, `${restored.status} ${JSON.stringify(restored.json?.message ?? "")}`);
 

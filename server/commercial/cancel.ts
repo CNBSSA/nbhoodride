@@ -49,6 +49,10 @@ export async function cancelJob(organizationId: string, jobId: string, actorUser
     updatedAt: now,
   } as any).where(eq(rides.id, ride.id)).returning();
   await db.update(commercialJobs).set({ cancellationFee: feeText }).where(eq(commercialJobs.id, jobId));
+  // An open approval link is closed so nobody answers for a job that will
+  // not happen (shared/recipientApproval.ts).
+  const { onCommercialRideEnded } = await import("./recipientApproval");
+  await onCommercialRideEnded(ride.id, "the job was cancelled").catch((err) => console.error("[recipient-pay] cancel hook failed:", err));
 
   return { ride: updated, cancellationFee: feeText, reason: charged.reason, driverId: ride.driverId ?? null };
 }

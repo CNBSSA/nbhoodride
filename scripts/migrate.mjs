@@ -735,7 +735,8 @@ CREATE TABLE IF NOT EXISTS organizations (
   default_payment_method_kind VARCHAR,
   terms JSONB,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  ask_recipient_by_default BOOLEAN NOT NULL DEFAULT false
 );
 CREATE TABLE IF NOT EXISTS organization_members (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -746,6 +747,21 @@ CREATE TABLE IF NOT EXISTS organization_members (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_organization_member ON organization_members (organization_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_organization_members_user ON organization_members (user_id);
+CREATE TABLE IF NOT EXISTS organization_recipients (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id),
+  name VARCHAR NOT NULL,
+  phone VARCHAR,
+  address JSONB NOT NULL,
+  handover VARCHAR NOT NULL DEFAULT 'person',
+  note TEXT,
+  created_by VARCHAR NOT NULL REFERENCES users(id),
+  archived_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_organization_recipients_org ON organization_recipients (organization_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_organization_recipient_phone ON organization_recipients (organization_id, phone) WHERE phone IS NOT NULL;
 CREATE TABLE IF NOT EXISTS organization_invitations (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id VARCHAR NOT NULL REFERENCES organizations(id),
@@ -775,6 +791,13 @@ CREATE TABLE IF NOT EXISTS commercial_jobs (
   cancellation_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00,
   parcel_size VARCHAR,
   handover VARCHAR,
+  recipient_approval VARCHAR NOT NULL DEFAULT 'none',
+  recipient_approval_token VARCHAR,
+  recipient_fee NUMERIC(8,2),
+  recipient_approved_at TIMESTAMP,
+  proof_share_token VARCHAR,
+  recipient_nudged_at TIMESTAMP,
+  shop_asked_at TIMESTAMP,
   pickup_contact JSONB,
   drop_contact JSONB,
   window_start TIMESTAMP,
@@ -796,6 +819,16 @@ ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS leg VARCHAR NOT NULL DEFAUL
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS return_of VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS parcel_size VARCHAR;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS handover VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_approval VARCHAR NOT NULL DEFAULT 'none';
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_approval_token VARCHAR;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_fee NUMERIC(8,2);
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_approved_at TIMESTAMP;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS proof_share_token VARCHAR;
+CREATE INDEX IF NOT EXISTS idx_commercial_jobs_proof_share_token ON commercial_jobs (proof_share_token);
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS recipient_nudged_at TIMESTAMP;
+ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS shop_asked_at TIMESTAMP;
+CREATE INDEX IF NOT EXISTS idx_commercial_jobs_recipient_token ON commercial_jobs (recipient_approval_token);
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS ask_recipient_by_default BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS pickup_contact JSONB;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS drop_contact JSONB;
 ALTER TABLE commercial_jobs ADD COLUMN IF NOT EXISTS window_start TIMESTAMP;
@@ -842,10 +875,22 @@ CREATE TABLE IF NOT EXISTS commercial_standing_orders (
   po_number VARCHAR,
   is_active BOOLEAN NOT NULL DEFAULT true,
   paused_at TIMESTAMP,
+  kind VARCHAR NOT NULL DEFAULT 'ride',
+  parcel_size VARCHAR,
+  handover VARCHAR,
+  pickup_contact JSONB,
+  drop_contact JSONB,
+  window_hours INTEGER,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_commercial_standing_orders_org ON commercial_standing_orders (organization_id);
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS kind VARCHAR NOT NULL DEFAULT 'ride';
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS parcel_size VARCHAR;
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS handover VARCHAR;
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS pickup_contact JSONB;
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS drop_contact JSONB;
+ALTER TABLE commercial_standing_orders ADD COLUMN IF NOT EXISTS window_hours INTEGER;
 
 CREATE TABLE IF NOT EXISTS reliability_events (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -34,6 +34,8 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import PortalPage from "@/pages/portal/PortalPage";
 import BusinessLogin, { businessNext } from "@/pages/portal/BusinessLogin";
 import JoinOrganization from "@/pages/portal/JoinOrganization";
+import RecipientApprovalPage from "@/pages/RecipientApprovalPage";
+import DeliveredPage from "@/pages/DeliveredPage";
 import { prefersBusinessHome } from "@/lib/businessHome";
 
 function AuthRedirect({ component: Component }: { component: React.ComponentType }) {
@@ -61,6 +63,8 @@ function Router() {
       {/* Public routes */}
       <Route path="/emergency/:token" component={EmergencyTracking} />
       <Route path="/guardian/:token" component={GuardianTrack} />
+      <Route path="/approve/:token" component={RecipientApprovalPage} />
+      <Route path="/delivered/:token" component={DeliveredPage} />
       <Route path="/terms" component={TermsOfService} />
       <Route path="/privacy" component={PrivacyPolicy} />
       
