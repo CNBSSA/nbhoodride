@@ -35,6 +35,20 @@ export function isDiscontinuedPaymentMethod(method: string | null | undefined): 
   return PAYMENT_METHODS_DISCONTINUED.includes(String(method ?? "") as RidePaymentMethod);
 }
 
+/**
+ * True for a ride whose money the driver took in hand, so it is settled by the
+ * driver confirming it rather than by a card.
+ *
+ * A ride with no payment method recorded counts: the column is nullable and
+ * defaulted to cash for as long as cash was taken, so a row from back then
+ * with nothing in it was a cash ride in practice, and its driver could always
+ * confirm the money. Discontinuing cash must not stand between them and that.
+ */
+export function settlesInCash(method: string | null | undefined): boolean {
+  if (method === null || method === undefined || String(method).trim() === "") return true;
+  return isDiscontinuedPaymentMethod(method);
+}
+
 /** What to tell whoever tried to pay a way PG Ride no longer takes. */
 export const CASH_DISCONTINUED_MESSAGE = "PG Ride no longer takes cash. Rides are paid by card.";
 

@@ -5,6 +5,7 @@ import {
   PAYMENT_METHODS_DISCONTINUED,
   isDiscontinuedPaymentMethod,
   mayCreateWithPaymentMethod,
+  settlesInCash,
 } from "./paymentMethods";
 
 describe("cash is discontinued", () => {
@@ -30,5 +31,23 @@ describe("cash is discontinued", () => {
 
   it("says so in words a rider can read", () => {
     expect(CASH_DISCONTINUED_MESSAGE).toMatch(/no longer takes cash/i);
+  });
+});
+
+describe("settlesInCash", () => {
+  it("is true for a cash ride", () => {
+    expect(settlesInCash("cash")).toBe(true);
+  });
+
+  it("is true for a ride from back then with nothing recorded, so its driver can still confirm the money", () => {
+    expect(settlesInCash(null)).toBe(true);
+    expect(settlesInCash(undefined)).toBe(true);
+    expect(settlesInCash("")).toBe(true);
+    expect(settlesInCash("   ")).toBe(true);
+  });
+
+  it("is false for a ride that pays itself", () => {
+    expect(settlesInCash("card")).toBe(false);
+    expect(settlesInCash("invoice")).toBe(false);
   });
 });

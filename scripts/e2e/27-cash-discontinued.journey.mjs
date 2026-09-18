@@ -57,6 +57,19 @@ export async function run({ base, db }) {
     const receipt = await rider.req("GET", `/api/rides/${old}/receipt`);
     check("the receipt still names how it was paid", receipt.status === 200 && /cash/i.test(JSON.stringify(receipt.json)), `${receipt.status}`);
 
+    // Rides from back then may carry no payment method at all: the column has
+    // always allowed it and the old default was cash, so their driver could
+    // always confirm the money. That must not change with the discontinuation.
+    const { rows: [blank] } = await db.query(
+      `INSERT INTO rides (rider_id, driver_id, status, pickup_location, destination_location, estimated_fare, actual_fare,
+                          payment_method, payment_status, platform_fee, driver_earnings, completed_at)
+       VALUES ($1, $2, 'completed', $3, $4, '12.00', '12.00', NULL, 'pending_payment', '1.80', '10.20', NOW()) RETURNING id, payment_method`,
+      [FIXTURES.rider.id, FIXTURES.driver.id, loc(PICKUP), loc(DEST)]);
+    ids.push(blank.id);
+    check("a ride with no payment method recorded stays that way", blank.payment_method === null, JSON.stringify(blank));
+    const blankConfirm = await driver.req("POST", `/api/rides/${blank.id}/confirm-payment`, { tipAmount: 2 });
+    check("and its driver can still confirm the money they took", blankConfirm.status === 200 && blankConfirm.json?.success === true, JSON.stringify(blankConfirm.json?.message ?? blankConfirm.status));
+
     section("A card ride cannot be marked paid in cash");
     // Before this the driver's confirm would take any completed ride, which
     // would have closed a card ride without ever charging the card.

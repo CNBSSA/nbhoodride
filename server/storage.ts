@@ -134,7 +134,7 @@ import {
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { resolveCompletedFare, type FarePricing } from "@shared/farePolicy";
 import { splitFare, driverBasisFor } from "@shared/payoutPolicy";
-import { CASH_DISCONTINUED_MESSAGE, isDiscontinuedPaymentMethod, mayCreateWithPaymentMethod } from "@shared/paymentMethods";
+import { CASH_DISCONTINUED_MESSAGE, isDiscontinuedPaymentMethod, mayCreateWithPaymentMethod, settlesInCash } from "@shared/paymentMethods";
 import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
 import { db } from "./db";
 import { isUniqueViolation } from "./pgErrors";
@@ -2377,7 +2377,7 @@ export class DatabaseStorage implements IStorage {
     // Only a ride that was actually taken in cash is settled this way. Cash is
     // discontinued, so this serves rides booked before the change and must
     // never be a way to mark a card ride paid without charging the card.
-    if (!isDiscontinuedPaymentMethod(ride.paymentMethod)) {
+    if (!settlesInCash(ride.paymentMethod)) {
       throw new Error("This ride is not paid in cash; it settles on the card the rider booked with.");
     }
 
