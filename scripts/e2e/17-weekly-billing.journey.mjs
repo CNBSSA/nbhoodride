@@ -96,8 +96,23 @@ export async function run({ base, db, server }) {
     check("the weekly run issues for every active account", run.status === 200 && run.json?.weekKey === weekKey && run.json?.issued >= 1, JSON.stringify(run.json));
     const skipped = (run.json?.skipped ?? []).find((s) => s.organization === "Bowie Legal Couriers");
     check("the account on terms is issued but not charged, and says why", !!skipped && /net terms/i.test(skipped.reason ?? ""), JSON.stringify(skipped));
-    const { rows: [bStmt] } = await db.query("SELECT status, total, attempts FROM commercial_statements WHERE organization_id=$1", [B.json.id]);
+    const { rows: [bStmt] } = await db.query("SELECT id, status, total, attempts FROM commercial_statements WHERE organization_id=$1", [B.json.id]);
     check("its statement is open, with nothing attempted", bStmt.status === "open" && bStmt.total === "34.00" && bStmt.attempts === 0, JSON.stringify(bStmt));
+    // Not by hand either: the admin's charge button on a net-terms statement
+    // says so instead of debiting a bank account the account never agreed to.
+    const byHand = await admin.req("POST", `/api/admin/commercial-statements/${bStmt.id}/charge`);
+    check("charging it by hand is refused in words, and nothing is attempted", byHand.status === 200 && byHand.json?.charged === false && /net terms/i.test(byHand.json?.reason ?? ""), `${byHand.status} ${JSON.stringify(byHand.json)}`);
+    const { rows: [bStill] } = await db.query("SELECT status, attempts FROM commercial_statements WHERE id=$1", [bStmt.id]);
+    check("the statement is still open, untouched", bStill.status === "open" && bStill.attempts === 0, JSON.stringify(bStill));
+
+    section("The finances screen says what PG Ride keeps, not only what passed through");
+    const fin = await admin.req("GET", `/api/admin/finances?year=${new Date().getFullYear()}`);
+    const f = fin.json ?? {};
+    check("gross revenue is still there, and beside it PG Ride's share, what was collected, and the drivers' share",
+      fin.status === 200 && typeof f.totalRevenue === "number" && typeof f.platformShare === "number" && typeof f.platformShareCollected === "number" && typeof f.driverShare === "number",
+      JSON.stringify(Object.keys(f)));
+    check("the duplicate fee field is gone; the cancellation total stands on its own", !("feesToDriversAndPool" in f), JSON.stringify(Object.keys(f)));
+    check("PG Ride's share is never more than the gross, and collected never more than the share", f.platformShare <= f.totalRevenue + 0.011 && f.platformShareCollected <= f.platformShare + 0.011 && Math.abs((f.platformShare - f.platformShareCollected) - f.platformShareUncollected) < 0.011, JSON.stringify({ share: f.platformShare, collected: f.platformShareCollected, uncollected: f.platformShareUncollected, gross: f.totalRevenue }));
 
     section("A job finished after its week was issued rolls onto the next statement");
     // A week is issued exactly once. Until 2026-09-16 a job completed on

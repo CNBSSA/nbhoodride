@@ -129,10 +129,12 @@ import {
   type DriverRateCard,
   platformRateCard,
   type PlatformRateCard,
+  commercialJobs,
 } from "@shared/schema";
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { resolveCompletedFare, type FarePricing } from "@shared/farePolicy";
-import { splitFare } from "@shared/payoutPolicy";
+import { splitFare, driverBasisFor } from "@shared/payoutPolicy";
+import { CASH_DISCONTINUED_MESSAGE, mayCreateWithPaymentMethod, settlesInCash } from "@shared/paymentMethods";
 import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
 import { db } from "./db";
 import { isUniqueViolation } from "./pgErrors";
@@ -295,6 +297,7 @@ export interface IStorage {
   deductVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
   addVirtualCardBalance(userId: string, amount: number, reason?: string, rideId?: string, performedBy?: string): Promise<User>;
   creditDriverEarningsOnce(rideId: string, driverId: string, amount: number): Promise<boolean>;
+  recordRideTipOnce(rideId: string, driverId: string, amount: number): Promise<boolean>;
   splitDeductForRide(userId: string, totalAmount: number, rideId: string): Promise<{ virtualDeducted: number; stripeAmount: number }>;
   getVirtualCardBalance(userId: string): Promise<number>;
   consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
@@ -1077,9 +1080,16 @@ export class DatabaseStorage implements IStorage {
 
   // Ride operations
   async createRide(ride: InsertRide): Promise<Ride> {
+    // Cash is no longer taken (shared/paymentMethods.ts, 2026-09-18). Every
+    // booking door writes card or invoice; this is the one place they all
+    // pass through, so no future door can quietly bring cash back.
+    const method = (ride as any).paymentMethod ?? "card";
+    if (!mayCreateWithPaymentMethod(method)) {
+      throw new Error(`${CASH_DISCONTINUED_MESSAGE} (asked for: ${String(method)})`);
+    }
     const [newRide] = await db
       .insert(rides)
-      .values(ride as any)
+      .values({ ...(ride as any), paymentMethod: method })
       .returning();
     return newRide;
   }
@@ -2042,6 +2052,9 @@ export class DatabaseStorage implements IStorage {
     // The same GPS price before any promotion came off it — what the driver is
     // paid on when a ride ends early on a promo trip.
     let meteredGross: number | undefined;
+    // And before any rate discount (group, shared, plan) was re-applied — the
+    // basis for a plan ride, whose discount is PG Ride's (shared/payoutPolicy.ts).
+    let meteredUnscaled: number | undefined;
 
     if (routePath.length >= 2 && ride.startedAt) {
       // Calculate actual distance from GPS waypoints
@@ -2070,6 +2083,7 @@ export class DatabaseStorage implements IStorage {
         // completion settlement even charges the rider extra to erase it).
         const originalFareNum = parseFloat(ride.originalFare || "0");
         const estimatedFareNum = parseFloat(ride.estimatedFare || "0");
+        meteredUnscaled = Math.round(fareAmount * 100) / 100;
         if (originalFareNum > 0 && estimatedFareNum > 0 && estimatedFareNum < originalFareNum) {
           fareAmount = fareAmount * (estimatedFareNum / originalFareNum);
         }
@@ -2114,21 +2128,23 @@ export class DatabaseStorage implements IStorage {
     const fareForSplit = parseFloat(updateData.actualFare ?? ride.actualFare ?? ride.estimatedFare ?? "0");
     const tipForSplit = tipAmount !== undefined ? tipAmount : parseFloat(ride.tipAmount ?? "0");
 
-    // A welcome credit or promotion is what PG Ride spends to win a rider, not
-    // a cut in the driver's pay: they drove the same miles either way, so they
-    // are paid on the fare before the discount and PG Ride's share absorbs it.
-    // An explicit fare is what an admin says the ride cost, discount and all,
-    // so it is taken at face value.
-    const promo = Math.max(0, parseFloat(ride.promoDiscountApplied || "0"));
-    let driverBasis = fareForSplit;
-    if (promo > 0 && resolved && resolved.basis !== "explicit") {
-      const quotedGross = parseFloat(ride.estimatedFare || "0");
-      const grossOfBasis = resolved.basis === "metered" && meteredGross !== undefined ? meteredGross : quotedGross;
-      // A metered fare is capped at the quote, so the basis is capped with it —
-      // the driver is never paid on more than the rider was ever quoted.
-      const capped = quotedGross > 0 ? Math.min(grossOfBasis, quotedGross) : grossOfBasis;
-      driverBasis = Math.max(fareForSplit, capped);
-    }
+    // A welcome credit, a promotion or a plan rate is what PG Ride spends to
+    // win or keep a rider, not a cut in the driver's pay: they drove the same
+    // miles either way, so they are paid on the fare before the discount and
+    // PG Ride's share absorbs it. Which discounts are PG Ride's, and that an
+    // explicit fare is taken at face value, is decided in shared/payoutPolicy.ts.
+    const driverBasis = driverBasisFor({
+      charged: fareForSplit,
+      basis: resolved?.basis ?? "quoted",
+      quotedFare: ride.estimatedFare,
+      originalFare: ride.originalFare,
+      // A plan rate is only a plan rate when a plan booked the ride
+      // (server/weeklyPlans.ts is the one writer of planId).
+      rideType: ride.planId ? ride.rideType : null,
+      promoDiscount: ride.promoDiscountApplied,
+      meteredGross,
+      meteredUnscaled,
+    });
     const split = splitFare(fareForSplit, tipForSplit, { driverBasis });
     if (driverBasis > fareForSplit) {
       console.log(`[fare] ride ${rideId}: driver paid on $${driverBasis.toFixed(2)} (pre-discount), rider charged $${fareForSplit.toFixed(2)}; PG Ride's share $${split.platformFee.toFixed(2)}`);
@@ -2136,13 +2152,19 @@ export class DatabaseStorage implements IStorage {
     updateData.platformFee = split.platformFee.toFixed(2);
     updateData.driverEarnings = split.driverEarnings.toFixed(2);
 
-    // Update ride status to completed
+    // Update ride status to completed — only from in_progress, so two
+    // completions racing (Complete and an early end) finish the ride once
+    // and only the winner goes on to pay the driver.
     const [updatedRide] = await db
       .update(rides)
       .set(updateData)
-      .where(eq(rides.id, rideId))
+      .where(and(eq(rides.id, rideId), eq(rides.status, "in_progress")))
       .returning();
-    
+    if (!updatedRide) {
+      const now = await this.getRide(rideId);
+      throw new Error("Ride cannot be completed. Current status: " + (now?.status ?? "unknown"));
+    }
+
     return updatedRide;
   }
 
@@ -2350,6 +2372,13 @@ export class DatabaseStorage implements IStorage {
     // Check if payment already confirmed
     if (ride.paymentStatus === "paid_cash") {
       throw new Error("Payment has already been confirmed");
+    }
+
+    // Only a ride that was actually taken in cash is settled this way. Cash is
+    // discontinued, so this serves rides booked before the change and must
+    // never be a way to mark a card ride paid without charging the card.
+    if (!settlesInCash(ride.paymentMethod)) {
+      throw new Error("This ride is not paid in cash; it settles on the card the rider booked with.");
     }
 
     const updateData: any = {
@@ -2773,6 +2802,56 @@ export class DatabaseStorage implements IStorage {
         amount: amount.toFixed(2),
         balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0").toFixed(2),
         reason: "ride_earnings",
+        rideId,
+      });
+      return true;
+    });
+  }
+
+  /**
+   * A rider's tip after a card ride, recorded once: the ride carries it
+   * (tip_amount, and driver_earnings grows by it so every earnings screen
+   * agrees), and the driver's wallet is credited all of it under `tip`.
+   * Locked per ride, so two taps or a retried request pay the driver once.
+   * Returns false when the tip was already recorded.
+   */
+  async recordRideTipOnce(rideId: string, driverId: string, amount: number): Promise<boolean> {
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error("Amount must be a positive number");
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'ride_tip:' + rideId}))`);
+      const existing = await tx
+        .select({ id: walletTransactions.id })
+        .from(walletTransactions)
+        .where(and(eq(walletTransactions.rideId, rideId), eq(walletTransactions.reason, "tip")))
+        .limit(1);
+      if (existing.length > 0) return false;
+
+      const [updatedRide] = await tx
+        .update(rides)
+        .set({
+          tipAmount: amount.toFixed(2),
+          driverEarnings: sql`(CAST(COALESCE(${rides.driverEarnings}, ${rides.actualFare}, '0') AS DECIMAL(10,2)) + ${amount})`,
+          updatedAt: new Date(),
+        } as any)
+        .where(and(eq(rides.id, rideId), eq(rides.driverId, driverId)))
+        .returning({ id: rides.id });
+      if (!updatedRide) throw new Error("Ride not found for this driver");
+
+      const [updatedUser] = await tx
+        .update(users)
+        .set({
+          virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) + ${amount})`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, driverId))
+        .returning();
+      if (!updatedUser) throw new Error("Driver not found");
+
+      await tx.insert(walletTransactions).values({
+        userId: driverId,
+        amount: amount.toFixed(2),
+        balanceAfter: parseFloat(updatedUser.virtualCardBalance || "0").toFixed(2),
+        reason: "tip",
         rideId,
       });
       return true;
@@ -3753,12 +3832,28 @@ export class DatabaseStorage implements IStorage {
   // FINANCIAL SUMMARY
   // ============================================================
 
+  // "Total revenue" here has always been the GROSS: every fare, tip and fee
+  // that passed through PG Ride, 85% of which belongs to drivers. It stays,
+  // because it is what the screen has always shown; beside it now sit the
+  // numbers an operator needs to run the company (rates audit, 2026-09-18):
+  // PG Ride's own share of the fares, how much of that share has actually
+  // been collected (a card that settled, a statement that was paid), what
+  // went to drivers, and that cancellation fees go to drivers and the
+  // community pool, not to PG Ride.
   async getFinancialSummary(year?: number): Promise<{
     totalRevenue: number;
     totalFares: number;
     totalTips: number;
     totalCancellationFees: number;
     rideCount: number;
+    platformShare: number;
+    platformShareCollected: number;
+    platformShareUncollected: number;
+    driverShare: number;
+    /** Rides taken in cash before it was discontinued, not yet confirmed by their driver. */
+    cashRidesUnsettled: number;
+    /** Rides taken in cash at all this year, so the tail can be watched out. */
+    cashRides: number;
   }> {
     const yearStart = new Date(year || new Date().getFullYear(), 0, 1);
     const yearEnd = new Date((year || new Date().getFullYear()) + 1, 0, 1);
@@ -3767,7 +3862,12 @@ export class DatabaseStorage implements IStorage {
       fare: rides.actualFare,
       tip: rides.tipAmount,
       cancelFee: rides.cancellationFee,
-    }).from(rides).where(
+      platformFee: rides.platformFee,
+      driverEarnings: rides.driverEarnings,
+      paymentMethod: rides.paymentMethod,
+      paymentStatus: rides.paymentStatus,
+      billedStatus: commercialJobs.billedStatus,
+    }).from(rides).leftJoin(commercialJobs, eq(commercialJobs.rideId, rides.id)).where(
       and(
         eq(rides.status, "completed"),
         gte(rides.completedAt, yearStart),
@@ -3786,13 +3886,36 @@ export class DatabaseStorage implements IStorage {
     );
 
     let totalFares = 0, totalTips = 0, totalCancelFees = 0;
+    let platformShare = 0, platformShareCollected = 0, driverShare = 0;
+    // Cash is discontinued (shared/paymentMethods.ts). These two say how much
+    // of that tail is left: how many cash rides there were this year, and how
+    // many of them a driver has still not confirmed the money for.
+    let cashRides = 0, cashRidesUnsettled = 0;
     for (const r of completedRides) {
       totalFares += parseFloat(r.fare || "0");
       totalTips += parseFloat(r.tip || "0");
+      const fee = parseFloat(r.platformFee || "0");
+      // A pre-policy ride has no split recorded; the driver was credited the
+      // whole fare, so PG Ride's share of it is 0 and the driver's is the fare.
+      const earned = r.driverEarnings != null ? parseFloat(r.driverEarnings) - parseFloat(r.tip || "0") : parseFloat(r.fare || "0");
+      platformShare += fee;
+      driverShare += Math.max(0, earned);
+      // Collected: a card that settled, or an invoice job whose statement was
+      // paid. A cash fare is the driver's in hand — nothing of it reached
+      // PG Ride — and a statement still charging or failed has not either.
+      const collected = r.paymentMethod === "card"
+        ? r.paymentStatus === "paid_card"
+        : r.paymentMethod === "invoice" ? r.billedStatus === "paid" : false;
+      if (collected) platformShareCollected += fee;
+      if (settlesInCash(r.paymentMethod)) {
+        cashRides += 1;
+        if (r.paymentStatus !== "paid_cash") cashRidesUnsettled += 1;
+      }
     }
     for (const r of cancelledWithFeeRides) {
       totalCancelFees += parseFloat(r.cancelFee || "0");
     }
+    const round2 = (n: number) => Math.round(n * 100) / 100;
 
     return {
       totalRevenue: totalFares + totalTips + totalCancelFees,
@@ -3800,6 +3923,12 @@ export class DatabaseStorage implements IStorage {
       totalTips,
       totalCancellationFees: totalCancelFees,
       rideCount: completedRides.length,
+      platformShare: round2(platformShare),
+      platformShareCollected: round2(platformShareCollected),
+      platformShareUncollected: round2(platformShare - platformShareCollected),
+      driverShare: round2(driverShare),
+      cashRides,
+      cashRidesUnsettled,
     };
   }
 

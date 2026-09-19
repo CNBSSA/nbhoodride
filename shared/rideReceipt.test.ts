@@ -49,6 +49,21 @@ describe("formatPaymentMethodLabel", () => {
     expect(formatPaymentMethodLabel("cash")).toBe("Cash");
     expect(formatPaymentMethodLabel("cash", { walletEnabled: true })).toBe("Cash");
   });
+  it("calls a ride from before the method was recorded Cash, because that is what the driver took", () => {
+    expect(formatPaymentMethodLabel(null)).toBe("Cash");
+    expect(formatPaymentMethodLabel(undefined, { walletEnabled: true })).toBe("Cash");
+  });
+  it("and the receipt's own field agrees with its label", () => {
+    const receipt = buildRideReceipt(
+      { id: "r1", completedAt: "2026-07-01T12:00:00Z", actualFare: "10.00", tipAmount: "0.00", paymentMethod: null } as any,
+      "Sam",
+    );
+    expect(receipt.paymentMethod).toBe("cash");
+    expect(receipt.paymentMethodLabel).toBe("Cash");
+  });
+  it("still names an organization's job", () => {
+    expect(formatPaymentMethodLabel("invoice")).toBe("Billed to the organization");
+  });
 });
 
 describe("formatReceiptAsText", () => {

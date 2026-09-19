@@ -148,6 +148,10 @@ export async function chargeStatement(statementId: string, now: Date = new Date(
   const { statement, org } = row;
   if (statement.status === "paid") return { statement, charged: false, reason: "Already paid" };
   if (statement.status === "void") return { statement, charged: false, reason: "Voided" };
+  // An account on terms pays outside PG Ride; its statement is never debited
+  // here, by hand any more than by the weekly run (rates audit, 2026-09-18).
+  // Change the account's billing mode first if it should be charged.
+  if (!autoCharges(org.billingMode)) return { statement, charged: false, reason: "On net terms; this account is not charged by PG Ride. Change its billing mode to charge it." };
 
   // A statement left "charging" has a debit in flight. Charging it again
   // would raise a second PaymentIntent — Stripe's idempotency key protects

@@ -121,6 +121,17 @@ export async function run({ base, db, server }) {
     const mine = await rider.req("GET", "/api/org/mine");
     check("and the desk is told", (mine.json ?? []).some((m) => m.organization.id === orgId && m.organization.askRecipientByDefault === true));
     check("nobody else can", (await driver.req("PATCH", `/api/org/${orgId}/settings`, { askRecipientByDefault: false })).status === 403);
+
+    section("The recipient is asked to approve what the shop is billed for the delivery");
+    // A shop with a facility fee is billed the tariff plus that fee; the
+    // recipient is told the same number, not a smaller one (rates audit, 2026-09-18).
+    await admin.req("PATCH", `/api/admin/organizations/${orgId}`, { facilityFee: 2 });
+    const withFee = await rider.req("POST", `/api/org/${orgId}/deliveries`, body({ askRecipient: true }));
+    check("the delivery is booked and held", withFee.status === 201 && withFee.json?.job?.recipientApproval === "awaiting", JSON.stringify(withFee.json?.message ?? withFee.status));
+    rideIds.push(withFee.json.ride.id);
+    const feeView = await guest.req("GET", `/api/approve/${tokenOf(withFee.json.recipientApproval.link)}`);
+    check("the fee on the recipient's page is the fare plus the facility fee", feeView.status === 200 && Math.abs(Number(feeView.json?.fee) - (Number(withFee.json.ride.estimatedFare) + 2)) < 0.011, `fee=${feeView.json?.fee} fare=${withFee.json.ride.estimatedFare}`);
+    await admin.req("PATCH", `/api/admin/organizations/${orgId}`, { facilityFee: 0 });
   } finally {
     await deleteRides(db, rideIds).catch(() => {});
     await deleteOrgs(db, orgIds).catch(() => {});

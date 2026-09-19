@@ -187,6 +187,20 @@ import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadge
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { splitFare } from "@shared/payoutPolicy";
+import { TIP_MAX, TIP_MIN, describeTipRefusal, normalizeTip, tipRefusal } from "@shared/tipPolicy";
+import { CASH_DISCONTINUED_MESSAGE, isDiscontinuedPaymentMethod, settlesInCash } from "@shared/paymentMethods";
+
+// What a booking request may say about a ride: where, when, for whom, in
+// what car, and the app's own route figures. Every other ride column — money,
+// splits, holds, links to a plan or group, state — is the server's and is
+// never read from a request body (post-implementation audit, 2026-09-18).
+const RIDER_BOOKING_FIELDS = [
+  "pickupLocation", "destinationLocation", "stops", "pickupInstructions",
+  "estimatedFare", "distance", "duration", "scheduledAt",
+  "requestedVehicleType", "driverId", "wantsSharedRide",
+  "bookedForFriend", "passengerName", "passengerPhone", "rideType", "paymentMethod",
+] as const;
+const RIDER_PICKABLE_RIDE_TYPES = new Set(["solo", "multi_stop", "shared_schedule"]);
 
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
@@ -2747,9 +2761,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const commercialNoShowFee = ride.paymentMethod === 'invoice'
         ? await recordNoShowForRide(rideId).catch((err) => { console.error(`[no-show] commercial fee failed for ride ${rideId}:`, err); return null; })
         : null;
-      const noShowFee = commercialNoShowFee ?? RIDER_NO_SHOW_FEE;
-      const collected = commercialNoShowFee === null ? await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE) : 0;
-      const split = await routeFeeWithFairnessSplit(commercialNoShowFee ?? collected, userId, rideId);
+      // A commercial job's fee is its account's, on its statement. If it could
+      // not be written there, nobody is billed — and nothing is taken from the
+      // requester's own wallet to cover it, which is what the rider ladder
+      // would do. It is paged instead (rates audit, 2026-09-18).
+      const billedToOrganization = ride.paymentMethod === 'invoice' && commercialNoShowFee !== null;
+      const commercialFeeUnwritten = ride.paymentMethod === 'invoice' && commercialNoShowFee === null;
+      if (commercialFeeUnwritten) {
+        opsAlert(formatOpsAlert("🏢 Commercial no-show not billed", [
+          ["Ride", rideId.slice(0, 8)],
+          ["Driver", userId],
+          ["Why", "the organization's no-show fee could not be written to the job"],
+          ["Driver", `paid the ordinary cut of $${RIDER_NO_SHOW_FEE.toFixed(2)} from PG Ride's float; they drove there and waited`],
+          ["Fix", "Put the account's own fee on its statement by hand"],
+        ]));
+      }
+      const noShowFee = commercialNoShowFee ?? (ride.paymentMethod === 'invoice' ? 0 : RIDER_NO_SHOW_FEE);
+      const collected = ride.paymentMethod === 'invoice' ? 0 : await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE);
+      // The driver drove there and waited. What they are paid does not hang on
+      // a billing write succeeding: when the account's fee could not be
+      // recorded, PG Ride carries the ordinary cut out of its own float and
+      // sorts the account's statement out afterwards (post-implementation
+      // audit, 2026-09-18 — the same rule as every other commercial payment).
+      const splitOn = commercialFeeUnwritten ? RIDER_NO_SHOW_FEE : (commercialNoShowFee ?? collected);
+      const split = await routeFeeWithFairnessSplit(splitOn, userId, rideId);
       const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
       if (ride.paymentMethod === 'invoice') {
@@ -2762,7 +2797,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         event: "rider_no_show",
         actorId: userId,
         details: {
-          fee: RIDER_NO_SHOW_FEE,
+          fee: noShowFee,
+          billedTo: billedToOrganization ? 'organization' : ride.paymentMethod === 'invoice' ? 'nobody' : 'rider',
           collected,
           driverCut: split.driverCut,
           fairnessFundCut: split.fundCut,
@@ -2788,10 +2824,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("No-show reliability check failed (non-fatal):", reliabilityErr);
       }
 
+      // The fee named here is the one that was applied: the rider ladder's,
+      // or the organization's own from its terms, on its statement.
       const noShowMessage = JSON.stringify({
         type: 'ride_no_show',
         rideId,
-        fee: RIDER_NO_SHOW_FEE,
+        fee: noShowFee,
       });
       for (const partyId of [ride.riderId, userId]) {
         const ws = activeConnections.get(partyId);
@@ -2801,13 +2839,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       deliverUserNotification(ride.riderId, {
         type: "ride-no-show",
         title: "Missed Ride",
-        body: `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point. A $${RIDER_NO_SHOW_FEE.toFixed(2)} no-show fee was applied.`,
+        body: billedToOrganization
+          ? `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point. A $${noShowFee.toFixed(2)} no-show fee goes on your organization's statement.`
+          : ride.paymentMethod === 'invoice'
+            ? `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point.`
+            : `Your driver waited ${NO_SHOW_WAIT_MINUTES} minutes at the pickup point. A $${noShowFee.toFixed(2)} no-show fee was applied.`,
         tag: "ride-no-show",
         url: "/",
-        data: { rideId, fee: RIDER_NO_SHOW_FEE },
+        data: { rideId, fee: noShowFee },
       }).catch(console.error);
 
-      res.json({ success: true, ride: updated, fee: RIDER_NO_SHOW_FEE, driverCut: split.driverCut });
+      res.json({ success: true, ride: updated, fee: noShowFee, driverCut: split.driverCut });
     } catch (error) {
       console.error("Error reporting no-show:", error);
       if (error instanceof Error) {
@@ -3110,6 +3152,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }
 
+  // A commercial ride is paid for by the organization's statement, so the
+  // driver is credited here, when the work is done, whichever door completed
+  // the ride: the ordinary Complete, or an early end mid-trip. The waiting at
+  // the door is priced onto the job first so the driver's share of it can be
+  // paid in the same breath. Never throws: an unpaid driver is paged rather
+  // than swallowed — it is not something to discover at payout time.
+  async function payCommercialDriverForCompletedRide(ride: Ride): Promise<void> {
+    if (ride.paymentMethod !== 'invoice') return;
+    const rideId = ride.id;
+    // An invoice ride is a commercial job or it is nothing: with no job there
+    // is no organization to bill, so nobody pays the driver's share but
+    // PG Ride. Paged below; never paid.
+    const waiting = await recordWaitingForCompletedRide(rideId)
+      .catch((err) => { console.error(`[complete] waiting charge failed for ride ${rideId}:`, err); return null; });
+    try {
+      // The job lookup itself may fail (database); that is the ordinary
+      // "driver not paid" page below with the real error, not "no job".
+      const job = await commercialJobForRide(rideId);
+      if (!job) {
+        console.error(`[complete] invoice ride ${rideId} has no commercial job — driver not paid from PG Ride's float`);
+        opsAlert(formatOpsAlert("💸 Invoice ride with no job", [
+          ["Ride", rideId.slice(0, 8)],
+          ["Driver", ride.driverId ?? "—"],
+          ["Why", "paymentMethod is invoice but no commercial_jobs row exists; nobody is billed for it"],
+          ["Fix", "Decide who pays, then credit the driver by hand in the admin wallet panel"],
+        ]));
+        return;
+      }
+      await payDriverForCompletedJob(storage, ride);
+      if (waiting && waiting.waitFee > 0) await payDriverForWaiting(storage, ride, waiting.waitFee);
+    } catch (payErr) {
+      console.error(`[complete] DRIVER NOT PAID for commercial ride ${rideId}:`, payErr);
+      opsAlert(formatOpsAlert("💸 Driver not paid for commercial work", [
+        ["Ride", rideId.slice(0, 8)],
+        ["Driver", ride.driverId ?? "—"],
+        ["Owed", `$${Number(ride.driverEarnings ?? 0).toFixed(2)}`],
+        ["Reason", String((payErr as any)?.message ?? payErr).slice(0, 200)],
+        ["Fix", "Credit the driver by hand in the admin wallet panel"],
+      ]));
+    }
+  }
+
   // Split a collected cancellation/no-show fee: the driver keeps the bulk,
   // and FAIRNESS_FUND_RATE of it feeds the community bonus pool that pays
   // for goodwill credits when a driver lets a rider down (see /cancel).
@@ -3136,7 +3220,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // nothing: driver-initiated cancels, admin cancels, requeue-for-rematch.
   async function refundRideAuthorizationInFull(ride: Ride): Promise<void> {
     const virtualAuthorized = parseFloat(ride.virtualAmountAuthorized || "0");
-    if (virtualAuthorized > 0) {
+    // A wallet hold only ever exists alongside the authorization that took it
+    // (setRidePaymentAuthorization writes both); a row that carries an amount
+    // and no authorization never held anything, and gives nothing back.
+    if (virtualAuthorized > 0 && !ride.stripePaymentIntentId) {
+      console.error(`[refund] ride ${ride.id}: virtualAmountAuthorized $${virtualAuthorized.toFixed(2)} with no authorization on record — not refunded`);
+    }
+    if (virtualAuthorized > 0 && ride.stripePaymentIntentId) {
       await storage.addVirtualCardBalance(ride.riderId, virtualAuthorized, "cancellation_refund", ride.id);
     }
     const hasRealStripeAuth =
@@ -3215,7 +3305,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "The fare is the amount quoted at booking; it can't be set at completion." });
       }
       const preCheck = await storage.getRide(rideId);
-      if (parsed.tipAmount !== undefined && parsed.tipAmount > 0 && preCheck?.paymentMethod !== 'cash') {
+      // A tip may be entered here only for a ride that was taken in cash —
+      // rides booked before cash was discontinued. On a card ride the rider
+      // adds it themselves (shared/tipPolicy.ts).
+      if (parsed.tipAmount !== undefined && parsed.tipAmount > 0 && !settlesInCash(preCheck?.paymentMethod)) {
         return res.status(400).json({
           message: preCheck?.paymentMethod === 'invoice'
             ? "Tips are not taken on jobs billed to an organization."
@@ -3246,8 +3339,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // driver as success so the driver is never trapped on a finished trip.
         const existing = await storage.getRide(rideId);
         if (existing && existing.status === "completed" && existing.driverId === userId) {
-          // A retry after a crash between completion and the receiver's text still sends it (once; the text stamps itself).
-          if (existing.paymentMethod === 'invoice') import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch(() => {});
+          // A retry after a crash between completion and the receiver's text still sends it (once; the text stamps itself),
+          // and still pays the driver (once; the ledger refuses a second credit).
+          if (existing.paymentMethod === 'invoice') {
+            import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch(() => {});
+            await payCommercialDriverForCompletedRide(existing);
+          }
           return res.json(existing);
         }
         throw err;
@@ -3300,24 +3397,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Never blocks the completion response, but an unpaid driver is paged
       // rather than swallowed: it is not something to discover at payout time.
       if (ride.paymentMethod === 'invoice') {
-        const waiting = await recordWaitingForCompletedRide(rideId)
-          .catch((err) => { console.error(`[complete] waiting charge failed for ride ${rideId}:`, err); return null; });
         // The receiver is told it was delivered, with a link to the proof
         // (server/commercial/delivered.ts). Best effort; never blocks.
         import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch((err) => console.error("[delivered] text failed:", err));
-        try {
-          await payDriverForCompletedJob(storage, ride);
-          if (waiting && waiting.waitFee > 0) await payDriverForWaiting(storage, ride, waiting.waitFee);
-        } catch (payErr) {
-          console.error(`[complete] DRIVER NOT PAID for commercial ride ${rideId}:`, payErr);
-          opsAlert(formatOpsAlert("💸 Driver not paid for commercial work", [
-            ["Ride", rideId.slice(0, 8)],
-            ["Driver", ride.driverId ?? "—"],
-            ["Owed", `$${Number(ride.driverEarnings ?? 0).toFixed(2)}`],
-            ["Reason", String((payErr as any)?.message ?? payErr).slice(0, 200)],
-            ["Fix", "Credit the driver by hand in the admin wallet panel"],
-          ]));
-        }
+        await payCommercialDriverForCompletedRide(ride);
       }
 
       // If ride uses card payment, settle against the auth taken at accept time.
@@ -3916,9 +3999,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
-      // SECURITY: Enforce virtual card as the only payment method
+      // Cash is no longer taken and an organization's work is booked from the
+      // desk, so a ride booked here is a card ride (shared/paymentMethods.ts).
       if (req.body.paymentMethod && req.body.paymentMethod !== 'card') {
-        return res.status(400).json({ message: "Only virtual card payment is supported" });
+        return res.status(400).json({
+          message: isDiscontinuedPaymentMethod(req.body.paymentMethod) ? CASH_DISCONTINUED_MESSAGE : "Only virtual card payment is supported",
+        });
       }
 
       const bookingRider = await storage.getUser(userId);
@@ -3969,15 +4055,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: validation.error });
       }
 
+      // Only the fields a rider may set are read from the body; a request that
+      // names its own originalFare, promo, plan, wallet hold, split or status
+      // is ignored on those keys. The driver's pay basis reads originalFare
+      // and a cancel refunds virtualAmountAuthorized, so neither may ever be
+      // a number a client chose.
+      const clientBody: any = {};
+      for (const key of RIDER_BOOKING_FIELDS) if (req.body && key in req.body) clientBody[key] = req.body[key];
+      const clientRideType = typeof req.body?.rideType === 'string' && RIDER_PICKABLE_RIDE_TYPES.has(req.body.rideType) ? req.body.rideType : 'solo';
+
       // Convert numeric fare to string for decimal field
       const bodyData = {
-        ...req.body,
+        ...clientBody,
         paymentMethod: 'card', // Force virtual card payment
         bookedForFriend,
         passengerName: bookedForFriend ? passengerName : undefined,
         passengerPhone: bookedForFriend ? passengerPhone : undefined,
         requestedVehicleType,
-        rideType: bookedForFriend ? 'friend' : (req.body.rideType ?? 'solo'),
+        rideType: bookedForFriend ? 'friend' : clientRideType,
         // "No driver chosen" arrives as an empty string from the schedule
         // modal — normalize it away or the insert trips the users FK.
         driverId: req.body.driverId || undefined,
@@ -4533,9 +4628,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           catch (err) { console.error("[commercial] proof gate could not be checked:", err); return res.status(503).json({ message: "Could not check the handover record. Try again in a moment." }); }
           if (gate) return res.status(409).json({ message: gate, needsProof: true });
         }
-        const completed = await storage.completeRide(rideId, ride.driverId!, undefined, undefined, "metered");
+        let completed: Ride;
+        try {
+          completed = await storage.completeRide(rideId, ride.driverId!, undefined, undefined, "metered");
+        } catch (completeErr) {
+          // Complete and an early end racing: the other door finished the ride
+          // first. That is the outcome this door wanted too.
+          const already = await storage.getRide(rideId);
+          if (already?.status === "completed") return res.json({ success: true, endedEarly: true, ride: already, actualFare: already.actualFare });
+          throw completeErr;
+        }
         if (ride.paymentMethod === "invoice") {
           import("./commercial/delivered").then((m) => m.notifyDelivered(rideId, resolveAppUrl(`${req.protocol}://${req.get("host")}`))).catch((err) => console.error("[delivered] text failed:", err));
+          // An early end is a completion: the organization is billed the
+          // metered fare, so the driver is paid their share of it now, exactly
+          // as on the ordinary Complete (rates audit, 2026-09-18).
+          await payCommercialDriverForCompletedRide(completed);
         }
         await settleCardPaymentForCompletedRide(completed, undefined, 0);
         await storage.updateRide(rideId, {
@@ -5180,6 +5288,160 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /** How long a tip claim is honoured before it is treated as abandoned. */
+  const TIP_CLAIM_STALE_SECONDS = 300;
+
+  // Called when a tip could not be recorded because one was already there.
+  // The ride is re-read first: the tip on it may be THIS charge, recorded a
+  // moment sooner by the other path, and refunding that would take back money
+  // the driver has been paid. Only a charge for some other amount is homeless.
+  // If the ride cannot be read, nothing is refunded and ops are told — a
+  // database blip is not a reason to reverse a rider's tip.
+  async function refundIfNotTheRecordedTip(rideId: string, intentId: string, amount: number): Promise<void> {
+    let recordedCents: number | null = null;
+    try {
+      const fresh = await storage.getRide(rideId);
+      if (fresh) recordedCents = Math.round(Number(fresh.tipAmount ?? 0) * 100);
+    } catch (readErr) {
+      console.error(`[tip] ride ${rideId}: could not re-read the ride to judge charge ${intentId}:`, readErr);
+    }
+    if (recordedCents === null) {
+      opsAlert(formatOpsAlert("💸 Tip charge of unknown standing", [
+        ["Ride", rideId.slice(0, 8)],
+        ["Charge", intentId],
+        ["Amount", `$${amount.toFixed(2)}`],
+        ["Why", "a tip was already recorded but the ride could not be re-read, so this charge was left alone"],
+        ["Fix", "Compare it with the ride's tip; refund it in Stripe if it is a second one"],
+      ]));
+      return;
+    }
+    if (Math.abs(recordedCents - Math.round(amount * 100)) < 1) return;
+    await refundHomelessTip(rideId, intentId, amount);
+  }
+
+  // A tip charge that no ledger row claims is money with nobody paid: give it
+  // straight back, and page when it cannot be given back.
+  async function refundHomelessTip(rideId: string, intentId: string, amount: number): Promise<void> {
+    try {
+      await stripeService.refundPaymentIntent(intentId, `tip already recorded for ride ${rideId}`);
+      console.warn(`[tip] ride ${rideId}: charge ${intentId} refunded — a different tip was already on the ledger`);
+    } catch (refundErr) {
+      console.error(`[tip] ride ${rideId}: could not refund duplicate charge ${intentId}:`, refundErr);
+      opsAlert(formatOpsAlert("💸 Duplicate tip charge not refunded", [
+        ["Ride", rideId.slice(0, 8)],
+        ["Charge", intentId],
+        ["Amount", `$${amount.toFixed(2)}`],
+        ["Fix", "Refund it in the Stripe dashboard"],
+      ]));
+    }
+  }
+
+  // A tip after a card ride (shared/tipPolicy.ts): the rider's own charge on
+  // the card on file, once per ride, all of it to the driver. The ride is
+  // claimed before the card is charged, so two requests racing (two amounts,
+  // two devices) charge once: the loser is told "already tipped" without
+  // reaching Stripe. The card is charged before anything is written, the
+  // write is locked per ride, and a charge that somehow finds a tip already
+  // on the ledger is refunded on the spot — money never sits with no home.
+  app.post('/api/rides/:rideId/tip', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      const { rideId } = req.params;
+      const amount = normalizeTip(req.body?.amount);
+      if (amount === null) {
+        return res.status(400).json({ message: `A tip is between $${TIP_MIN} and $${TIP_MAX}.` });
+      }
+      const ride = await storage.getRide(rideId);
+      if (!ride) return res.status(404).json({ message: "Ride not found" });
+      if (ride.riderId !== userId) return res.status(403).json({ message: "Only the rider can tip for this ride." });
+      const why = tipRefusal(ride);
+      if (why) return res.status(why === "already_tipped" ? 409 : 400).json({ message: describeTipRefusal(why), reason: why });
+      if (await storage.hasWalletTransaction(rideId, "tip")) {
+        return res.status(409).json({ message: describeTipRefusal("already_tipped"), reason: "already_tipped" });
+      }
+      const rider = await storage.getUser(userId);
+      if (!rider?.stripeCustomerId || !rider?.stripePaymentMethodId) {
+        return res.status(400).json({ message: "Add a card in Payments first, then tip." });
+      }
+      if (!stripeService.isEnabled) {
+        return res.status(503).json({ message: "Tips are not available right now. Please try again later." });
+      }
+
+      // One request at a time per ride: the claim is taken before the card is
+      // charged and released only when nothing was charged, so a second
+      // request racing this one (another amount, another device) is told
+      // "already tipped" instead of raising its own charge. A stale claim
+      // from a request that died mid-flight is released once it is older than
+      // any Stripe call can take; the ledger, not the claim, is the truth of
+      // whether a tip was recorded.
+      // Longer than a Stripe call can take (the SDK waits 80s and retries
+      // twice), so a charge still in flight is never treated as abandoned.
+      await storage.releaseStaleWebhookEvent("ride_tip", rideId, TIP_CLAIM_STALE_SECONDS).catch(() => {});
+      if (!(await storage.claimWebhookEvent("ride_tip", rideId, "tip"))) {
+        return res.status(409).json({ message: describeTipRefusal("already_tipped"), reason: "already_tipped" });
+      }
+      const release = () => storage.releaseWebhookEvent("ride_tip", rideId).catch(() => {});
+
+      let intentId: string;
+      try {
+        const intent = await stripeService.chargeTip({ amount, customerId: rider.stripeCustomerId, paymentMethodId: rider.stripePaymentMethodId, rideId, riderId: userId });
+        if (intent.status === "processing") {
+          // Rare on a card, but real: the money is on its way. The webhook
+          // records the tip when Stripe says it succeeded (below), so the
+          // rider is told "pending", never "declined", and never charged twice.
+          // The claim stays: a second charge must not be raised meanwhile.
+          console.log(`[tip] ride ${rideId}: charge ${intent.id} is processing; the webhook will record it`);
+          return res.status(202).json({ pending: true, rideId, tipAmount: amount, message: "Your tip is on its way. It will show once your bank confirms it." });
+        }
+        if (intent.status !== "succeeded") {
+          console.warn(`[tip] ride ${rideId}: charge ${intent.id} is ${intent.status}, not recorded`);
+          await release();
+          return res.status(402).json({ message: "Your card did not go through. Try another card in Payments." });
+        }
+        intentId = intent.id;
+      } catch (chargeErr: any) {
+        await release();
+        const type = String(chargeErr?.type ?? "unknown");
+        console.error(`[tip] ride ${rideId}: charge failed (${type}):`, chargeErr?.message ?? chargeErr);
+        if (type === "StripeCardError") return res.status(402).json({ message: "Your card was declined. Try another card in Payments." });
+        // The card on file is gone or unusable (detached, expired): the fix is
+        // in Payments, not "try later".
+        if (type === "StripeInvalidRequestError") return res.status(400).json({ message: "The card on file could not be used. Add a card in Payments, then tip." });
+        return res.status(503).json({ message: "Tips are not available right now. Please try again later." });
+      }
+
+      let recorded: boolean;
+      try {
+        recorded = await storage.recordRideTipOnce(rideId, ride.driverId!, amount);
+      } catch (recordErr) {
+        // Charged and not recorded: the webhook (below) records it when
+        // Stripe reports the charge, and the claim stays until then. Paged,
+        // so it is never a surprise at payout time.
+        console.error(`[tip] ride ${rideId}: charge ${intentId} succeeded but the tip could not be recorded:`, recordErr);
+        opsAlert(formatOpsAlert("💸 Tip charged, not yet recorded", [["Ride", rideId.slice(0, 8)], ["Charge", intentId], ["Amount", `$${amount.toFixed(2)}`], ["Next", "The Stripe webhook records it; if it does not, credit the driver by hand"]]));
+        return res.status(503).json({ message: "Your tip was taken but could not be recorded yet. It will show shortly; you will not be charged again." });
+      }
+      await logRideAudit({ rideId, event: "tip_added", actorId: userId, details: { amount, intentId, recorded } });
+      if (!recorded) {
+        // A tip was already on the ledger. Usually it is THIS charge, recorded
+        // by the webhook a moment sooner — the rider is tipped, the driver is
+        // paid, and there is nothing to give back. Only a charge for some
+        // other amount has no home, and that one is refunded.
+        await refundIfNotTheRecordedTip(rideId, intentId, amount);
+        return res.status(409).json({ message: describeTipRefusal("already_tipped"), reason: "already_tipped" });
+      }
+      console.log(`[tip] ride ${rideId.slice(0, 8)}: rider tipped $${amount.toFixed(2)} → driver ${ride.driverId} (charge ${intentId})`);
+      const driverWs = ride.driverId ? activeConnections.get(ride.driverId) : undefined;
+      if (driverWs?.readyState === WebSocket.OPEN) {
+        driverWs.send(JSON.stringify({ type: "tip_received", rideId, amount, message: `${rider.firstName || "Your rider"} tipped you $${amount.toFixed(2)}. All of it is yours.` }));
+      }
+      res.json({ success: true, rideId, tipAmount: amount });
+    } catch (error) {
+      console.error("[tip] failed:", error);
+      res.status(500).json({ message: "Could not add the tip." });
+    }
+  });
+
   app.post('/api/rides/:rideId/rating', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -5266,7 +5528,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(400).json({ message: "Invalid payment data" });
       } else if (error instanceof Error && error.message.includes("not found")) {
         res.status(404).json({ message: error.message });
-      } else if (error instanceof Error && (error.message.includes("Only the driver") || error.message.includes("already been confirmed"))) {
+      } else if (error instanceof Error && (error.message.includes("Only the driver") || error.message.includes("already been confirmed") || error.message.includes("not paid in cash") || error.message.includes("must be completed"))) {
         res.status(400).json({ message: error.message });
       } else {
         res.status(500).json({ message: "Failed to confirm payment" });
@@ -7318,7 +7580,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           destinationLocation: circuit.destination,
           estimatedFare: circuit.farePerSeat,
           originalFare: circuit.farePerSeat,
-          paymentMethod: req.body?.paymentMethod || "card",
+          paymentMethod: "card", // every seat is paid by card, as every booking is
           rideType: "circuit",
           groupId: group.id,
           scheduledAt: w.runAt,
@@ -10517,7 +10779,27 @@ Generate the FAQ list.`;
         case 'payment_intent.succeeded': {
           const pi = event.data.object as any;
           const rideId = pi.metadata?.rideId;
-          if (rideId) {
+          if (pi.metadata?.type === 'tip') {
+            // A tip is its own charge and never the fare's: it must not mark a
+            // ride paid. Recording it here is the server-side fallback for a
+            // charge that came back "processing", or a request that died
+            // between Stripe and the ledger; recordRideTipOnce is idempotent,
+            // so the ordinary path and this one credit the driver once.
+            const tipRide = rideId ? await storage.getRide(rideId) : undefined;
+            const tipCents = Number(pi.amount_received ?? pi.amount ?? 0);
+            if (tipRide?.driverId && tipCents > 0) {
+              const recorded = await storage.recordRideTipOnce(rideId, tipRide.driverId, Math.round(tipCents) / 100);
+              if (recorded) {
+                console.log(`[tip] ride ${rideId}: $${(tipCents / 100).toFixed(2)} recorded from webhook ${pi.id}`);
+              } else {
+                // A tip was already there. It may be THIS charge, recorded by
+                // the route a moment sooner (tipRide was read before the write
+                // above), so the ride is re-read before anything is given back.
+                await refundIfNotTheRecordedTip(rideId, pi.id, Math.round(tipCents) / 100);
+              }
+              await storage.releaseWebhookEvent("ride_tip", rideId).catch(() => {});
+            }
+          } else if (rideId) {
             const ride = await storage.getRide(rideId);
             if (ride && ride.paymentStatus !== 'paid_card') {
               await storage.updateRide(rideId, { paymentStatus: 'paid_card' });

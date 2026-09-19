@@ -1979,6 +1979,8 @@ function FinancesPanel() {
   const { data: summary, isLoading } = useQuery<{
     totalRevenue: number; totalFares: number; totalTips: number;
     totalCancellationFees: number; rideCount: number;
+    platformShare?: number; platformShareCollected?: number; platformShareUncollected?: number;
+    driverShare?: number; cashRides?: number; cashRidesUnsettled?: number;
   }>({ queryKey: [`/api/admin/finances?year=${year}`] });
 
   if (isLoading) return <div data-testid="loading-finances">Loading finances...</div>;
@@ -2004,6 +2006,43 @@ function FinancesPanel() {
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground">Total Revenue</p>
             <p className="text-3xl font-bold text-green-700">${(summary?.totalRevenue || 0).toFixed(2)}</p>
+            <p className="text-xs text-muted-foreground mt-1">Gross: every fare, tip and fee that passed through. Drivers' share included.</p>
+          </CardContent>
+        </Card>
+        <Card data-testid="stat-platform-share">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">PG Ride's Share</p>
+            <p className="text-3xl font-bold text-green-700">${(summary?.platformShare || 0).toFixed(2)}</p>
+            <p className="text-xs text-muted-foreground mt-1">15% of fares, before card fees. What the company actually keeps.</p>
+          </CardContent>
+        </Card>
+        <Card data-testid="stat-platform-share-collected">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Collected So Far</p>
+            <p className="text-2xl font-bold">${(summary?.platformShareCollected || 0).toFixed(2)}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Of PG Ride's share: cards that settled and statements that were paid.
+              {(summary?.platformShareUncollected || 0) > 0 ? ` $${(summary?.platformShareUncollected || 0).toFixed(2)} not collected (cash fares, statements still owed).` : ""}
+            </p>
+          </CardContent>
+        </Card>
+        <Card data-testid="stat-cash-tail">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Cash Rides (discontinued)</p>
+            <p className="text-2xl font-bold">{summary?.cashRides ?? 0}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              PG Ride no longer takes cash.
+              {(summary?.cashRidesUnsettled || 0) > 0
+                ? ` ${summary?.cashRidesUnsettled} still waiting for a driver to confirm the money.`
+                : " Every one of them is settled."}
+            </p>
+          </CardContent>
+        </Card>
+        <Card data-testid="stat-driver-share">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Drivers' Share</p>
+            <p className="text-2xl font-bold">${(summary?.driverShare || 0).toFixed(2)}</p>
+            <p className="text-xs text-muted-foreground mt-1">85% of fares, paid to drivers. Tips are on top.</p>
           </CardContent>
         </Card>
         <Card data-testid="stat-total-fares">
@@ -2022,6 +2061,7 @@ function FinancesPanel() {
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground">Cancellation Fees</p>
             <p className="text-2xl font-bold">${(summary?.totalCancellationFees || 0).toFixed(2)}</p>
+            <p className="text-xs text-muted-foreground mt-1">80% to the driver, 20% to the community pool. None of it is PG Ride's.</p>
           </CardContent>
         </Card>
         <Card data-testid="stat-ride-count">
