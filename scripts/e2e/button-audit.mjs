@@ -66,7 +66,10 @@ const SCREENS = [
   { role: "admin", path: "/org" },
 ];
 
-/** BUTTON_AUDIT_ONLY="rider /" runs one screen; BUTTON_AUDIT_VERBOSE=1 prints every press. */
+/** The name of the extra pass below, so BUTTON_AUDIT_ONLY can run it on its own. */
+const UNAUTHORISED_PREFS = "unauthorised-preferences";
+
+/** BUTTON_AUDIT_ONLY="rider /" runs one screen (or "unauthorised-preferences"); BUTTON_AUDIT_VERBOSE=1 prints every press. */
 const ONLY = process.env.BUTTON_AUDIT_ONLY || "";
 const VERBOSE = process.env.BUTTON_AUDIT_VERBOSE === "1";
 const ROLE_USER = { rider: FIXTURES.rider.email, driver: FIXTURES.driver.email, admin: FIXTURES.admin.email, requester: FIXTURES.rider.email };
@@ -257,6 +260,44 @@ async function contextFor(browser, base, role) {
   return contexts.get(role);
 }
 
+/**
+ * A screen whose answer never came still has to be a screen.
+ *
+ * A rider tapping Profile met the error screen on 2026-09-20: the app-wide
+ * language provider asks for ride preferences and takes `null` for an answer
+ * when the request is not authorised, Profile reads the same cache entry, and
+ * a default written as `const { data = {...} }` does not apply to `null`. The
+ * crash is invisible to the rest of this audit because its sessions are alive.
+ * So: answer that one request with a 401, open the rider's Profile, and
+ * require a screen.
+ */
+async function auditUnauthorisedPreferences(browser, base) {
+  const context = await browser.newContext({ viewport: VIEWPORT, isMobile: true, hasTouch: true });
+  const page = await context.newPage();
+  const name = "rider / (preferences unauthorised)";
+  try {
+    await loginAs(page, base, ROLE_USER.rider);
+    await page.route("**/api/user/ride-preferences", (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ message: "Unauthorized" }) })
+        : route.continue());
+    const w = watch(page);
+    await page.goto(base + "/", { waitUntil: "domcontentloaded" });
+    await afterLoad(page, {});
+    const tab = page.locator('[data-testid="tab-profile"]').first();
+    const reachable = await tab.isVisible().catch(() => false);
+    if (reachable) { await tab.click({ timeout: 5000 }).catch(() => {}); await settle(page); }
+    const problems = await screenVerdict(page, w);
+    w.stop();
+    check(`${name}: Profile still draws, with a new rider's preferences`, reachable && problems.length === 0,
+      reachable ? problems.join("; ") : "the Profile tab was not on the screen");
+  } catch (e) {
+    check(`${name}: audit ran`, false, String(e?.message ?? e).split("\n")[0]);
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
 async function auditScreen(browser, base, screen) {
   const { page } = await contextFor(browser, base, screen.role);
   const opts = {};
@@ -377,6 +418,7 @@ try {
       catch (e) { check(`${screen.role} ${screen.path}: audit ran`, false, String(e?.message ?? e).split("\n")[0]); }
     }
   }));
+  if (!ONLY || ONLY === UNAUTHORISED_PREFS) await auditUnauthorisedPreferences(browser, server.base);
 } finally {
   for (const { context } of contexts.values()) await context.close().catch(() => {});
   await browser.close();
