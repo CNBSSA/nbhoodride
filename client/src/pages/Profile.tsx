@@ -7,6 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getCsrfToken } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
+import { useRidePreferences } from "@/hooks/useRidePreferences";
 import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import { useToast } from "@/hooks/use-toast";
 import DocumentUploadModal from "@/components/DocumentUploadModal";
@@ -82,13 +83,11 @@ export default function Profile() {
     },
   });
 
-  const { data: ridePrefs = { calmRideMode: "off", preferredLanguage: "en" } } = useQuery<{
-    calmRideMode: string;
-    preferredLanguage: string;
-    minimizeNotifications: boolean;
-  }>({
-    queryKey: ["/api/user/ride-preferences"],
-  });
+  // Shares its cache entry with the app-wide language provider, which takes
+  // null for an answer when the session has died. The hook turns that into a
+  // new rider's preferences, so this screen is never handed a null to read
+  // (shared/ridePreferences.ts).
+  const { preferences: ridePrefs } = useRidePreferences();
 
   const setRidePrefs = useMutation({
     mutationFn: async (prefs: { calmRideMode?: string; preferredLanguage?: string }) => {
