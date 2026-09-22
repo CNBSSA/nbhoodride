@@ -40,9 +40,24 @@ export function formatOpsAlert(
   return lines.join("\n");
 }
 
+/**
+ * Every alert is written to the log as well as sent.
+ *
+ * An alert that only exists in Telegram is gone when Telegram is not
+ * configured, is rate limiting, or is down — and the operator has no way to
+ * know what they were not told. The same reasoning already applies to the
+ * texts PG Ride sends passengers, which are logged verbatim so they are
+ * auditable when Twilio is unreachable. One line, the alert's title and its
+ * fields on one line, so it can be read and grepped.
+ */
+function logAlert(text: string, delivered: boolean): void {
+  const oneLine = text.replace(/\s*\n\s*/g, " · ").slice(0, 500);
+  console.log(`[ops-alert]${delivered ? "" : " (not delivered)"} ${oneLine}`);
+}
+
 async function send(text: string): Promise<void> {
   const cfg = getConfig();
-  if (!cfg) return;
+  if (!cfg) { logAlert(text, false); return; }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
   try {
@@ -56,6 +71,7 @@ async function send(text: string): Promise<void> {
       }),
       signal: controller.signal,
     });
+    logAlert(text, res.ok);
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       console.error(`[telegram-ops] send failed: ${res.status} ${body.slice(0, 200)}`);
@@ -68,6 +84,7 @@ async function send(text: string): Promise<void> {
 /** Fire-and-forget ops alert. Never throws, never blocks the caller. */
 export function opsAlert(text: string): void {
   send(text).catch((err) => {
+    logAlert(text, false);
     console.error(`[telegram-ops] send error: ${err instanceof Error ? err.message : String(err)}`);
   });
 }
