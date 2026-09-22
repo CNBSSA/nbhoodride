@@ -37,6 +37,19 @@ import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
 // Shared across the SOS panel, the sidebar badge, and the ack/resolve
 // mutations so they read and invalidate the exact same cache entry. The high
 // limit ensures no unresolved incident is hidden by the server's default cap.
+/**
+ * How often a queue of people waiting on an admin refreshes itself.
+ *
+ * Every query in this app is cached until something invalidates it
+ * (staleTime: Infinity, no refetch on focus), which is right for a rider's
+ * own screens and wrong for an approval queue: an admin who leaves the
+ * dashboard open — or installs it and never closes it — sees whatever was
+ * true when the page loaded. A driver who applied on 2026-09-22 waited
+ * behind exactly that, invisible. The emergency and settlement queues
+ * already poll for the same reason; these are the rest of them.
+ */
+const QUEUE_REFRESH = { refetchInterval: 30000, refetchIntervalInBackground: false, refetchOnWindowFocus: true, staleTime: 15000 } as const;
+
 const SOS_INCIDENTS_KEY = "/api/admin/emergency-incidents?limit=500";
 const AWAITING_SETTLEMENT_KEY = "/api/admin/rides/awaiting-settlement";
 
@@ -45,9 +58,11 @@ type AdminTab = "dashboard" | "organizations" | "announcements" | "sos" | "recon
 function useAdminNavPendingCounts() {
   const { data: pendingUsers = [] } = useQuery<any[]>({
     queryKey: ["/api/admin/users/pending"],
+    ...QUEUE_REFRESH,
   });
   const { data: drivers = [] } = useQuery<any[]>({
     queryKey: ["/api/admin/drivers"],
+    ...QUEUE_REFRESH,
   });
   const pendingDrivers = drivers.filter(
     (d) => !d.approvalStatus || d.approvalStatus === "pending",
@@ -220,7 +235,7 @@ function DashboardOverview() {
     totalUsers: number; totalDrivers: number; onlineDrivers: number;
     activeRides: number; completedRidesToday: number; revenueToday: number;
     revenueThisMonth: number; pendingDisputes: number; totalOwners: number;
-  }>({ queryKey: ["/api/admin/dashboard"] });
+  }>({ queryKey: ["/api/admin/dashboard"], ...QUEUE_REFRESH });
 
   if (isLoading) return <div className="text-center py-12" data-testid="loading-dashboard">Loading dashboard...</div>;
 
@@ -260,9 +275,10 @@ function DashboardOverview() {
 
 function UsersPanel() {
   const { user: currentUser } = useAuth();
-  const { data: users = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/admin/users"] });
+  const { data: users = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/admin/users"], ...QUEUE_REFRESH });
   const { data: pendingUsersAll = [], isLoading: pendingLoading } = useQuery<any[]>({
     queryKey: ["/api/admin/users/pending"],
+    ...QUEUE_REFRESH,
   });
   const { toast } = useToast();
   const [showCreateAdmin, setShowCreateAdmin] = useState(false);
@@ -622,7 +638,7 @@ function UsersPanel() {
 }
 
 function DriversPanel() {
-  const { data: drivers = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/admin/drivers"] });
+  const { data: drivers = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/admin/drivers"], ...QUEUE_REFRESH });
   const { toast } = useToast();
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
