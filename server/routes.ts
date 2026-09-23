@@ -1564,6 +1564,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       console.error("Error creating driver profile:", errMsg, error);
+      // An application that does not land tells nobody: the successful one
+      // pages ops, and until 2026-09-22 the failed one only wrote a log line,
+      // so a driver could be told "we have your application" while the
+      // operator had nothing to approve. Both ends are heard from now.
+      const applicantId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
+      storage.getUser(applicantId).then((applicant) => {
+        opsAlert(formatOpsAlert("🚙 Driver application FAILED", [
+          ["Name", `${applicant?.firstName ?? ""} ${applicant?.lastName ?? ""}`.trim() || String(applicantId ?? "unknown")],
+          ["Email", applicant?.email],
+          ["Phone", applicant?.phone],
+          ["Why", error instanceof z.ZodError ? `the form was refused: ${error.errors[0]?.message ?? "invalid"}` : errMsg.slice(0, 200)],
+          ["Fix", "They were told it did not go through; nothing is waiting in Drivers. Ask them to apply again."],
+        ]));
+      }).catch(() => {});
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0].message });
       }
