@@ -121,3 +121,58 @@ export function statementStatusFromIntent(status: string): "paid" | "failed" | n
   if (status === "canceled" || status === "requires_payment_method") return "failed";
   return null;
 }
+
+/**
+ * The Stripe idempotency key for one attempt at collecting a statement.
+ *
+ * One key per attempt, not per statement (corporate audit, #382): the key
+ * makes Stripe replay the SAME result for a repeated request, which is what
+ * you want while an attempt's outcome is unknown (a network timeout mid
+ * request) and exactly what you do not want after an attempt has failed —
+ * the old key replayed the failure for a day, so an operator's retry could
+ * not succeed. The attempt number is bumped and stored BEFORE Stripe is
+ * called, so a retry of an unfinished attempt reuses its key and a retry
+ * after a recorded failure gets a fresh one.
+ */
+export function chargeAttemptKey(statementId: string, attempt: number): string {
+  return `commercial-statement-${statementId}-attempt-${attempt}`;
+}
+
+export type SettlementAction = "paid" | "failed" | "undecided" | "ignore";
+
+export interface SettlementDecision {
+  action: SettlementAction;
+  /** Why, in words an operator can read in a log line. */
+  reason: string;
+  /** True when the statement had no intent recorded and this one is adopted as its attempt. */
+  adopts: boolean;
+}
+
+/**
+ * What a Stripe event about a PaymentIntent means for a statement.
+ *
+ * An event is trusted only when the intent is the statement's CURRENT
+ * attempt (corporate audit, #382): a late event about a superseded attempt
+ * — a failure arriving after a later attempt paid, or a success for an
+ * attempt the operator gave up on — is ignored, never applied. A statement
+ * that is charging with no intent recorded (the request to Stripe died
+ * before the id came back) adopts the intent the event names, since the
+ * event's metadata proves it was raised for this statement.
+ */
+export function settlementDecision(
+  statement: { status: string; stripePaymentIntentId: string | null },
+  intent: { id: string; status: string },
+): SettlementDecision {
+  if (statement.status === "paid" || statement.status === "void") {
+    return { action: "ignore", reason: `statement already ${statement.status}`, adopts: false };
+  }
+  const current = statement.stripePaymentIntentId;
+  if (current && current !== intent.id) {
+    return { action: "ignore", reason: `event is about ${intent.id}, the statement's current attempt is ${current}`, adopts: false };
+  }
+  const adopts = !current;
+  const next = statementStatusFromIntent(intent.status);
+  if (next === "paid") return { action: "paid", reason: "Paid", adopts };
+  if (next === "failed") return { action: "failed", reason: `Bank debit ${intent.status}`, adopts };
+  return { action: "undecided", reason: `Bank debit ${intent.status}; nothing to do yet`, adopts };
+}
