@@ -224,6 +224,45 @@ function rejectUnlessTwilioSigned(req: any): { status: number; message: string }
   return null;
 }
 
+const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
+const replyTwiml = (reply: string) => `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${reply.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</Message></Response>`;
+
+/**
+ * One answer for a Twilio-signed text, whichever door it came in by
+ * (corporate audit #335). Compliance first: a STOP-family word records the
+ * opt-out and gets no reply; a START-family word from a number that had
+ * opted out clears it and gets no reply; HELP is answered by Twilio's
+ * registered text. A number that is opted out gets no reply to anything.
+ * Everything else is a booking, status or tracking command for the SMS
+ * agent, answered in the same conversation — including YES from a number
+ * that is not opted out, which has nothing to clear and is the agent's
+ * booking confirmation, not a START.
+ */
+async function answerSignedInboundText(params: any): Promise<string> {
+  const rawFrom = params?.From ?? params?.from;
+  const body = String(params?.Body ?? params?.body ?? "");
+  const from = normalizePhoneE164(rawFrom);
+  const keyword = classifyKeyword(body);
+  if (from && keyword === 'stop') {
+    await storage.recordSmsOptOut(from, 'stop_keyword');
+    console.log('[sms] opt-out recorded for an inbound STOP');
+    opsAlert(formatOpsAlert('🔕 SMS opt-out', [['Number', from]]));
+    return EMPTY_TWIML;
+  }
+  if (keyword === 'help') { console.log('[sms] inbound HELP received'); return EMPTY_TWIML; }
+  const optedOut = from ? await storage.isPhoneOptedOut(from).catch(() => true) : false;
+  if (keyword === 'start') {
+    if (from && optedOut) {
+      await storage.clearSmsOptOut(from);
+      console.log('[sms] opt-out cleared for an inbound START');
+      return EMPTY_TWIML;
+    }
+    if (body.trim().toLowerCase().replace(/[^a-z]/g, "") !== "yes") return EMPTY_TWIML;
+  }
+  if (optedOut || !rawFrom) return EMPTY_TWIML;
+  return replyTwiml(await handleInboundSms(storage, String(rawFrom), body));
+}
+
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
 let _anthropic: Anthropic | null = null;
@@ -9125,18 +9164,14 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
   app.post('/api/sms/inbound', async (req, res) => {
     // Nothing is booked, cancelled or tracked on the word of an unsigned
     // request (corporate audit #335): this door takes only what Twilio
-    // signed, exactly as /api/webhooks/twilio/sms does. Kept as a second
-    // address for a number already pointed at it.
+    // signed, and answers exactly as /api/webhooks/twilio/sms does — STOP
+    // is recorded here too. Kept as a second address for a number already
+    // pointed at it.
     const rejection = rejectUnlessTwilioSigned(req);
     if (rejection) return res.status(rejection.status).json({ message: rejection.message });
     try {
-      const phone = req.body.From || req.body.from;
-      const body = req.body.Body || req.body.body || "";
-      if (!phone) return res.status(400).send("Missing From");
-      const reply = await handleInboundSms(storage, phone, body);
-      res.type("text/xml").send(
-        `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${reply.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</Message></Response>`,
-      );
+      if (!(req.body?.From || req.body?.from)) return res.status(400).send("Missing From");
+      res.type("text/xml").send(await answerSignedInboundText(req.body));
     } catch (error) {
       console.error("SMS inbound error:", error);
       res.status(500).send("Error");
@@ -10756,50 +10791,18 @@ Generate the FAQ list.`;
    * Twilio silently drops, and we would have no record of who opted out.
    */
   app.post('/api/webhooks/twilio/sms', async (req: any, res) => {
-    const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
-    const sendEmptyTwiml = () => res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
-
-    if (!authToken) {
-      console.error('[sms] inbound webhook hit but TWILIO_AUTH_TOKEN is not set');
-      return res.status(503).json({ message: 'SMS not configured' });
-    }
-
+    const sendEmptyTwiml = () => res.type('text/xml').send(EMPTY_TWIML);
     // Verify the request really came from Twilio before trusting any field.
-    const signature = req.get('X-Twilio-Signature') || '';
-    const proto = (req.get('X-Forwarded-Proto') || req.protocol || 'https').split(',')[0].trim();
-    const url = `${proto}://${req.get('host')}${req.originalUrl}`;
-    const params = (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) ? req.body : {};
-    if (!twilio.validateRequest(authToken, signature, url, params)) {
-      console.warn('[sms] inbound webhook signature rejected');
-      return res.status(403).json({ message: 'Invalid signature' });
+    const rejection = rejectUnlessTwilioSigned(req);
+    if (rejection) {
+      if (rejection.status === 503) console.error('[sms] inbound webhook hit but TWILIO_AUTH_TOKEN is not set');
+      return res.status(rejection.status).json({ message: rejection.message });
     }
-
+    const params = (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) ? req.body : {};
     try {
-      const from = normalizePhoneE164(params.From);
-      const keyword = classifyKeyword(params.Body);
-      if (from && keyword === 'stop') {
-        await storage.recordSmsOptOut(from, 'stop_keyword');
-        console.log('[sms] opt-out recorded for an inbound STOP');
-        opsAlert(formatOpsAlert('🔕 SMS opt-out', [['Number', from]]));
-      } else if (from && keyword === 'start') {
-        await storage.clearSmsOptOut(from);
-        console.log('[sms] opt-out cleared for an inbound START');
-      }
-      // HELP needs no state change — Twilio answers it with the registered
-      // help text; we log it so support can see people asking.
-      if (keyword === 'help') console.log('[sms] inbound HELP received');
-      if (keyword === 'stop' || keyword === 'start' || keyword === 'help') return sendEmptyTwiml();
-      // Anything else is a booking, status or tracking command for the SMS
-      // agent, answered in the same conversation (corporate audit #335: one
-      // signed door for the compliance keywords and the booking experience).
-      // A number that replied STOP gets no reply at all.
-      if (from && (await storage.isPhoneOptedOut(from).catch(() => true))) return sendEmptyTwiml();
-      const rawFrom = params.From || params.from;
-      if (!rawFrom) return sendEmptyTwiml();
-      const reply = await handleInboundSms(storage, String(rawFrom), String(params.Body ?? params.body ?? ""));
-      return res.type('text/xml').send(
-        `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${reply.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</Message></Response>`,
-      );
+      // STOP/START/HELP, then the booking agent for anything else, in one
+      // signed door (corporate audit #335).
+      return res.type('text/xml').send(await answerSignedInboundText(params));
     } catch (error) {
       console.error('[sms] inbound webhook error:', error);
       // Still 200 with empty TwiML: retries would only duplicate the work, and

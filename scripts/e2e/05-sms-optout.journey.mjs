@@ -40,6 +40,13 @@ export async function run({ base, db }) {
   const silent = await post({ From: PHONE, Body: "status" });
   const silentText = await silent.text();
   check("a number that replied STOP gets no reply to a command, not even from the agent", silent.status === 200 && !/<Message>/.test(silentText), `${silent.status} ${silentText.slice(0, 80)}`);
+  check("START from that number clears the opt-out and gets no reply", (await post({ From: PHONE, Body: "START" })).status === 200 && !(await optedOut()));
+  const yes = await post({ From: PHONE, Body: "YES" });
+  const yesText = await yes.text();
+  check("YES from a number that is not opted out is the agent's confirmation, not a START: it gets the agent's reply", yes.status === 200 && /<Message>/.test(yesText), `${yes.status} ${yesText.slice(0, 80)}`);
+  const legacyStop = await postTo(legacyUrl, { From: PHONE, Body: "STOP" });
+  const legacyStopText = await legacyStop.text();
+  check("STOP through the legacy door is recorded too, with no reply", legacyStop.status === 200 && !/<Message>/.test(legacyStopText) && (await optedOut()), `${legacyStop.status} ${legacyStopText.slice(0, 60)}`);
 
   section("Every outbound text goes through the opt-out registry");
   // The rider's emergency contact has replied STOP: the test text is refused

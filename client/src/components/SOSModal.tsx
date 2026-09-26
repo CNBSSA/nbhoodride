@@ -45,9 +45,20 @@ export default function SOSModal({ isOpen, onClose, currentRideId }: SOSModalPro
       if (data.shareUrl) {
         setShareUrl(`${window.location.origin}${data.shareUrl}`);
       }
+      // Say what actually happened to the contact's text: the server reports
+      // it (corporate audit #335), and a contact who replied STOP, or a
+      // number that is not a phone number, was not texted.
+      const sms = data.smsDeliveryStatus;
+      const contactLine =
+        sms === "sent" ? "Your emergency contact has been texted and PG Ride support has been notified."
+        : sms === "opted_out" ? "PG Ride support has been notified. Your emergency contact was NOT texted: that number has asked not to receive texts from PG Ride (it replied STOP)."
+        : sms === "invalid_number" ? "PG Ride support has been notified. Your emergency contact was NOT texted: the number on your profile is not a valid phone number."
+        : sms === "skipped" ? "PG Ride support has been notified. Add an emergency contact in Profile to have them texted too."
+        : sms ? "PG Ride support has been notified. Your emergency contact could not be texted right now."
+        : "Emergency contacts and PG Ride support have been notified.";
       toast({
         title: "Emergency Alert Sent",
-        description: "Emergency contacts and PG Ride support have been notified.",
+        description: contactLine,
       });
     },
     onError: () => {
