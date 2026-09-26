@@ -19,7 +19,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { commercialJobs, commercialStatements, organizations, rides, type CommercialStatement } from "@shared/schema";
-import { autoCharges, billingWeekWindow, previousBillingWeek, statementStatusFromIntent, weekCharge, type BillingWeek } from "@shared/billingCycle";
+import { autoCharges, billingWeekWindow, chargeAttemptKey, previousBillingWeek, settlementDecision, weekCharge, type BillingWeek } from "@shared/billingCycle";
 import type { StatementLine } from "@shared/commercial";
 import { stripe } from "../stripeService";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
@@ -64,6 +64,15 @@ export interface IssueResult {
 /**
  * Price a finished week and write its statement. Jobs already carrying a
  * statement id are left alone, so a week issued twice charges once.
+ *
+ * The whole of it happens in one transaction with the jobs locked
+ * (corporate audit, #381): the jobs are selected FOR UPDATE, so two issuers
+ * running at once — the Monday sweep and an operator's button, or two weeks
+ * both entitled to a late job — cannot both take the same job; the loser's
+ * select waits, then no longer sees a job the winner stamped. The stamp
+ * itself carries the ownership predicate (`statement_id IS NULL`), and the
+ * statement is written only if every job it priced was stamped by it, so
+ * its count and total can never disagree with the jobs attached to it.
  */
 export async function issueStatement(organizationId: string, weekKey: string): Promise<IssueResult> {
   const org = await getOrganization(organizationId);
@@ -71,47 +80,47 @@ export async function issueStatement(organizationId: string, weekKey: string): P
   let window: BillingWeek;
   try { window = billingWeekWindow(weekKey); } catch (e) { throw new CommercialError((e as Error).message); }
 
-  const [existing] = await db.select().from(commercialStatements)
-    .where(and(eq(commercialStatements.organizationId, organizationId), eq(commercialStatements.periodKey, weekKey)));
-  if (existing) return { statement: existing, created: false, reason: "Already issued" };
+  const outcome = await db.transaction(async (tx) => {
+    const [existing] = await tx.select().from(commercialStatements)
+      .where(and(eq(commercialStatements.organizationId, organizationId), eq(commercialStatements.periodKey, weekKey)));
+    if (existing) return { statement: existing, created: false, reason: "Already issued" } as IssueResult;
 
-  const rows = await db
-    .select({ job: commercialJobs, ride: rides })
-    .from(commercialJobs)
-    .innerJoin(rides, eq(rides.id, commercialJobs.rideId))
-    .where(and(
-      eq(commercialJobs.organizationId, organizationId),
-      sql`${commercialJobs.statementId} IS NULL`,
-      inArray(rides.status, [...BILLABLE]),
-      // This week's jobs — AND anything billable from an earlier week that
-      // no statement ever picked up. A job completed on Tuesday for last
-      // week's date arrives after last week's statement was issued, and a
-      // week is issued exactly once; without this it was never billed at
-      // all (daily audit, #381). Late jobs roll onto the next statement,
-      // dated as they were.
-      sql`COALESCE(${rides.scheduledAt}, ${rides.createdAt}) < ${window.end}`,
-    ));
+    const rows = await tx
+      .select({ job: commercialJobs, ride: rides })
+      .from(commercialJobs)
+      .innerJoin(rides, eq(rides.id, commercialJobs.rideId))
+      .where(and(
+        eq(commercialJobs.organizationId, organizationId),
+        sql`${commercialJobs.statementId} IS NULL`,
+        inArray(rides.status, [...BILLABLE]),
+        // This week's jobs — AND anything billable from an earlier week that
+        // no statement ever picked up. A job completed on Tuesday for last
+        // week's date arrives after last week's statement was issued, and a
+        // week is issued exactly once; without this it was never billed at
+        // all (daily audit, #381). Late jobs roll onto the next statement,
+        // dated as they were.
+        sql`COALESCE(${rides.scheduledAt}, ${rides.createdAt}) < ${window.end}`,
+      ))
+      // Ours until this transaction ends: a concurrent issuer blocks here and
+      // then re-reads the rows, minus the ones we stamped.
+      .for("update", { of: commercialJobs });
 
-  const lines: StatementLine[] = rows.map(({ job, ride }) => ({
-    jobNumber: job.jobNumber,
-    at: new Date(ride.scheduledAt ?? ride.createdAt ?? window.start).toISOString(),
-    passenger: ride.passengerName ?? "",
-    from: ride.pickupLocation?.address ?? "",
-    to: ride.destinationLocation?.address ?? "",
-    status: ride.status ?? "completed",
-    fare: ride.actualFare ?? ride.estimatedFare,
-    facilityFee: job.facilityFee,
-    waitFee: job.waitFee,
-    cancellationFee: Number(job.cancellationFee) > 0 ? job.cancellationFee : (ride.cancellationFee ?? "0.00"),
-    receivedBy: (job.proof as any)?.receivedBy ?? null,
-  }));
-  const charge = weekCharge(lines);
-  if (!charge.chargeable) return { statement: null, created: false, reason: charge.reason };
+    const lines: StatementLine[] = rows.map(({ job, ride }) => ({
+      jobNumber: job.jobNumber,
+      at: new Date(ride.scheduledAt ?? ride.createdAt ?? window.start).toISOString(),
+      passenger: ride.passengerName ?? "",
+      from: ride.pickupLocation?.address ?? "",
+      to: ride.destinationLocation?.address ?? "",
+      status: ride.status ?? "completed",
+      fare: ride.actualFare ?? ride.estimatedFare,
+      facilityFee: job.facilityFee,
+      waitFee: job.waitFee,
+      cancellationFee: Number(job.cancellationFee) > 0 ? job.cancellationFee : (ride.cancellationFee ?? "0.00"),
+      receivedBy: (job.proof as any)?.receivedBy ?? null,
+    }));
+    const charge = weekCharge(lines);
+    if (!charge.chargeable) return { statement: null, created: false, reason: charge.reason } as IssueResult;
 
-  // The statement and the stamp on its jobs are one write or none: a
-  // statement that exists while its jobs are unstamped carries a total the
-  // jobs do not account for (daily audit, #381).
-  const statement = await db.transaction(async (tx) => {
     const [created] = await tx.insert(commercialStatements).values({
       organizationId,
       periodKey: window.weekKey,
@@ -122,20 +131,47 @@ export async function issueStatement(organizationId: string, weekKey: string): P
       total: charge.amount.toFixed(2),
       status: "open",
     }).returning();
-    await tx.update(commercialJobs)
+    const stamped = await tx.update(commercialJobs)
       .set({ statementId: created.id, billedStatus: "statement" })
-      .where(inArray(commercialJobs.id, rows.map(({ job }) => job.id)));
-    return created;
+      .where(and(
+        inArray(commercialJobs.id, rows.map(({ job }) => job.id)),
+        sql`${commercialJobs.statementId} IS NULL`,
+      ))
+      .returning({ id: commercialJobs.id });
+    // Every job priced into the total must be the statement's, or the total
+    // is a lie. Under the lock this cannot happen; if it ever does, nothing
+    // is written rather than something wrong.
+    if (stamped.length !== rows.length) {
+      throw new CommercialError(`Statement not issued: priced ${rows.length} jobs but could only attach ${stamped.length}. Nothing was written; try again.`, 409);
+    }
+    return { statement: created, created: true, reason: charge.reason } as IssueResult;
   });
 
-  console.log(`[commercial] statement issued :: ${org.name} | ${window.label} | ${lines.length} job${lines.length === 1 ? "" : "s"} | $${charge.amount.toFixed(2)}`);
-  return { statement, created: true, reason: charge.reason };
+  if (outcome.created && outcome.statement) {
+    console.log(`[commercial] statement issued :: ${org.name} | ${window.label} | ${outcome.statement.jobCount} job${outcome.statement.jobCount === 1 ? "" : "s"} | $${outcome.statement.total}`);
+  }
+  return outcome;
 }
 
 export interface ChargeResult {
   statement: CommercialStatement;
   charged: boolean;
   reason: string;
+}
+
+/**
+ * Is a Stripe error a verdict, or a shrug?
+ *
+ * A card error or an invalid request is Stripe saying no: the attempt has
+ * failed and the next one may be a new one. A connection error or a timeout
+ * is Stripe not answering: the request may or may not have gone through,
+ * so the attempt is NOT over — the statement stays charging with its
+ * attempt number, and the next try repeats the same request under the same
+ * idempotency key, which Stripe replays rather than duplicates.
+ */
+function stripeSaidNo(err: any): boolean {
+  const type = String(err?.type ?? "");
+  return type === "StripeCardError" || type === "StripeInvalidRequestError" || type === "StripeAuthenticationError" || type === "StripePermissionError";
 }
 
 /** Take the money for an issued statement, off-session, once. */
@@ -154,14 +190,15 @@ export async function chargeStatement(statementId: string, now: Date = new Date(
   if (!autoCharges(org.billingMode)) return { statement, charged: false, reason: "On net terms; this account is not charged by PG Ride. Change its billing mode to charge it." };
 
   // A statement left "charging" has a debit in flight. Charging it again
-  // would raise a second PaymentIntent — Stripe's idempotency key protects
-  // that for 24 hours and no longer (daily audit, #382). So ask Stripe what
-  // became of the one we have, and only ever go again once it has failed.
+  // would raise a second PaymentIntent (corporate audit, #382). So ask Stripe
+  // what became of the one we have, and only ever go again once it has
+  // failed. A charging statement with NO intent recorded is an attempt whose
+  // answer never came back; it is repeated below under the same key.
   if (statement.status === "charging" && statement.stripePaymentIntentId) {
     if (!stripe) return { statement, charged: false, reason: "Bank debit in flight; Stripe is not configured here to check it" };
     try {
       const intent = await stripe.paymentIntents.retrieve(statement.stripePaymentIntentId);
-      const reconciled = await settleStatementFromIntent(intent, now);
+      const reconciled = await settleStatementFromIntent({ ...intent, metadata: { ...(intent.metadata ?? {}), statementId } }, now);
       if (reconciled) return reconciled;
       return { statement, charged: false, reason: `Bank debit ${intent.status}; nothing to do yet` };
     } catch (err: any) {
@@ -169,9 +206,13 @@ export async function chargeStatement(statementId: string, now: Date = new Date(
     }
   }
 
-  const fail = async (reason: string, page = true): Promise<ChargeResult> => {
+  // A failure is recorded against the attempt it belongs to. One refused
+  // before Stripe was called (nothing on file, Stripe not configured) is
+  // still an attempt the operator made and sees counted; one Stripe decided
+  // against already carries its attempt number from above.
+  const fail = async (reason: string, page = true, countsAsAttempt = false): Promise<ChargeResult> => {
     const [updated] = await db.update(commercialStatements)
-      .set({ status: "failed", attempts: statement.attempts + 1, lastError: reason.slice(0, 500) })
+      .set({ status: "failed", lastError: reason.slice(0, 500), ...(countsAsAttempt ? { attempts: statement.attempts + 1 } : {}) })
       .where(eq(commercialStatements.id, statementId)).returning();
     console.error(`[commercial] statement charge failed :: ${org.name} | ${statement.periodLabel} | $${statement.total} :: ${reason}`);
     if (page) {
@@ -183,12 +224,20 @@ export async function chargeStatement(statementId: string, now: Date = new Date(
     return { statement: updated, charged: false, reason };
   };
 
-  if (!stripe) return fail("Stripe is not configured on this deployment", false);
+  if (!stripe) return fail("Stripe is not configured on this deployment", false, true);
   if (!org.stripeCustomerId || !org.defaultPaymentMethodId) {
-    return fail(`${org.name} has no bank account or card on file. The desk adds one in the portal under Billing.`);
+    return fail(`${org.name} has no bank account or card on file. The desk adds one in the portal under Billing.`, true, true);
   }
 
-  await db.update(commercialStatements).set({ status: "charging" }).where(eq(commercialStatements.id, statementId));
+  // Which attempt this is decides the idempotency key, so it is fixed and
+  // stored BEFORE Stripe is called: an attempt that is still unanswered
+  // (charging, no intent id) is repeated under its own key; a new attempt
+  // after a recorded failure gets a new one.
+  const resumingUnanswered = statement.status === "charging" && !statement.stripePaymentIntentId && statement.attempts > 0;
+  const attempt = resumingUnanswered ? statement.attempts : statement.attempts + 1;
+  await db.update(commercialStatements)
+    .set({ status: "charging", attempts: attempt, lastError: null })
+    .where(eq(commercialStatements.id, statementId));
   try {
     const intent = await stripe.paymentIntents.create({
       amount: Math.round(Number(statement.total) * 100),
@@ -198,45 +247,71 @@ export async function chargeStatement(statementId: string, now: Date = new Date(
       off_session: true,
       confirm: true,
       description: `PG Ride — ${org.name} — ${statement.periodLabel}`,
-      metadata: { organizationId: org.id, statementId: statement.id, periodKey: statement.periodKey },
-    }, { idempotencyKey: `commercial-statement-${statement.id}` });
+      metadata: { organizationId: org.id, statementId: statement.id, periodKey: statement.periodKey, attempt: String(attempt) },
+    }, { idempotencyKey: chargeAttemptKey(statement.id, attempt) });
 
     // A bank debit settles over days: "processing" is a success here, and the
-    // webhook marks it paid when the money actually lands.
-    const settled = intent.status === "succeeded";
+    // webhook marks it paid when the money actually lands. Anything Stripe
+    // has already decided against is a failure now, not a debit in flight.
+    const decision = settlementDecision({ status: "charging", stripePaymentIntentId: null }, intent);
+    if (decision.action === "failed") {
+      await db.update(commercialStatements).set({ stripePaymentIntentId: intent.id }).where(eq(commercialStatements.id, statementId));
+      return fail(`${intent.last_payment_error?.message ?? decision.reason}`);
+    }
+    const settled = decision.action === "paid";
     const [updated] = await db.update(commercialStatements).set({
       status: settled ? "paid" : "charging",
       stripePaymentIntentId: intent.id,
-      attempts: statement.attempts + 1,
       paidAt: settled ? now : null,
       lastError: null,
     }).where(eq(commercialStatements.id, statementId)).returning();
     if (settled) {
       await db.update(commercialJobs).set({ billedStatus: "paid" }).where(eq(commercialJobs.statementId, statement.id));
     }
-    console.log(`[commercial] statement charged :: ${org.name} | ${statement.periodLabel} | $${statement.total} | ${intent.status}`);
+    console.log(`[commercial] statement charged :: ${org.name} | ${statement.periodLabel} | $${statement.total} | attempt ${attempt} | ${intent.status}`);
     return { statement: updated, charged: settled, reason: settled ? "Paid" : `Bank debit ${intent.status}` };
   } catch (err: any) {
-    return fail(String(err?.message ?? err));
+    if (stripeSaidNo(err)) return fail(String(err?.message ?? err));
+    // No verdict: the request may have gone through. Leave the statement
+    // charging on this attempt so the next try repeats it under the same key
+    // rather than raising a second debit; say so, and page.
+    const reason = `No answer from Stripe (${String(err?.type ?? err?.code ?? "network")}): ${String(err?.message ?? err).slice(0, 160)}. Attempt ${attempt} left open; retrying repeats it, never a second debit.`;
+    const [left] = await db.update(commercialStatements).set({ lastError: reason.slice(0, 500) }).where(eq(commercialStatements.id, statementId)).returning();
+    console.error(`[commercial] statement charge unanswered :: ${org.name} | ${statement.periodLabel} :: ${reason}`);
+    opsAlert(formatOpsAlert("💳 Commercial statement charge unanswered", [["Account", org.name], ["Week", statement.periodLabel], ["Amount", `$${Number(statement.total).toFixed(2)}`], ["Attempt", attempt], ["Reason", reason.slice(0, 200)], ["Next", "Retry from Admin; it repeats this attempt under the same key"]]));
+    return { statement: left, charged: false, reason };
   }
 }
 
 /**
  * Bring a statement into line with what Stripe says about its debit. Used by
- * the webhook (succeeded / failed events carry the statement id in metadata)
- * and by chargeStatement when asked to charge a statement whose debit is
- * still in flight. Returns null when the intent is still undecided.
- * Idempotent: a settled statement is not moved again.
+ * the webhook (succeeded / failed / canceled events carry the statement id
+ * in metadata) and by chargeStatement when asked to charge a statement whose
+ * debit is still in flight. Returns null when nothing moved: the intent is
+ * still undecided, or it is not the statement's current attempt and so is
+ * not believed (shared/billingCycle.ts settlementDecision, corporate audit
+ * #382). Idempotent: a settled statement is not moved again.
  */
 export async function settleStatementFromIntent(intent: { id: string; status: string; metadata?: Record<string, string> | null; last_payment_error?: { message?: string } | null }, now: Date = new Date()): Promise<ChargeResult | null> {
   const statementId = intent.metadata?.statementId;
   if (!statementId) return null;
   const [statement] = await db.select().from(commercialStatements).where(eq(commercialStatements.id, statementId));
   if (!statement) return null;
-  const next = statementStatusFromIntent(intent.status);
-  if (!next) return null;
-  if (statement.status === "paid" || statement.status === "void") return { statement, charged: false, reason: "Already settled" };
-  if (next === "paid") {
+  const decision = settlementDecision(statement, intent);
+  if (decision.action === "ignore") {
+    if (statement.status !== "paid" && statement.status !== "void") {
+      console.warn(`[commercial] statement event ignored :: ${statementId.slice(0, 8)} | ${intent.id} ${intent.status} :: ${decision.reason}`);
+    }
+    return { statement, charged: false, reason: decision.reason };
+  }
+  if (decision.action === "undecided") {
+    if (decision.adopts) {
+      // The attempt whose answer never came back: now we know its id.
+      await db.update(commercialStatements).set({ stripePaymentIntentId: intent.id, status: "charging" }).where(eq(commercialStatements.id, statementId));
+    }
+    return null;
+  }
+  if (decision.action === "paid") {
     const [updated] = await db.update(commercialStatements)
       .set({ status: "paid", paidAt: now, lastError: null, stripePaymentIntentId: intent.id })
       .where(eq(commercialStatements.id, statementId)).returning();
@@ -244,12 +319,12 @@ export async function settleStatementFromIntent(intent: { id: string; status: st
     console.log(`[commercial] statement settled :: ${statementId} | $${statement.total} | ${intent.status}`);
     return { statement: updated, charged: true, reason: "Paid" };
   }
-  const reason = intent.last_payment_error?.message ?? `Bank debit ${intent.status}`;
+  const reason = intent.last_payment_error?.message ?? decision.reason;
   const [updated] = await db.update(commercialStatements)
     .set({ status: "failed", lastError: reason.slice(0, 500), stripePaymentIntentId: intent.id })
     .where(eq(commercialStatements.id, statementId)).returning();
   console.error(`[commercial] statement debit failed after the fact :: ${statementId} | $${statement.total} :: ${reason}`);
-  opsAlert(formatOpsAlert("💳 Commercial bank debit failed", [["Statement", statementId.slice(0, 8)], ["Amount", `$${Number(statement.total).toFixed(2)}`], ["Reason", reason.slice(0, 200)]]));
+  opsAlert(formatOpsAlert("💳 Commercial bank debit failed", [["Statement", statementId.slice(0, 8)], ["Amount", `$${Number(statement.total).toFixed(2)}`], ["Reason", reason.slice(0, 200)], ["Next", "Retry from Admin once the account's bank or card is put right"]]));
   return { statement: updated, charged: false, reason };
 }
 

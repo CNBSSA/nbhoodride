@@ -10942,7 +10942,24 @@ Generate the FAQ list.`;
         case 'payment_intent.canceled': {
           const pi = event.data.object as any;
           const rideId = pi.metadata?.rideId;
+          if (pi.metadata?.statementId) {
+            // A commercial debit cancelled after it was raised: a failure the
+            // statement must show, so it can be retried (corporate audit, #382).
+            const { settleStatementFromIntent } = await import("./commercial/billing");
+            await settleStatementFromIntent(pi).catch((e) => console.error("[commercial] statement cancel-settle failed:", e));
+            break;
+          }
           console.log(`[STRIPE] payment_intent.canceled for ride=${rideId ?? 'unknown'} pi=${pi.id}`);
+          break;
+        }
+        case 'payment_intent.processing': {
+          const pi = event.data.object as any;
+          if (pi.metadata?.statementId) {
+            // A bank debit that has entered clearing. Nothing is decided, but a
+            // statement whose attempt never got its id back learns it here.
+            const { settleStatementFromIntent } = await import("./commercial/billing");
+            await settleStatementFromIntent(pi).catch((e) => console.error("[commercial] statement processing-settle failed:", e));
+          }
           break;
         }
         case 'charge.refunded': {
