@@ -18,10 +18,15 @@
  *   /health/deps       the server's own view of database and Stripe
  *
  * Exit 0 when everything answers; exit 1 with a one-line summary on stdout
- * (the workflow puts it in the Telegram page) otherwise. The in-server
- * dependency watch already pages when Stripe or the database fails, so a
- * /health/deps 503 is reported here as context, not as a second page.
+ * (the workflow puts it in the Telegram page) otherwise. A configured
+ * critical dependency being down — database, Stripe, map tiles — is a
+ * failure of this watch, not a remark (corporate audit, #384): the run goes
+ * red and the page names the cause. The in-server watch pages those too;
+ * the failure text says so, so the two pages read as one outage. The rules
+ * live in scripts/production-watch-rules.mjs, where they are tested.
  */
+
+import { judgeDependencies } from "./production-watch-rules.mjs";
 
 const baseUrl = (process.env.BASE_URL || "https://nbhoodride-production.up.railway.app").replace(/\/+$/, "");
 const TIMEOUT_MS = 15_000;
@@ -67,37 +72,15 @@ await probe("Front page", "/", { expectText: ["PG Ride"] });
 await probe("App shell", "/?probe=1", { expectText: ['id="root"'] });
 await probe("Terms page", "/terms", { expectText: ["Terms of Service"] });
 
-// The server's own lifelines. A 503 here means the in-server watch has
-// already paged; we add it to the summary so the page reads whole.
-// `probe` marks this run in the server's heartbeat log, so the 4 AM review
-// can say whether the outside watch actually ran overnight.
+// The server's own lifelines: database, Stripe, map tiles. Any of them the
+// server reports down turns this run red with the reason. `probe` marks
+// this run in the server's heartbeat log, so the 4 AM review can say
+// whether the outside watch actually ran overnight.
 const deps = await get("/health/deps?probe=production-watch");
-let depsDown = [];
-try {
-  const d = JSON.parse(deps.body || "{}");
-  depsDown = Array.isArray(d.down) ? d.down : [];
-  // Carry the REASON, not just the name. "server reports down: maps" tells
-  // the operator something is wrong and nothing about what to do; the
-  // dependency's own detail says whether a token is absent, rejected,
-  // rate-limited or the provider is unreachable — four different fixes.
-  // These details are written to be safe to show: /health/deps is public and
-  // the watch redacts keys before they ever reach it.
-  const withWhy = depsDown
-    .map((n) => {
-      const why = d.deps?.[n]?.detail;
-      return why ? `${n} — ${String(why).slice(0, 160)}` : n;
-    })
-    .join("; ");
-  // The database down is not a degraded server, it is no server a rider can
-  // use — /health still answers 200 because it is a flat OK. So it is a
-  // FAILURE here, not a note, and this watch goes red (daily audit, #384).
-  // The other dependencies degrade a feature and stay notes: the server
-  // has already paged them itself.
-  if (depsDown.includes("database")) failures.push(`Database down: ${d.deps?.database?.detail ?? "unreachable from the server"}`);
-  if (deps.status === 503 || depsDown.length > 0) notes.push(`server reports down: ${withWhy || "unknown"} [already paged by the server]`);
-  else if (deps.status !== 200) failures.push(`Dependencies (/health/deps): HTTP ${deps.status}`);
-} catch {
-  if (health) failures.push(`Dependencies (/health/deps): ${deps.status === 0 ? deps.error : `HTTP ${deps.status}, not JSON`}`);
+{
+  const judged = judgeDependencies(deps, !!health);
+  failures.push(...judged.failures);
+  notes.push(...judged.notes);
 }
 
 // /api/version answers { id, builtAt } (scripts/write-build-id.mjs): the id is the commit on Railway.
