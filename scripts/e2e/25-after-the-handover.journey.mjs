@@ -4,7 +4,7 @@
  * and the record forever; revoking or suspending an account ends every
  * session it holds at once.
  */
-import { Session, check, section, serverLog, deleteRides, deleteOrgs, FIXTURES, PASSWORD, PICKUP, DEST, uniqueEmail } from "./harness.mjs";
+import { Session, check, section, serverLog, deleteRides, deleteOrgs, FIXTURES, PASSWORD, PICKUP, DEST, uniqueEmail, tinyPng } from "./harness.mjs";
 
 export async function run({ base, db, server }) {
   const admin = new Session(base); await admin.login(FIXTURES.admin.email);
@@ -45,7 +45,7 @@ export async function run({ base, db, server }) {
     check("started", (await driver.req("POST", `/api/driver/rides/${rideId}/start`)).status === 200);
     const up = await driver.req("POST", "/api/objects/upload?store=db", {});
     const objectPath = new URL(up.json?.uploadURL ?? "http://x/").pathname;
-    await driver.req("PUT", objectPath, "jpeg-bytes-of-a-door", { "Content-Type": "image/jpeg" });
+    await driver.req("PUT", objectPath, tinyPng(), { "Content-Type": "image/jpeg" });
     const proof = await driver.req("POST", `/api/driver/rides/${rideId}/proof`, { receivedBy: "Ngozi", photoUrl: up.json?.uploadURL });
     check("the handover is recorded with a photo", proof.status === 200 && proof.json?.proof?.photoUrl === objectPath, JSON.stringify(proof.json?.proof));
     check("completed", (await driver.req("POST", `/api/driver/rides/${rideId}/complete`, {})).status === 200);
@@ -56,7 +56,7 @@ export async function run({ base, db, server }) {
     const view = await guest.req("GET", `/api/delivered/${token}`);
     check("the delivered page shows the shop, the handover and that there is a photo — never the goods", view.status === 200 && view.json?.shopName === "Corner Bakery" && /received by Ngozi/.test(view.json?.handoverText ?? "") && view.json?.hasPhoto === true && !!view.json?.deliveredAt, JSON.stringify(view.json));
     const photo = await fetch(base + `/api/delivered/${token}/photo`, { headers: { "X-Forwarded-Proto": "https" } });
-    check("and serves the photo to whoever holds the link, never as a page", photo.status === 200 && /image\/jpeg/.test(photo.headers.get("content-type") ?? "") && photo.headers.get("x-content-type-options") === "nosniff" && /sandbox/.test(photo.headers.get("content-security-policy") ?? ""), `${photo.status} ${photo.headers.get("content-type")} ${photo.headers.get("content-security-policy")}`);
+    check("and serves the photo to whoever holds the link, never as a page", photo.status === 200 && /image\/png/.test(photo.headers.get("content-type") ?? "") && photo.headers.get("x-content-type-options") === "nosniff" && /sandbox/.test(photo.headers.get("content-security-policy") ?? ""), `${photo.status} ${photo.headers.get("content-type")} ${photo.headers.get("content-security-policy")}`);
     // A second parcel ended early is a completion too, and the receiver is told once.
     const second = await rider.req("POST", `/api/org/${orgId}/deliveries`, { parcelSize: "small", pickupContact: { name: "Counter" }, dropContact: { name: "Ada", phone: "3015550189" }, readyAt: inMin(95), windowHours: 2, pickup: PICKUP, destination: DEST, handover: "person" });
     const secondRide = second.json.ride.id; rideIds.push(secondRide);
@@ -67,9 +67,10 @@ export async function run({ base, db, server }) {
     check("a photo that already proves another job is refused for this one", reuse.status === 400 && /already the proof/.test(reuse.json?.message ?? ""), JSON.stringify(reuse.json));
     const upSvg = await driver.req("POST", "/api/objects/upload?store=db", {});
     const svgPath = new URL(upSvg.json?.uploadURL ?? "http://x/").pathname;
-    await driver.req("PUT", svgPath, "<svg onload='alert(1)'/>", { "Content-Type": "image/svg+xml" });
+    const svgPut = await driver.req("PUT", svgPath, "<svg onload='alert(1)'/>", { "Content-Type": "image/svg+xml" });
+    check("an SVG is not a photo: refused at the door", svgPut.status === 400 && /JPEG, PNG/.test(svgPut.json?.message ?? ""), JSON.stringify(svgPut.json));
     const svg = await driver.req("POST", `/api/driver/rides/${secondRide}/proof`, { receivedBy: "Ada", photoUrl: svgPath });
-    check("an SVG is not a photo", svg.status === 400 && /JPEG, PNG/.test(svg.json?.message ?? ""), JSON.stringify(svg.json));
+    check("and cannot be named as a proof", svg.status === 400, JSON.stringify(svg.json));
     await driver.req("POST", `/api/driver/rides/${secondRide}/proof`, { receivedBy: "Ada" });
     const early = await driver.req("POST", `/api/rides/${secondRide}/cancel`, { reason: "ended early after the handover" });
     await new Promise((r) => setTimeout(r, 400));

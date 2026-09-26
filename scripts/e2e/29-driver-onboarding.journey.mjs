@@ -1,4 +1,4 @@
-import { Session, check, section, deleteRides, FIXTURES, PICKUP, DEST } from "./harness.mjs";
+import { Session, check, section, deleteRides, FIXTURES, PICKUP, DEST, tinyPng, tinyPdf } from "./harness.mjs";
 
 /**
  * A driver from the street to the road: the whole path, in one go.
@@ -25,7 +25,7 @@ export async function run({ base, db }) {
   const uploadOne = async (session, label) => {
     const up = await session.req("POST", "/api/objects/upload", {});
     const path = new URL(up.json?.uploadURL ?? "http://x/").pathname;
-    const put = await session.req("PUT", path, `bytes-of-${label}`, { "Content-Type": "image/jpeg" });
+    const put = await session.req("PUT", path, label === "insurance" ? tinyPdf() : tinyPng(), { "Content-Type": "image/jpeg" });
     check(`${label} reaches PG Ride's own store`, up.status === 200 && put.status === 200, `upload=${up.status} put=${put.status}`);
     return up.json.uploadURL;
   };
@@ -55,6 +55,26 @@ export async function run({ base, db }) {
     check("nothing was approved by the refusal", (await db.query("SELECT approval_status FROM driver_profiles WHERE user_id=$1", [user.id])).rows[0].approval_status !== "approved");
 
     section("They upload what was asked for, the way the documents screen does");
+    section("The store takes a photo or a PDF by its bytes, nothing else (corporate audit #340)");
+    const newObject = async () => new URL((await applicant.req("POST", "/api/objects/upload", {})).json?.uploadURL ?? "http://x/").pathname;
+    const disguised = await applicant.req("PUT", await newObject(), "<!doctype html><script>alert(1)</script>", { "Content-Type": "image/png" });
+    check("a page declared as a PNG is refused by its bytes, with a reason", disguised.status === 400 && /Only photos/.test(disguised.json?.message ?? ""), `${disguised.status} ${JSON.stringify(disguised.json?.message)}`);
+    const script = await applicant.req("PUT", await newObject(), "#!/bin/sh\necho hi", { "Content-Type": "image/jpeg" });
+    check("a script declared as a JPEG is refused", script.status === 400, `${script.status}`);
+    const empty = await applicant.req("PUT", await newObject(), "", { "Content-Type": "image/jpeg" });
+    check("an empty upload is refused", empty.status === 400 && /Empty/.test(empty.json?.message ?? ""), `${empty.status} ${JSON.stringify(empty.json?.message)}`);
+    const mislabelled = await newObject();
+    const asJpeg = await applicant.req("PUT", mislabelled, tinyPng(), { "Content-Type": "image/jpeg" });
+    check("a PNG declared as a JPEG is accepted", asJpeg.status === 200, `${asJpeg.status}`);
+    const servedPng = await fetch(base + mislabelled, { headers: { "X-Forwarded-Proto": "https", Cookie: applicant.cookieHeader() } });
+    check("and stored and served as what it is: a PNG, unsniffable, sandboxed, inline", servedPng.status === 200 && servedPng.headers.get("content-type") === "image/png" && servedPng.headers.get("x-content-type-options") === "nosniff" && servedPng.headers.get("content-security-policy") === "sandbox" && !servedPng.headers.get("content-disposition"), `${servedPng.status} ${servedPng.headers.get("content-type")} ${servedPng.headers.get("content-disposition")}`);
+    const pdfPath = await newObject();
+    const asPdf = await applicant.req("PUT", pdfPath, tinyPdf(), { "Content-Type": "application/octet-stream" });
+    const servedPdf = await fetch(base + pdfPath, { headers: { "X-Forwarded-Proto": "https", Cookie: applicant.cookieHeader() } });
+    check("a PDF declared as nothing in particular is accepted and served as a PDF", asPdf.status === 200 && servedPdf.status === 200 && servedPdf.headers.get("content-type") === "application/pdf", `${asPdf.status} ${servedPdf.headers.get("content-type")}`);
+    const peek = await fetch(base + mislabelled, { headers: { "X-Forwarded-Proto": "https", Cookie: rider.cookieHeader() } });
+    check("another rider cannot open the applicant's document", peek.status === 403, `${peek.status}`);
+
     // Each document is saved to the profile the moment it uploads, one PUT
     // per document, exactly as client/src/components/DocumentUploadModal.tsx
     // does it — so this proves the real path, not a shortcut to the database.

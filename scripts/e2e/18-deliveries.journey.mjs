@@ -1,4 +1,4 @@
-import { Session, check, section, serverLog, deleteRides, deleteOrgs, FIXTURES, PICKUP, DEST } from "./harness.mjs";
+import { Session, check, section, serverLog, deleteRides, deleteOrgs, FIXTURES, PICKUP, DEST, tinyPng } from "./harness.mjs";
 
 /**
  * Slice 6: a job with no passenger. A law office sends a parcel across the
@@ -94,22 +94,30 @@ export async function run({ base, db, server }) {
     // A real photo goes through the same door as driver documents.
     const up = await driver.req("POST", "/api/objects/upload?store=db", {});
     const objectPath = new URL(up.json?.uploadURL ?? "http://x/").pathname;
-    const put = await driver.req("PUT", objectPath, "not-really-jpeg-bytes", { "Content-Type": "image/jpeg" });
+    const put = await driver.req("PUT", objectPath, tinyPng(), { "Content-Type": "image/jpeg" });
     check("the driver's phone uploads the photo through PG Ride", up.status === 200 && put.status === 200, `upload=${up.status} put=${put.status} ${objectPath}`);
     // Only the driver's own image counts: someone else's object, or a page
     // uploaded as a "photo", is refused (post-implementation audit).
     const theirs = await rider.req("POST", "/api/objects/upload?store=db", {});
     const theirsPath = new URL(theirs.json?.uploadURL ?? "http://x/").pathname;
-    await rider.req("PUT", theirsPath, "someone-elses-bytes", { "Content-Type": "image/jpeg" });
+    await rider.req("PUT", theirsPath, tinyPng(), { "Content-Type": "image/jpeg" });
     const notMine = await driver.req("POST", `/api/driver/rides/${ride.id}/proof`, { receivedBy: "Ms Rivera", photoUrl: theirsPath });
     check("an object the driver did not upload is refused as a proof", notMine.status === 403 && /not yours/.test(notMine.json?.message ?? ""), JSON.stringify(notMine.json));
     const upHtml = await driver.req("POST", "/api/objects/upload?store=db", {});
     const htmlPath = new URL(upHtml.json?.uploadURL ?? "http://x/").pathname;
-    await driver.req("PUT", htmlPath, "<script>alert(1)</script>", { "Content-Type": "text/html" });
+    // A page sent as a "photo" is refused at the door by its bytes, whatever
+    // Content-Type it claimed (corporate audit #340), so it never exists to
+    // be named as a proof.
+    const htmlPut = await driver.req("PUT", htmlPath, "<script>alert(1)</script>", { "Content-Type": "image/jpeg" });
+    check("a page uploaded as a photo is refused at the door, by its bytes", htmlPut.status === 400 && /Only photos/.test(htmlPut.json?.message ?? ""), `${htmlPut.status} ${JSON.stringify(htmlPut.json?.message)}`);
     const notPhoto = await driver.req("POST", `/api/driver/rides/${ride.id}/proof`, { receivedBy: "Ms Rivera", photoUrl: htmlPath });
-    check("a page uploaded as a photo is refused", notPhoto.status === 400 && /must be a photo/.test(notPhoto.json?.message ?? ""), JSON.stringify(notPhoto.json));
-    const served = await fetch(base + htmlPath, { headers: { "X-Forwarded-Proto": "https", Cookie: driver.cookieHeader() } });
-    check("and even its uploader only ever gets it as a download, never a page", served.status === 200 && /attachment/.test(served.headers.get("content-disposition") ?? ""), `${served.status} ${served.headers.get("content-disposition")}`);
+    check("and cannot be named as a proof", notPhoto.status === 400, JSON.stringify(notPhoto.json));
+    // A page stored before uploads were checked (seeded straight into the
+    // store) is a download under a neutral type, never a page.
+    const legacyId = "00000000-0000-4000-8000-0000000000aa";
+    await db.query("INSERT INTO stored_objects (id, owner_user_id, content_type, size_bytes, data_base64) VALUES ($1, $2, 'text/html', 24, $3) ON CONFLICT (id) DO NOTHING", [legacyId, FIXTURES.driver.id, Buffer.from("<script>alert(1)</script>").toString("base64")]);
+    const served = await fetch(`${base}/api/objects/db-upload/${legacyId}`, { headers: { "X-Forwarded-Proto": "https", Cookie: driver.cookieHeader() } });
+    check("a page stored before the rule is only ever a download under a neutral type, never a page", served.status === 200 && /attachment/.test(served.headers.get("content-disposition") ?? "") && /octet-stream/.test(served.headers.get("content-type") ?? "") && served.headers.get("x-content-type-options") === "nosniff" && served.headers.get("content-security-policy") === "sandbox", `${served.status} ${served.headers.get("content-type")} ${served.headers.get("content-disposition")}`);
     const ghost = await driver.req("POST", `/api/driver/rides/${ride.id}/proof`, { receivedBy: "Ms Rivera", photoUrl: "/api/objects/db-upload/00000000-0000-4000-8000-000000000001" });
     check("a photo that was never uploaded is refused", ghost.status === 400, JSON.stringify(ghost.json));
     const proof = await driver.req("POST", `/api/driver/rides/${ride.id}/proof`, { receivedBy: "Ms Rivera", photoUrl: up.json?.uploadURL, note: "Left at reception desk", lat: DEST.lat, lng: DEST.lng });
@@ -118,7 +126,7 @@ export async function run({ base, db, server }) {
     check("a recorded photo is not replaced", swap.status === 409 && /already has its photo/.test(swap.json?.message ?? ""), JSON.stringify(swap.json));
     const officeDesk = rider; // the rider fixture owns the office account
     const photo = await officeDesk.text("GET", objectPath);
-    check("the desk that booked the job can see the photo; it belongs to the account", photo.status === 200 && /image\/jpeg/.test(photo.type), `status=${photo.status} type=${photo.type}`);
+    check("the desk that booked the job can see the photo; it belongs to the account", photo.status === 200 && /image\/png/.test(photo.type), `status=${photo.status} type=${photo.type}`);
     const stranger = new Session(base); await stranger.login(FIXTURES.admin.email);
     check("an admin can see it too", (await stranger.text("GET", objectPath)).status === 200);
     check("the driver records who took it and the photo", proof.status === 200 && proof.json?.proof?.receivedBy === "Ms Rivera" && proof.json?.proof?.photoUrl === objectPath, JSON.stringify(proof.json?.proof));
@@ -208,7 +216,7 @@ export async function run({ base, db, server }) {
     const signedBefore = after24?.signed;
     const up2 = await driver.req("POST", "/api/objects/upload?store=db", {});
     const path2 = new URL(up2.json?.uploadURL ?? "http://x/").pathname;
-    await driver.req("PUT", path2, "later-jpeg-bytes", { "Content-Type": "image/jpeg" });
+    await driver.req("PUT", path2, tinyPng(), { "Content-Type": "image/jpeg" });
     const followed = await driver.req("POST", `/api/driver/rides/${doorRide}/proof`, { photoUrl: up2.json?.uploadURL });
     check("a late photo is still taken, 'never arrived' clears, and the handover time is not rewritten", followed.status === 200 && followed.json?.proof?.photoUrl === path2 && followed.json?.proof?.photoPending === false && followed.json?.proof?.photoNeverArrived === false && followed.json?.proof?.signedAt === signedBefore && !!followed.json?.proof?.photoUploadedAt, JSON.stringify(followed.json?.proof));
     const deskJobs = await rider.req("GET", `/api/org/${office.json.id}/jobs`);

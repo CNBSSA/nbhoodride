@@ -1,4 +1,4 @@
-import twilio from "twilio";
+import { sendSms as sendThroughRegistry } from "../smsService";
 import type { IStorage } from "../storage";
 import { createGuardianShareToken } from "./orchestrator";
 import { resolveAppUrl } from "../appUrl";
@@ -29,22 +29,15 @@ function normalizePhone(phone: string): string {
   return phone.startsWith("+") ? phone : `+${digits}`;
 }
 
-function twilioClient() {
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  const from = process.env.TWILIO_PHONE_NUMBER;
-  if (!sid || !token || !from) return null;
-  return { client: twilio(sid, token), from };
-}
-
+// Every outbound text leaves through the one door (server/smsService.ts):
+// the opt-out registry is checked on every send, the number is normalized
+// once, and a Twilio outage never fails the ride. This agent used to carry
+// a Twilio client of its own, so a tracking link could be texted to a
+// number that had replied STOP (corporate audit #335).
 async function sendSms(to: string, body: string): Promise<boolean> {
-  const cfg = twilioClient();
-  if (!cfg) {
-    console.log("[sms] Twilio not configured — would send:", { to, body });
-    return false;
-  }
-  await cfg.client.messages.create({ to, from: cfg.from, body });
-  return true;
+  const result = await sendThroughRegistry(to, body);
+  if (!result.sent) console.log(`[sms] booking agent: not sent (${result.reason}${result.detail ? `: ${result.detail}` : ""})`);
+  return result.sent;
 }
 
 /** E4 — Inbound SMS booking + tracking fallback. */
