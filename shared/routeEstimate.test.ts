@@ -15,4 +15,13 @@ describe("road figures an app reports are believed only when they could be true"
     expect(roadFiguresPlausible(NaN, 42, 15.4)).toBe(false);
     expect(roadFiguresPlausible(17.3, 0, 15.4)).toBe(false);
   });
+  it("refuses figures far above the road: a short trip cannot be priced as a long one", () => {
+    // 1 mile apart, app claims 489 miles / 420 minutes: passes the floors, not the ceilings.
+    expect(roadFiguresPlausible(489, 420, 1)).toBe(false);
+    expect(roadFiguresPlausible(4.1, 12, 1)).toBe(false);
+    expect(roadFiguresPlausible(3.9, 12, 1)).toBe(true);
+    // 15.4 miles apart: 17.3 miles in 42 minutes is a real drive; 17.3 miles in 5 hours is not.
+    expect(roadFiguresPlausible(17.3, 300, 15.4)).toBe(false);
+    expect(roadFiguresPlausible(17.3, 100, 15.4)).toBe(true);
+  });
 });

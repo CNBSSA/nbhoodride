@@ -35,16 +35,27 @@ export function estimateRoute(points: RoutePoint[]): { miles: number; minutes: n
   return { miles, minutes, straightLineMiles: Math.round(straight * 100) / 100 };
 }
 
+/** A road route is never this many times the straight line (plus a mile for the block). */
+export const MAX_ROAD_TO_STRAIGHT = 3;
+/** Nobody averages under 4 mph door to door, even in traffic, beyond a 20-minute stall. */
+export const MAX_MINUTES_PER_MILE = 15;
+export const MAX_STALL_MINUTES = 20;
+
 /**
  * Whether road figures an app reports for a trip could be true. A road
  * route is never shorter than the straight line between its points, and
  * nobody averages better than 70 mph door to door — figures under either
- * bar were not measured, they were typed. Above the bars they are taken as
- * the app's Mapbox route, which is better than any estimate made here.
+ * bar were not measured, they were typed. Nor is a road route ever many
+ * times the straight line, or slower than a walk: figures far above the
+ * bars would price a trip up to the fare cap on nobody's road (corporate
+ * audit #379). Between the bars they are taken as the app's Mapbox route,
+ * which is better than any estimate made here.
  */
 export function roadFiguresPlausible(miles: number, minutes: number, straightLineMiles: number): boolean {
   if (!Number.isFinite(miles) || !Number.isFinite(minutes) || miles <= 0 || minutes <= 0) return false;
   if (miles < straightLineMiles * 0.95) return false;
+  if (miles > straightLineMiles * MAX_ROAD_TO_STRAIGHT + 1) return false;
   if (minutes < (miles / 70) * 60) return false;
+  if (minutes > miles * MAX_MINUTES_PER_MILE + MAX_STALL_MINUTES) return false;
   return true;
 }

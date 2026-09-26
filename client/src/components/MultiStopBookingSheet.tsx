@@ -10,6 +10,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { MapPin, Plus, X, Navigation, DollarSign, Shield, Loader2, CheckCircle, Trash2 } from "lucide-react";
 import { PG_CARD } from "@shared/userFacingCopy";
+import { estimateRoute } from "@shared/routeEstimate";
 
 interface Stop {
   address: string;
@@ -36,27 +37,18 @@ interface MultiStopBookingSheetProps {
 
 const MAX_STOPS = 3;
 
-function haversineMiles(lat1: number, lng1: number, lat2: number, lng2: number) {
-  const R = 3958.8;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function estimateFareForRoute(stops: Stop[], dest: Stop): number {
-  // Sum haversine distances between consecutive stops including final destination
-  const allPoints = stops.filter((s) => s.lat !== null);
-  if (allPoints.length < 2) return 0;
-  let dist = 0;
-  for (let i = 0; i < allPoints.length - 1; i++) {
-    dist += haversineMiles(allPoints[i].lat!, allPoints[i].lng!, allPoints[i + 1].lat!, allPoints[i + 1].lng!);
-  }
-  const roadDist = dist * 1.3;
-  const duration = Math.round((roadDist / 25) * 60);
-  return Math.max(5, 2.5 + roadDist * 1.5 + duration * 0.3);
+// The fare comes from the server's rate card, never from arithmetic on the
+// phone: this sheet used to carry a tariff of its own ($2.50 + $1.50/mi +
+// $0.30/min, min $5) that no longer matched what every other ride was
+// quoted, and the server now prices the booking itself either way
+// (corporate audit #379). The route figures go with the booking so the
+// server prices the same route the rider was shown.
+async function quoteFromServer(distance: number, duration: number): Promise<number> {
+  const res = await apiRequest("POST", "/api/rides/calculate-fare", { distance, duration });
+  const data = await res.json();
+  const total = Number(data?.total);
+  if (!Number.isFinite(total) || total <= 0) throw new Error("No fare quote returned");
+  return total;
 }
 
 export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLocation }: MultiStopBookingSheetProps) {
@@ -68,6 +60,8 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
   const [destination, setDestination] = useState<Stop>({ address: "", lat: null, lng: null });
   const [selectedDriver, setSelectedDriver] = useState("");
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
+  const [routeFigures, setRouteFigures] = useState<{ miles: number; minutes: number } | null>(null);
+  const [quoting, setQuoting] = useState(false);
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -82,6 +76,8 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
       setDestination({ address: "", lat: null, lng: null });
       setSelectedDriver("");
       setFareEstimate(null);
+      setRouteFigures(null);
+      setQuoting(false);
     }
   }, [isOpen, userLocation]);
 
@@ -128,10 +124,18 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
       toast({ title: "Pick each address", description: "Choose every stop and the destination from the suggestions.", variant: "destructive" });
       return;
     }
-    const allForFare = [...stops, destination];
-    const fare = estimateFareForRoute(allForFare, destination);
-    setFareEstimate(fare);
-    setStep(2);
+    const route = estimateRoute([...stops, destination].map((s) => ({ lat: s.lat as number, lng: s.lng as number })));
+    setQuoting(true);
+    quoteFromServer(route.miles, route.minutes)
+      .then((fare) => {
+        setRouteFigures(route);
+        setFareEstimate(fare);
+        setStep(2);
+      })
+      .catch(() => {
+        toast({ title: "Couldn't get a fare quote", description: "Check your connection and try again.", variant: "destructive" });
+      })
+      .finally(() => setQuoting(false));
   };
 
   const handleConfirm = () => {
@@ -143,6 +147,8 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
       pickupStops: additionalStops.map((s) => ({ lat: s.lat, lng: s.lng, address: s.address })),
       driverId: selectedDriver,
       estimatedFare: fareEstimate?.toFixed(2),
+      distance: routeFigures?.miles,
+      duration: routeFigures?.minutes,
       paymentMethod: "card",
       rideType: "multi_stop",
     });
@@ -291,8 +297,8 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
 
         <div className="p-4 border-t flex-shrink-0 space-y-2" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom, 1rem))" }}>
           {step === 1 && (
-            <Button onClick={handleGeocodeAll} disabled={destination.lat === null || stops.some((s, i) => i > 0 && s.lat === null)} className="w-full h-12" data-testid="button-multistop-next">
-              {"Next — Calculate Fare"}
+            <Button onClick={handleGeocodeAll} disabled={quoting || destination.lat === null || stops.some((s, i) => i > 0 && s.lat === null)} className="w-full h-12" data-testid="button-multistop-next">
+              {quoting ? <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Getting your fare…</> : "Next — Calculate Fare"}
             </Button>
           )}
           {step === 2 && (
