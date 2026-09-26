@@ -186,6 +186,7 @@ import { CommercialError } from "./commercial/organizations";
 import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadges";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
+import { judgeUpload, safeServeHeaders } from "@shared/uploadTypes";
 import { splitFare } from "@shared/payoutPolicy";
 import { TIP_MAX, TIP_MIN, describeTipRefusal, normalizeTip, tipRefusal } from "@shared/tipPolicy";
 import { CASH_DISCONTINUED_MESSAGE, isDiscontinuedPaymentMethod, settlesInCash } from "@shared/paymentMethods";
@@ -1417,8 +1418,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid object id" });
       }
       const body: Buffer = req.body;
-      if (!Buffer.isBuffer(body) || body.length === 0) {
-        return res.status(400).json({ message: "Empty upload" });
+      // The bytes decide what the file is; the request's Content-Type is a
+      // claim (corporate audit #340). A photo or a PDF by its signature is
+      // stored under that type; anything else is refused with a reason.
+      const judged = judgeUpload(Buffer.isBuffer(body) ? body : null, req.get("content-type"));
+      if (!judged.ok) {
+        console.warn(`[upload] refused :: ${userId} declared ${judged.declared} :: ${judged.reason}`);
+        return res.status(400).json({ message: judged.reason });
       }
       const existing = await storage.getStoredObject(id);
       if (existing && existing.ownerUserId !== userId) {
@@ -1432,7 +1438,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.createStoredObject({
         id,
         ownerUserId: userId,
-        contentType: req.get("content-type") || "application/octet-stream",
+        contentType: judged.contentType!,
         sizeBytes: body.length,
         dataBase64: body.toString("base64"),
       });
@@ -1459,13 +1465,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Not allowed" });
         }
       }
-      res.set("Content-Type", obj.contentType);
-      res.set("Cache-Control", "private, max-age=3600");
-      // A stored object that is not an image or a PDF is a download, never a
-      // page: nothing a driver uploads can run in a desk's session.
-      if (!/^(image\/|application\/pdf)/i.test(obj.contentType)) res.set("Content-Disposition", `attachment; filename="${obj.id}"`);
-      res.set("X-Content-Type-Options", "nosniff");
-      res.set("Content-Security-Policy", "sandbox");
+      // A photo or a PDF is shown inline, sandboxed and unsniffable; a file
+      // stored before uploads were checked by their bytes is a download
+      // under a neutral type, never a page: nothing a driver uploaded can
+      // run in a desk's session (shared/uploadTypes.ts).
+      res.set(safeServeHeaders(obj.contentType, obj.id));
       res.send(Buffer.from(obj.dataBase64, "base64"));
     } catch (error) {
       console.error("Error serving stored object:", error);
