@@ -41,7 +41,10 @@ export async function run({ base, db }) {
     cleanup.groupId = created.json?.group?.id ?? null;
     check("organizer receives a PG- code", typeof code === "string" && /^PG-/.test(code), `code=${code}`);
     check("organizer's ride carries the departure time", new Date(created.json?.scheduledAt ?? 0).getTime() === new Date(departAt).getTime());
-    check("organizer pays full fare while alone", Number(created.json?.estimatedFare) === 20, `fare=${created.json?.estimatedFare}`);
+    // The organizer's fare is the server's quote for their route (corporate
+    // audit #379), not the $20 the app sent.
+    const orgQuote = (await organizer.req("POST", "/api/rides/calculate-fare", { distance: Number(created.json?.distance), duration: Number(created.json?.duration) })).json?.total;
+    check("organizer pays the server's full fare for their route while alone", Number(created.json?.estimatedFare) > 0 && Math.abs(Number(created.json?.estimatedFare) - orgQuote) < 0.011, `fare=${created.json?.estimatedFare} quote=${orgQuote}`);
 
     section("Coworkers join with the code");
     const preview = await bola.session.req("GET", `/api/rides/schedule/${code}`);
@@ -53,7 +56,7 @@ export async function run({ base, db }) {
     const { rows: afterTwo } = await db.query("SELECT rider_id, estimated_fare, original_fare, group_discount_amount FROM rides WHERE group_id=$1 ORDER BY created_at", [cleanup.groupId]);
     const org = afterTwo.find((r) => r.rider_id === FIXTURES.rider.id);
     const b = afterTwo.find((r) => r.rider_id === bola.id);
-    check("organizer's fare drops 30% once a coworker joins ($20 → $14)", Number(org?.estimated_fare) === 14 && Number(org?.original_fare) === 20, `fare=${org?.estimated_fare} original=${org?.original_fare}`);
+    check("organizer's fare drops 30% once a coworker joins", Math.abs(Number(org?.estimated_fare) - Math.round(orgQuote * 0.7 * 100) / 100) < 0.011 && Math.abs(Number(org?.original_fare) - orgQuote) < 0.011, `fare=${org?.estimated_fare} original=${org?.original_fare} quote=${orgQuote}`);
     check("joiner is 30% off their own route (not stacked)", b && Math.abs(Number(b.estimated_fare) - Number(b.original_fare) * 0.7) < 0.011, `fare=${b?.estimated_fare} original=${b?.original_fare}`);
     // The joiner's full fare must be the rate card's quote for their route —
     // the same number /api/rides/calculate-fare gives for the same figures.
@@ -112,7 +115,7 @@ export async function run({ base, db }) {
     check("first coworker cancels free (scheduled, hours out)", leave1.status === 200 && Number(leave1.json?.cancellationFee ?? 0) === 0, JSON.stringify(leave1.json?.message ?? leave1.json?.cancellationFee ?? leave1.status));
     const orgAfter1 = await rideOf(FIXTURES.rider.id);
     const chidiAfter1 = await rideOf(chidi.id);
-    check("with two riders left the group rate still holds", Number(orgAfter1.estimated_fare) === 14 && Math.abs(Number(chidiAfter1.estimated_fare) - Number(chidiAfter1.original_fare) * 0.7) < 0.011, `org=${orgAfter1.estimated_fare} chidi=${chidiAfter1.estimated_fare}`);
+    check("with two riders left the group rate still holds", Math.abs(Number(orgAfter1.estimated_fare) - Math.round(orgQuote * 0.7 * 100) / 100) < 0.011 && Math.abs(Number(chidiAfter1.estimated_fare) - Number(chidiAfter1.original_fare) * 0.7) < 0.011, `org=${orgAfter1.estimated_fare} chidi=${chidiAfter1.estimated_fare}`);
     const { rows: [gAfter1] } = await db.query("SELECT filled_slots, discount_active FROM ride_groups WHERE id=$1", [cleanup.groupId]);
     check("seat released, rate still on", gAfter1.filled_slots === 2 && gAfter1.discount_active === true, JSON.stringify(gAfter1));
     await new Promise((r) => setTimeout(r, 300));
@@ -124,14 +127,14 @@ export async function run({ base, db }) {
     const leave2 = await chidi.session.req("POST", `/api/rides/${chidiRide.id}/cancel`, { reason: "e2e: coworker leaves" });
     check("second coworker cancels", leave2.status === 200, JSON.stringify(leave2.json?.message ?? leave2.status));
     const orgAfter2 = await rideOf(FIXTURES.rider.id);
-    check("the last rider is back at the solo fare ($14 → $20)", Number(orgAfter2.estimated_fare) === 20 && Number(orgAfter2.group_discount_amount) === 0, `fare=${orgAfter2.estimated_fare} discount=${orgAfter2.group_discount_amount}`);
+    check("the last rider is back at the solo fare (the server's quote)", Math.abs(Number(orgAfter2.estimated_fare) - orgQuote) < 0.011 && Number(orgAfter2.group_discount_amount) === 0, `fare=${orgAfter2.estimated_fare} discount=${orgAfter2.group_discount_amount}`);
     const { rows: [gAfter2] } = await db.query("SELECT filled_slots, discount_active FROM ride_groups WHERE id=$1", [cleanup.groupId]);
     check("group rate switched off", gAfter2.filled_slots === 1 && gAfter2.discount_active === false, JSON.stringify(gAfter2));
     const untilMs = orgAfter2.free_cancel_until ? new Date(orgAfter2.free_cancel_until).getTime() - Date.now() : 0;
     check("a ~30-minute free-cancel window is open", untilMs > 25 * 60_000 && untilMs <= 30 * 60_000 + 5000, `window=${Math.round(untilMs / 60_000)} min`);
     await new Promise((r) => setTimeout(r, 300));
     const orgNotices2 = await noticesFor(FIXTURES.rider.id);
-    check("the last rider is told the rate is gone, the new fare, and that cancelling is free", orgNotices2.length >= 2 && /solo rate, \$20\.00/.test(orgNotices2.at(-1).body) && /cancel free/.test(orgNotices2.at(-1).body), JSON.stringify(orgNotices2.at(-1)));
+    check("the last rider is told the rate is gone, the new fare, and that cancelling is free", orgNotices2.length >= 2 && new RegExp(`solo rate, \\$${orgQuote.toFixed(2).replace(".", "\\.")}`).test(orgNotices2.at(-1).body) && /cancel free/.test(orgNotices2.at(-1).body), JSON.stringify(orgNotices2.at(-1)));
     const requotePreview = await organizer.req("GET", `/api/rides/${orgAfter2.id}/cancel-preview`);
     check("cancel preview honours the window with the reason", requotePreview.status === 200 && Number(requotePreview.json?.fee) === 0 && /re-quoted/.test(requotePreview.json?.reason ?? ""), JSON.stringify(requotePreview.json));
   } finally {
