@@ -77,6 +77,7 @@ export default function MultiStopBookingSheet({ isOpen, onClose, drivers, userLo
       setSelectedDriver("");
       setFareEstimate(null);
       setRouteFigures(null);
+      setQuoting(false);
     }
   }, [isOpen, userLocation]);
 

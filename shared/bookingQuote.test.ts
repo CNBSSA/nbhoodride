@@ -18,6 +18,11 @@ describe("bookingRouteFigures", () => {
     const fast = bookingRouteFigures([A, B], 9.4, 3);
     expect(fast.source).toBe("server");
   });
+  it("replaces figures far above the road, so a short trip is never priced as a long one", () => {
+    const inflated = bookingRouteFigures([A, B], 489, 420);
+    expect(inflated.source).toBe("server");
+    expect(inflated.miles).toBeLessThan(30);
+  });
   it("replaces figures that are missing, negative or absurd", () => {
     expect(bookingRouteFigures([A, B], undefined, undefined).source).toBe("server");
     expect(bookingRouteFigures([A, B], -5, 20).source).toBe("server");
