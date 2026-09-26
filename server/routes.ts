@@ -1465,10 +1465,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Not allowed" });
         }
       }
-      // A photo or a PDF is shown inline, sandboxed and unsniffable; a file
+      // A photo or a PDF is shown inline, unsniffable (so a polyglot with an
+      // image header is never read as HTML) and under a sandbox CSP; a file
       // stored before uploads were checked by their bytes is a download
-      // under a neutral type, never a page: nothing a driver uploaded can
-      // run in a desk's session (shared/uploadTypes.ts).
+      // under a neutral type, never a page (shared/uploadTypes.ts). A PDF's
+      // own scripts are held by the browser's separate PDF viewer process,
+      // not by these headers.
       res.set(safeServeHeaders(obj.contentType, obj.id));
       res.send(Buffer.from(obj.dataBase64, "base64"));
     } catch (error) {
