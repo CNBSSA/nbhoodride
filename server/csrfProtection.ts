@@ -68,6 +68,10 @@ function isExempt(req: Request): boolean {
   // so a forged request can at worst store junk under the attacker's OWN
   // session-less request (rejected) — acceptable exemption.
   if (req.path.startsWith("/api/objects/db-upload/")) return true;
+  // The legacy inbound-SMS door is Twilio-signed like the webhooks
+  // (corporate audit #335); the signature is the stronger check, and a
+  // browser never posts here.
+  if (req.path === "/api/sms/inbound") return true;
   return false;
 }
 
