@@ -262,20 +262,25 @@ export async function run({ base, db, server }) {
     const cards = await rider.req("GET", "/api/payment/methods");
     check("saved cards during a Stripe outage answer 503 with a message, not 500", cards.status === 503 && /temporarily unavailable/.test(cards.json?.message ?? ""), `${cards.status} ${JSON.stringify(cards.json)}`);
 
-    section("The outside watch can use this server");
+    section("The outside watch goes red when a configured dependency is down");
+    // Here Stripe is configured with a key that cannot work and the map has
+    // no token: two configured critical dependencies down. Until the
+    // corporate audit (#384) the outside watch wrote them into a GREEN run as
+    // a remark, and green read as "a rider can use PG Ride" while nobody
+    // could pay or see a map. It is red now, and says why.
     const probe = spawnSync("node", ["scripts/production-watch.mjs"], { env: { ...process.env, BASE_URL: base }, encoding: "utf8" });
-    const lastLine = (probe.stdout ?? "").trim().split("\n").pop() ?? "";
-    check("outside probe passes against a healthy app shell and pages", probe.status === 0, `${probe.status}: ${lastLine} ${probe.stderr}`);
-    // Names AND reasons, in any order, with details that may themselves
-    // contain brackets — so match on what the line says, not its shape.
-    check("outside probe carries the server's own view instead of paging twice",
-      /server reports down:/.test(lastLine) && /stripe/.test(lastLine) && /already paged by the server/.test(lastLine), lastLine);
+    const lines = (probe.stdout ?? "").trim().split("\n");
+    const lastLine = lines.pop() ?? "";
+    let verdict = {}; try { verdict = JSON.parse(lines.pop() ?? "{}"); } catch {}
+    check("outside probe fails red with a configured Stripe and the map down", probe.status === 1 && /^DOWN — /.test(lastLine), `${probe.status}: ${lastLine} ${probe.stderr}`);
+    check("the server itself answered: only the dependencies are the failures", Array.isArray(verdict.failures) && verdict.failures.length === 2 && verdict.failures.every((f) => /^(Stripe|Map tiles) down:/.test(f)), JSON.stringify(verdict.failures));
     // Stripe's own wording varies between runs ("Invalid API Key",
     // "Invalid JSON received"), so assert that a reason is CARRIED, not
     // which words the provider chose. The map's reason is ours, so it is
     // pinned exactly — that is the one an operator has to act on.
     check("and it carries WHY, so the reason does not need chasing down",
-      /stripe — \S/.test(lastLine) && /maps — .*MAPBOX_TOKEN/i.test(lastLine), lastLine);
+      /Stripe down: \S/.test(lastLine) && /Map tiles down: .*MAPBOX_TOKEN/i.test(lastLine), lastLine);
+    check("and says the server has paged too, so two pages read as one outage", /the server has paged this too/.test(lastLine), lastLine);
     check("the probe never echoes the key itself", !/sk_test_e2e_fake/.test(lastLine), lastLine);
     const probeDown = spawnSync("node", ["scripts/production-watch.mjs"], { env: { ...process.env, BASE_URL: "http://127.0.0.1:1" }, encoding: "utf8" });
     check("outside probe fails red when nothing answers", probeDown.status === 1 && /^DOWN — Process/.test((probeDown.stdout ?? "").trim().split("\n").pop() ?? ""), (probeDown.stdout ?? "").trim().split("\n").pop());
