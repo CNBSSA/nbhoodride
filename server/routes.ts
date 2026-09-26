@@ -187,6 +187,8 @@ import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadge
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { judgeUpload, safeServeHeaders } from "@shared/uploadTypes";
+import { validateRoutePoints } from "@shared/bookingQuote";
+import { priceBooking } from "./bookingQuote";
 import { splitFare } from "@shared/payoutPolicy";
 import { TIP_MAX, TIP_MIN, describeTipRefusal, normalizeTip, tipRefusal } from "@shared/tipPolicy";
 import { CASH_DISCONTINUED_MESSAGE, isDiscontinuedPaymentMethod, settlesInCash } from "@shared/paymentMethods";
@@ -202,6 +204,8 @@ const RIDER_BOOKING_FIELDS = [
   "bookedForFriend", "passengerName", "passengerPhone", "rideType", "paymentMethod",
 ] as const;
 const RIDER_PICKABLE_RIDE_TYPES = new Set(["solo", "multi_stop", "shared_schedule"]);
+/** Extra pickups on a multi-stop ride: the sheet offers three pickups in all; the API bounds the route, not the sheet. */
+const MAX_MULTI_STOP_PICKUPS = 5;
 
 // Lazy Anthropic client — instantiated on first use so the server starts
 // successfully even when ANTHROPIC_API_KEY is not yet configured.
@@ -4107,71 +4111,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // first real trip and made the receipt look like a time-only charge.
       // "Add a stop": extra destinations on the way, in order. The quote (and
       // so the fare) covers the whole route pickup → stops → destination.
-      const rawStops = Array.isArray(req.body.stops) ? req.body.stops : [];
-      if (rawStops.length > MAX_RIDE_STOPS) {
-        return res.status(400).json({ message: `You can add up to ${MAX_RIDE_STOPS} stops to a ride.` });
+      const stopsCheck = validateRoutePoints(req.body.stops, MAX_RIDE_STOPS);
+      if (!stopsCheck.ok) {
+        return res.status(400).json({ message: stopsCheck.error });
       }
-      const stops = rawStops.map((s: any) => ({
-        lat: Number(s?.lat),
-        lng: Number(s?.lng),
-        address: String(s?.address ?? "").trim().slice(0, 200),
-      }));
-      if (stops.some((s: { lat: number; lng: number; address: string }) =>
-        !Number.isFinite(s.lat) || !Number.isFinite(s.lng) || Math.abs(s.lat) > 90 || Math.abs(s.lng) > 180 || !s.address)) {
-        return res.status(400).json({ message: "Each stop needs a full address. Pick one from the suggestions." });
-      }
-      const routeEstimate = stops.length > 0 ? estimateRoute([pickup, ...stops, destination]) : null;
-
-      const clientDistance = Number(req.body.distance);
-      const clientDuration = Number(req.body.duration);
-      const quotedMiles = Number.isFinite(clientDistance) && clientDistance > 0 && clientDistance < 500
-        ? clientDistance
-        : routeEstimate?.miles ?? validation.distanceMiles ?? 0; // validation figure is already road miles
-      const quotedMinutes = Number.isFinite(clientDuration) && clientDuration > 0 && clientDuration < 1440
-        ? Math.round(clientDuration)
-        : routeEstimate?.minutes ?? validation.durationMinutes ?? 0;
+      const stops = stopsCheck.points;
 
       // The fare is the quote, and at completion the quote is what is
-      // charged — so the quote cannot be the client's number. Until
-      // 2026-09-16 only XL/SUV requests were floored at the server's class
-      // quote; a standard ride stored whatever estimatedFare the app sent,
-      // and a tampered app could book a twenty-mile ride for a dollar and
-      // pay the driver eighty-five cents of it (daily audit, #379).
-      //
-      // Now every class is floored at the server's own quote. The app's
-      // road figures are its Mapbox route — more accurate than the
-      // straight-line × 1.3 estimate made here, and what the rider was
-      // shown — so they price the floor when they could be true (no
-      // shorter than the straight line, no faster than 70 mph); figures
-      // that could not be true are replaced by the server's own estimate.
-      // A fare the app quoted ABOVE the server's figure is left alone (a
-      // stale rate card on an old bundle can only overcharge the rider's
-      // own device) but flagged to the operator when it is materially above.
-      const bookingRates = await storage.getPlatformRates();
-      const bookingMultiplier = vehicleFareMultiplier(requestedVehicleType ?? "standard", bookingRates);
-      const straightLineMiles = routeEstimate?.straightLineMiles ?? validation.straightLineMiles ?? 0;
-      const clientFiguresPlausible = roadFiguresPlausible(clientDistance, clientDuration, straightLineMiles);
-      const serverMiles = clientFiguresPlausible ? quotedMiles : routeEstimate?.miles ?? validation.distanceMiles ?? quotedMiles;
-      const serverMinutes = clientFiguresPlausible ? quotedMinutes : routeEstimate?.minutes ?? validation.durationMinutes ?? quotedMinutes;
-      // The ride records the figures that priced it, so distance, duration
-      // and fare on a ride are always one coherent triple.
-      let rideMiles = quotedMiles;
-      let rideMinutes = quotedMinutes;
-      if (serverMiles > 0 && serverMinutes > 0) {
-        const serverQuote = estimateFare(serverMiles, serverMinutes, { rates: bookingRates, vehicleType: requestedVehicleType ?? "standard" }).total;
-        const clientFare = Number(bodyData.estimatedFare);
-        if (!Number.isFinite(clientFare) || clientFare + 0.01 < serverQuote) {
-          console.log(`[fare] ${requestedVehicleType ?? "standard"} request quoted $${Number.isFinite(clientFare) ? clientFare.toFixed(2) : "?"} by the app; server quote $${serverQuote.toFixed(2)} applied`);
-          if (Number.isFinite(clientFare) && clientFare > 0 && clientFare < serverQuote * 0.8) {
-            riderAlert("fare_mismatch", `${userId}:${clientFare.toFixed(2)}`, [["Rider", userId], ["App quoted", `$${clientFare.toFixed(2)}`], ["Server quote", `$${serverQuote.toFixed(2)}`], ["Effect", "Server quote applied"]]);
-          }
-          bodyData.estimatedFare = serverQuote.toFixed(2);
-          rideMiles = serverMiles;
-          rideMinutes = Math.round(serverMinutes);
-        } else if (Number.isFinite(clientFare) && clientFare > serverQuote * 1.25) {
-          riderAlert("fare_mismatch", `${userId}:${clientFare.toFixed(2)}`, [["Rider", userId], ["App quoted", `$${clientFare.toFixed(2)}`], ["Server quote", `$${serverQuote.toFixed(2)}`], ["Effect", "Left as quoted — check for a stale bundle"]]);
-        }
-      }
+      // charged — so the quote is the server's, never the app's number
+      // (shared/bookingQuote.ts, corporate audit #379). The app's road
+      // figures price it when they could be true; its fare is compared and
+      // ops are told when it is far off, but the ride is booked at the
+      // server's quote either way. Distance, duration and fare on a ride
+      // are always one coherent triple.
+      const priced = await priceBooking({
+        door: "ride",
+        userId,
+        points: [pickup, ...stops, destination],
+        appFare: bodyData.estimatedFare,
+        appMiles: req.body.distance,
+        appMinutes: req.body.duration,
+        vehicleType: requestedVehicleType ?? "standard",
+      });
+      bodyData.estimatedFare = priced.fare;
+      const rideMiles = priced.miles;
+      const rideMinutes = priced.minutes;
+      const bookingMultiplier = priced.multiplier;
 
       const dataToValidate = {
         ...bodyData,
@@ -4190,7 +4155,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ["Rider", `${bookingRider?.firstName ?? ""} ${bookingRider?.lastName ?? ""}`.trim() || userId],
         ["From", pickup.address],
         ["To", destination.address],
-        ["Fare", `$${Number(req.body.estimatedFare ?? 0).toFixed(2)}`],
+        ["Fare", `$${priced.fare}`],
         ["Pickup at", req.body.scheduledAt ? new Date(req.body.scheduledAt).toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET" : "now"],
         ["For a friend", bookedForFriend ? passengerName : null],
       ]));
@@ -7999,6 +7964,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: NEEDS_CARD_MESSAGE });
       }
 
+      // Every pickup on the way needs real coordinates, or the route can be
+      // neither priced nor driven; and the fare is the server's quote for
+      // the whole route pickup → stops → destination on the live rate card,
+      // never the app's number (corporate audit #379: this door stored
+      // whatever estimatedFare the app sent, and the app priced it with a
+      // tariff nothing else used).
+      const multiStopsCheck = validateRoutePoints(pickupStops, MAX_MULTI_STOP_PICKUPS);
+      if (!multiStopsCheck.ok) {
+        return res.status(400).json({ message: multiStopsCheck.error });
+      }
+      const multiStops = multiStopsCheck.points;
+      const multiPriced = await priceBooking({
+        door: "multi-stop",
+        userId,
+        points: [pickupLocation, ...multiStops, destinationLocation],
+        appFare: estimatedFare,
+        appMiles: req.body.distance,
+        appMinutes: req.body.duration,
+      });
+
       // Create a ride group first
       const group = await storage.createRideGroup({
         organizerId: userId,
@@ -8015,9 +8000,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         driverId: driverId || null,
         pickupLocation,
         destinationLocation,
-        pickupStops: pickupStops || [],
+        pickupStops: multiStops,
         pickupInstructions,
-        estimatedFare: String(estimatedFare),
+        estimatedFare: multiPriced.fare,
+        distance: multiPriced.miles.toFixed(2),
+        duration: multiPriced.minutes,
         paymentMethod: "card",
         rideType: "multi_stop",
         groupId: group.id,
@@ -8026,8 +8013,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       opsAlert(formatOpsAlert("🚗 Multi-stop ride booked", [
         ["From", pickupLocation.address],
         ["To", destinationLocation.address],
-        ["Stops", Array.isArray(pickupStops) ? pickupStops.length : 0],
-        ["Fare", `$${Number(estimatedFare).toFixed(2)}`],
+        ["Stops", multiStops.length],
+        ["Fare", `$${multiPriced.fare}`],
       ]));
 
       // Dispatch: without this, a multi-stop booking sat pending forever —
@@ -8203,22 +8190,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } as any);
 
       // Create organizer's ride linked to the group
-      // Route figures the organizer's quote was priced on (receipt + history);
-      // the app's numbers when plausible, the shared road estimate otherwise.
-      const orgRoute = estimateRoute([pickupLocation, destinationLocation]);
-      const orgDistance = Number(req.body.distance), orgDuration = Number(req.body.duration);
-      const orgMiles = Number.isFinite(orgDistance) && orgDistance > 0 && orgDistance < 500 ? orgDistance : orgRoute.miles;
-      const orgMinutes = Number.isFinite(orgDuration) && orgDuration > 0 && orgDuration < 1440 ? Math.round(orgDuration) : orgRoute.minutes;
+      // The organizer's full fare is the server's quote for their route on
+      // the live rate card, never the app's number (corporate audit #379);
+      // the app's road figures price it when they could be true. The group
+      // discount comes off this figure when a coworker joins, so it is the
+      // originalFare too.
+      const orgPriced = await priceBooking({
+        door: "coworker-group",
+        userId,
+        points: [pickupLocation, destinationLocation],
+        appFare: estimatedFare,
+        appMiles: req.body.distance,
+        appMinutes: req.body.duration,
+      });
       const ride = await storage.createRide({
         riderId: userId,
         driverId: driverId || null,
         pickupLocation,
         destinationLocation,
         pickupInstructions,
-        estimatedFare: String(estimatedFare),
-        originalFare: String(estimatedFare),
-        distance: orgMiles.toFixed(2),
-        duration: orgMinutes,
+        estimatedFare: orgPriced.fare,
+        originalFare: orgPriced.fare,
+        distance: orgPriced.miles.toFixed(2),
+        duration: orgPriced.minutes,
         paymentMethod: "card",
         rideType: "shared_schedule",
         groupId: group.id,

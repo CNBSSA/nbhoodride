@@ -1,4 +1,4 @@
-import { Session, check, section, deleteRides, FIXTURES, PICKUP, DEST } from "./harness.mjs";
+import { Session, check, section, deleteRides, serverLog, FIXTURES, PICKUP, DEST } from "./harness.mjs";
 
 /**
  * The fare a rider confirms at booking is the fare they pay. The first real
@@ -7,7 +7,7 @@ import { Session, check, section, deleteRides, FIXTURES, PICKUP, DEST } from "./
  * locked. This drives a ride through start → sparse GPS → complete over the
  * real API and asserts the quote survives.
  */
-export async function run({ base, db }) {
+export async function run({ base, db, server }) {
   const driver = new Session(base);
   check("driver logs in", (await driver.login(FIXTURES.driver.email)).status === 200);
 
@@ -84,9 +84,9 @@ export async function run({ base, db }) {
   const suvReceipt = await rider.req("GET", `/api/rides/${lowball.json.id}/receipt`);
   check("receipt shows the SUV line and what it added", suvReceipt.status === 200 && suvReceipt.json?.vehicleMultiplier === sm && suvReceipt.json?.vehicleAdjustment > 0, JSON.stringify({ m: suvReceipt.json?.vehicleMultiplier, adj: suvReceipt.json?.vehicleAdjustment }));
   const honest = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: suv.json.total, paymentMethod: "card", distance: 17.3, duration: 42, requestedVehicleType: "suv" });
-  // Priced above the server's figure: left as quoted (a stale rate card on an
-  // old bundle can only overcharge the rider's own device), never lowered.
-  check("an app that already priced the SUV correctly is left alone", honest.status === 200 && Number(honest.json?.estimatedFare) >= suvFloor - 0.011, `fare=${honest.json?.estimatedFare} serverSuv=${suvFloor}`);
+  // An app that priced the same figures on the same rate card sends the
+  // server's own number, so the rider sees no difference.
+  check("an app that already priced the SUV correctly is booked at exactly that number", honest.status === 200 && Math.abs(Number(honest.json?.estimatedFare) - suvFloor) < 0.011, `fare=${honest.json?.estimatedFare} serverSuv=${suvFloor}`);
   await db.query("UPDATE vehicles SET vehicle_type='standard' WHERE driver_profile_id=(SELECT id FROM driver_profiles WHERE user_id=$1)", [FIXTURES.driver.id]);
   await deleteRides(db, [lowball.json?.id, honest.json?.id]);
 
@@ -110,6 +110,37 @@ export async function run({ base, db }) {
   const stopReceipt = await rider.req("GET", `/api/rides/${withStop.json.id}/receipt`);
   check("receipt lists the stop between pickup and destination", stopReceipt.status === 200 && Array.isArray(stopReceipt.json?.stops) && stopReceipt.json.stops[0] === stopA.address, JSON.stringify(stopReceipt.json?.stops));
   await deleteRides(db, [withStop.json.id]);
+
+  section("Every booking door is priced by the server (corporate audit #379)");
+  // Pinning the driver: multi-stop dispatches at booking and cancels with a
+  // 409 when nobody is matched, so the fixture driver takes it by name.
+  const quoteFor = async (ride, vehicleType = "standard") => (await rider.req("POST", "/api/rides/calculate-fare", { distance: Number(ride.distance), duration: Number(ride.duration), vehicleType })).json?.total;
+  const multiLow = await rider.req("POST", "/api/rides/multi-stop", { pickupLocation: PICKUP, destinationLocation: DEST, pickupStops: [stopA], driverId: FIXTURES.driver.id, estimatedFare: 1 });
+  check("a one-dollar multi-stop booking is accepted", multiLow.status === 200, JSON.stringify(multiLow.json?.message ?? multiLow.status));
+  const multiQuote = await quoteFor(multiLow.json);
+  check("but priced by the server for the whole route, not a dollar", Number(multiLow.json?.estimatedFare) > 1 && Math.abs(Number(multiLow.json?.estimatedFare) - multiQuote) < 0.011, `fare=${multiLow.json?.estimatedFare} quote=${multiQuote} route=${multiLow.json?.distance}mi/${multiLow.json?.duration}min`);
+  check("the multi-stop route covers pickup → stop → destination (longer than the direct trip)", Number(multiLow.json?.distance) > Number(noFigures.json?.distance), `multi=${multiLow.json?.distance} direct=${noFigures.json?.distance}`);
+  const multiHigh = await rider.req("POST", "/api/rides/multi-stop", { pickupLocation: PICKUP, destinationLocation: DEST, pickupStops: [stopA], driverId: FIXTURES.driver.id, estimatedFare: 500, distance: 0.1, duration: 1 });
+  check("a $500 multi-stop booking with typed-in figures is accepted", multiHigh.status === 200, JSON.stringify(multiHigh.json?.message ?? multiHigh.status));
+  check("at the server's quote on the server's own figures, not $500 on a tenth of a mile", Number(multiHigh.json?.estimatedFare) < 100 && Math.abs(Number(multiHigh.json?.estimatedFare) - Number(multiLow.json?.estimatedFare)) < 0.011 && Number(multiHigh.json?.distance) > 1, `fare=${multiHigh.json?.estimatedFare} miles=${multiHigh.json?.distance}`);
+  const multiBad = await rider.req("POST", "/api/rides/multi-stop", { pickupLocation: PICKUP, destinationLocation: DEST, pickupStops: [{ lat: 38.95, lng: -76.93 }], driverId: FIXTURES.driver.id, estimatedFare: 20 });
+  check("a multi-stop pickup without an address is refused, not priced", multiBad.status === 400 && /full address/.test(multiBad.json?.message ?? ""), `status=${multiBad.status} ${multiBad.json?.message ?? ""}`);
+  const inflated = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 100, paymentMethod: "card", distance: 489, duration: 420 });
+  check("figures far above the road are replaced: a twenty-mile trip is not priced to the cap", inflated.status === 200 && Number(inflated.json?.distance) < 30 && Number(inflated.json?.estimatedFare) < 60, `fare=${inflated.json?.estimatedFare} miles=${inflated.json?.distance}`);
+  const multiHonest = await rider.req("POST", "/api/rides/multi-stop", { pickupLocation: PICKUP, destinationLocation: DEST, pickupStops: [stopA], driverId: FIXTURES.driver.id, estimatedFare: multiQuote, distance: Number(multiLow.json.distance), duration: Number(multiLow.json.duration) });
+  check("an app that priced the route on the rate card is booked at exactly its number", multiHonest.status === 200 && Math.abs(Number(multiHonest.json?.estimatedFare) - multiQuote) < 0.011, `fare=${multiHonest.json?.estimatedFare} quote=${multiQuote}`);
+  const solo = await rider.req("POST", "/api/rides", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 90, paymentMethod: "card", distance: 17.3, duration: 42 });
+  check("a solo booking $90 above the rate card is accepted", solo.status === 200, JSON.stringify(solo.json?.message ?? solo.status));
+  const soloQuote = await quoteFor(solo.json);
+  check("at the rate card's price for its figures — the rider is never charged a stale app's number", Math.abs(Number(solo.json?.estimatedFare) - soloQuote) < 0.011 && soloQuote < 90, `fare=${solo.json?.estimatedFare} quote=${soloQuote}`);
+  const departAt = new Date(Date.now() + 5 * 3600e3).toISOString();
+  const grp = await rider.req("POST", "/api/rides/create-shared-schedule", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 1, scheduledAt: departAt, distance: 0.2, duration: 1 });
+  check("a one-dollar coworker group booking is accepted", grp.status === 200, JSON.stringify(grp.json?.message ?? grp.status));
+  const grpQuote = await quoteFor(grp.json);
+  check("the organizer's full fare is the server's quote for their route, and so is the figure the group rate comes off", Number(grp.json?.estimatedFare) > 1 && Math.abs(Number(grp.json?.estimatedFare) - grpQuote) < 0.011 && grp.json?.originalFare === grp.json?.estimatedFare && Number(grp.json?.distance) > 1, `fare=${grp.json?.estimatedFare} original=${grp.json?.originalFare} quote=${grpQuote} miles=${grp.json?.distance}`);
+  check("the lowballed doors were reported to ops", serverLog(server).split("\n").filter((l) => /\[ops-alert\]/.test(l) && /Fare quote did not match/.test(l)).length >= 3, `${serverLog(server).split("\n").filter((l) => /Fare quote did not match/.test(l)).length} fare alerts`);
+  await db.query("DELETE FROM rides WHERE id = ANY($1::varchar[])", [[multiLow.json?.id, multiHigh.json?.id, multiHonest.json?.id, solo.json?.id, grp.json?.id, inflated.json?.id].filter(Boolean)]).catch(() => {});
+  await db.query("DELETE FROM ride_groups WHERE id = ANY($1::varchar[])", [[multiLow.json?.group?.id, multiHigh.json?.group?.id, multiHonest.json?.group?.id, grp.json?.group?.id].filter(Boolean)]).catch(() => {});
 
   section("A driver's phone cannot set the fare, or a tip on a card ride");
   const { rows: [cardRideRow] } = await db.query(
