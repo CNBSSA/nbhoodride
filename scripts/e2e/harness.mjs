@@ -204,7 +204,7 @@ export class Session {
     if (csrf) headers["X-CSRF-Token"] = decodeURIComponent(csrf);
     const res = await fetch(this.base + path, {
       method, headers,
-      body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
+      body: body === undefined ? undefined : typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body),
     });
     this.absorb(res);
     let json = null; try { json = await res.json(); } catch {}
@@ -226,3 +226,12 @@ export class Session {
 export const PICKUP = { lat: 38.9073, lng: -76.7781, address: "Bowie, MD" };
 export const DEST = { lat: 38.7823, lng: -77.0166, address: "National Harbor, MD" };
 export const uniqueEmail = (tag) => `${tag}-${Date.now()}-${Math.floor(Math.random() * 1e4)}@example.com`;
+
+/** A real 1×1 PNG: what a photo upload looks like to the store's signature check. */
+export function tinyPng() {
+  return Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+}
+/** A real minimal PDF. */
+export function tinyPdf() {
+  return Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n");
+}

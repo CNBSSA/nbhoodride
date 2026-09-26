@@ -1,3 +1,4 @@
+import { safeServeHeaders } from "@shared/uploadTypes";
 import { randomUUID } from "crypto";
 import { Response } from "express";
 import { Storage, File } from "@google-cloud/storage";
@@ -59,7 +60,12 @@ export class ObjectStorageService {
 
   async downloadObject(file: File, res: Response, cacheTtlSec: number = 3600) {
     const [metadata] = await file.getMetadata();
-    res.setHeader("Content-Type", metadata.contentType || "application/octet-stream");
+    // The same rule as the database store (shared/uploadTypes.ts): a photo
+    // or a PDF inline, sandboxed and unsniffable; anything else a download
+    // under a neutral type. A cloud upload goes straight to the bucket, so
+    // its bytes were never checked at the door; serving is where it is held.
+    const headers = safeServeHeaders(String(metadata.contentType || "application/octet-stream"), file.name.split("/").pop() || "file");
+    for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
     res.setHeader("Cache-Control", `private, max-age=${cacheTtlSec}`);
     file.createReadStream().on("error", () => res.sendStatus(500)).pipe(res);
   }

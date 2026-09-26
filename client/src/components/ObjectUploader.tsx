@@ -73,7 +73,11 @@ export function ObjectUploader({
           headers: { "Content-Type": file.type || "application/octet-stream" },
         });
         if (!res.ok) {
-          throw new Error(`Upload failed (${res.status})`);
+          // The server says why — "Only photos … and PDF files can be
+          // uploaded", "File is larger than 10MB" — and the driver should
+          // read that, not a status code.
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.message || `Upload failed (${res.status})`);
         }
         successful.push({ uploadURL: url, name: file.name });
       } catch (err) {
