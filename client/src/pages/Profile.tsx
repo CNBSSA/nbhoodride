@@ -44,7 +44,7 @@ export default function Profile() {
   const [showCountySelector, setShowCountySelector] = useState(false);
   const [localCounties, setLocalCounties] = useState<string[]>([]);
   const { user, isLoading } = useAuth();
-  const { walletEnabled, driverMarketplaceEnabled } = useFeatureFlags();
+  const { walletEnabled, driverMarketplaceEnabled, rentalEnabled } = useFeatureFlags();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -508,6 +508,26 @@ export default function Profile() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* Car rental (PG Ride Car Rental Master Plan): the same page as the
+              rider home's "Rent a car", for people who look in Profile. */}
+          {rentalEnabled && (
+            <Button
+              variant="outline"
+              className="w-full justify-between p-4"
+              onClick={() => setLocation("/rent")}
+              data-testid="button-open-rent"
+            >
+              <div className="flex items-center space-x-3">
+                <i className="fas fa-car text-secondary text-xl" />
+                <div className="text-left">
+                  <p className="font-medium">Rent a car</p>
+                  <p className="text-sm text-muted-foreground">PG Ride cars by the day</p>
+                </div>
+              </div>
+              <i className="fas fa-chevron-right text-muted-foreground" />
+            </Button>
           )}
 
           {/* The way in to the organization portal. It existed as a route and

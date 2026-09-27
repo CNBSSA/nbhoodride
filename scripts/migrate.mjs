@@ -1477,6 +1477,72 @@ DO $$ BEGIN
       ADD CONSTRAINT driver_profiles_user_id_unique UNIQUE (user_id);
   END IF;
 END $$;
+
+-- ── Car rental (shared/rental.ts, server/rental/, behind RENTAL_ENABLED) ──
+CREATE TABLE IF NOT EXISTS rental_cars (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_kind VARCHAR NOT NULL DEFAULT 'fleet',
+  owner_user_id VARCHAR REFERENCES users(id),
+  make VARCHAR NOT NULL,
+  model VARCHAR NOT NULL,
+  year INTEGER NOT NULL,
+  color VARCHAR NOT NULL,
+  seats INTEGER NOT NULL DEFAULT 5,
+  vehicle_type VARCHAR NOT NULL DEFAULT 'standard',
+  license_plate VARCHAR NOT NULL,
+  vin VARCHAR,
+  photos JSONB NOT NULL DEFAULT '[]'::jsonb,
+  daily_price DECIMAL(8,2) NOT NULL,
+  deposit DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+  miles_per_day INTEGER NOT NULL DEFAULT 0,
+  extra_mile_fee DECIMAL(6,2) NOT NULL DEFAULT 0.00,
+  late_hour_fee DECIMAL(6,2) NOT NULL DEFAULT 0.00,
+  pickup_location JSONB,
+  inspection_expires TIMESTAMP,
+  registration_expires TIMESTAMP,
+  insurance_expires TIMESTAMP,
+  status VARCHAR NOT NULL DEFAULT 'hidden',
+  hidden_reason TEXT,
+  created_by VARCHAR REFERENCES users(id),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS rental_bookings (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  car_id VARCHAR NOT NULL REFERENCES rental_cars(id),
+  renter_id VARCHAR NOT NULL REFERENCES users(id),
+  starts_at TIMESTAMP NOT NULL,
+  ends_at TIMESTAMP NOT NULL,
+  days INTEGER NOT NULL,
+  daily_price DECIMAL(8,2) NOT NULL,
+  rental_total DECIMAL(10,2) NOT NULL,
+  deposit DECIMAL(8,2) NOT NULL,
+  miles_allowed INTEGER NOT NULL DEFAULT 0,
+  extra_mile_fee DECIMAL(6,2) NOT NULL DEFAULT 0.00,
+  late_hour_fee DECIMAL(6,2) NOT NULL DEFAULT 0.00,
+  status VARCHAR NOT NULL DEFAULT 'requested',
+  licence_number VARCHAR NOT NULL,
+  licence_image_url VARCHAR NOT NULL,
+  collected_at TIMESTAMP,
+  collect_odometer INTEGER,
+  collect_photos JSONB,
+  returned_at TIMESTAMP,
+  return_odometer INTEGER,
+  return_photos JSONB,
+  settlement JSONB,
+  damage_note TEXT,
+  charge_intent_id VARCHAR,
+  deposit_intent_id VARCHAR,
+  beyond_deposit_intent_id VARCHAR,
+  payment_status VARCHAR NOT NULL DEFAULT 'none',
+  payment_error TEXT,
+  cancel_reason TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rental_bookings_car ON rental_bookings (car_id, starts_at);
+CREATE INDEX IF NOT EXISTS idx_rental_bookings_renter ON rental_bookings (renter_id);
 `;
 
 async function migrate() {

@@ -49,6 +49,13 @@ export const featureFlags = {
    * tab is hidden.
    */
   commercialEnabled: flag(process.env.COMMERCIAL_ENABLED, false),
+  /**
+   * Car rental (PG Ride Car Rental Master Plan). OFF by default, and off in
+   * production until a Maryland lawyer and PG Ride's insurer have signed off
+   * (the plan's first gate). Off => every /api/rent and /api/admin/rental
+   * route answers 404, the sweep does not run, and the buttons are hidden.
+   */
+  rentalEnabled: flag(process.env.RENTAL_ENABLED, false),
 } as const;
 
 export type FeatureFlags = typeof featureFlags;

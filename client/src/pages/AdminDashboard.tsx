@@ -29,6 +29,7 @@ import { format } from "date-fns";
 import { useLocation } from "wouter";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { OrganizationsPanel } from "@/components/admin/OrganizationsPanel";
+import { RentalPanel } from "@/components/admin/RentalPanel";
 import { DriverBadges } from "@/components/admin/DriverBadges";
 import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
@@ -53,7 +54,7 @@ const QUEUE_REFRESH = { refetchInterval: 30000, refetchIntervalInBackground: fal
 const SOS_INCIDENTS_KEY = "/api/admin/emergency-incidents?limit=500";
 const AWAITING_SETTLEMENT_KEY = "/api/admin/rides/awaiting-settlement";
 
-type AdminTab = "dashboard" | "organizations" | "announcements" | "sos" | "reconciliation" | "pricing" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
+type AdminTab = "dashboard" | "organizations" | "rentals" | "announcements" | "sos" | "reconciliation" | "pricing" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
 
 function useAdminNavPendingCounts() {
   const { data: pendingUsers = [] } = useQuery<any[]>({
@@ -109,6 +110,7 @@ export default function AdminDashboard() {
   const tabs: { id: AdminTab; label: string; icon: any }[] = [
     { id: "dashboard", label: "Overview", icon: LayoutDashboard },
     { id: "organizations", label: "Organizations", icon: Building2 },
+    { id: "rentals", label: "Car rental", icon: Car },
     { id: "announcements", label: "Announcements", icon: Megaphone },
     { id: "sos", label: "SOS / Emergency", icon: Siren },
     { id: "reconciliation", label: "Reconciliation", icon: Banknote },
@@ -130,7 +132,7 @@ export default function AdminDashboard() {
   ];
   // Commercial riders is a new surface, on per deployment (COMMERCIAL_ENABLED).
   const flags = useFeatureFlags();
-  const visibleTabs = tabs.filter((t) => t.id !== "organizations" || flags.commercialEnabled);
+  const visibleTabs = tabs.filter((t) => (t.id !== "organizations" || flags.commercialEnabled) && (t.id !== "rentals" || flags.rentalEnabled));
 
   return (
     <div className="min-h-screen bg-gray-50" data-testid="admin-dashboard">
@@ -206,6 +208,7 @@ export default function AdminDashboard() {
         <main className="flex-1 p-6 md:p-8 mt-12 md:mt-0 max-w-6xl">
           {activeTab === "dashboard" && <DashboardOverview />}
           {activeTab === "organizations" && <OrganizationsPanel />}
+          {activeTab === "rentals" && flags.rentalEnabled && <RentalPanel />}
           {activeTab === "announcements" && <AnnouncementsPanel />}
           {activeTab === "sos" && <SosPanel />}
           {activeTab === "reconciliation" && <ReconciliationPanel />}
