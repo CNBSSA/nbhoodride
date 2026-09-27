@@ -17,6 +17,11 @@ import {
   quoteFor, renterView, requestRental, returnRental, settleRental,
 } from "./bookings";
 import { runRentalSweep } from "./sweep";
+import {
+  assignFleetCar, cancelFleetRequest, chargeDamage, chargeDueWeek, declineFleetRequest, extendFleetCar, handOverFleetCar,
+  listAssignments, listFleetCarsForDrivers, myFleetCar, requestFleetCar, runDriverRentSweep, takeBackFleetCar,
+} from "./drivers";
+import { DRIVER_RENT_SENTENCE, MAX_DRIVER_WEEKS } from "@shared/rental";
 import { RENTAL_TERMS_SENTENCE, MAX_RENTAL_DAYS } from "@shared/rental";
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown;
@@ -110,6 +115,50 @@ export function registerRentalRoutes(app: Express, deps: RentalDeps): void {
 
   app.post("/api/admin/rental/bookings/:id/settle", gate, isAdminOrSessionAuth, async (req, res) => {
     try { res.json(await settleRental(String(req.params.id))); } catch (err) { fail(res, err, "Could not settle the rental"); }
+  });
+
+  // ── Drivers: PG Ride fleet cars to earn with (phase 3) ─────────────────────
+  app.get("/api/driver/fleet-cars", gate, isAuthenticated, async (req, res) => {
+    try { res.json({ cars: await listFleetCarsForDrivers(windowOf(req.query)), terms: DRIVER_RENT_SENTENCE, maxWeeks: MAX_DRIVER_WEEKS }); } catch (err) { fail(res, err, "Could not load cars"); }
+  });
+
+  app.get("/api/driver/fleet-car", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await myFleetCar(userIdOf(req))); } catch (err) { fail(res, err, "Could not load your car"); }
+  });
+
+  app.post("/api/driver/fleet-car/request", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await requestFleetCar(userIdOf(req), req.body ?? {})); } catch (err) { fail(res, err, "Could not ask for that car"); }
+  });
+
+  app.post("/api/driver/fleet-car/cancel", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await cancelFleetRequest(userIdOf(req))); } catch (err) { fail(res, err, "Could not cancel"); }
+  });
+
+  app.get("/api/admin/rental/assignments", gate, isAdminOrSessionAuth, async (_req, res) => {
+    try { res.json(await listAssignments()); } catch (err) { fail(res, err, "Could not load driver cars"); }
+  });
+
+  const adminAct = (path: string, fn: (id: string, req: any) => Promise<unknown>, fallback: string) =>
+    app.post(`/api/admin/rental/assignments/:id/${path}`, gate, isAdminOrSessionAuth, async (req: any, res) => {
+      try { res.json(await fn(String(req.params.id), req)); } catch (err) { fail(res, err, fallback); }
+    });
+  adminAct("assign", (id) => assignFleetCar(id), "Could not assign the car");
+  adminAct("decline", (id, req) => declineFleetRequest(id, req.body?.reason), "Could not decline");
+  adminAct("handover", (id, req) => handOverFleetCar(id, userIdOf(req), req.body ?? {}), "Could not hand the car over");
+  adminAct("takeback", (id, req) => takeBackFleetCar(id, userIdOf(req), req.body ?? {}), "Could not take the car back");
+  adminAct("extend", (id, req) => extendFleetCar(id, req.body?.weeks), "Could not extend");
+  adminAct("charge-rent", (id) => chargeDueWeek(id), "Could not charge the rent");
+  adminAct("charge-damage", async (id) => {
+    const { db } = await import("../db");
+    const { driverCarAssignments } = await import("@shared/schema");
+    const { eq } = await import("drizzle-orm");
+    const [a] = await db.select().from(driverCarAssignments).where(eq(driverCarAssignments.id, id));
+    if (!a) throw new RentalError("Not found.", 404);
+    return chargeDamage(a);
+  }, "Could not charge the damage");
+
+  app.post("/api/admin/analytics/driver-rent-sweep", gate, isAdminOrSessionAuth, async (_req, res) => {
+    try { res.json(await runDriverRentSweep()); } catch (err) { fail(res, err, "Could not run the rent sweep"); }
   });
 
   app.post("/api/admin/analytics/rental-sweep", gate, isAdminOrSessionAuth, async (req, res) => {

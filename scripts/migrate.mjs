@@ -1497,6 +1497,7 @@ CREATE TABLE IF NOT EXISTS rental_cars (
   miles_per_day INTEGER NOT NULL DEFAULT 0,
   extra_mile_fee DECIMAL(6,2) NOT NULL DEFAULT 0.00,
   late_hour_fee DECIMAL(6,2) NOT NULL DEFAULT 0.00,
+  weekly_driver_rent DECIMAL(8,2),
   pickup_location JSONB,
   inspection_expires TIMESTAMP,
   registration_expires TIMESTAMP,
@@ -1543,6 +1544,50 @@ CREATE TABLE IF NOT EXISTS rental_bookings (
 );
 CREATE INDEX IF NOT EXISTS idx_rental_bookings_car ON rental_bookings (car_id, starts_at);
 CREATE INDEX IF NOT EXISTS idx_rental_bookings_renter ON rental_bookings (renter_id);
+
+-- ── Car rental, phase 3: PG Ride fleet cars assigned to drivers ──
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS weekly_driver_rent DECIMAL(8,2);
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS rental_car_id VARCHAR;
+CREATE TABLE IF NOT EXISTS driver_car_assignments (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  car_id VARCHAR NOT NULL REFERENCES rental_cars(id),
+  driver_user_id VARCHAR NOT NULL REFERENCES users(id),
+  status VARCHAR NOT NULL DEFAULT 'requested',
+  starts_at TIMESTAMP NOT NULL,
+  weeks INTEGER NOT NULL,
+  ends_at TIMESTAMP NOT NULL,
+  weekly_rent DECIMAL(8,2) NOT NULL,
+  vehicle_id VARCHAR,
+  collected_at TIMESTAMP,
+  collect_odometer INTEGER,
+  collect_photos JSONB,
+  returned_at TIMESTAMP,
+  return_odometer INTEGER,
+  return_photos JSONB,
+  damage_amount DECIMAL(8,2),
+  damage_note TEXT,
+  damage_intent_id VARCHAR,
+  paid_through TIMESTAMP,
+  payment_status VARCHAR NOT NULL DEFAULT 'none',
+  payment_error TEXT,
+  cancel_reason TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_driver_car_assignments_car ON driver_car_assignments (car_id, starts_at);
+CREATE INDEX IF NOT EXISTS idx_driver_car_assignments_driver ON driver_car_assignments (driver_user_id);
+CREATE TABLE IF NOT EXISTS driver_rent_charges (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  assignment_id VARCHAR NOT NULL REFERENCES driver_car_assignments(id),
+  period_start TIMESTAMP NOT NULL,
+  amount DECIMAL(8,2) NOT NULL,
+  status VARCHAR NOT NULL DEFAULT 'charging',
+  stripe_payment_intent_id VARCHAR,
+  error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_driver_rent_charge_period ON driver_rent_charges (assignment_id, period_start);
 `;
 
 async function migrate() {

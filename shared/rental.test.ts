@@ -97,3 +97,38 @@ describe("expiryWarnings", () => {
     ]);
   });
 });
+
+import { quoteDriverAssignment, fleetDriverMayDrive, MAX_DRIVER_WEEKS } from "./rental";
+
+describe("quoteDriverAssignment", () => {
+  const car = { weeklyDriverRent: "250", ownerKind: "fleet" };
+  const at = (h: number) => new Date(now.getTime() + h * 3600_000).toISOString();
+  it("whole weeks from the car's weekly rent", () => {
+    const q = quoteDriverAssignment(car, at(24), 3, now);
+    expect(q.ok && q.quote).toMatchObject({ weeks: 3, weeklyRent: 250, total: 750 });
+    expect(q.ok && q.quote.endsAt.getTime() - q.quote.startsAt.getTime()).toBe(3 * 7 * 86400_000);
+  });
+  it("only fleet cars, only cars with a weekly rent, only sane weeks and dates", () => {
+    expect(quoteDriverAssignment({ ...car, ownerKind: "private" }, at(24), 1, now).ok).toBe(false);
+    expect(quoteDriverAssignment({ weeklyDriverRent: null, ownerKind: "fleet" }, at(24), 1, now).ok).toBe(false);
+    expect(quoteDriverAssignment(car, at(24), 0, now).ok).toBe(false);
+    expect(quoteDriverAssignment(car, at(24), MAX_DRIVER_WEEKS + 1, now).ok).toBe(false);
+    expect(quoteDriverAssignment(car, at(24), 1.5, now).ok).toBe(false);
+    expect(quoteDriverAssignment(car, at(0.2), 1, now).ok).toBe(false);
+  });
+});
+
+describe("fleetDriverMayDrive", () => {
+  const later = new Date(now.getTime() + 86400_000), earlier = new Date(now.getTime() - 1000);
+  it("a driver with a car of their own is not stopped", () => {
+    expect(fleetDriverMayDrive({ ownCars: 1, fleetCars: 1, assignment: null, now }).ok).toBe(true);
+  });
+  it("a fleet driver drives while the car is active and paid", () => {
+    expect(fleetDriverMayDrive({ ownCars: 0, fleetCars: 1, assignment: { status: "active", paidThrough: later, endsAt: later }, now }).ok).toBe(true);
+  });
+  it("and not when the rent has run out or the car is not theirs now", () => {
+    expect(fleetDriverMayDrive({ ownCars: 0, fleetCars: 1, assignment: { status: "active", paidThrough: earlier, endsAt: later }, now })).toMatchObject({ ok: false, reason: expect.stringMatching(/rent/) });
+    expect(fleetDriverMayDrive({ ownCars: 0, fleetCars: 1, assignment: { status: "active", paidThrough: null, endsAt: later }, now }).ok).toBe(false);
+    expect(fleetDriverMayDrive({ ownCars: 0, fleetCars: 1, assignment: null, now }).ok).toBe(false);
+  });
+});

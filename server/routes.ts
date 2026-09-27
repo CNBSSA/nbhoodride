@@ -1746,6 +1746,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // A driver whose only car is a PG Ride fleet car drives it only while
+      // it is theirs and its rent is paid (server/rental/drivers.ts).
+      if (isOnline && featureFlags.rentalEnabled) {
+        const block = await import("./rental/drivers").then((m) => m.fleetDriveBlock(userId)).catch(() => null);
+        if (block) return res.status(403).json({ message: block, fleetCar: true });
+      }
+
       await storage.toggleDriverOnlineStatus(userId, isOnline);
 
       if (isOnline && Array.isArray(dailyCounties)) {
@@ -7809,7 +7816,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         const missing: string[] = [];
         if (!profile.licenseImageUrl) missing.push("license image");
-        if (!profile.insuranceImageUrl) missing.push("insurance image");
+        // A driver without a car of their own may drive a PG Ride fleet car
+        // (Car Rental Master Plan, phase 3): an assigned or collected fleet
+        // car stands in for their own insurance card and car photos. Their
+        // licence is still required.
+        const fleetCar = featureFlags.rentalEnabled
+          ? await import("./rental/drivers").then((m) => m.hasFleetCar(userId)).catch(() => false)
+          : false;
+        if (!profile.insuranceImageUrl && !fleetCar) missing.push("insurance image");
         const stashedVehiclePhotos = (profile as any).vehiclePhotoUrls;
         const hasVehiclePhotos = Array.isArray(stashedVehiclePhotos) && stashedVehiclePhotos.length > 0;
         let hasVehicleRow = false;
@@ -7819,7 +7833,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } catch {
           hasVehicleRow = false;
         }
-        if (!hasVehiclePhotos && !hasVehicleRow) missing.push("vehicle photos / vehicle record");
+        if (!hasVehiclePhotos && !hasVehicleRow && !fleetCar) missing.push("vehicle photos / vehicle record");
         if (missing.length > 0) {
           return res.status(400).json({
             message: `Cannot approve: driver onboarding is incomplete (missing: ${missing.join(", ")}).`,
@@ -11550,6 +11564,11 @@ Generate the FAQ list.`;
       // ── Proof photos still on a phone: page ops at 6 h, give up at 24 h ──
       if (featureFlags.commercialEnabled && now.getMinutes() === 7) {
         import("./commercial/badges").then((m) => m.sweepPendingProofPhotos(now)).catch((err) => console.error("pending proof photo sweep failed:", err));
+      }
+
+      // ── Fleet cars for drivers: charge next week's rent an hour before the paid week ends ──
+      if (featureFlags.rentalEnabled && now.getMinutes() === 37) {
+        import("./rental/drivers").then((m) => m.runDriverRentSweep(now)).catch((err) => console.error("driver rent sweep failed:", err));
       }
 
       // ── Car rental: hide a car the hour a document lapses; warn ahead once a day ──

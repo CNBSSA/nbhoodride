@@ -13,7 +13,7 @@
  */
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../db";
-import { rentalBookings, rentalCars, type RentalBooking } from "@shared/schema";
+import { driverCarAssignments, rentalBookings, rentalCars, type RentalBooking } from "@shared/schema";
 import { HOLDS_THE_CAR, RENTER_MAY_CANCEL, money, quoteRental, rentalsOverlap, settleReturn } from "@shared/rental";
 import { stripeService } from "../stripeService";
 import { storage } from "../storage";
@@ -153,6 +153,9 @@ export async function collectRental(bookingId: string, actorId: string, body: an
   const [stillOut] = await db.select({ id: rentalBookings.id }).from(rentalBookings)
     .where(and(eq(rentalBookings.carId, b.carId), eq(rentalBookings.status, "collected"))).limit(1);
   if (stillOut && stillOut.id !== b.id) throw new RentalError("This car is still out on the previous rental. Take it back first.", 409);
+  const [withDriver] = await db.select({ id: driverCarAssignments.id }).from(driverCarAssignments)
+    .where(and(eq(driverCarAssignments.carId, b.carId), eq(driverCarAssignments.status, "active"))).limit(1);
+  if (withDriver) throw new RentalError("This car is still with a PG Ride driver. Take it back from them first.", 409);
   if (!stripeService.isEnabled) throw new RentalError("Card payments are not set up on this deployment, so the deposit cannot be held. The car cannot be handed over.", 503);
   const card = await renterCard(b.renterId);
   if (!card) throw new RentalError("The renter has no card on file. They add one in Profile, then try again.", 409);

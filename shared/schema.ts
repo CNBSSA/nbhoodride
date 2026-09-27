@@ -182,6 +182,8 @@ export const vehicles = pgTable("vehicles", {
   vehicleType: varchar("vehicle_type").default("standard"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  /** Set when this row mirrors a PG Ride fleet car assigned to the driver (server/rental/drivers.ts). */
+  rentalCarId: varchar("rental_car_id"),
 });
 
 // Ride status enum
@@ -1611,6 +1613,8 @@ export const rentalCars = pgTable("rental_cars", {
   milesPerDay: integer("miles_per_day").notNull().default(0),
   extraMileFee: decimal("extra_mile_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
   lateHourFee: decimal("late_hour_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** Weekly rent for a PG Ride driver; null = not offered to drivers. Only fleet cars are ever offered. */
+  weeklyDriverRent: decimal("weekly_driver_rent", { precision: 8, scale: 2 }),
   pickupLocation: jsonb("pickup_location").$type<{ lat: number; lng: number; address: string }>(),
   inspectionExpires: timestamp("inspection_expires"),
   registrationExpires: timestamp("registration_expires"),
@@ -1664,6 +1668,61 @@ export const rentalBookings = pgTable("rental_bookings", {
   index("idx_rental_bookings_renter").on(table.renterId),
 ]);
 export type RentalBooking = typeof rentalBookings.$inferSelect;
+
+// A PG Ride fleet car assigned to a driver to earn with, by the week
+// (Car Rental Master Plan, phase 3; only fleet cars, Festus 2026-09-27).
+export const driverCarAssignments = pgTable("driver_car_assignments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  carId: varchar("car_id").notNull().references(() => rentalCars.id),
+  driverUserId: varchar("driver_user_id").notNull().references(() => users.id),
+  /** requested | assigned | active | ended | declined | cancelled */
+  status: varchar("status").notNull().default("requested"),
+  startsAt: timestamp("starts_at").notNull(),
+  weeks: integer("weeks").notNull(),
+  endsAt: timestamp("ends_at").notNull(),
+  weeklyRent: decimal("weekly_rent", { precision: 8, scale: 2 }).notNull(),
+  /** The vehicles row that mirrors the car while the driver has it. */
+  vehicleId: varchar("vehicle_id"),
+  collectedAt: timestamp("collected_at"),
+  collectOdometer: integer("collect_odometer"),
+  collectPhotos: jsonb("collect_photos").$type<string[]>(),
+  returnedAt: timestamp("returned_at"),
+  returnOdometer: integer("return_odometer"),
+  returnPhotos: jsonb("return_photos").$type<string[]>(),
+  damageAmount: decimal("damage_amount", { precision: 8, scale: 2 }),
+  damageNote: text("damage_note"),
+  damageIntentId: varchar("damage_intent_id"),
+  /** Rent is paid up to here; the driver may drive the car until then. */
+  paidThrough: timestamp("paid_through"),
+  /** none | paid | due | failed */
+  paymentStatus: varchar("payment_status").notNull().default("none"),
+  paymentError: text("payment_error"),
+  cancelReason: text("cancel_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_driver_car_assignments_car").on(table.carId, table.startsAt),
+  index("idx_driver_car_assignments_driver").on(table.driverUserId),
+]);
+export type DriverCarAssignment = typeof driverCarAssignments.$inferSelect;
+
+// One row per week of rent: written before the card is charged, so a week is
+// charged at most once however often the sweep or the desk asks.
+export const driverRentCharges = pgTable("driver_rent_charges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  assignmentId: varchar("assignment_id").notNull().references(() => driverCarAssignments.id),
+  periodStart: timestamp("period_start").notNull(),
+  amount: decimal("amount", { precision: 8, scale: 2 }).notNull(),
+  /** charging | paid | failed */
+  status: varchar("status").notNull().default("charging"),
+  stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_driver_rent_charge_period").on(table.assignmentId, table.periodStart),
+]);
+export type DriverRentCharge = typeof driverRentCharges.$inferSelect;
 
 export const eventTrackingRelations = relations(eventTracking, ({ one }) => ({
   user: one(users, {
