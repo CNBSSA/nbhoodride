@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { judgeDependencies } from "./production-watch-rules.mjs";
 
@@ -59,5 +60,19 @@ describe("judgeDependencies", () => {
     const up = judgeDependencies(answer({ checkedAt: "y", deps: { stripe: dep(true) }, down: [] }), true);
     expect(down.failures).toHaveLength(1);
     expect(up.failures).toHaveLength(0);
+  });
+});
+
+// The workflow checks out only the files it names (a sparse checkout), so a
+// local module the probe imports but the workflow does not name crashes the
+// watch and pages "DOWN" about a healthy production. That happened on
+// 2026-09-26 when the rules moved into their own file.
+describe("the production-watch workflow checks out everything the probe imports", () => {
+  it("names every local module production-watch.mjs imports", () => {
+    const workflow = readFileSync(".github/workflows/production-watch.yml", "utf8");
+    const probe = readFileSync("scripts/production-watch.mjs", "utf8");
+    const localImports = [...probe.matchAll(/from\s+["']\.\/([^"']+)["']/g)].map((m) => `scripts/${m[1]}`);
+    expect(localImports.length).toBeGreaterThan(0);
+    for (const file of localImports) expect(workflow).toContain(file);
   });
 });

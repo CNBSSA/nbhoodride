@@ -46,6 +46,7 @@ jobs:
         with:
           sparse-checkout: |
             scripts/production-watch.mjs
+            scripts/production-watch-rules.mjs
           sparse-checkout-cone-mode: false
 
       - name: Set up Node
