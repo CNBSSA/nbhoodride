@@ -4,8 +4,8 @@
  */
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
-import { rentalBookings, rentalCars, storedObjects, users, type RentalCar } from "@shared/schema";
-import { HOLDS_THE_CAR, qualificationProblems, rentalsOverlap } from "@shared/rental";
+import { driverCarAssignments, rentalBookings, rentalCars, storedObjects, users, vehicles, type RentalCar } from "@shared/schema";
+import { ASSIGNMENT_HOLDS_THE_CAR, HOLDS_THE_CAR, qualificationProblems, rentalsOverlap } from "@shared/rental";
 import { VEHICLE_TYPES } from "@shared/vehicleTypes";
 
 export class RentalError extends Error {
@@ -73,6 +73,11 @@ async function carFields(body: any, actorId: string, existing?: RentalCar): Prom
   if (has("seats")) { const v = intOr(body.seats, null); if (!Number.isInteger(v) || (v as number) < 2 || (v as number) > 15) throw new RentalError("Seats must be a whole number."); out.seats = v as number; }
   if (has("vehicleType")) { const v = clean(body.vehicleType, 20); if (!(VEHICLE_TYPES as readonly string[]).includes(v)) throw new RentalError("Unknown vehicle class."); out.vehicleType = v; }
   if (has("milesPerDay")) { const v = intOr(body.milesPerDay, 0); if (!Number.isInteger(v) || (v as number) < 0 || (v as number) > 2000) throw new RentalError("Miles per day must be a whole number, 0 for unlimited."); out.milesPerDay = v as number; }
+  if (has("weeklyDriverRent")) {
+    const v = moneyOr(body.weeklyDriverRent, null);
+    if (v === "bad") throw new RentalError("Weekly rent for a driver must be an amount in dollars, or blank.");
+    out.weeklyDriverRent = v === null || Number(v) === 0 ? null : v;
+  }
   for (const k of ["dailyPrice", "deposit", "extraMileFee", "lateHourFee"] as const) {
     if (has(k)) { const v = moneyOr(body[k], k === "dailyPrice" ? null : "0.00"); if (v === "bad" || v === null) throw new RentalError(`${k === "dailyPrice" ? "Daily price" : k === "deposit" ? "Deposit" : k === "extraMileFee" ? "Extra-mile fee" : "Late-hour fee"} must be an amount in dollars.`); out[k] = v; }
   }
@@ -131,6 +136,12 @@ export async function updateFleetCar(carId: string, body: any, actorId: string, 
   const status = wants === "listed" && !problems.length ? "listed" : "hidden";
   const hiddenReason = status === "listed" ? null : body?.status === "hidden" ? clean(body?.hiddenReason, 200) || "Hidden by an admin." : problems.length ? problems.join(" ") : car.hiddenReason;
   const [updated] = await db.update(rentalCars).set({ ...(fields as any), status, hiddenReason, updatedAt: now }).where(eq(rentalCars.id, carId)).returning();
+  // A car with a driver is also that driver's vehicle: what riders and
+  // dispatch see follows the edit.
+  await db.update(vehicles).set({
+    make: updated.make, model: updated.model, year: updated.year, color: updated.color, licensePlate: updated.licensePlate,
+    vehicleType: updated.vehicleType, photos: updated.photos ?? [], updatedAt: now,
+  }).where(eq(vehicles.rentalCarId, carId));
   return updated;
 }
 
@@ -151,11 +162,19 @@ export function publicCar(car: RentalCar) {
   };
 }
 
-/** Bookings that hold a car, for overlap checks. */
-export async function holdingBookings(carId: string, executor: any = db) {
-  return executor.select({ id: rentalBookings.id, startsAt: rentalBookings.startsAt, endsAt: rentalBookings.endsAt })
+/**
+ * Everything that holds a car, for overlap checks: public rentals that are
+ * confirmed or out, and driver assignments that are assigned or active. One
+ * car, one set of days, whichever door it went out of.
+ */
+export async function holdingBookings(carId: string, executor: any = db): Promise<Array<{ id: string; startsAt: Date; endsAt: Date }>> {
+  const rentals = await executor.select({ id: rentalBookings.id, startsAt: rentalBookings.startsAt, endsAt: rentalBookings.endsAt })
     .from(rentalBookings)
     .where(and(eq(rentalBookings.carId, carId), inArray(rentalBookings.status, [...HOLDS_THE_CAR])));
+  const assigned = await executor.select({ id: driverCarAssignments.id, startsAt: driverCarAssignments.startsAt, endsAt: driverCarAssignments.endsAt })
+    .from(driverCarAssignments)
+    .where(and(eq(driverCarAssignments.carId, carId), inArray(driverCarAssignments.status, [...ASSIGNMENT_HOLDS_THE_CAR])));
+  return [...rentals, ...assigned];
 }
 
 /** Listed, still-qualified cars; with dates, only those free for the whole stay. */

@@ -205,8 +205,8 @@ export class StripeService {
    * gets a real new attempt, not the old decline replayed. A card that wants the renter present is a decline:
    * these run with the renter at the desk but the card is charged off-session.
    */
-  async chargeRental(params: { amount: number; customerId: string; paymentMethodId: string; bookingId: string; renterId: string; purpose: "rental" | "extras" }): Promise<Stripe.PaymentIntent> {
-    const { amount, customerId, paymentMethodId, bookingId, renterId, purpose } = params;
+  async chargeRental(params: { amount: number; customerId: string; paymentMethodId: string; bookingId: string; renterId: string; purpose: "rental" | "extras" | "driver_rent" | "driver_damage"; keyPart?: string }): Promise<Stripe.PaymentIntent> {
+    const { amount, customerId, paymentMethodId, bookingId, renterId, purpose, keyPart } = params;
     return await requireStripe().paymentIntents.create({
       amount: Math.round(amount * 100),
       currency: "usd",
@@ -216,9 +216,15 @@ export class StripeService {
       confirm: true,
       off_session: true,
       error_on_requires_action: true,
-      description: purpose === "rental" ? "PG Ride car rental" : "PG Ride car rental: extras on return",
-      metadata: { rentalBookingId: bookingId, renterId, type: `rental_${purpose}` },
-    }, { idempotencyKey: `rental_${purpose}_${bookingId}_${paymentMethodId}` });
+      description: purpose === "rental" ? "PG Ride car rental" : purpose === "extras" ? "PG Ride car rental: extras on return" : purpose === "driver_rent" ? "PG Ride car for driving: weekly rent" : "PG Ride car for driving: damage on return",
+      metadata: { rentalBookingId: bookingId, renterId, type: `rental_${purpose}`, ...(keyPart ? { rentalKeyPart: keyPart } : {}) },
+    }, { idempotencyKey: `rental_${purpose}_${bookingId}${keyPart ? `_${keyPart}` : ""}_${paymentMethodId}` });
+  }
+
+  /** A charge already made for this booking, purpose and period, if Stripe has one (recovering a charge whose answer was lost). */
+  async findRentalCharge(customerId: string, bookingId: string, purpose: string, keyPart?: string): Promise<Stripe.PaymentIntent | null> {
+    const recent = await requireStripe().paymentIntents.list({ customer: customerId, limit: 100 });
+    return recent.data.find((pi) => pi.metadata?.rentalBookingId === bookingId && pi.metadata?.type === `rental_${purpose}` && (!keyPart || pi.metadata?.rentalKeyPart === keyPart)) ?? null;
   }
 
   async holdRentalDeposit(params: { amount: number; customerId: string; paymentMethodId: string; bookingId: string; renterId: string }): Promise<Stripe.PaymentIntent> {

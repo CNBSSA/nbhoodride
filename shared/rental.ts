@@ -254,3 +254,73 @@ export function money(n: unknown): string {
   const v = num(n);
   return `$${(Number.isFinite(v) ? v : 0).toFixed(2)}`;
 }
+
+// ── Phase 3: PG Ride fleet cars assigned to drivers ─────────────────────────
+//
+// Only fleet cars are ever assigned to drivers (Festus, 2026-09-27). A driver
+// asks for a car by the week; an admin assigns it and hands it over; rent is
+// charged to the driver's card a week at a time, in advance, and the driver
+// may drive the car on PG Ride only while the rent is paid. No deposit: a
+// card hold cannot outlast a week. Decisions Festus may change: rent taken
+// from earnings instead of the card; a deposit; MAX_DRIVER_WEEKS.
+
+export const DRIVER_ASSIGNMENT_STATUSES = ["requested", "assigned", "active", "ended", "declined", "cancelled"] as const;
+export type DriverAssignmentStatus = (typeof DRIVER_ASSIGNMENT_STATUSES)[number];
+/** Statuses that hold the car against other assignments and public rentals. */
+export const ASSIGNMENT_HOLDS_THE_CAR: readonly DriverAssignmentStatus[] = ["assigned", "active"];
+/** Statuses a driver may have only one of at a time. */
+export const ASSIGNMENT_OPEN: readonly DriverAssignmentStatus[] = ["requested", "assigned", "active"];
+export const MAX_DRIVER_WEEKS = 12;
+export const WEEK_MS = 7 * DAY_MS;
+/** Rent for the next week is charged this long before the paid week runs out. */
+export const RENT_CHARGE_LEAD_MS = 60 * 60 * 1000;
+
+export type DriverQuoteResult =
+  | { ok: true; quote: { startsAt: Date; endsAt: Date; weeks: number; weeklyRent: number; total: number } }
+  | { ok: false; error: string };
+
+export function quoteDriverAssignment(car: { weeklyDriverRent: unknown; ownerKind?: string | null }, startsAtRaw: unknown, weeksRaw: unknown, now: Date = new Date()): DriverQuoteResult {
+  if (car.ownerKind && car.ownerKind !== "fleet") return { ok: false, error: "Only PG Ride's own cars are offered to drivers." };
+  const weeklyRent = num(car.weeklyDriverRent);
+  if (!(weeklyRent > 0)) return { ok: false, error: "This car is not offered to drivers." };
+  const startsAt = new Date(String(startsAtRaw ?? ""));
+  if (!Number.isFinite(startsAt.getTime())) return { ok: false, error: "Pick when you want to collect the car." };
+  if (startsAt.getTime() < now.getTime() + MIN_LEAD_MINUTES * 60_000) return { ok: false, error: `Collection has to be at least ${MIN_LEAD_MINUTES} minutes from now.` };
+  if (startsAt.getTime() > now.getTime() + MAX_BOOK_AHEAD_DAYS * DAY_MS) return { ok: false, error: `A car can be asked for up to ${MAX_BOOK_AHEAD_DAYS} days ahead.` };
+  const weeks = Number(weeksRaw);
+  if (!Number.isInteger(weeks) || weeks < 1 || weeks > MAX_DRIVER_WEEKS) return { ok: false, error: `Ask for between 1 and ${MAX_DRIVER_WEEKS} weeks.` };
+  const endsAt = new Date(startsAt.getTime() + weeks * WEEK_MS);
+  return { ok: true, quote: { startsAt, endsAt, weeks, weeklyRent: round2(weeklyRent), total: round2(weeklyRent * weeks) } };
+}
+
+/**
+ * May a driver go online? A driver with a car of their own is not this
+ * rule's business. A driver whose only car is a PG Ride car may drive while
+ * the car is theirs (active) and its rent is paid through now.
+ */
+export function fleetDriverMayDrive(input: {
+  ownCars: number;
+  fleetCars: number;
+  assignment: { status: string; paidThrough: Date | string | null; endsAt: Date | string } | null;
+  now?: Date;
+}): { ok: true } | { ok: false; reason: string } {
+  const now = input.now ?? new Date();
+  if (input.ownCars > 0 || input.fleetCars === 0) return { ok: true };
+  const a = input.assignment;
+  if (!a || a.status !== "active") return { ok: false, reason: "You have no PG Ride car at the moment. Ask for one on your Profile, or add your own car." };
+  const paid = a.paidThrough ? new Date(a.paidThrough).getTime() : 0;
+  if (paid <= now.getTime()) return { ok: false, reason: "This week's rent for your PG Ride car has not been paid. Update your card in Profile; PG Ride will retry it." };
+  return { ok: true };
+}
+
+export const DRIVER_ASSIGNMENT_WORDS: Record<DriverAssignmentStatus, string> = {
+  requested: "Asked for — PG Ride will confirm",
+  assigned: "Confirmed — collect it at the pick-up place",
+  active: "Yours to drive",
+  ended: "Returned",
+  declined: "Not available",
+  cancelled: "Cancelled",
+};
+
+export const DRIVER_RENT_SENTENCE =
+  "Rent is charged to your card a week at a time, in advance, starting when you collect the car. You can drive it on PG Ride while the rent is paid. Cancelling before collection is free.";

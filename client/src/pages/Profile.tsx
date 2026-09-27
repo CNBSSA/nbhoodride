@@ -23,6 +23,7 @@ import { ReferralProgramCard } from "@/components/ReferralProgramCard";
 import { CalmRideToggle } from "@/components/CalmRideToggle";
 import { LanguageSelector } from "@/components/LanguageSelector";
 import { DriverOnboardingChecklist } from "@/components/DriverOnboardingChecklist";
+import { DriverFleetCarCard } from "@/components/DriverFleetCarCard";
 import { SupportContactLinks } from "@/components/SupportContactLinks";
 import { MD_COUNTIES } from "../../../shared/schema";
 import type { Locale } from "@shared/i18n";
@@ -443,6 +444,10 @@ export default function Profile() {
               <i className="fas fa-chevron-right text-muted-foreground" />
             </Button>
           )}
+
+          {/* A driver without a car can drive a PG Ride fleet car (Car Rental
+              Master Plan, phase 3); applicants see it too, before approval. */}
+          {rentalEnabled && (user?.isDriver || user?.driverProfile) && <DriverFleetCarCard />}
 
           {user?.isDriver && (
             <div className="border rounded-xl overflow-hidden">

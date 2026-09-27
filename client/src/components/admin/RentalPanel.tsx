@@ -22,7 +22,12 @@ interface AdminCar {
   id: string; make: string; model: string; year: number; color: string; seats: number; vehicleType: string; licensePlate: string; vin: string | null;
   photos: string[]; dailyPrice: string; deposit: string; milesPerDay: number; extraMileFee: string; lateHourFee: string;
   pickupLocation: { address: string } | null; inspectionExpires: string | null; registrationExpires: string | null; insuranceExpires: string | null;
-  status: "listed" | "hidden"; hiddenReason: string | null; problems: string[];
+  status: "listed" | "hidden"; hiddenReason: string | null; problems: string[]; weeklyDriverRent: string | null;
+}
+interface AdminAssignment {
+  id: string; status: string; startsAt: string; endsAt: string; weeks: number; weeklyRent: string; paidThrough: string | null;
+  paymentStatus: string; paymentError: string | null; damageAmount: string | null; damageIntentId: string | null;
+  car: { make: string; model: string; year: number; licensePlate: string }; driver: { name: string; approvalStatus: string };
 }
 interface AdminBooking {
   id: string; status: string; startsAt: string; endsAt: string; days: number; rentalTotal: string; deposit: string; licenceNumber: string; licenceImageUrl: string;
@@ -59,6 +64,7 @@ export function RentalPanel() {
         <p className="text-sm text-muted-foreground">PG Ride's own fleet. A car is listed only while it qualifies; the sweep hides it the hour a document lapses.</p>
       </div>
       <RentalBookings />
+      <DriverCars />
       <FleetCars />
     </div>
   );
@@ -87,7 +93,7 @@ function FleetCars() {
               <p className="font-medium">{car.year} {car.make} {car.model} · {car.licensePlate}</p>
               <Badge variant={car.status === "listed" ? "default" : "secondary"}>{car.status}</Badge>
             </div>
-            <p className="text-xs text-muted-foreground">{money(car.dailyPrice)}/day · deposit {money(car.deposit)} · {car.photos.length} photos · inspection {day(car.inspectionExpires) || "—"} · registration {day(car.registrationExpires) || "—"} · insurance {day(car.insuranceExpires) || "—"}</p>
+            <p className="text-xs text-muted-foreground">{money(car.dailyPrice)}/day · deposit {money(car.deposit)} · {car.weeklyDriverRent ? `drivers ${money(car.weeklyDriverRent)}/week` : "not offered to drivers"} · {car.photos.length} photos · inspection {day(car.inspectionExpires) || "—"} · registration {day(car.registrationExpires) || "—"} · insurance {day(car.insuranceExpires) || "—"}</p>
             {car.problems.length > 0 && <ul className="text-xs text-destructive list-disc pl-4">{car.problems.map((p) => <li key={p}>{p}</li>)}</ul>}
             {car.status === "hidden" && car.hiddenReason && car.problems.length === 0 && <p className="text-xs text-muted-foreground">{car.hiddenReason}</p>}
             {car.status === "listed"
@@ -102,7 +108,7 @@ function FleetCars() {
 
 function CarForm({ onDone }: { onDone: () => void }) {
   const { toast } = useToast();
-  const [f, setF] = useState({ make: "", model: "", year: "", color: "", seats: "5", vehicleType: "standard", licensePlate: "", vin: "", dailyPrice: "", deposit: "", milesPerDay: "150", extraMileFee: "0.40", lateHourFee: "15", inspectionExpires: "", registrationExpires: "", insuranceExpires: "" });
+  const [f, setF] = useState({ make: "", model: "", year: "", color: "", seats: "5", vehicleType: "standard", licensePlate: "", vin: "", dailyPrice: "", deposit: "", milesPerDay: "150", extraMileFee: "0.40", lateHourFee: "15", weeklyDriverRent: "", inspectionExpires: "", registrationExpires: "", insuranceExpires: "" });
   const [photos, setPhotos] = useState<string[]>([]);
   const [address, setAddress] = useState("");
   const [pickup, setPickup] = useState<{ lat: number; lng: number; address: string } | null>(null);
@@ -127,7 +133,7 @@ function CarForm({ onDone }: { onDone: () => void }) {
         {field("licensePlate", "Plate")}{field("vin", "VIN (17 characters)")}
         {field("dailyPrice", "Price per day ($)", "number")}{field("deposit", "Deposit ($)", "number")}
         {field("milesPerDay", "Miles a day (0 = unlimited)", "number")}{field("extraMileFee", "Per extra mile ($)", "number")}
-        {field("lateHourFee", "Per late hour ($)", "number")}
+        {field("lateHourFee", "Per late hour ($)", "number")}{field("weeklyDriverRent", "Weekly rent for a driver ($, blank = not offered)", "number")}
         {field("inspectionExpires", "Inspection expires", "date")}{field("registrationExpires", "Registration expires", "date")}{field("insuranceExpires", "Insurance expires", "date")}
       </div>
       <AddressAutocomplete value={address} onChange={(v) => { setAddress(v); setPickup(null); }} onSelect={(s) => { setAddress(s.label); setPickup({ lat: s.lat, lng: s.lng, address: s.label }); }} placeholder="Pick-up place" data-testid="input-fleet-pickup" />
@@ -179,7 +185,7 @@ function RentalBookings() {
   );
 }
 
-function Handover({ kind, pending, onSubmit }: { kind: "collect" | "return"; pending: boolean; onSubmit: (body: any) => void }) {
+function Handover({ kind, pending, onSubmit, label }: { kind: "collect" | "return"; pending: boolean; onSubmit: (body: any) => void; label?: string }) {
   const [odometer, setOdometer] = useState("");
   const [photos, setPhotos] = useState<string[]>([]);
   const [damageAmount, setDamageAmount] = useState("");
@@ -193,8 +199,53 @@ function Handover({ kind, pending, onSubmit }: { kind: "collect" | "return"; pen
         <Input placeholder="What is damaged" value={damageNote} onChange={(e) => setDamageNote(e.target.value)} data-testid="input-rental-damage-note" />
       </div>}
       <Button size="sm" className="w-full" disabled={pending || !odometer || photos.length < 4} onClick={() => onSubmit({ odometer: Number(odometer), photos, ...(kind === "return" ? { damageAmount: damageAmount || undefined, damageNote } : {}) })} data-testid={`button-submit-rental-${kind}`}>
-        {kind === "collect" ? "Charge the rental, hold the deposit, hand over" : "Take the car back and settle the deposit"}
+        {label ?? (kind === "collect" ? "Charge the rental, hold the deposit, hand over" : "Take the car back and settle the deposit")}
       </Button>
     </div>
+  );
+}
+
+function DriverCars() {
+  const { toast } = useToast();
+  const { data: rows } = useQuery<AdminAssignment[]>({ queryKey: ["/api/admin/rental/assignments"], ...REFRESH });
+  const [handling, setHandling] = useState<{ id: string; kind: "handover" | "takeback" } | null>(null);
+  const act = useMutation({
+    mutationFn: async ({ id, action, body }: { id: string; action: string; body?: any }) => (await apiRequest("POST", `/api/admin/rental/assignments/${id}/${action}`, body ?? {})).json(),
+    onSuccess: (a: any) => {
+      toast({ title: "Done", description: a?.paymentError ? `Recorded. ${a.paymentError}` : `Now ${a?.status}.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/rental/assignments"] });
+      setHandling(null);
+    },
+    onError: (e: Error) => toast({ title: "Could not do that", description: e.message, variant: "destructive" }),
+  });
+  const open = rows?.filter((r) => ["requested", "assigned", "active"].includes(r.status)) ?? [];
+  return (
+    <Card>
+      <CardHeader><CardTitle>Cars for drivers</CardTitle><CardDescription>{open.length} open · only PG Ride's own cars · rent is charged a week at a time, in advance</CardDescription></CardHeader>
+      <CardContent className="space-y-3">
+        {(rows?.length ?? 0) === 0 && <p className="text-sm text-muted-foreground" data-testid="text-no-driver-cars">No driver has asked for a car yet.</p>}
+        {rows?.map((r) => (
+          <div key={r.id} className="border rounded-md p-3 space-y-1" data-testid={`row-driver-car-${r.id}`}>
+            <div className="flex justify-between"><p className="font-medium">{r.driver.name} · {r.car.year} {r.car.make} {r.car.model} ({r.car.licensePlate})</p><Badge variant="secondary">{r.status}</Badge></div>
+            <p className="text-xs text-muted-foreground">{when(r.startsAt)} → {when(r.endsAt)} · {r.weeks} week{r.weeks === 1 ? "" : "s"} at {money(r.weeklyRent)} · driver {r.driver.approvalStatus}{r.paidThrough ? ` · paid to ${when(r.paidThrough)}` : ""}</p>
+            {r.paymentError && <p className="text-xs text-destructive">{r.paymentError}</p>}
+            <div className="flex flex-wrap gap-2 pt-1">
+              {r.status === "requested" && <>
+                <Button size="sm" onClick={() => act.mutate({ id: r.id, action: "assign" })} data-testid={`button-assign-driver-car-${r.id}`}>Assign</Button>
+                <Button size="sm" variant="outline" onClick={() => act.mutate({ id: r.id, action: "decline", body: { reason: "Not available" } })} data-testid={`button-decline-driver-car-${r.id}`}>Decline</Button>
+              </>}
+              {r.status === "assigned" && <Button size="sm" onClick={() => setHandling({ id: r.id, kind: "handover" })} data-testid={`button-handover-driver-car-${r.id}`}>Hand over</Button>}
+              {r.status === "active" && <>
+                <Button size="sm" onClick={() => setHandling({ id: r.id, kind: "takeback" })} data-testid={`button-takeback-driver-car-${r.id}`}>Take back</Button>
+                <Button size="sm" variant="outline" onClick={() => act.mutate({ id: r.id, action: "extend", body: { weeks: 1 } })} data-testid={`button-extend-driver-car-${r.id}`}>Add a week</Button>
+                {r.paymentStatus === "due" && <Button size="sm" variant="outline" onClick={() => act.mutate({ id: r.id, action: "charge-rent" })} data-testid={`button-charge-rent-driver-car-${r.id}`}>Retry rent</Button>}
+              </>}
+              {r.status === "ended" && r.damageAmount && !r.damageIntentId && <Button size="sm" variant="outline" onClick={() => act.mutate({ id: r.id, action: "charge-damage" })} data-testid={`button-charge-damage-driver-car-${r.id}`}>Retry damage charge</Button>}
+            </div>
+            {handling?.id === r.id && <Handover kind={handling.kind === "handover" ? "collect" : "return"} label={handling.kind === "handover" ? "Charge the first week's rent and hand over" : "Take the car back (charge any damage)"} pending={act.isPending} onSubmit={(body) => act.mutate({ id: r.id, action: handling.kind, body })} />}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
