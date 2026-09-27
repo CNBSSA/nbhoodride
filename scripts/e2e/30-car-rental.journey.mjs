@@ -26,6 +26,12 @@ export async function run({ base, db, server }) {
     const put = await session.req("PUT", path, tinyPng(), { "Content-Type": "image/png" });
     return put.status === 200 ? path : null;
   };
+  // An ops page is written to the log when it is sent, which can land a
+  // moment after the response that caused it: wait for it, up to 5 seconds.
+  const logShows = async (re) => {
+    for (let i = 0; i < 25; i++) { if (re.test(serverLog(server))) return true; await new Promise((r) => setTimeout(r, 200)); }
+    return false;
+  };
   const inDays = (d, h = 10) => { const t = new Date(Date.now() + d * 86400_000); t.setUTCHours(h, 0, 0, 0); return t.toISOString(); };
   const inAYear = inDays(365);
   const { rows: [cardBefore] } = await db.query("SELECT stripe_customer_id, stripe_payment_method_id FROM users WHERE id=$1", [FIXTURES.rider.id]);
@@ -82,8 +88,7 @@ export async function run({ base, db, server }) {
     check("a request with a licence is taken, priced by the server, and charges nothing", asked.status === 200 && asked.json?.status === "requested" && asked.json?.rentalTotal === "135.00" && asked.json?.paymentStatus === "none" && asked.json?.licenceNumber === "M123456789", JSON.stringify(asked.json?.message ?? { s: asked.json?.status, t: asked.json?.rentalTotal }));
     check("and the renter is never shown payment ids", asked.json && !("chargeIntentId" in asked.json) && !("depositIntentId" in asked.json));
     const bookingId = asked.json?.id;
-    await new Promise((r) => setTimeout(r, 300));
-    check("PG Ride is paged to confirm it", /\[ops-alert\][\s\S]*Car rental requested/.test(serverLog(server)));
+    check("PG Ride is paged to confirm it", await logShows(/\[ops-alert\][\s\S]*Car rental requested/));
 
     section("Only one rental holds a car for any hour");
     const otherLicence = await upload(other);
@@ -124,8 +129,7 @@ export async function run({ base, db, server }) {
     check("when the rental cannot be charged, the car is not handed over, and the desk is told why", collect.status === 402 && /could not be charged/.test(collect.json?.message ?? ""), `${collect.status} ${collect.json?.message}`);
     const { rows: [afterCollect] } = await db.query("SELECT status, payment_error, charge_intent_id FROM rental_bookings WHERE id=$1", [bookingId]);
     check("it stays confirmed, with the reason on it and no charge recorded", afterCollect.status === "confirmed" && /declined/.test(afterCollect.payment_error ?? "") && !afterCollect.charge_intent_id, JSON.stringify(afterCollect));
-    await new Promise((r) => setTimeout(r, 300));
-    check("and ops are paged", /Rental charge declined at collection/.test(serverLog(server)));
+    check("and ops are paged", await logShows(/Rental charge declined at collection/));
 
     section("One car is out on one rental at a time");
     const nextLicence = licence;
@@ -151,8 +155,7 @@ export async function run({ base, db, server }) {
     // 400 miles on 300 allowed at $0.50 = $50; 2.5 hours late = 3 hours at $12 = $36; damage $80 → $166 on a $150 deposit.
     check("the return is priced from the booking: extra miles, late hours past the grace hour, and damage", back.status === 200 && s.extraMiles === 100 && s.extraMilesCharge === 50 && s.lateHours === 3 && s.lateCharge === 36 && s.damage === 80 && s.extrasTotal === 166 && s.fromDeposit === 150 && s.depositReleased === 0 && s.beyondDeposit === 16, JSON.stringify(s));
     check("the car is back even though the card could not be settled", back.json?.status === "returned" && back.json?.paymentStatus === "failed" && /Settlement failed/.test(back.json?.paymentError ?? ""), JSON.stringify({ st: back.json?.status, ps: back.json?.paymentStatus, e: back.json?.paymentError }));
-    await new Promise((r) => setTimeout(r, 300));
-    check("and ops are paged to retry it", /Rental settlement FAILED/.test(serverLog(server)));
+    check("and ops are paged to retry it", await logShows(/Rental settlement FAILED/));
     const retry = await admin.req("POST", `/api/admin/rental/bookings/${bookingId}/settle`);
     check("a retry is safe: it answers, still returned, still failed", retry.status === 200 && retry.json?.status === "returned" && retry.json?.paymentStatus === "failed", JSON.stringify({ s: retry.status, st: retry.json?.status }));
     const seenBack = (await rider.req("GET", "/api/rent/bookings")).json?.find((b) => b.id === bookingId);
@@ -172,8 +175,7 @@ export async function run({ base, db, server }) {
     check("and says why", hiddenCar.status === "hidden" && /Insurance/.test(hiddenCar.hidden_reason ?? ""), JSON.stringify(hiddenCar));
     check("renters no longer see it", !((await rider.req("GET", "/api/rent/cars")).json ?? []).some((c) => c.id === carId));
     check("nor can they request it", (await rider.req("POST", "/api/rent/quote", { carId, startsAt: inDays(30), endsAt: inDays(31) })).status === 404);
-    await new Promise((r) => setTimeout(r, 300));
-    check("ops are told which car and why", /Rental car taken off the list[\s\S]*Insurance/.test(serverLog(server)));
+    check("ops are told which car and why", await logShows(/Rental car taken off the list[\s\S]*Insurance/));
   } finally {
     await db.query("DELETE FROM rental_bookings WHERE car_id = ANY($1::varchar[])", [carIds]).catch(() => {});
     await db.query("DELETE FROM rental_cars WHERE id = ANY($1::varchar[])", [carIds]).catch(() => {});
