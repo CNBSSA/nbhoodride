@@ -198,6 +198,11 @@ export async function chargeWeek(a: DriverCarAssignment, periodStart: Date): Pro
   }
 }
 
+async function engineIsCutOff(carId: string): Promise<boolean> {
+  const [c] = await db.select({ off: rentalCars.engineCutOffAt, on: rentalCars.engineRestoredAt }).from(rentalCars).where(eq(rentalCars.id, carId));
+  return !!c?.off && !c?.on;
+}
+
 /** A charge row older than this in "charging" had its answer lost; it may be taken up again. */
 export const CHARGING_STALE_MS = 10 * 60 * 1000;
 
@@ -222,6 +227,7 @@ export async function handOverFleetCar(id: string, actorId: string, body: any, n
   const [stillOut] = await db.select({ id: driverCarAssignments.id }).from(driverCarAssignments)
     .where(and(eq(driverCarAssignments.carId, a.carId), eq(driverCarAssignments.status, "active"))).limit(1);
   if (stillOut) throw new RentalError("This car is still with another driver. Take it back first.", 409);
+  if (await engineIsCutOff(a.carId)) throw new RentalError("This car's engine is recorded as cut off. Restore it before handing it over.", 409);
   const [rentedOut] = await db.select({ id: rentalBookings.id }).from(rentalBookings)
     .where(and(eq(rentalBookings.carId, a.carId), eq(rentalBookings.status, "collected"))).limit(1);
   if (rentedOut) throw new RentalError("This car is still out on a rental. Take it back first.", 409);
@@ -321,7 +327,8 @@ export async function extendFleetCar(id: string, weeksRaw: unknown): Promise<Dri
     const next = { startsAt: a.endsAt, endsAt: new Date(a.endsAt.getTime() + add * WEEK_MS) };
     const held = await holdingBookings(a.carId, tx);
     if (held.some((h) => h.id !== a.id && rentalsOverlap(h, next))) throw new RentalError("The car is booked for some of those days.", 409);
-    const [u] = await tx.update(driverCarAssignments).set({ weeks: a.weeks + add, endsAt: next.endsAt, updatedAt: new Date() }).where(eq(driverCarAssignments.id, id)).returning();
+    // New weeks, new end: if the car is late again after them, ops are paged again.
+    const [u] = await tx.update(driverCarAssignments).set({ weeks: a.weeks + add, endsAt: next.endsAt, overduePagedAt: null, updatedAt: new Date() }).where(eq(driverCarAssignments.id, id)).returning();
     return u;
   });
 }

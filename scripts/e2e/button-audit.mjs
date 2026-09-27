@@ -34,7 +34,8 @@ const BASELINE_PATH = join(ROOT, "scripts/e2e/button-audit-baseline.json");
  * suspended the fixture driver from the admin screen and the next journey
  * could not go online.
  */
-const NEVER = /logout|sign-?out|delete|remove-account|sos|emergency|panic|911|error-reload|call-|dial|share-native|open-maps|navigate-external|install-app|suspend|unsuspend|ban|reject|revoke|deactivate|disable|refund|payout|reset-password|force-|tip-send/i;
+// engine-cut-off: stops a real car once a tracker is connected — never from a test.
+const NEVER = /logout|sign-?out|delete|remove-account|sos|emergency|panic|911|error-reload|call-|dial|share-native|open-maps|navigate-external|install-app|suspend|unsuspend|ban|reject|revoke|deactivate|disable|refund|payout|reset-password|force-|tip-send|engine-cut-off/i;
 
 /** What a rider can tap. Order matters: testid keys are stable, text keys are the fallback. */
 const CLICKABLE = [

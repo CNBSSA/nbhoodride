@@ -69,12 +69,16 @@ describe("rentalsOverlap", () => {
 });
 
 describe("settleReturn", () => {
-  const base = { milesAllowed: 300, collectOdometer: 10000, returnOdometer: 10250, extraMileFee: "0.40", endsAt: "2026-10-03T10:00:00Z", returnedAt: "2026-10-03T10:30:00Z", lateHourFee: "15", deposit: "200" };
+  const base = { milesAllowed: 300, collectOdometer: 10000, returnOdometer: 10250, extraMileFee: "0.40", endsAt: "2026-10-03T10:00:00Z", returnedAt: "2026-10-03T09:59:00Z", lateHourFee: "15", deposit: "200" };
+  it("no grace: a car back one minute late pays one hour", () => {
+    const s = settleReturn({ ...base, returnedAt: "2026-10-03T10:01:00Z" });
+    expect(s.ok && s.settlement).toMatchObject({ lateHours: 1, lateCharge: 15 });
+  });
   it("on time, within the miles, no damage: the whole deposit goes back", () => {
     const s = settleReturn(base);
     expect(s.ok && s.settlement).toMatchObject({ milesDriven: 250, extraMiles: 0, lateHours: 0, extrasTotal: 0, fromDeposit: 0, depositReleased: 200, beyondDeposit: 0 });
   });
-  it("extra miles and lateness past the grace hour come out of the deposit", () => {
+  it("extra miles and every hour late come out of the deposit", () => {
     const s = settleReturn({ ...base, returnOdometer: 10400, returnedAt: "2026-10-03T12:10:00Z" });
     expect(s.ok && s.settlement).toMatchObject({ extraMiles: 100, extraMilesCharge: 40, lateHours: 3, lateCharge: 45, extrasTotal: 85, fromDeposit: 85, depositReleased: 115, beyondDeposit: 0 });
   });
@@ -166,5 +170,17 @@ describe("ownerSplit", () => {
       const s = ownerSplit(t, null);
       expect(Math.round((s.ownerShare + s.platformShare) * 100)).toBe(Math.round(s.collected * 100));
     }
+  });
+});
+
+
+import { isOverdue, minutesOverdue } from "./rental";
+
+describe("overdue", () => {
+  it("a car is overdue the minute it is past its return time", () => {
+    expect(isOverdue(new Date(now.getTime() - 60_000), now)).toBe(true);
+    expect(isOverdue(new Date(now.getTime() + 60_000), now)).toBe(false);
+    expect(minutesOverdue(new Date(now.getTime() - 90_000), now)).toBe(2);
+    expect(minutesOverdue(new Date(now.getTime() + 90_000), now)).toBe(0);
   });
 });

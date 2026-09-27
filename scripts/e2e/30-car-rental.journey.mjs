@@ -152,8 +152,8 @@ export async function run({ base, db, server }) {
     check("an odometer that went backwards is refused", backwards.status === 400, JSON.stringify(backwards.json));
     const back = await admin.req("POST", `/api/admin/rental/bookings/${bookingId}/return`, { odometer: 10400, photos: handPhotos, damageAmount: 80, damageNote: "Scratch on rear bumper" });
     const s = back.json?.settlement ?? {};
-    // 400 miles on 300 allowed at $0.50 = $50; 2.5 hours late = 3 hours at $12 = $36; damage $80 → $166 on a $150 deposit.
-    check("the return is priced from the booking: extra miles, late hours past the grace hour, and damage", back.status === 200 && s.extraMiles === 100 && s.extraMilesCharge === 50 && s.lateHours === 3 && s.lateCharge === 36 && s.damage === 80 && s.extrasTotal === 166 && s.fromDeposit === 150 && s.depositReleased === 0 && s.beyondDeposit === 16, JSON.stringify(s));
+    // 400 miles on 300 allowed at $0.50 = $50; 2.5 hours late = 3 hours started at $12 = $36 (no grace); damage $80 → $166 on a $150 deposit.
+    check("the return is priced from the booking: extra miles, every hour started late, and damage", back.status === 200 && s.extraMiles === 100 && s.extraMilesCharge === 50 && s.lateHours === 3 && s.lateCharge === 36 && s.damage === 80 && s.extrasTotal === 166 && s.fromDeposit === 150 && s.depositReleased === 0 && s.beyondDeposit === 16, JSON.stringify(s));
     check("the car is back even though the card could not be settled", back.json?.status === "returned" && back.json?.paymentStatus === "failed" && /Settlement failed/.test(back.json?.paymentError ?? ""), JSON.stringify({ st: back.json?.status, ps: back.json?.paymentStatus, e: back.json?.paymentError }));
     check("and ops are paged to retry it", await logShows(/Rental settlement FAILED/));
     const retry = await admin.req("POST", `/api/admin/rental/bookings/${bookingId}/settle`);

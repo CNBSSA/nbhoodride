@@ -157,6 +157,8 @@ export async function collectRental(bookingId: string, actorId: string, body: an
   const [withDriver] = await db.select({ id: driverCarAssignments.id }).from(driverCarAssignments)
     .where(and(eq(driverCarAssignments.carId, b.carId), eq(driverCarAssignments.status, "active"))).limit(1);
   if (withDriver) throw new RentalError("This car is still with a PG Ride driver. Take it back from them first.", 409);
+  const [engine] = await db.select({ off: rentalCars.engineCutOffAt, on: rentalCars.engineRestoredAt }).from(rentalCars).where(eq(rentalCars.id, b.carId));
+  if (engine?.off && !engine?.on) throw new RentalError("This car's engine is recorded as cut off. Restore it before handing it over.", 409);
   if (!stripeService.isEnabled) throw new RentalError("Card payments are not set up on this deployment, so the deposit cannot be held. The car cannot be handed over.", 503);
   const card = await renterCard(b.renterId);
   if (!card) throw new RentalError("The renter has no card on file. They add one in Profile, then try again.", 409);

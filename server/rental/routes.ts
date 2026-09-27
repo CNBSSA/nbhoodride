@@ -17,6 +17,7 @@ import {
   quoteFor, renterView, requestRental, returnRental, settleRental,
 } from "./bookings";
 import { runRentalSweep } from "./sweep";
+import { recordEngineCutOff, recordEngineRestored, runOverdueWatch } from "./overdue";
 import { createOwnerCar, getOwnerPayout, listOwnerBookings, listOwnerCars, ownerAct, reviewOwnerCar, saveOwnerPayout, updateOwnerCar } from "./owners";
 import { OWNER_TERMS_SENTENCE } from "@shared/rental";
 import {
@@ -185,6 +186,17 @@ export function registerRentalRoutes(app: Express, deps: RentalDeps): void {
 
   app.post("/api/admin/analytics/driver-rent-sweep", gate, isAdminOrSessionAuth, async (_req, res) => {
     try { res.json(await runDriverRentSweep()); } catch (err) { fail(res, err, "Could not run the rent sweep"); }
+  });
+
+  // ── Overdue cars and the engine cut-off (Festus 2026-09-27) ─────────────────
+  app.post("/api/admin/rental/cars/:id/engine-cut-off", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await recordEngineCutOff(String(req.params.id), userIdOf(req))); } catch (err) { fail(res, err, "Could not record the engine cut-off"); }
+  });
+  app.post("/api/admin/rental/cars/:id/engine-restored", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await recordEngineRestored(String(req.params.id), userIdOf(req))); } catch (err) { fail(res, err, "Could not record the engine restored"); }
+  });
+  app.post("/api/admin/analytics/rental-overdue-sweep", gate, isAdminOrSessionAuth, async (_req, res) => {
+    try { res.json(await runOverdueWatch()); } catch (err) { fail(res, err, "Could not run the overdue watch"); }
   });
 
   app.post("/api/admin/analytics/rental-sweep", gate, isAdminOrSessionAuth, async (req, res) => {
