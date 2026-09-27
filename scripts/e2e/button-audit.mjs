@@ -55,7 +55,7 @@ const SCREENS = [
   // The receiver's "delivered" page (2026-09-17).
   { role: "visitor", path: `/delivered/${E2E_DELIVERED_TOKEN}` },
   { role: "visitor", path: "/forgot-password" }, { role: "visitor", path: "/terms" }, { role: "visitor", path: "/privacy" },
-  { role: "rider", path: "/" }, { role: "rider", path: "/ratings" }, { role: "rider", path: "/payments" }, { role: "rider", path: "/card-setup" },
+  { role: "rider", path: "/" }, { role: "rider", path: "/rent" }, { role: "rider", path: "/ratings" }, { role: "rider", path: "/payments" }, { role: "rider", path: "/card-setup" },
   { role: "driver", path: "/" }, { role: "driver", path: "/driver/insights" },
   { role: "admin", path: "/admin" }, { role: "admin", path: "/" },
   { role: "requester", path: "/org" },

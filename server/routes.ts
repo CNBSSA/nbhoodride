@@ -167,6 +167,7 @@ import { reliabilityEventRecorder } from "./reliabilityEvents";
 import { pageAtRiskRides } from "./rideRiskWatch";
 import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
 import { registerCommercialRoutes } from "./commercial/routes";
+import { registerRentalRoutes } from "./rental/routes";
 import { materializeAllStandingOrders } from "./commercial/standingOrders";
 import { runWeeklyBilling } from "./commercial/billing";
 import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
@@ -1526,7 +1527,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // A proof-of-delivery photo belongs to the organization that booked
         // the job: its members may see it (2026-09-17).
         const { userMaySeeProofPhoto } = await import("./commercial/badges");
-        if (!(await userMaySeeProofPhoto(userId, obj.id).catch(() => false))) {
+        // A listed rental car's photos are for every signed-in renter, and a
+        // rental's licence and handover photos are for its renter.
+        const mayRental = featureFlags.rentalEnabled
+          ? await import("./rental/cars").then((m) => m.rentalPhotoVisibleTo(userId, obj.id)).catch(() => false)
+          : false;
+        if (!mayRental && !(await userMaySeeProofPhoto(userId, obj.id).catch(() => false))) {
           return res.status(403).json({ message: "Not allowed" });
         }
       }
@@ -5595,6 +5601,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       driverMarketplaceEnabled: featureFlags.driverMarketplaceEnabled,
       equityProgramEnabled: featureFlags.equityProgramEnabled,
       commercialEnabled: featureFlags.commercialEnabled,
+      rentalEnabled: featureFlags.rentalEnabled,
     });
   });
 
@@ -11444,6 +11451,9 @@ Generate the FAQ list.`;
 
   // ── Scheduled ride monitor: fires every minute ──
   // Handles: 30-min reminders, T-60/15/5 escalations, midnight county cleanup
+  // ── Car rental (server/rental/, behind RENTAL_ENABLED) ──
+  registerRentalRoutes(app, { isAuthenticated, isAdminOrSessionAuth });
+
   // ── Commercial riders: organizations that book for other people and are billed ──
   // Registered here so the driver-board broadcast can reuse the live socket map.
   registerCommercialRoutes(app, {
@@ -11540,6 +11550,11 @@ Generate the FAQ list.`;
       // ── Proof photos still on a phone: page ops at 6 h, give up at 24 h ──
       if (featureFlags.commercialEnabled && now.getMinutes() === 7) {
         import("./commercial/badges").then((m) => m.sweepPendingProofPhotos(now)).catch((err) => console.error("pending proof photo sweep failed:", err));
+      }
+
+      // ── Car rental: hide a car the hour a document lapses; warn ahead once a day ──
+      if (featureFlags.rentalEnabled && now.getMinutes() === 23) {
+        import("./rental/sweep").then((m) => m.runRentalSweep(now, { warnings: now.getUTCHours() === 13 })).catch((err) => console.error("rental sweep failed:", err));
       }
 
       // ── Ride-risk watch: page ops before the rider finds out ──

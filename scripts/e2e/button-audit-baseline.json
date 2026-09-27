@@ -182,7 +182,26 @@
     "button-upload-insurance",
     "button-upload-license",
     "button-upload-vehicle-*",
-    "button-view-receipt-*"
+    "button-view-receipt-*",
+    "button-rent-a-car",
+    "button-request-rental",
+    "button-save-fleet-car",
+    "button-confirm-rental-*",
+    "button-decline-rental-*",
+    "button-handover-rental-*",
+    "button-hide-car-*",
+    "button-list-car-*",
+    "button-settle-rental-*",
+    "button-submit-rental-*",
+    "button-takeback-rental-*",
+    "button-add-fleet-car",
+    "button-cancel-rental-*",
+    "button-open-rent",
+    "button-rent-back",
+    "button-rent-car-*",
+    "button-rent-tab-find",
+    "button-rent-tab-mine",
+    "button-rent-upload-licence"
   ],
   "unreachable": {
     "button-add-card": "not reachable from the audited screens yet",
@@ -292,6 +311,17 @@
     "button-portal-copy-approval-link-*": "on the desk's job row for a held delivery; journey 22 covers the link",
     "button-portal-resend-approval-link-*": "on the desk's job row for a held delivery; journey 22 covers it",
     "button-approve-no": "on the approval page, whichever answer the audit presses first changes the page so the other disappears; the layout audit measures both and journey 22 covers both answers",
-    "button-portal-remove-recipient-*": "inside the Recipients tab; archiving is covered by journey 23"
+    "button-portal-remove-recipient-*": "inside the Recipients tab; archiving is covered by journey 23",
+    "button-rent-a-car": "inside the rider home's More options, like button-multi-stop and button-become-driver; journey 30 covers the page it opens and the audit presses every button on /rent",
+    "button-request-rental": "enabled only after a licence number and a licence photo are uploaded; journey 30 requests rentals over the API",
+    "button-save-fleet-car": "inside the admin Car rental tab's add-a-car form; journey 30 adds and lists fleet cars over the API",
+    "button-confirm-rental-*": "inside the admin Car rental tab; journey 30 confirms rentals over the API, including two at once",
+    "button-decline-rental-*": "inside the admin Car rental tab; journey 30 declines over the API",
+    "button-handover-rental-*": "inside the admin Car rental tab, on a confirmed rental; the hand-over charges a card",
+    "button-hide-car-*": "inside the admin Car rental tab; journey 30 lists and hides cars over the API",
+    "button-list-car-*": "inside the admin Car rental tab; journey 30 lists cars over the API",
+    "button-settle-rental-*": "inside the admin Car rental tab, on a returned rental; settling charges a card",
+    "button-submit-rental-*": "inside the admin hand-over form, enabled only with four uploaded photos; it charges a card",
+    "button-takeback-rental-*": "inside the admin Car rental tab, on a rental on the road; journey 30 takes cars back over the API"
   }
 }

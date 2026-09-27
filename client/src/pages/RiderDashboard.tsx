@@ -175,7 +175,7 @@ export default function RiderDashboard() {
 
   // ── Hooks ──
   const { user } = useAuth();
-  const { walletEnabled } = useFeatureFlags();
+  const { walletEnabled, rentalEnabled } = useFeatureFlags();
   const { location, error: locationError, requestLocation } = useGeolocation();
   const { lastMessage } = useWebSocket();
   const { toast } = useToast();
@@ -1217,6 +1217,18 @@ export default function RiderDashboard() {
                   <MapPin className="w-4 h-4" />
                   Multi-stop ride (organizer pays)
                 </button>
+                {/* Car rental (PG Ride Car Rental Master Plan): one quiet door
+                    inside More options, so the home screen itself is unchanged. */}
+                {rentalEnabled && (
+                  <button
+                    onClick={() => setWouterLocation("/rent")}
+                    className="w-full flex items-center gap-2 justify-center bg-emerald-50 text-emerald-700 rounded-xl py-3 text-xs font-semibold active:bg-emerald-100 transition-colors"
+                    data-testid="button-rent-a-car"
+                  >
+                    <Car className="w-4 h-4" />
+                    Rent a car
+                  </button>
+                )}
                 {!user?.isDriver && (
                   <button
                     onClick={() => window.dispatchEvent(new CustomEvent('pgride:open-profile'))}

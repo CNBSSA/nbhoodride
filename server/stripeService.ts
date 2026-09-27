@@ -196,6 +196,47 @@ export class StripeService {
     });
   }
 
+  /**
+   * Car rental (server/rental/): the rental price, charged at collection;
+   * the deposit, held at collection and settled at return; and anything owed
+   * beyond the deposit. One idempotency key per booking, purpose and card, so
+   * a retried collection or settlement replays the same charge instead of
+   * making a second one, while a renter who swaps a declined card for another
+   * gets a real new attempt, not the old decline replayed. A card that wants the renter present is a decline:
+   * these run with the renter at the desk but the card is charged off-session.
+   */
+  async chargeRental(params: { amount: number; customerId: string; paymentMethodId: string; bookingId: string; renterId: string; purpose: "rental" | "extras" }): Promise<Stripe.PaymentIntent> {
+    const { amount, customerId, paymentMethodId, bookingId, renterId, purpose } = params;
+    return await requireStripe().paymentIntents.create({
+      amount: Math.round(amount * 100),
+      currency: "usd",
+      customer: customerId,
+      payment_method: paymentMethodId,
+      capture_method: "automatic",
+      confirm: true,
+      off_session: true,
+      error_on_requires_action: true,
+      description: purpose === "rental" ? "PG Ride car rental" : "PG Ride car rental: extras on return",
+      metadata: { rentalBookingId: bookingId, renterId, type: `rental_${purpose}` },
+    }, { idempotencyKey: `rental_${purpose}_${bookingId}_${paymentMethodId}` });
+  }
+
+  async holdRentalDeposit(params: { amount: number; customerId: string; paymentMethodId: string; bookingId: string; renterId: string }): Promise<Stripe.PaymentIntent> {
+    const { amount, customerId, paymentMethodId, bookingId, renterId } = params;
+    return await requireStripe().paymentIntents.create({
+      amount: Math.round(amount * 100),
+      currency: "usd",
+      customer: customerId,
+      payment_method: paymentMethodId,
+      capture_method: "manual",
+      confirm: true,
+      off_session: true,
+      error_on_requires_action: true,
+      description: "PG Ride car rental deposit (held, not charged)",
+      metadata: { rentalBookingId: bookingId, renterId, type: "rental_deposit" },
+    }, { idempotencyKey: `rental_deposit_${bookingId}_${paymentMethodId}` });
+  }
+
   async getPaymentIntent(paymentIntentId: string): Promise<Stripe.PaymentIntent> {
     return await requireStripe().paymentIntents.retrieve(paymentIntentId);
   }

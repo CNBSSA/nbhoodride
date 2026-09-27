@@ -107,6 +107,18 @@ export async function seedFixtures(db) {
   const { rows: [prof] } = await db.query("SELECT id FROM driver_profiles WHERE user_id=$1", [FIXTURES.driver.id]);
   await db.query(`INSERT INTO vehicles (driver_profile_id, make, model, year, color, license_plate)
     SELECT $1::varchar,'Toyota','Camry',2020,'Blue','E2E0001' WHERE NOT EXISTS (SELECT 1 FROM vehicles WHERE driver_profile_id=$1::varchar)`, [prof.id]);
+  // A listed, qualified PG Ride fleet car and a rental request on it, so the
+  // rental page and the admin's Car rental tab have something to show the
+  // audits (journey 30 makes its own). Reset on every seed.
+  const inAYear = new Date(Date.now() + 365 * 86400_000).toISOString();
+  await db.query(`INSERT INTO rental_cars (id, owner_kind, make, model, year, color, seats, license_plate, vin, photos, daily_price, deposit, miles_per_day, extra_mile_fee, late_hour_fee, pickup_location, inspection_expires, registration_expires, insurance_expires, status)
+    VALUES ('e2e-rental-car', 'fleet', 'Honda', 'Civic', $1, 'Silver', 5, 'PGR0001', '1HGCM82633A004352', '["/api/objects/db-upload/00000000-0000-4000-8000-0000000000c1","/api/objects/db-upload/00000000-0000-4000-8000-0000000000c2","/api/objects/db-upload/00000000-0000-4000-8000-0000000000c3","/api/objects/db-upload/00000000-0000-4000-8000-0000000000c4"]'::jsonb, 49.00, 200.00, 150, 0.40, 15.00, $2, $3, $3, $3, 'listed')
+    ON CONFLICT (id) DO UPDATE SET status='listed', inspection_expires=$3, registration_expires=$3, insurance_expires=$3, year=$1`,
+    [new Date().getUTCFullYear() - 2, JSON.stringify({ lat: 38.9073, lng: -76.7781, address: "PG Ride lot, Bowie, MD" }), inAYear]).catch((e) => console.log("  (rental car seed) " + String(e?.message ?? e).split("\n")[0]));
+  await db.query(`INSERT INTO rental_bookings (id, car_id, renter_id, starts_at, ends_at, days, daily_price, rental_total, deposit, miles_allowed, status, licence_number, licence_image_url)
+    VALUES ('e2e-rental-request', 'e2e-rental-car', $1, NOW() + interval '60 days', NOW() + interval '62 days', 2, 49.00, 98.00, 200.00, 300, 'requested', 'E2E1234567', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5')
+    ON CONFLICT (id) DO UPDATE SET status='requested', starts_at=NOW() + interval '60 days', ends_at=NOW() + interval '62 days', payment_status='none', payment_error=NULL, charge_intent_id=NULL, deposit_intent_id=NULL`,
+    [FIXTURES.rider.id]).catch((e) => console.log("  (rental booking seed) " + String(e?.message ?? e).split("\n")[0]));
 }
 
 export async function startServer(env = {}) {
@@ -126,6 +138,8 @@ export async function startServer(env = {}) {
       // it on. Overridable so the flag-off state — what production actually
       // runs — can be re-proved on demand, not just argued about.
       COMMERCIAL_ENABLED: process.env.COMMERCIAL_ENABLED ?? "true",
+      // Car rental likewise: off in production, on for the journeys and audits.
+      RENTAL_ENABLED: process.env.RENTAL_ENABLED ?? "true",
       RESEND_API_KEY: "re_e2e_fake", RESEND_FROM: "noreply@peoplegoverned.com",
       TELEGRAM_BOT_TOKEN: "e2e", TELEGRAM_CHAT_ID: "1",
       TWILIO_ACCOUNT_SID: "ACe2e", TWILIO_AUTH_TOKEN: "e2e-auth-token", TWILIO_PHONE_NUMBER: "+18882743045",

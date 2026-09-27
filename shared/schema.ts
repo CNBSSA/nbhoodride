@@ -1588,6 +1588,83 @@ export const safetyAlerts = pgTable("safety_alerts", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// ── Car rental (PG Ride Car Rental Master Plan; rules in shared/rental.ts,
+// server in server/rental/, behind RENTAL_ENABLED). Phase 1 lists PG Ride's
+// own fleet; owner_kind and owner_user_id are there for private owners in
+// phase 2. Only fleet cars are ever assigned to drivers (Festus, 2026-09-27).
+export const rentalCars = pgTable("rental_cars", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** fleet | private */
+  ownerKind: varchar("owner_kind").notNull().default("fleet"),
+  ownerUserId: varchar("owner_user_id").references(() => users.id),
+  make: varchar("make").notNull(),
+  model: varchar("model").notNull(),
+  year: integer("year").notNull(),
+  color: varchar("color").notNull(),
+  seats: integer("seats").notNull().default(5),
+  vehicleType: varchar("vehicle_type").notNull().default("standard"),
+  licensePlate: varchar("license_plate").notNull(),
+  vin: varchar("vin"),
+  photos: jsonb("photos").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  dailyPrice: decimal("daily_price", { precision: 8, scale: 2 }).notNull(),
+  deposit: decimal("deposit", { precision: 8, scale: 2 }).notNull().default("0.00"),
+  milesPerDay: integer("miles_per_day").notNull().default(0),
+  extraMileFee: decimal("extra_mile_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  lateHourFee: decimal("late_hour_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  pickupLocation: jsonb("pickup_location").$type<{ lat: number; lng: number; address: string }>(),
+  inspectionExpires: timestamp("inspection_expires"),
+  registrationExpires: timestamp("registration_expires"),
+  insuranceExpires: timestamp("insurance_expires"),
+  /** hidden | listed — listed only while shared/rental.ts qualificationProblems is empty. */
+  status: varchar("status").notNull().default("hidden"),
+  hiddenReason: text("hidden_reason"),
+  createdBy: varchar("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export type RentalCar = typeof rentalCars.$inferSelect;
+
+export const rentalBookings = pgTable("rental_bookings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  carId: varchar("car_id").notNull().references(() => rentalCars.id),
+  renterId: varchar("renter_id").notNull().references(() => users.id),
+  startsAt: timestamp("starts_at").notNull(),
+  endsAt: timestamp("ends_at").notNull(),
+  days: integer("days").notNull(),
+  dailyPrice: decimal("daily_price", { precision: 8, scale: 2 }).notNull(),
+  rentalTotal: decimal("rental_total", { precision: 10, scale: 2 }).notNull(),
+  deposit: decimal("deposit", { precision: 8, scale: 2 }).notNull(),
+  milesAllowed: integer("miles_allowed").notNull().default(0),
+  extraMileFee: decimal("extra_mile_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  lateHourFee: decimal("late_hour_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** requested | confirmed | collected | returned | closed | declined | cancelled */
+  status: varchar("status").notNull().default("requested"),
+  licenceNumber: varchar("licence_number").notNull(),
+  licenceImageUrl: varchar("licence_image_url").notNull(),
+  collectedAt: timestamp("collected_at"),
+  collectOdometer: integer("collect_odometer"),
+  collectPhotos: jsonb("collect_photos").$type<string[]>(),
+  returnedAt: timestamp("returned_at"),
+  returnOdometer: integer("return_odometer"),
+  returnPhotos: jsonb("return_photos").$type<string[]>(),
+  /** The figures the return was settled on (shared/rental.ts settleReturn). */
+  settlement: jsonb("settlement").$type<Record<string, number>>(),
+  damageNote: text("damage_note"),
+  chargeIntentId: varchar("charge_intent_id"),
+  depositIntentId: varchar("deposit_intent_id"),
+  beyondDepositIntentId: varchar("beyond_deposit_intent_id"),
+  /** none | charged | settled | failed | refunded */
+  paymentStatus: varchar("payment_status").notNull().default("none"),
+  paymentError: text("payment_error"),
+  cancelReason: text("cancel_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_rental_bookings_car").on(table.carId, table.startsAt),
+  index("idx_rental_bookings_renter").on(table.renterId),
+]);
+export type RentalBooking = typeof rentalBookings.$inferSelect;
+
 export const eventTrackingRelations = relations(eventTracking, ({ one }) => ({
   user: one(users, {
     fields: [eventTracking.userId],
