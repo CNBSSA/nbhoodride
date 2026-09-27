@@ -231,7 +231,9 @@
     "button-owner-doc-inspection",
     "button-owner-doc-ownership",
     "button-fleet-photos",
-    "button-rental-photos-*"
+    "button-rental-photos-*",
+    "button-engine-restored-*",
+    "button-engine-cut-off-*"
   ],
   "unreachable": {
     "button-add-card": "not reachable from the audited screens yet",
@@ -371,6 +373,7 @@
     "button-owner-takeback-*": "shown only to an owner whose car is out; journey 32 takes it back over the API",
     "button-owner-settle-*": "shown only on a returned rental whose settlement failed; settling charges a card",
     "button-owner-list-car-*": "shown only to an owner with a car; journey 32 lists over the API",
-    "button-owner-hide-car-*": "shown only to an owner with a listed car"
+    "button-owner-hide-car-*": "shown only to an owner with a listed car",
+    "button-engine-restored-*": "shown only on a car whose engine is recorded as cut off; the audit never cuts an engine off (NEVER), and journey 33 records both over the API"
   }
 }

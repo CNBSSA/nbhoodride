@@ -11566,6 +11566,11 @@ Generate the FAQ list.`;
         import("./commercial/badges").then((m) => m.sweepPendingProofPhotos(now)).catch((err) => console.error("pending proof photo sweep failed:", err));
       }
 
+      // ── Overdue rental cars: page ops to cut off the engine, the minute a car is late ──
+      if (featureFlags.rentalEnabled) {
+        import("./rental/overdue").then((m) => m.runOverdueWatch(now)).catch((err) => console.error("rental overdue watch failed:", err));
+      }
+
       // ── Fleet cars for drivers: charge next week's rent an hour before the paid week ends ──
       if (featureFlags.rentalEnabled && now.getMinutes() === 37) {
         import("./rental/drivers").then((m) => m.runDriverRentSweep(now)).catch((err) => console.error("driver rent sweep failed:", err));

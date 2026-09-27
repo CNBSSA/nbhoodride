@@ -1619,6 +1619,11 @@ export const rentalCars = pgTable("rental_cars", {
   inspectionExpires: timestamp("inspection_expires"),
   registrationExpires: timestamp("registration_expires"),
   insuranceExpires: timestamp("insurance_expires"),
+  /** The engine cut-off (Festus, 2026-09-27): when the desk recorded it cut off, by whom, and when restored. */
+  engineCutOffAt: timestamp("engine_cut_off_at"),
+  engineCutOffBy: varchar("engine_cut_off_by"),
+  engineRestoredAt: timestamp("engine_restored_at"),
+  engineRestoredBy: varchar("engine_restored_by"),
   /** A private owner's papers (phase 2): photos or PDFs in PG Ride's own store. */
   registrationDocUrl: varchar("registration_doc_url"),
   insuranceDocUrl: varchar("insurance_doc_url"),
@@ -1669,6 +1674,8 @@ export const rentalBookings = pgTable("rental_bookings", {
   paymentStatus: varchar("payment_status").notNull().default("none"),
   paymentError: text("payment_error"),
   cancelReason: text("cancel_reason"),
+  /** When ops were paged that the car is overdue (once per rental). */
+  overduePagedAt: timestamp("overdue_paged_at"),
   /** A private owner's car: what the rental collected, the owner's 90% and PG Ride's 10%, fixed at close. */
   ownerShare: decimal("owner_share", { precision: 10, scale: 2 }),
   platformShare: decimal("platform_share", { precision: 10, scale: 2 }),
@@ -1710,6 +1717,8 @@ export const driverCarAssignments = pgTable("driver_car_assignments", {
   paymentStatus: varchar("payment_status").notNull().default("none"),
   paymentError: text("payment_error"),
   cancelReason: text("cancel_reason"),
+  /** When ops were paged that the car is overdue (once per assignment). */
+  overduePagedAt: timestamp("overdue_paged_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [

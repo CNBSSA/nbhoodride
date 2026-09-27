@@ -15,7 +15,8 @@
  *     "listed" always means "qualified".
  *   - Cancelling is free until the car is collected: no money moves before
  *     collection, so there is nothing to keep.
- *   - LATE_GRACE_MINUTES = 59: the first hour late is not charged.
+ *   - No grace for a late return (Festus, 2026-09-27): every hour started
+ *     late is charged, and a car not back on time may be stopped remotely.
  */
 
 export const RENTAL_OWNER_KINDS = ["fleet", "private"] as const;
@@ -39,7 +40,8 @@ export const MAX_BOOK_AHEAD_DAYS = 90;
 export const MAX_CAR_AGE_YEARS = 12;
 export const MAX_SEATS = 8;
 export const MIN_PHOTOS = 4;
-export const LATE_GRACE_MINUTES = 59;
+/** No grace for a late return (Festus, 2026-09-27): from the first minute, every hour started. */
+export const LATE_GRACE_MINUTES = 0;
 export const EXPIRY_WARNING_DAYS = [30, 7] as const;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -263,7 +265,7 @@ export const RENTAL_STATUS_WORDS: Record<RentalBookingStatus, string> = {
 
 export const RENTAL_TERMS_SENTENCE =
   `Rentals run up to ${MAX_RENTAL_DAYS} days. Nothing is charged until you collect the car: then the rental is charged and the deposit is held on your card. ` +
-  `On return, extra miles, lateness beyond the first hour and any damage come out of the deposit, and the rest is released. Cancelling before collection is free.`;
+  `On return, extra miles, every hour late (from the first minute) and any damage come out of the deposit, and the rest is released. A car not back on time may be stopped remotely. Cancelling before collection is free.`;
 
 export function money(n: unknown): string {
   const v = num(n);
@@ -338,7 +340,7 @@ export const DRIVER_ASSIGNMENT_WORDS: Record<DriverAssignmentStatus, string> = {
 };
 
 export const DRIVER_RENT_SENTENCE =
-  "Rent is charged to your card a week at a time, in advance, starting when you collect the car. You can drive it on PG Ride while the rent is paid. Cancelling before collection is free.";
+  "Rent is charged to your card a week at a time, in advance, starting when you collect the car. You can drive it on PG Ride while the rent is paid. A car not back at the end of its weeks may be stopped remotely. Cancelling before collection is free.";
 
 
 // ── Phase 2: private owners (Festus, 2026-09-27) ────────────────────────────
@@ -374,3 +376,24 @@ export const OWNER_PAYOUT_METHODS = ["zelle", "cashapp", "paypal", "check"] as c
 
 export const OWNER_TERMS_SENTENCE =
   "PG Ride checks your car's papers before it is listed. You accept each request and hand the car over yourself. When a rental closes, PG Ride keeps 10% of everything it collected and you are credited the rest, paid every Friday to the payout method you choose.";
+
+
+// ── Overdue cars and the engine cut-off (Festus, 2026-09-27) ───────────────
+//
+// "No grace for late returns, we cut off the engine remotely." The moment a
+// car is past its return time and not back, ops are paged to cut off its
+// engine; the desk records when it was cut off and restored. Which tracker
+// does the cutting is not connected yet: until it is, the page and the
+// record are the whole of it, and the cut-off is made in the tracker's app.
+// Renters and drivers are told up front that a late car may be stopped.
+
+/** Is this car overdue: out, and past the time it was due back? */
+export function isOverdue(endsAt: Date | string, now: Date = new Date()): boolean {
+  return new Date(endsAt).getTime() < now.getTime();
+}
+
+/** Minutes a car is overdue, rounded up; 0 when it is not. */
+export function minutesOverdue(endsAt: Date | string, now: Date = new Date()): number {
+  const ms = now.getTime() - new Date(endsAt).getTime();
+  return ms > 0 ? Math.ceil(ms / 60_000) : 0;
+}

@@ -1606,6 +1606,14 @@ CREATE TABLE IF NOT EXISTS rental_owner_profiles (
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+-- ── Car rental: overdue cars and the engine cut-off (Festus 2026-09-27) ──
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_cut_off_at TIMESTAMP;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_cut_off_by VARCHAR;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_restored_at TIMESTAMP;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_restored_by VARCHAR;
+ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS overdue_paged_at TIMESTAMP;
+ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS overdue_paged_at TIMESTAMP;
 `;
 
 async function migrate() {

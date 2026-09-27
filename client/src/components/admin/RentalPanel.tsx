@@ -24,6 +24,7 @@ interface AdminCar {
   pickupLocation: { address: string } | null; inspectionExpires: string | null; registrationExpires: string | null; insuranceExpires: string | null;
   status: "listed" | "hidden"; hiddenReason: string | null; problems: string[]; weeklyDriverRent: string | null;
   ownerKind: string; reviewStatus: string; reviewNote: string | null;
+  engineCutOffAt: string | null; engineRestoredAt: string | null;
   registrationDocUrl: string | null; insuranceDocUrl: string | null; inspectionDocUrl: string | null; ownershipDocUrl: string | null;
 }
 interface AdminAssignment {
@@ -54,6 +55,24 @@ export function PhotoPicker({ photos, setPhotos, children }: { photos: string[];
       <ObjectUploader maxNumberOfFiles={8} onGetUploadParameters={uploadTarget} onComplete={(r) => setPhotos([...photos, ...r.successful.map((f) => pathOf(f.uploadURL))])} buttonClassName="w-full border rounded-md py-2 text-sm">
         {children}
       </ObjectUploader>
+    </div>
+  );
+}
+
+function EngineControl({ car }: { car: AdminCar }) {
+  const { toast } = useToast();
+  const cutOff = !!car.engineCutOffAt && !car.engineRestoredAt;
+  const act = useMutation({
+    mutationFn: async (what: "engine-cut-off" | "engine-restored") => (await apiRequest("POST", `/api/admin/rental/cars/${car.id}/${what}`, {})).json(),
+    onSuccess: (r: any) => { toast({ title: r?.car?.engineRestoredAt ? "Engine restored — recorded" : "Engine cut off — recorded", description: r?.tracker?.sent ? "The command went to the tracker." : r?.tracker?.reason }); queryClient.invalidateQueries({ queryKey: ["/api/admin/rental/cars"] }); },
+    onError: (e: Error) => toast({ title: "Could not record it", description: e.message, variant: "destructive" }),
+  });
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      {cutOff && <Badge variant="destructive">engine cut off {when(car.engineCutOffAt!)}</Badge>}
+      {cutOff
+        ? <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate("engine-restored")} data-testid={`button-engine-restored-${car.id}`}>Engine restored</Button>
+        : <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate("engine-cut-off")} data-testid={`button-engine-cut-off-${car.id}`}>Engine cut off</Button>}
     </div>
   );
 }
@@ -119,6 +138,7 @@ function FleetCars() {
               </div>
             )}
             {car.ownerKind === "private" && car.reviewStatus === "pending" && <OwnerCarReview carId={car.id} />}
+            <EngineControl car={car} />
             <p className="text-xs text-muted-foreground">{money(car.dailyPrice)}/day · deposit {money(car.deposit)} · {car.weeklyDriverRent ? `drivers ${money(car.weeklyDriverRent)}/week` : "not offered to drivers"} · {car.photos.length} photos · inspection {day(car.inspectionExpires) || "—"} · registration {day(car.registrationExpires) || "—"} · insurance {day(car.insuranceExpires) || "—"}</p>
             {car.problems.length > 0 && <ul className="text-xs text-destructive list-disc pl-4">{car.problems.map((p) => <li key={p}>{p}</li>)}</ul>}
             {car.status === "hidden" && car.hiddenReason && car.problems.length === 0 && <p className="text-xs text-muted-foreground">{car.hiddenReason}</p>}

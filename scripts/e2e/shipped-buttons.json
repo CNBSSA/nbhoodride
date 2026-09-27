@@ -82,6 +82,8 @@
     "button-email-receipt",
     "button-emergency-contact",
     "button-enable-push",
+    "button-engine-cut-off-*",
+    "button-engine-restored-*",
     "button-error-reload",
     "button-extend-driver-car-*",
     "button-fleet-photos",

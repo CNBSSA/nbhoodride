@@ -177,6 +177,9 @@ function MyRentals() {
             <p className="font-semibold">{r.car.year} {r.car.make} {r.car.model}</p>
             <p className="text-xs text-muted-foreground">{when(r.startsAt)} → {when(r.endsAt)} · {r.days} day{r.days === 1 ? "" : "s"} · {money(r.rentalTotal)}</p>
             <p className="text-sm" data-testid={`text-rental-status-${r.id}`}>{RENTAL_STATUS_WORDS[r.status] ?? r.status}</p>
+            {r.status === "collected" && new Date(r.endsAt).getTime() < Date.now() && (
+              <p className="text-xs text-destructive" data-testid={`text-rental-overdue-${r.id}`}>This car was due back at {when(r.endsAt)}. Every hour late is charged, and the car may be stopped remotely. Bring it back now.</p>
+            )}
             {r.settlement && (r.status === "closed" || r.status === "returned") && (
               <p className="text-xs text-muted-foreground">Extras {money(r.settlement.extrasTotal)} · deposit released {money(r.settlement.depositReleased)}{r.damageNote ? ` · damage: ${r.damageNote}` : ""}</p>
             )}
