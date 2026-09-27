@@ -52,6 +52,12 @@ const num = (v: unknown): number => {
 // ── Qualification ────────────────────────────────────────────────────────────
 
 export interface CarForQualification {
+  ownerKind?: string | null;
+  reviewStatus?: string | null;
+  registrationDocUrl?: string | null;
+  insuranceDocUrl?: string | null;
+  inspectionDocUrl?: string | null;
+  ownershipDocUrl?: string | null;
   year: number | null | undefined;
   seats: number | null | undefined;
   licensePlate: string | null | undefined;
@@ -102,6 +108,15 @@ export function qualificationProblems(car: CarForQualification, now: Date = new 
   if (!expiresAfter(car.inspectionExpires, now)) out.push("Safety inspection is missing or expired.");
   if (!expiresAfter(car.registrationExpires, now)) out.push("Registration is missing or expired.");
   if (!expiresAfter(car.insuranceExpires, now)) out.push("Insurance is missing or expired.");
+  if (car.ownerKind === "private") {
+    const docs: Array<[string, unknown]> = [
+      ["registration card", car.registrationDocUrl], ["insurance card", car.insuranceDocUrl],
+      ["inspection certificate", car.inspectionDocUrl], ["proof of ownership or the owner's permission", car.ownershipDocUrl],
+    ];
+    for (const [name, url] of docs) if (!url) out.push(`A photo of the ${name} is missing.`);
+    if (car.reviewStatus === "rejected") out.push("PG Ride could not accept the papers; see the note, fix them and send again.");
+    else if (car.reviewStatus !== "approved") out.push("PG Ride has not checked the papers yet.");
+  }
   return out;
 }
 
@@ -324,3 +339,38 @@ export const DRIVER_ASSIGNMENT_WORDS: Record<DriverAssignmentStatus, string> = {
 
 export const DRIVER_RENT_SENTENCE =
   "Rent is charged to your card a week at a time, in advance, starting when you collect the car. You can drive it on PG Ride while the rent is paid. Cancelling before collection is free.";
+
+
+// ── Phase 2: private owners (Festus, 2026-09-27) ────────────────────────────
+//
+// A private owner's car lists only once PG Ride has checked its papers, and
+// changing what the car IS (make, model, year, plate, VIN, papers, expiry
+// dates) sends it back to be checked. The owner accepts requests and hands
+// the car over; money moves exactly as for a fleet car. When a rental on a
+// private car closes, PG Ride keeps 10% of everything it collected and the
+// owner is credited the rest, paid weekly by the Friday payday.
+
+export const RENTAL_PLATFORM_SHARE = 0.10;
+
+/** Fields whose change sends a private owner's car back to be checked. */
+export const REVIEWED_FIELDS = [
+  "make", "model", "year", "licensePlate", "vin", "seats", "vehicleType",
+  "registrationDocUrl", "insuranceDocUrl", "inspectionDocUrl", "ownershipDocUrl",
+  "inspectionExpires", "registrationExpires", "insuranceExpires",
+] as const;
+
+/**
+ * What a closed rental collected, and how it splits. Collected = the rental
+ * charged at collection + what the deposit covered + anything charged beyond
+ * it. A deposit that was released is not revenue.
+ */
+export function ownerSplit(rentalTotal: unknown, settlement: { fromDeposit?: unknown; beyondDeposit?: unknown } | null | undefined): { collected: number; ownerShare: number; platformShare: number } {
+  const collected = round2((num(rentalTotal) || 0) + (num(settlement?.fromDeposit) || 0) + (num(settlement?.beyondDeposit) || 0));
+  const platformShare = round2(collected * RENTAL_PLATFORM_SHARE);
+  return { collected, platformShare, ownerShare: round2(collected - platformShare) };
+}
+
+export const OWNER_PAYOUT_METHODS = ["zelle", "cashapp", "paypal", "check"] as const;
+
+export const OWNER_TERMS_SENTENCE =
+  "PG Ride checks your car's papers before it is listed. You accept each request and hand the car over yourself. When a rental closes, PG Ride keeps 10% of everything it collected and you are credited the rest, paid every Friday to the payout method you choose.";

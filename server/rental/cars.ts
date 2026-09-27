@@ -5,7 +5,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { driverCarAssignments, rentalBookings, rentalCars, storedObjects, users, vehicles, type RentalCar } from "@shared/schema";
-import { ASSIGNMENT_HOLDS_THE_CAR, HOLDS_THE_CAR, qualificationProblems, rentalsOverlap } from "@shared/rental";
+import { ASSIGNMENT_HOLDS_THE_CAR, HOLDS_THE_CAR, REVIEWED_FIELDS, qualificationProblems, rentalsOverlap } from "@shared/rental";
 import { VEHICLE_TYPES } from "@shared/vehicleTypes";
 
 export class RentalError extends Error {
@@ -61,7 +61,7 @@ async function verifiedPhotoList(raw: unknown, ownerUserId: string, what: string
 }
 
 /** The fields an admin may set on a fleet car, validated. Photos are checked against the acting admin's uploads. */
-async function carFields(body: any, actorId: string, existing?: RentalCar): Promise<Partial<typeof rentalCars.$inferInsert>> {
+export async function carFields(body: any, actorId: string, existing?: RentalCar, opts: { allowDriverRent?: boolean } = { allowDriverRent: true }): Promise<Partial<typeof rentalCars.$inferInsert>> {
   const out: Partial<typeof rentalCars.$inferInsert> = {};
   const has = (k: string) => body && Object.prototype.hasOwnProperty.call(body, k);
   for (const k of ["make", "model", "color"] as const) {
@@ -73,6 +73,15 @@ async function carFields(body: any, actorId: string, existing?: RentalCar): Prom
   if (has("seats")) { const v = intOr(body.seats, null); if (!Number.isInteger(v) || (v as number) < 2 || (v as number) > 15) throw new RentalError("Seats must be a whole number."); out.seats = v as number; }
   if (has("vehicleType")) { const v = clean(body.vehicleType, 20); if (!(VEHICLE_TYPES as readonly string[]).includes(v)) throw new RentalError("Unknown vehicle class."); out.vehicleType = v; }
   if (has("milesPerDay")) { const v = intOr(body.milesPerDay, 0); if (!Number.isInteger(v) || (v as number) < 0 || (v as number) > 2000) throw new RentalError("Miles per day must be a whole number, 0 for unlimited."); out.milesPerDay = v as number; }
+  // A private owner's papers: a photo or PDF each, the owner's own upload
+  // (one already on the car is kept whoever uploaded it).
+  for (const k of ["registrationDocUrl", "insuranceDocUrl", "inspectionDocUrl", "ownershipDocUrl"] as const) {
+    if (!has(k)) continue;
+    const v = clean(body[k], 600);
+    if (!v) { out[k] = null; continue; }
+    out[k] = existing && (existing as any)[k] === v ? v : await verifiedStorePath(v, actorId, { allowPdf: true, what: "document" });
+  }
+  if (has("weeklyDriverRent") && opts.allowDriverRent === false) throw new RentalError("Only PG Ride's own cars are offered to drivers.", 403);
   if (has("weeklyDriverRent")) {
     const v = moneyOr(body.weeklyDriverRent, null);
     if (v === "bad") throw new RentalError("Weekly rent for a driver must be an amount in dollars, or blank.");
@@ -124,9 +133,29 @@ export async function createFleetCar(body: any, actorId: string): Promise<Rental
 
 /** Edit a car; `status: "listed"` lists it only if it qualifies. Any edit that breaks a listed car hides it. */
 export async function updateFleetCar(carId: string, body: any, actorId: string, now: Date = new Date()): Promise<RentalCar> {
+  return updateCar(carId, body, actorId, {}, now);
+}
+
+/**
+ * Edit a car. An admin may edit any car (they are the reviewer). A private
+ * owner (opts.ownerId) may edit only their own, may not offer it to drivers,
+ * and changing what the car IS sends it back to PG Ride to be checked.
+ */
+export async function updateCar(carId: string, body: any, actorId: string, opts: { ownerId?: string }, now: Date = new Date()): Promise<RentalCar> {
   const [car] = await db.select().from(rentalCars).where(eq(rentalCars.id, carId));
-  if (!car || car.ownerKind !== "fleet") throw new RentalError("Car not found.", 404);
-  const fields = await carFields(body, actorId, car);
+  if (!car) throw new RentalError("Car not found.", 404);
+  if (opts.ownerId && (car.ownerKind !== "private" || car.ownerUserId !== opts.ownerId)) throw new RentalError("Car not found.", 404);
+  const fields = await carFields(body, actorId, car, { allowDriverRent: !opts.ownerId && car.ownerKind === "fleet" });
+  if (opts.ownerId) {
+    const changed = REVIEWED_FIELDS.some((k) => k in fields && String((fields as any)[k] ?? "") !== String((car as any)[k] ?? ""));
+    if (changed) {
+      // What a renter has in their hands cannot change under them.
+      const [out] = await db.select({ id: rentalBookings.id }).from(rentalBookings)
+        .where(and(eq(rentalBookings.carId, carId), eq(rentalBookings.status, "collected"))).limit(1);
+      if (out) throw new RentalError("The car is out on a rental. Change its details when it is back.", 409);
+      fields.reviewStatus = "pending"; fields.reviewNote = null;
+    }
+  }
   const next = { ...car, ...fields } as RentalCar;
   const wants = body?.status === "listed" ? "listed" : body?.status === "hidden" ? "hidden" : car.status;
   const problems = qualificationProblems(next, now);
@@ -134,7 +163,7 @@ export async function updateFleetCar(carId: string, body: any, actorId: string, 
     if (body?.status === "listed") throw new RentalError("This car cannot be listed yet.", 409, problems);
   }
   const status = wants === "listed" && !problems.length ? "listed" : "hidden";
-  const hiddenReason = status === "listed" ? null : body?.status === "hidden" ? clean(body?.hiddenReason, 200) || "Hidden by an admin." : problems.length ? problems.join(" ") : car.hiddenReason;
+  const hiddenReason = status === "listed" ? null : body?.status === "hidden" ? clean(body?.hiddenReason, 200) || (opts.ownerId ? "Hidden by the owner." : "Hidden by an admin.") : problems.length ? problems.join(" ") : car.hiddenReason;
   const [updated] = await db.update(rentalCars).set({ ...(fields as any), status, hiddenReason, updatedAt: now }).where(eq(rentalCars.id, carId)).returning();
   // A car with a driver is also that driver's vehicle: what riders and
   // dispatch see follows the edit.
@@ -161,6 +190,7 @@ export function publicCar(car: RentalCar) {
     pickupAddress: car.pickupLocation?.address ?? null,
   };
 }
+
 
 /**
  * Everything that holds a car, for overlap checks: public rentals that are
@@ -210,7 +240,11 @@ export async function rentalPhotoVisibleTo(userId: string, objectId: string): Pr
   if (car) return true;
   const [booking] = await db.select({ id: rentalBookings.id }).from(rentalBookings)
     .where(and(eq(rentalBookings.renterId, userId), sql`(${rentalBookings.licenceImageUrl} = ${path} OR COALESCE(${rentalBookings.collectPhotos}, '[]'::jsonb) @> ${JSON.stringify([path])}::jsonb OR COALESCE(${rentalBookings.returnPhotos}, '[]'::jsonb) @> ${JSON.stringify([path])}::jsonb)`)).limit(1);
-  return !!booking;
+  if (booking) return true;
+  const [asOwner] = await db.select({ id: rentalBookings.id }).from(rentalBookings)
+    .innerJoin(rentalCars, eq(rentalCars.id, rentalBookings.carId))
+    .where(and(eq(rentalCars.ownerUserId, userId), sql`(${rentalBookings.licenceImageUrl} = ${path} OR COALESCE(${rentalBookings.collectPhotos}, '[]'::jsonb) @> ${JSON.stringify([path])}::jsonb OR COALESCE(${rentalBookings.returnPhotos}, '[]'::jsonb) @> ${JSON.stringify([path])}::jsonb)`)).limit(1);
+  return !!asOwner;
 }
 
 export { verifiedPhotoList, users };

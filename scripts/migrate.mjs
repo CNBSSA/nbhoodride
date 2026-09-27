@@ -1588,6 +1588,24 @@ CREATE TABLE IF NOT EXISTS driver_rent_charges (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_driver_rent_charge_period ON driver_rent_charges (assignment_id, period_start);
+
+-- ── Car rental, phase 2: private owners list their own cars ──
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS registration_doc_url VARCHAR;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS insurance_doc_url VARCHAR;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS inspection_doc_url VARCHAR;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS ownership_doc_url VARCHAR;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS review_status VARCHAR NOT NULL DEFAULT 'approved';
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS review_note TEXT;
+ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS owner_share DECIMAL(10,2);
+ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS platform_share DECIMAL(10,2);
+ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS owner_credited_at TIMESTAMP;
+CREATE TABLE IF NOT EXISTS rental_owner_profiles (
+  user_id VARCHAR PRIMARY KEY REFERENCES users(id),
+  payout_method VARCHAR NOT NULL,
+  payout_details VARCHAR NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
 `;
 
 async function migrate() {

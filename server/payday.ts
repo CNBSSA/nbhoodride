@@ -20,7 +20,7 @@
 
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db";
-import { driverProfiles, payoutRequests, users } from "@shared/schema";
+import { driverProfiles, payoutRequests, rentalOwnerProfiles, users } from "@shared/schema";
 import { MINIMUM_PAYDAY_AMOUNT, paydayFor, paydayKeyOf, paydayLabel } from "@shared/paydayCycle";
 import { opsAlert, formatOpsAlert } from "./telegramOps";
 
@@ -71,6 +71,36 @@ export async function runWeeklyPayday(now: Date = new Date()): Promise<PaydayRes
       sql`COALESCE(${driverProfiles.isSuspended}, false) = false`,
       sql`CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) > 0`,
     ));
+
+  // Private car owners are paid weekly too (Festus, 2026-09-27): everyone
+  // with a car owner's payout method, a balance, and no driver profile (a
+  // driver who also owns a listed car is paid once, through the driver row
+  // above — the balance is one balance).
+  // An owner is paid only what their cars earned and has not been paid yet
+  // — never a refund or credit that happens to sit in the same balance.
+  const ownerOwed = sql<string>`GREATEST(0, LEAST(
+      CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)),
+      COALESCE((SELECT SUM(CAST(wt.amount AS DECIMAL(10,2))) FROM wallet_transactions wt WHERE wt.user_id = ${users.id} AND wt.reason = 'rental_owner_earnings'), 0)
+      - COALESCE((SELECT SUM(CAST(pr.amount AS DECIMAL(10,2))) FROM payout_requests pr WHERE pr.driver_id = ${users.id}), 0)
+    ))`;
+  const owners = await db
+    .select({
+      userId: users.id,
+      firstName: users.firstName,
+      lastName: users.lastName,
+      balance: ownerOwed,
+      method: rentalOwnerProfiles.payoutMethod,
+      details: rentalOwnerProfiles.payoutDetails,
+      suspended: sql<boolean>`COALESCE(${users.isSuspended}, false)`,
+    })
+    .from(rentalOwnerProfiles)
+    .innerJoin(users, eq(users.id, rentalOwnerProfiles.userId))
+    .where(and(
+      sql`NOT EXISTS (SELECT 1 FROM driver_profiles dp WHERE dp.user_id = ${users.id})`,
+      sql`COALESCE(${users.isSuspended}, false) = false`,
+      sql`${ownerOwed} > 0`,
+    ));
+  rows.push(...owners);
 
   const paid: PaydayLine[] = [];
   const skipped: PaydayLine[] = [];
@@ -139,7 +169,7 @@ export async function runWeeklyPayday(now: Date = new Date()): Promise<PaydayRes
     `${noMethod.length ? ` :: Waiting on a payout method: ${noMethod.map((l) => l.name).join(", ")}` : ""}`);
 
   opsAlert(formatOpsAlert(`💰 Payday — ${label}`, [
-    ["Drivers paid", paid.length],
+    ["Drivers and car owners paid", paid.length],
     ["Total", `$${total.toFixed(2)}`],
     ["Waiting on a payout method", noMethod.length > 0 ? noMethod.map((l) => l.name).join(", ") : "nobody"],
     ["Next", paid.length > 0 ? "Send them from Admin → Payout requests" : "Nothing to send"],

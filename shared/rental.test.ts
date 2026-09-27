@@ -132,3 +132,39 @@ describe("fleetDriverMayDrive", () => {
     expect(fleetDriverMayDrive({ ownCars: 0, fleetCars: 1, assignment: null, now }).ok).toBe(false);
   });
 });
+
+
+import { ownerSplit, RENTAL_PLATFORM_SHARE } from "./rental";
+
+describe("private owner cars", () => {
+  const privateCar = { ...good, ownerKind: "private", reviewStatus: "approved", registrationDocUrl: "/r", insuranceDocUrl: "/i", inspectionDocUrl: "/s", ownershipDocUrl: "/o" };
+  it("an approved private car with its papers qualifies", () => {
+    expect(qualificationProblems(privateCar, now)).toEqual([]);
+  });
+  it("it needs all four papers and PG Ride's check", () => {
+    const p = qualificationProblems({ ...privateCar, ownershipDocUrl: null, reviewStatus: "pending" }, now).join(" | ");
+    expect(p).toMatch(/proof of ownership/);
+    expect(p).toMatch(/has not checked the papers/);
+    expect(qualificationProblems({ ...privateCar, reviewStatus: "rejected" }, now).join(" ")).toMatch(/could not accept/);
+  });
+  it("a fleet car is not asked for owner papers", () => {
+    expect(qualificationProblems({ ...good, ownerKind: "fleet" }, now)).toEqual([]);
+  });
+});
+
+describe("ownerSplit", () => {
+  it("PG Ride keeps 10% of everything collected, the owner the rest", () => {
+    expect(RENTAL_PLATFORM_SHARE).toBe(0.1);
+    expect(ownerSplit("135.00", { fromDeposit: 50, beyondDeposit: 16 })).toEqual({ collected: 201, platformShare: 20.1, ownerShare: 180.9 });
+  });
+  it("a released deposit is not revenue", () => {
+    expect(ownerSplit(98, { fromDeposit: 0, beyondDeposit: 0 })).toEqual({ collected: 98, platformShare: 9.8, ownerShare: 88.2 });
+    expect(ownerSplit(98, null).ownerShare).toBe(88.2);
+  });
+  it("shares always add up to what was collected", () => {
+    for (const t of [0.01, 1.05, 33.33, 49.99, 1234.57]) {
+      const s = ownerSplit(t, null);
+      expect(Math.round((s.ownerShare + s.platformShare) * 100)).toBe(Math.round(s.collected * 100));
+    }
+  });
+});

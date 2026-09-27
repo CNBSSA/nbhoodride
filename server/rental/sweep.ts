@@ -30,13 +30,16 @@ export async function runRentalSweep(now: Date = new Date(), opts: { warnings?: 
     ]));
   }
   if (opts.warnings) {
-    const all = await db.select().from(rentalCars).where(eq(rentalCars.ownerKind, "fleet"));
+    // PG Ride's cars and private owners' alike: ops tell an owner in time.
+    const all = await db.select().from(rentalCars);
     for (const car of all) {
       for (const w of expiryWarnings(car, now)) {
         warned++;
-        opsAlert(formatOpsAlert("🔑 Rental car document expiring", [["Car", `${car.year} ${car.make} ${car.model} (${car.licensePlate})`], ["Document", w.document], ["Days left", w.daysLeft]]));
+        opsAlert(formatOpsAlert("🔑 Rental car document expiring", [["Car", `${car.year} ${car.make} ${car.model} (${car.licensePlate})`], ["Whose", car.ownerKind === "private" ? "a private owner's — tell them" : "PG Ride's"], ["Document", w.document], ["Days left", w.daysLeft]]));
       }
     }
   }
+  // Owners whose closed rental was not credited (a credit that failed) are paid now.
+  await import("./owners").then((m) => m.creditOwedOwners()).catch((err) => console.error("owner credit catch-up failed:", err));
   return { hidden, warned };
 }

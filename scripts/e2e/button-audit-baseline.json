@@ -211,7 +211,27 @@
     "button-extend-driver-car-*",
     "button-charge-rent-driver-car-*",
     "button-charge-damage-driver-car-*",
-    "button-driver-rent-car"
+    "button-driver-rent-car",
+    "button-owner-save-car",
+    "button-approve-owner-car-*",
+    "button-sendback-owner-car-*",
+    "button-owner-confirm-*",
+    "button-owner-decline-*",
+    "button-owner-handover-*",
+    "button-owner-takeback-*",
+    "button-owner-settle-*",
+    "button-owner-list-car-*",
+    "button-owner-hide-car-*",
+    "button-owner-add-car",
+    "button-owner-save-payout",
+    "button-rent-tab-cars",
+    "button-owner-photos",
+    "button-owner-doc-registration",
+    "button-owner-doc-insurance",
+    "button-owner-doc-inspection",
+    "button-owner-doc-ownership",
+    "button-fleet-photos",
+    "button-rental-photos-*"
   ],
   "unreachable": {
     "button-add-card": "not reachable from the audited screens yet",
@@ -341,6 +361,16 @@
     "button-takeback-driver-car-*": "inside the admin Car rental tab, on a car with a driver; journey 31 takes it back over the API",
     "button-extend-driver-car-*": "inside the admin Car rental tab, on a car with a driver; journey 31 extends over the API",
     "button-charge-rent-driver-car-*": "inside the admin Car rental tab, on unpaid rent; it charges a card",
-    "button-charge-damage-driver-car-*": "inside the admin Car rental tab, on a returned car with unpaid damage; it charges a card"
+    "button-charge-damage-driver-car-*": "inside the admin Car rental tab, on a returned car with unpaid damage; it charges a card",
+    "button-owner-save-car": "enabled only once the owner's car form is filled in; journey 32 adds owner cars over the API",
+    "button-approve-owner-car-*": "inside the admin Car rental tab, on a private car waiting for its papers to be checked; journey 32 reviews over the API",
+    "button-sendback-owner-car-*": "inside the admin Car rental tab, on a private car waiting for its papers to be checked; journey 32 sends back over the API",
+    "button-owner-confirm-*": "shown only to an owner with a rental request on their car; journey 32 accepts over the API",
+    "button-owner-decline-*": "shown only to an owner with a rental request on their car",
+    "button-owner-handover-*": "shown only to an owner with a confirmed rental; the hand-over charges a card",
+    "button-owner-takeback-*": "shown only to an owner whose car is out; journey 32 takes it back over the API",
+    "button-owner-settle-*": "shown only on a returned rental whose settlement failed; settling charges a card",
+    "button-owner-list-car-*": "shown only to an owner with a car; journey 32 lists over the API",
+    "button-owner-hide-car-*": "shown only to an owner with a listed car"
   }
 }

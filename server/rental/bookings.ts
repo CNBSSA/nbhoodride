@@ -64,7 +64,8 @@ export async function requestRental(renterId: string, body: any, now: Date = new
   }).returning();
   opsAlert(formatOpsAlert("🔑 Car rental requested", [
     ["Car", `${car.year} ${car.make} ${car.model}`], ["From", quote.startsAt.toISOString()], ["Days", quote.days],
-    ["Rental", money(quote.rentalTotal)], ["Deposit", money(quote.deposit)], ["Next", "Confirm or decline in Admin, Car rental"],
+    ["Rental", money(quote.rentalTotal)], ["Deposit", money(quote.deposit)],
+    ["Next", car.ownerKind === "private" ? "The owner accepts or declines in My cars" : "Confirm or decline in Admin, Car rental"],
   ]));
   return booking;
 }
@@ -284,5 +285,7 @@ export async function settleRental(bookingId: string): Promise<RentalBooking> {
   }
   const [closed] = await db.update(rentalBookings).set({ status: "closed", paymentStatus: "settled", paymentError: null, updatedAt: new Date() })
     .where(and(eq(rentalBookings.id, b.id), eq(rentalBookings.status, "returned"))).returning();
-  return closed ?? (await load(b.id));
+  // A private owner's car: their 90% of what the rental collected, once.
+  if (closed) await import("./owners").then((m) => m.creditOwnerForClosedRental(closed.id)).catch((err) => console.error("owner credit failed:", err));
+  return load(b.id);
 }
