@@ -5,7 +5,7 @@
  * (the deposit is settled there), and retries a settlement that failed.
  * Shown only while RENTAL_ENABLED is on.
  */
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -23,6 +23,8 @@ interface AdminCar {
   photos: string[]; dailyPrice: string; deposit: string; milesPerDay: number; extraMileFee: string; lateHourFee: string;
   pickupLocation: { address: string } | null; inspectionExpires: string | null; registrationExpires: string | null; insuranceExpires: string | null;
   status: "listed" | "hidden"; hiddenReason: string | null; problems: string[]; weeklyDriverRent: string | null;
+  ownerKind: string; reviewStatus: string; reviewNote: string | null;
+  registrationDocUrl: string | null; insuranceDocUrl: string | null; inspectionDocUrl: string | null; ownershipDocUrl: string | null;
 }
 interface AdminAssignment {
   id: string; status: string; startsAt: string; endsAt: string; weeks: number; weeklyRent: string; paidThrough: string | null;
@@ -39,19 +41,36 @@ const REFRESH = { refetchInterval: 30_000, refetchOnWindowFocus: true } as const
 const day = (s: string | null) => (s ? new Date(s).toISOString().slice(0, 10) : "");
 const when = (s: string) => new Date(s).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
-async function uploadTarget() {
+export async function uploadTarget() {
   const res = await apiRequest("POST", "/api/objects/upload?store=db", {});
   const { uploadURL } = await res.json();
   return { method: "PUT" as const, url: uploadURL };
 }
-const pathOf = (u: string) => new URL(u, window.location.origin).pathname;
+export const pathOf = (u: string) => new URL(u, window.location.origin).pathname;
 
-function PhotoPicker({ photos, setPhotos, testId, label }: { photos: string[]; setPhotos: (p: string[]) => void; testId: string; label: string }) {
+export function PhotoPicker({ photos, setPhotos, children }: { photos: string[]; setPhotos: (p: string[]) => void; children: ReactNode }) {
   return (
     <div className="space-y-1">
       <ObjectUploader maxNumberOfFiles={8} onGetUploadParameters={uploadTarget} onComplete={(r) => setPhotos([...photos, ...r.successful.map((f) => pathOf(f.uploadURL))])} buttonClassName="w-full border rounded-md py-2 text-sm">
-        <span data-testid={testId}>{label} ({photos.length} added)</span>
+        {children}
       </ObjectUploader>
+    </div>
+  );
+}
+
+function OwnerCarReview({ carId }: { carId: string }) {
+  const { toast } = useToast();
+  const [note, setNote] = useState("");
+  const review = useMutation({
+    mutationFn: async (decision: "approve" | "reject") => (await apiRequest("POST", `/api/admin/rental/cars/${carId}/review`, { decision, note })).json(),
+    onSuccess: (c: any) => { toast({ title: c.reviewStatus === "approved" ? "Papers accepted" : "Sent back", description: c.reviewStatus === "approved" ? "The owner can list it now." : "The owner is shown your note." }); queryClient.invalidateQueries({ queryKey: ["/api/admin/rental/cars"] }); },
+    onError: (e: Error) => toast({ title: "Could not record the check", description: e.message, variant: "destructive" }),
+  });
+  return (
+    <div className="flex flex-wrap gap-2 items-center">
+      <Input className="h-8 max-w-xs" placeholder="Note to the owner (needed to send back)" value={note} onChange={(e) => setNote(e.target.value)} data-testid={`input-review-note-${carId}`} />
+      <Button size="sm" disabled={review.isPending} onClick={() => review.mutate("approve")} data-testid={`button-approve-owner-car-${carId}`}>Papers are right</Button>
+      <Button size="sm" variant="outline" disabled={review.isPending} onClick={() => review.mutate("reject")} data-testid={`button-sendback-owner-car-${carId}`}>Send back</Button>
     </div>
   );
 }
@@ -82,7 +101,7 @@ function FleetCars() {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
-        <div><CardTitle>Fleet cars</CardTitle><CardDescription>{cars?.filter((c) => c.status === "listed").length ?? 0} listed of {cars?.length ?? 0}</CardDescription></div>
+        <div><CardTitle>Cars</CardTitle><CardDescription>{cars?.filter((c) => c.status === "listed").length ?? 0} listed of {cars?.length ?? 0}</CardDescription></div>
         <Button size="sm" onClick={() => setAdding((v) => !v)} data-testid="button-add-fleet-car">{adding ? "Close" : "Add a car"}</Button>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -91,8 +110,15 @@ function FleetCars() {
           <div key={car.id} className="border rounded-md p-3 space-y-1" data-testid={`row-fleet-car-${car.id}`}>
             <div className="flex justify-between items-center">
               <p className="font-medium">{car.year} {car.make} {car.model} · {car.licensePlate}</p>
-              <Badge variant={car.status === "listed" ? "default" : "secondary"}>{car.status}</Badge>
+              <div className="flex gap-1">{car.ownerKind === "private" && <Badge variant="outline">private · {car.reviewStatus}</Badge>}<Badge variant={car.status === "listed" ? "default" : "secondary"}>{car.status}</Badge></div>
             </div>
+            {car.ownerKind === "private" && (
+              <div className="text-xs space-x-2">
+                {([["registration", car.registrationDocUrl], ["insurance", car.insuranceDocUrl], ["inspection", car.inspectionDocUrl], ["ownership", car.ownershipDocUrl]] as const).map(([n, u]) => u ? <a key={n} className="underline" href={u} target="_blank" rel="noreferrer">{n}</a> : <span key={n} className="text-destructive">no {n}</span>)}
+                {car.reviewNote && <span className="text-muted-foreground">· {car.reviewNote}</span>}
+              </div>
+            )}
+            {car.ownerKind === "private" && car.reviewStatus === "pending" && <OwnerCarReview carId={car.id} />}
             <p className="text-xs text-muted-foreground">{money(car.dailyPrice)}/day · deposit {money(car.deposit)} · {car.weeklyDriverRent ? `drivers ${money(car.weeklyDriverRent)}/week` : "not offered to drivers"} · {car.photos.length} photos · inspection {day(car.inspectionExpires) || "—"} · registration {day(car.registrationExpires) || "—"} · insurance {day(car.insuranceExpires) || "—"}</p>
             {car.problems.length > 0 && <ul className="text-xs text-destructive list-disc pl-4">{car.problems.map((p) => <li key={p}>{p}</li>)}</ul>}
             {car.status === "hidden" && car.hiddenReason && car.problems.length === 0 && <p className="text-xs text-muted-foreground">{car.hiddenReason}</p>}
@@ -137,7 +163,7 @@ function CarForm({ onDone }: { onDone: () => void }) {
         {field("inspectionExpires", "Inspection expires", "date")}{field("registrationExpires", "Registration expires", "date")}{field("insuranceExpires", "Insurance expires", "date")}
       </div>
       <AddressAutocomplete value={address} onChange={(v) => { setAddress(v); setPickup(null); }} onSelect={(s) => { setAddress(s.label); setPickup({ lat: s.lat, lng: s.lng, address: s.label }); }} placeholder="Pick-up place" data-testid="input-fleet-pickup" />
-      <PhotoPicker photos={photos} setPhotos={setPhotos} testId="button-fleet-photos" label={`Add photos of the car (at least ${MIN_PHOTOS})`} />
+      <PhotoPicker photos={photos} setPhotos={setPhotos}><span data-testid="button-fleet-photos">Add photos of the car (at least {MIN_PHOTOS}) ({photos.length} added)</span></PhotoPicker>
       <Button className="w-full" disabled={save.isPending} onClick={() => save.mutate()} data-testid="button-save-fleet-car">{save.isPending ? "Saving…" : "Save car (hidden until listed)"}</Button>
     </div>
   );
@@ -185,7 +211,7 @@ function RentalBookings() {
   );
 }
 
-function Handover({ kind, pending, onSubmit, label }: { kind: "collect" | "return"; pending: boolean; onSubmit: (body: any) => void; label?: string }) {
+export function Handover({ kind, pending, onSubmit, label }: { kind: "collect" | "return"; pending: boolean; onSubmit: (body: any) => void; label?: string }) {
   const [odometer, setOdometer] = useState("");
   const [photos, setPhotos] = useState<string[]>([]);
   const [damageAmount, setDamageAmount] = useState("");
@@ -193,7 +219,7 @@ function Handover({ kind, pending, onSubmit, label }: { kind: "collect" | "retur
   return (
     <div className="border-t pt-2 space-y-2" data-testid={`form-rental-${kind}`}>
       <Input type="number" placeholder="Odometer reading" value={odometer} onChange={(e) => setOdometer(e.target.value)} data-testid={`input-rental-odometer-${kind}`} />
-      <PhotoPicker photos={photos} setPhotos={setPhotos} testId={`button-rental-photos-${kind}`} label="Photos: front, back, both sides" />
+      <PhotoPicker photos={photos} setPhotos={setPhotos}><span data-testid={`button-rental-photos-${kind}`}>Photos: front, back, both sides ({photos.length} added)</span></PhotoPicker>
       {kind === "return" && <div className="grid grid-cols-2 gap-2">
         <Input type="number" placeholder="Damage ($, if any)" value={damageAmount} onChange={(e) => setDamageAmount(e.target.value)} data-testid="input-rental-damage" />
         <Input placeholder="What is damaged" value={damageNote} onChange={(e) => setDamageNote(e.target.value)} data-testid="input-rental-damage-note" />

@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ObjectUploader } from "@/components/ObjectUploader";
+import { MyCars } from "@/components/rental/MyCars";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useFeatureFlags, useStripeConfig } from "@/hooks/useStripeConfig";
@@ -41,7 +42,7 @@ export default function RentPage() {
   const [, setLocation] = useLocation();
   const { rentalEnabled } = useFeatureFlags();
   const { isLoading: flagsLoading } = useStripeConfig();
-  const [tab, setTab] = useState<"find" | "mine">("find");
+  const [tab, setTab] = useState<"find" | "mine" | "cars">("find");
   const start = new Date(Date.now() + 26 * 3600_000); start.setMinutes(0, 0, 0);
   const [from, setFrom] = useState(localInput(start));
   const [to, setTo] = useState(localInput(new Date(start.getTime() + 2 * 86400_000)));
@@ -67,10 +68,11 @@ export default function RentPage() {
       <div className="px-4 pt-3 flex gap-2">
         <Button variant={tab === "find" ? "default" : "outline"} size="sm" onClick={() => setTab("find")} data-testid="button-rent-tab-find">Find a car</Button>
         <Button variant={tab === "mine" ? "default" : "outline"} size="sm" onClick={() => setTab("mine")} data-testid="button-rent-tab-mine">My rentals</Button>
+        <Button variant={tab === "cars" ? "default" : "outline"} size="sm" onClick={() => setTab("cars")} data-testid="button-rent-tab-cars">My cars</Button>
       </div>
-      {tab === "find"
-        ? <FindCars from={from} to={to} setFrom={setFrom} setTo={setTo} onBooked={() => setTab("mine")} />
-        : <MyRentals />}
+      {tab === "find" && <FindCars from={from} to={to} setFrom={setFrom} setTo={setTo} onBooked={() => setTab("mine")} />}
+      {tab === "mine" && <MyRentals />}
+      {tab === "cars" && <MyCars />}
     </div>
   );
 }
@@ -105,7 +107,7 @@ function FindCars({ from, to, setFrom, setTo, onBooked }: { from: string; to: st
             <div className="flex justify-between items-start">
               <div>
                 <p className="font-semibold">{car.year} {car.make} {car.model}</p>
-                <p className="text-xs text-muted-foreground">{car.color} · {car.seats} seats{car.ownerKind === "fleet" ? " · PG Ride fleet" : ""}</p>
+                <p className="text-xs text-muted-foreground">{car.color} · {car.seats} seats{car.ownerKind === "fleet" ? " · PG Ride fleet" : " · private owner"}</p>
               </div>
               <p className="font-semibold">{money(car.dailyPrice)}<span className="text-xs font-normal text-muted-foreground">/day</span></p>
             </div>

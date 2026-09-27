@@ -1619,6 +1619,14 @@ export const rentalCars = pgTable("rental_cars", {
   inspectionExpires: timestamp("inspection_expires"),
   registrationExpires: timestamp("registration_expires"),
   insuranceExpires: timestamp("insurance_expires"),
+  /** A private owner's papers (phase 2): photos or PDFs in PG Ride's own store. */
+  registrationDocUrl: varchar("registration_doc_url"),
+  insuranceDocUrl: varchar("insurance_doc_url"),
+  inspectionDocUrl: varchar("inspection_doc_url"),
+  ownershipDocUrl: varchar("ownership_doc_url"),
+  /** A private owner's car is checked by PG Ride before it lists: pending | approved | rejected. Fleet cars: approved. */
+  reviewStatus: varchar("review_status").notNull().default("approved"),
+  reviewNote: text("review_note"),
   /** hidden | listed — listed only while shared/rental.ts qualificationProblems is empty. */
   status: varchar("status").notNull().default("hidden"),
   hiddenReason: text("hidden_reason"),
@@ -1661,6 +1669,10 @@ export const rentalBookings = pgTable("rental_bookings", {
   paymentStatus: varchar("payment_status").notNull().default("none"),
   paymentError: text("payment_error"),
   cancelReason: text("cancel_reason"),
+  /** A private owner's car: what the rental collected, the owner's 90% and PG Ride's 10%, fixed at close. */
+  ownerShare: decimal("owner_share", { precision: 10, scale: 2 }),
+  platformShare: decimal("platform_share", { precision: 10, scale: 2 }),
+  ownerCreditedAt: timestamp("owner_credited_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -1723,6 +1735,17 @@ export const driverRentCharges = pgTable("driver_rent_charges", {
   uniqueIndex("uq_driver_rent_charge_period").on(table.assignmentId, table.periodStart),
 ]);
 export type DriverRentCharge = typeof driverRentCharges.$inferSelect;
+
+// Where a private car owner is paid (phase 2). Owners are paid weekly by the
+// Friday payday, as drivers are (Festus, 2026-09-27).
+export const rentalOwnerProfiles = pgTable("rental_owner_profiles", {
+  userId: varchar("user_id").primaryKey().references(() => users.id),
+  payoutMethod: varchar("payout_method").notNull(),
+  payoutDetails: varchar("payout_details").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export type RentalOwnerProfile = typeof rentalOwnerProfiles.$inferSelect;
 
 export const eventTrackingRelations = relations(eventTracking, ({ one }) => ({
   user: one(users, {

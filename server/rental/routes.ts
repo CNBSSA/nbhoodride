@@ -17,6 +17,8 @@ import {
   quoteFor, renterView, requestRental, returnRental, settleRental,
 } from "./bookings";
 import { runRentalSweep } from "./sweep";
+import { createOwnerCar, getOwnerPayout, listOwnerBookings, listOwnerCars, ownerAct, reviewOwnerCar, saveOwnerPayout, updateOwnerCar } from "./owners";
+import { OWNER_TERMS_SENTENCE } from "@shared/rental";
 import {
   assignFleetCar, cancelFleetRequest, chargeDamage, chargeDueWeek, declineFleetRequest, extendFleetCar, handOverFleetCar,
   listAssignments, listFleetCarsForDrivers, myFleetCar, requestFleetCar, runDriverRentSweep, takeBackFleetCar,
@@ -80,7 +82,31 @@ export function registerRentalRoutes(app: Express, deps: RentalDeps): void {
     try { res.json(renterView(await cancelRental(String(req.params.id), userIdOf(req), req.body?.reason))); } catch (err) { fail(res, err, "Could not cancel that rental"); }
   });
 
+  // ── Private owners: My cars (phase 2) ──────────────────────────────────────
+  app.get("/api/rent/my-cars", gate, isAuthenticated, async (req, res) => {
+    try { res.json({ cars: await listOwnerCars(userIdOf(req)), payout: await getOwnerPayout(userIdOf(req)), terms: OWNER_TERMS_SENTENCE }); } catch (err) { fail(res, err, "Could not load your cars"); }
+  });
+  app.post("/api/rent/my-cars", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await createOwnerCar(userIdOf(req), req.body ?? {})); } catch (err) { fail(res, err, "Could not add your car"); }
+  });
+  app.patch("/api/rent/my-cars/:id", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await updateOwnerCar(userIdOf(req), String(req.params.id), req.body ?? {})); } catch (err) { fail(res, err, "Could not update your car"); }
+  });
+  app.put("/api/rent/owner-payout", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await saveOwnerPayout(userIdOf(req), req.body ?? {})); } catch (err) { fail(res, err, "Could not save how you are paid"); }
+  });
+  app.get("/api/rent/my-cars/bookings", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await listOwnerBookings(userIdOf(req))); } catch (err) { fail(res, err, "Could not load rentals of your cars"); }
+  });
+  app.post("/api/rent/my-cars/bookings/:id/:action", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await ownerAct(userIdOf(req), String(req.params.id), String(req.params.action), req.body ?? {})); } catch (err) { fail(res, err, "Could not do that"); }
+  });
+
   // ── Operator ───────────────────────────────────────────────────────────────
+  app.post("/api/admin/rental/cars/:id/review", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await reviewOwnerCar(String(req.params.id), req.body ?? {})); } catch (err) { fail(res, err, "Could not record the check"); }
+  });
+
   app.get("/api/admin/rental/cars", gate, isAdminOrSessionAuth, async (_req, res) => {
     try { res.json(await listAllCars()); } catch (err) { fail(res, err, "Could not load rental cars"); }
   });
