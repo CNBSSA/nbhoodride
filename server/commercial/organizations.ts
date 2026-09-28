@@ -10,7 +10,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import { commercialJobs, organizationMembers, organizations, users, type Organization } from "@shared/schema";
-import { DEFAULT_FACILITY_FEE, isCategory, isOrgRole, type CommercialCategory, type OrgRole } from "@shared/commercial";
+import { DEFAULT_FACILITY_FEE, isCategory, isFleetCategory, isOrgRole, rolesForCategory, type CommercialCategory, type OrgRole } from "@shared/commercial";
 import { orgTerms, sanitizeTermsPatch } from "@shared/commercialTerms";
 
 export class CommercialError extends Error {
@@ -94,6 +94,8 @@ export async function listOrganizations(): Promise<OrganizationSummary[]> {
     address: r.address, notes: r.notes, stripeCustomerId: r.stripe_customer_id, terms: r.terms,
     defaultPaymentMethodId: r.default_payment_method_id, defaultPaymentMethodKind: r.default_payment_method_kind,
     askRecipientByDefault: !!r.ask_recipient_by_default,
+    fleetDetails: r.fleet_details ?? null, reviewNote: r.review_note ?? null,
+    payoutMethod: r.payout_method ?? null, payoutDetails: r.payout_details ?? null,
     createdAt: r.created_at, updatedAt: r.updated_at,
     memberCount: Number(r.member_count ?? 0), jobCount: Number(r.job_count ?? 0),
   }));
@@ -106,9 +108,21 @@ export async function getOrganization(id: string): Promise<Organization | undefi
 
 export async function updateOrganization(id: string, patch: Partial<OrganizationInput> & { status?: string; billingMode?: string; terms?: unknown; askRecipientByDefault?: unknown }): Promise<Organization> {
   const set: Record<string, unknown> = { updatedAt: new Date() };
+  // A fleet is not a booking account and never becomes one, nor the other
+  // way round; a fleet application is approved or sent back through its
+  // review (server/fleet/accounts.ts), not by setting its status here.
+  const fleetNow = patch.category !== undefined || patch.status !== undefined ? await getOrganization(id) : undefined;
   if (patch.name !== undefined) { const n = clean(patch.name, 120); if (!n) throw new CommercialError("The organization needs a name."); set.name = n; }
-  if (patch.category !== undefined) { if (!isCategory(patch.category)) throw new CommercialError("Category must be medical, business or food."); set.category = patch.category; }
-  if (patch.status !== undefined) { if (!["active", "paused"].includes(patch.status)) throw new CommercialError("Status must be active or paused."); set.status = patch.status; }
+  if (patch.category !== undefined) {
+    if (!isCategory(patch.category)) throw new CommercialError("Category must be medical, business or food.");
+    if (isFleetCategory(fleetNow?.category)) throw new CommercialError("A fleet account cannot become a booking account.");
+    set.category = patch.category;
+  }
+  if (patch.status !== undefined) {
+    if (!["active", "paused"].includes(patch.status)) throw new CommercialError("Status must be active or paused.");
+    if (isFleetCategory(fleetNow?.category) && !["active", "paused"].includes(fleetNow?.status ?? "")) throw new CommercialError("This fleet has not been approved yet. Approve or send back its application first.", 409);
+    set.status = patch.status;
+  }
   if (patch.billingMode !== undefined) { if (!["weekly_debit", "net_terms"].includes(patch.billingMode)) throw new CommercialError("Billing must be weekly_debit or net_terms."); set.billingMode = patch.billingMode; }
   if (patch.askRecipientByDefault !== undefined) { if (typeof patch.askRecipientByDefault !== "boolean") throw new CommercialError("Ask the recipient by default must be yes or no."); set.askRecipientByDefault = patch.askRecipientByDefault; }
   if (patch.facilityFee !== undefined && patch.facilityFee !== null) { const f = Number(patch.facilityFee); if (!Number.isFinite(f) || f < 0 || f > 100) throw new CommercialError("Facility fee must be between $0 and $100."); set.facilityFee = f.toFixed(2); }
@@ -153,7 +167,9 @@ export async function listMembers(organizationId: string): Promise<MemberRow[]> 
 
 /** Attach an existing PG Ride user by email. Re-adding changes the role. */
 export async function addMemberByEmail(organizationId: string, email: string, role: OrgRole): Promise<MemberRow> {
-  if (!isOrgRole(role)) throw new CommercialError("Role must be owner, requester or billing.");
+  const org = await getOrganization(organizationId);
+  const allowed = rolesForCategory(org?.category);
+  if (!isOrgRole(role) || !allowed.includes(role)) throw new CommercialError(`Role must be ${allowed.slice(0, -1).join(", ")} or ${allowed[allowed.length - 1]}.`);
   const addr = clean(email, 200)?.toLowerCase();
   if (!addr) throw new CommercialError("An email is needed.");
   const [user] = await db.select().from(users).where(eq(users.email, addr));

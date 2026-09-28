@@ -376,6 +376,8 @@
     "button-owner-hide-car-*": "shown only to an owner with a listed car",
     "button-engine-restored-*": "shown only on a car whose engine is recorded as cut off; the audit never cuts an engine off (NEVER), and journey 33 records both over the API",
     "button-record-refused-*": "refusing needs a written reason and declines the renter's waiting requests; journey 34 refuses over the API",
-    "button-fleet-rent-from-earnings": "shown only to a driver with a PG Ride car or a request for one; journey 34 sets and withdraws it over the API"
+    "button-fleet-rent-from-earnings": "shown only to a driver with a PG Ride car or a request for one; journey 34 sets and withdraws it over the API",
+    "button-fleet-resubmit": "shown only on a fleet application PG Ride sent back; journey 35 corrects and sends it again over the API",
+    "button-sendback-fleet-*": "needs a written note before it is enabled, and ends the application's wait; journey 35 sends one back over the API"
   }
 }

@@ -24,6 +24,7 @@ import ResetPassword from "@/pages/ResetPassword";
 import AdminDashboard from "@/pages/AdminDashboard";
 import DriverInsights from "@/pages/DriverInsights";
 import RentPage from "@/pages/RentPage";
+import FleetApplyPage from "@/pages/FleetApplyPage";
 import { TermsOfService, PrivacyPolicy } from "@/pages/LegalPages";
 import NotFound from "@/pages/not-found";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
@@ -98,6 +99,7 @@ function Router() {
           <Route path="/org" component={PortalPage} />
           <Route path="/driver/insights" component={DriverInsights} />
           <Route path="/rent" component={RentPage} />
+          <Route path="/fleet/apply" component={FleetApplyPage} />
         </>
       )}
       <Route component={NotFound} />

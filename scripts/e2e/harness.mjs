@@ -73,6 +73,19 @@ export async function seedFixtures(db) {
   // reach this one by ?org=e2e-biz.
   await db.query(`INSERT INTO organizations (id, name, category, facility_fee, address) VALUES ('e2e-biz', 'E2E Books Expert LLC', 'business', 0.00, $1) ON CONFLICT (id) DO UPDATE SET address=$1`, [JSON.stringify({ lat: 38.9073, lng: -76.7781, address: "Bowie, MD" })]);
   await db.query(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES ('e2e-biz', $1, 'owner', NOW() - interval '1 day') ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner', created_at=NOW() - interval '1 day'`, [FIXTURES.rider.id]);
+  // A standing, approved FLEET account with the rider as owner (reached by the
+  // audits at ?org=e2e-fleet; its name sorts after the others, so it is never
+  // the portal's default), and a fleet application waiting for PG Ride with
+  // the driver as owner, so the admin's Organizations list has one to check.
+  // Both reset on every seed.
+  const fleetBiz = { legalName: "E2E Fleet Motors LLC", ein: "12-3456789", businessType: "llc" };
+  await db.query(`INSERT INTO organizations (id, name, category, status, facility_fee, fleet_details, payout_method, payout_details, contact_phone)
+    VALUES ('e2e-fleet', 'E2E Fleet Motors', 'fleet', 'active', 0.00, $1, 'zelle', 'fleet@example.com', '2405550100'),
+           ('e2e-fleet-app', 'E2E Fleet Applicant', 'fleet', 'pending', 0.00, $2, 'check', '12 Elm St, Bowie, MD', '2405550101')
+    ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, fleet_details=EXCLUDED.fleet_details, payout_method=EXCLUDED.payout_method, payout_details=EXCLUDED.payout_details, review_note=NULL`,
+    [JSON.stringify(fleetBiz), JSON.stringify({ ...fleetBiz, legalName: "E2E Fleet Applicant Inc", ein: "98-7654321", businessType: "corporation" })]).catch((e) => console.log("  (fleet seed) " + String(e?.message ?? e).split("\n")[0]));
+  await db.query(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES ('e2e-fleet', $1, 'owner', NOW() - interval '2 days'), ('e2e-fleet-app', $2, 'owner', NOW())
+    ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner'`, [FIXTURES.rider.id, FIXTURES.driver.id]).catch((e) => console.log("  (fleet members seed) " + String(e?.message ?? e).split("\n")[0]));
   // An open invitation to the medical organization, re-opened on every seed,
   // so the every-button audit can open the join page and press its buttons.
   const inviteHash = createHash("sha256").update(E2E_INVITE_TOKEN).digest("hex");
@@ -149,6 +162,8 @@ export async function startServer(env = {}) {
       COMMERCIAL_ENABLED: process.env.COMMERCIAL_ENABLED ?? "true",
       // Car rental likewise: off in production, on for the journeys and audits.
       RENTAL_ENABLED: process.env.RENTAL_ENABLED ?? "true",
+      // Fleet management accounts likewise.
+      FLEET_ENABLED: process.env.FLEET_ENABLED ?? "true",
       RESEND_API_KEY: "re_e2e_fake", RESEND_FROM: "noreply@peoplegoverned.com",
       TELEGRAM_BOT_TOKEN: "e2e", TELEGRAM_CHAT_ID: "1",
       TWILIO_ACCOUNT_SID: "ACe2e", TWILIO_AUTH_TOKEN: "e2e-auth-token", TWILIO_PHONE_NUMBER: "+18882743045",
