@@ -15,9 +15,10 @@
  */
 import { and, desc, eq, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { db } from "../db";
-import { driverCarAssignments, driverRentCharges, rentalBookings, rentalCars, vehicles, type DriverCarAssignment } from "@shared/schema";
+import { driverCarAssignments, driverRentCharges, rentalBookings, rentalCars, users, vehicles, walletTransactions, type DriverCarAssignment } from "@shared/schema";
 import {
-  ASSIGNMENT_OPEN, RENT_CHARGE_LEAD_MS, WEEK_MS, fleetDriverMayDrive, money, qualificationProblems, quoteDriverAssignment, rentalsOverlap, settleReturn,
+  ASSIGNMENT_OPEN, RENT_CHARGE_LEAD_MS, WEEK_MS, driverLateFee, fleetDriverMayDrive, money, qualificationProblems, quoteDriverAssignment, rentalsOverlap, settleReturn,
+  splitFromEarnings,
 } from "@shared/rental";
 import { stripeService } from "../stripeService";
 import { storage } from "../storage";
@@ -98,6 +99,8 @@ export async function requestFleetCar(driverUserId: string, body: any, now: Date
   const [a] = await db.insert(driverCarAssignments).values({
     carId: car.id, driverUserId, status: "requested", startsAt: q.quote.startsAt, weeks: q.quote.weeks, endsAt: q.quote.endsAt,
     weeklyRent: q.quote.weeklyRent.toFixed(2),
+    // The driver's written agreement (the sentence shown beside the box) to pay rent from earnings first.
+    rentFromEarningsAgreedAt: body?.rentFromEarnings === true ? now : null,
   }).returning();
   opsAlert(formatOpsAlert("🔑 A driver asks for a PG Ride car", [
     ["Car", `${car.year} ${car.make} ${car.model} (${car.licensePlate})`], ["From", q.quote.startsAt.toISOString()], ["Weeks", q.quote.weeks],
@@ -149,10 +152,52 @@ export async function declineFleetRequest(id: string, reason: unknown): Promise<
 }
 
 /**
+ * The driver agrees, or withdraws their agreement, to rent (and anything owed
+ * at return) being taken from their earnings first. Withdrawing takes effect
+ * from the next week not yet charged.
+ */
+export async function setRentFromEarnings(driverUserId: string, agree: unknown): Promise<DriverCarAssignment> {
+  const [a] = await db.update(driverCarAssignments).set({ rentFromEarningsAgreedAt: agree === true ? new Date() : null, updatedAt: new Date() })
+    .where(and(eq(driverCarAssignments.driverUserId, driverUserId), inArray(driverCarAssignments.status, [...ASSIGNMENT_OPEN]))).returning();
+  if (!a) throw new RentalError("You have no PG Ride car or request for one.", 404);
+  return a;
+}
+
+/** Ledger reasons for money a driver pays from earnings for a PG Ride car. */
+export const RENT_FROM_EARNINGS_REASON = "driver_car_rent";
+export const RETURN_FROM_EARNINGS_REASON = "driver_car_return";
+export const RENT_REFUND_REASON = "driver_car_rent_refund";
+
+/**
+ * Take up to `amount` from the driver's balance, once per (reason, ref): the
+ * balance is locked, the ledger row written in the same transaction, and a
+ * ledger row already there for this ref means it was taken before. Returns
+ * what was taken.
+ */
+async function takeFromEarnings(driverUserId: string, amount: number, reason: string, refId: string): Promise<number> {
+  return db.transaction(async (tx) => {
+    const [u] = await tx.select({ balance: users.virtualCardBalance }).from(users).where(eq(users.id, driverUserId)).for("update");
+    if (!u) return 0;
+    const [done] = await tx.select({ amount: walletTransactions.amount }).from(walletTransactions)
+      .where(and(eq(walletTransactions.rideId, refId), eq(walletTransactions.reason, reason))).limit(1);
+    if (done) return Math.abs(Number(done.amount));
+    const { fromEarnings } = splitFromEarnings(amount, u.balance);
+    if (fromEarnings <= 0) return 0;
+    const after = (Number(u.balance ?? 0) - fromEarnings).toFixed(2);
+    await tx.update(users).set({ virtualCardBalance: after, updatedAt: new Date() }).where(eq(users.id, driverUserId));
+    await tx.insert(walletTransactions).values({ userId: driverUserId, amount: (-fromEarnings).toFixed(2), balanceAfter: after, reason, rideId: refId });
+    return fromEarnings;
+  });
+}
+
+/**
  * Charge one week of rent, at most once. The week's row is written first
  * (unique per assignment and week); a week already paid is not charged
  * again, a week whose charge is still in flight is refused, and a week
- * whose charge failed is tried again.
+ * whose charge failed is tried again. When the driver agreed to it, the
+ * week is taken from their earnings first, once, and the card is charged
+ * only the rest — the same rest on every retry, so a retry is the same
+ * Stripe request.
  */
 export async function chargeWeek(a: DriverCarAssignment, periodStart: Date): Promise<{ ok: true } | { ok: false; error: string }> {
   const amount = a.weeklyRent;
@@ -186,10 +231,19 @@ export async function chargeWeek(a: DriverCarAssignment, periodStart: Date): Pro
     }
   }
   try {
-    if (!stripeService.isEnabled) throw new Error("card payments are not set up on this deployment");
+    // Earnings first, decided once per week (0 when the driver has not agreed).
+    let fromEarnings = row.fromEarnings === null ? null : Number(row.fromEarnings);
+    if (fromEarnings === null) {
+      const [agreed] = await db.select({ at: driverCarAssignments.rentFromEarningsAgreedAt }).from(driverCarAssignments).where(eq(driverCarAssignments.id, a.id));
+      fromEarnings = agreed?.at ? await takeFromEarnings(a.driverUserId, Number(amount), RENT_FROM_EARNINGS_REASON, row.id) : 0;
+      await db.update(driverRentCharges).set({ fromEarnings: fromEarnings.toFixed(2), updatedAt: new Date() }).where(eq(driverRentCharges.id, row.id));
+    }
+    const fromCard = Math.round((Number(amount) - fromEarnings) * 100) / 100;
+    if (fromCard <= 0) return markWeekPaid(a, row.id, null, periodStart);
+    if (!stripeService.isEnabled) throw new Error(fromEarnings > 0 ? `${money(fromEarnings)} was taken from earnings; card payments are not set up on this deployment for the other ${money(fromCard)}` : "card payments are not set up on this deployment");
     const card = await driverCard(a.driverUserId);
-    if (!card) throw new Error("the driver has no card on file");
-    const pi = await stripeService.chargeRental({ amount: Number(amount), ...card, bookingId: a.id, renterId: a.driverUserId, purpose: "driver_rent", keyPart: String(periodStart.getTime()) });
+    if (!card) throw new Error(fromEarnings > 0 ? `${money(fromEarnings)} was taken from earnings and the driver has no card on file for the other ${money(fromCard)}` : "the driver has no card on file");
+    const pi = await stripeService.chargeRental({ amount: fromCard, ...card, bookingId: a.id, renterId: a.driverUserId, purpose: "driver_rent", keyPart: String(periodStart.getTime()) });
     if (pi.status !== "succeeded") throw new Error(`the card answered ${pi.status}`);
     return markWeekPaid(a, row.id, pi.id, periodStart);
   } catch (err) {
@@ -206,7 +260,7 @@ async function engineIsCutOff(carId: string): Promise<boolean> {
 /** A charge row older than this in "charging" had its answer lost; it may be taken up again. */
 export const CHARGING_STALE_MS = 10 * 60 * 1000;
 
-async function markWeekPaid(a: DriverCarAssignment, chargeRowId: string, intentId: string, periodStart: Date): Promise<{ ok: true }> {
+async function markWeekPaid(a: DriverCarAssignment, chargeRowId: string, intentId: string | null, periodStart: Date): Promise<{ ok: true }> {
   await db.update(driverRentCharges).set({ status: "paid", stripePaymentIntentId: intentId, error: null, updatedAt: new Date() }).where(eq(driverRentCharges.id, chargeRowId));
   const paidThrough = new Date(periodStart.getTime() + WEEK_MS);
   await db.update(driverCarAssignments).set({ paidThrough, paymentStatus: "paid", paymentError: null, updatedAt: new Date() })
@@ -257,16 +311,23 @@ export async function handOverFleetCar(id: string, actorId: string, body: any, n
     // Cancelled while the desk was charging: the copy goes and the week is given back.
     await db.delete(vehicles).where(eq(vehicles.id, vehicle.id));
     const [week] = await db.select().from(driverRentCharges).where(and(eq(driverRentCharges.assignmentId, id), eq(driverRentCharges.status, "paid"))).limit(1);
-    let refunded = false;
+    let refunded = !!week && !week.stripePaymentIntentId;
     if (week?.stripePaymentIntentId) {
       try {
         await stripeService.refundPaymentIntent(week.stripePaymentIntentId, "driver cancelled during hand-over");
-        await db.update(driverRentCharges).set({ status: "refunded", updatedAt: new Date() }).where(eq(driverRentCharges.id, week.id));
         refunded = true;
       } catch (err) {
         opsAlert(formatOpsAlert("💳 Driver car refund FAILED", [["Assignment", id.slice(0, 8)], ["Reason", errText(err)], ["Next", "Refund the first week by hand in Stripe"]]));
       }
     }
+    // What was taken from earnings goes back to the balance, once.
+    if (week && Number(week.fromEarnings ?? 0) > 0 && !(await storage.hasWalletTransaction(week.id, RENT_REFUND_REASON))) {
+      await storage.addVirtualCardBalance(a.driverUserId, Number(week.fromEarnings), RENT_REFUND_REASON, week.id).catch((err) => {
+        refunded = false;
+        opsAlert(formatOpsAlert("💳 Driver car refund FAILED", [["Assignment", id.slice(0, 8)], ["From earnings", money(week.fromEarnings)], ["Reason", errText(err)], ["Next", "Credit it back to the driver's balance by hand"]]));
+      });
+    }
+    if (week && refunded) await db.update(driverRentCharges).set({ status: "refunded", updatedAt: new Date() }).where(eq(driverRentCharges.id, week.id));
     throw new RentalError(refunded ? "The driver cancelled while the car was being handed over. The first week was given back." : "The driver cancelled while the car was being handed over. Refund the first week in Stripe.", 409);
   }
   return u;
@@ -286,32 +347,59 @@ export async function takeBackFleetCar(id: string, actorId: string, body: any, n
   if (!s.ok) throw new RentalError(s.error);
   const damage = s.settlement.damage;
   if (damage > 0 && !clean(body?.damageNote, 500)) throw new RentalError("Say what the damage is: the driver is shown it.");
+  // Kept past the end of the weeks: every hour started, at the weekly rent / 168 (industry practice, 2026-09-28).
+  const late = driverLateFee(a.weeklyRent, a.endsAt, now);
   const [u] = await db.update(driverCarAssignments).set({
     status: "ended", returnedAt: now, returnOdometer: odometer, returnPhotos: photos,
-    damageAmount: damage > 0 ? damage.toFixed(2) : null, damageNote: clean(body?.damageNote, 500) || null, updatedAt: now,
+    damageAmount: damage > 0 ? damage.toFixed(2) : null, damageNote: clean(body?.damageNote, 500) || null,
+    lateHours: late.lateHours, lateCharge: late.lateCharge > 0 ? late.lateCharge.toFixed(2) : null, updatedAt: now,
   }).where(and(eq(driverCarAssignments.id, id), eq(driverCarAssignments.status, "active"))).returning();
   if (!u) throw new RentalError("This changed just now. Refresh and try again.", 409);
   if (a.vehicleId) await db.delete(vehicles).where(and(eq(vehicles.id, a.vehicleId), isNotNull(vehicles.rentalCarId)));
   const profile = await storage.getDriverProfile(a.driverUserId);
   const left = profile ? await storage.getVehiclesByDriverId(profile.id) : [];
   if (!left.length) await storage.toggleDriverOnlineStatus(a.driverUserId, false).catch(() => {});
-  if (damage > 0) return chargeDamage(u);
+  if (damage > 0 || late.lateCharge > 0) return chargeDamage(u);
   return u;
 }
 
+/** What a driver owes when the car comes back: damage plus the late fee. */
+export function returnOwed(a: Pick<DriverCarAssignment, "damageAmount" | "lateCharge">): number {
+  return Math.round((Number(a.damageAmount ?? 0) + Number(a.lateCharge ?? 0)) * 100) / 100;
+}
+
+/**
+ * Charge what is owed at return (damage and the late fee), once: from the
+ * driver's earnings first when they agreed to it (decided once, stored), the
+ * card for the rest under one key. Safe to retry from the desk.
+ */
 export async function chargeDamage(a: DriverCarAssignment): Promise<DriverCarAssignment> {
-  if (!a.damageAmount || a.damageIntentId) return a;
+  const owed = returnOwed(a);
+  if (!(owed > 0) || a.damageIntentId) return a;
+  let fromEarnings = a.returnFromEarnings === null ? null : Number(a.returnFromEarnings);
+  if (fromEarnings !== null && owed - fromEarnings <= 0) return a;
   try {
+    if (fromEarnings === null) {
+      fromEarnings = a.rentFromEarningsAgreedAt ? await takeFromEarnings(a.driverUserId, owed, RETURN_FROM_EARNINGS_REASON, a.id) : 0;
+      const [u] = await db.update(driverCarAssignments).set({ returnFromEarnings: fromEarnings.toFixed(2), paymentError: null }).where(eq(driverCarAssignments.id, a.id)).returning();
+      a = u;
+    }
+    const fromCard = Math.round((owed - fromEarnings) * 100) / 100;
+    if (fromCard <= 0) return a;
     if (!stripeService.isEnabled) throw new Error("card payments are not set up on this deployment");
     const card = await driverCard(a.driverUserId);
     if (!card) throw new Error("the driver has no card on file");
-    const pi = await stripeService.chargeRental({ amount: Number(a.damageAmount), ...card, bookingId: a.id, renterId: a.driverUserId, purpose: "driver_damage" });
+    const pi = await stripeService.chargeRental({ amount: fromCard, ...card, bookingId: a.id, renterId: a.driverUserId, purpose: "driver_return" });
     if (pi.status !== "succeeded") throw new Error(`the card answered ${pi.status}`);
     const [u] = await db.update(driverCarAssignments).set({ damageIntentId: pi.id, paymentError: null }).where(eq(driverCarAssignments.id, a.id)).returning();
     return u;
   } catch (err) {
-    const [u] = await db.update(driverCarAssignments).set({ paymentError: `Damage charge failed: ${errText(err)}` }).where(eq(driverCarAssignments.id, a.id)).returning();
-    opsAlert(formatOpsAlert("💳 Driver car damage charge FAILED", [["Assignment", a.id.slice(0, 8)], ["Amount", money(a.damageAmount)], ["Reason", errText(err)], ["Next", "Retry from Admin, Car rental"]]));
+    const taken = fromEarnings && fromEarnings > 0 ? ` (${money(fromEarnings)} was taken from earnings)` : "";
+    const [u] = await db.update(driverCarAssignments).set({ paymentError: `Return charge failed${taken}: ${errText(err)}` }).where(eq(driverCarAssignments.id, a.id)).returning();
+    opsAlert(formatOpsAlert("💳 Driver car return charge FAILED", [
+      ["Assignment", a.id.slice(0, 8)], ["Damage", money(a.damageAmount ?? 0)], ["Late", `${a.lateHours ?? 0} h, ${money(a.lateCharge ?? 0)}`],
+      ["From earnings", money(fromEarnings ?? 0)], ["Reason", errText(err)], ["Next", "Retry from Admin, Car rental"],
+    ]));
     return u;
   }
 }

@@ -5,7 +5,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { driverCarAssignments, rentalBookings, rentalCars, storedObjects, users, vehicles, type RentalCar } from "@shared/schema";
-import { ASSIGNMENT_HOLDS_THE_CAR, HOLDS_THE_CAR, REVIEWED_FIELDS, qualificationProblems, rentalsOverlap } from "@shared/rental";
+import { ASSIGNMENT_HOLDS_THE_CAR, DEPOSIT_DEFAULT, HOLDS_THE_CAR, REVIEWED_FIELDS, depositProblem, qualificationProblems, rentalsOverlap } from "@shared/rental";
 import { VEHICLE_TYPES } from "@shared/vehicleTypes";
 
 export class RentalError extends Error {
@@ -87,8 +87,15 @@ export async function carFields(body: any, actorId: string, existing?: RentalCar
     if (v === "bad") throw new RentalError("Weekly rent for a driver must be an amount in dollars, or blank.");
     out.weeklyDriverRent = v === null || Number(v) === 0 ? null : v;
   }
-  for (const k of ["dailyPrice", "deposit", "extraMileFee", "lateHourFee"] as const) {
-    if (has(k)) { const v = moneyOr(body[k], k === "dailyPrice" ? null : "0.00"); if (v === "bad" || v === null) throw new RentalError(`${k === "dailyPrice" ? "Daily price" : k === "deposit" ? "Deposit" : k === "extraMileFee" ? "Extra-mile fee" : "Late-hour fee"} must be an amount in dollars.`); out[k] = v; }
+  for (const k of ["dailyPrice", "extraMileFee", "lateHourFee"] as const) {
+    if (has(k)) { const v = moneyOr(body[k], k === "dailyPrice" ? null : "0.00"); if (v === "bad" || v === null) throw new RentalError(`${k === "dailyPrice" ? "Daily price" : k === "extraMileFee" ? "Extra-mile fee" : "Late-hour fee"} must be an amount in dollars.`); out[k] = v; }
+  }
+  // A deposit between $100 and $1,000; left blank, $250 (industry practice, 2026-09-28).
+  if (has("deposit")) {
+    const v = moneyOr(body.deposit, DEPOSIT_DEFAULT.toFixed(2));
+    const wrong = v === "bad" || v === null ? "Deposit must be an amount in dollars." : depositProblem(v);
+    if (wrong) throw new RentalError(wrong);
+    out.deposit = v as string;
   }
   if (has("pickupLocation")) {
     const p = body.pickupLocation;

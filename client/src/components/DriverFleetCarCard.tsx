@@ -19,6 +19,7 @@ interface FleetCar { id: string; make: string; model: string; year: number; colo
 interface MyCar {
   id: string; status: DriverAssignmentStatus; startsAt: string; endsAt: string; weeks: number; weeklyRent: string;
   paidThrough: string | null; paymentStatus: string; paymentError: string | null; car: FleetCar & { licensePlate?: string };
+  rentFromEarningsAgreedAt: string | null; lateHours: number | null; lateCharge: string | null; damageAmount: string | null; damageNote: string | null;
 }
 
 const day = (s: string | null) => (s ? new Date(s).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : "—");
@@ -31,15 +32,16 @@ export function DriverFleetCarCard() {
   const start = new Date(Date.now() + 26 * 3600_000); start.setMinutes(0, 0, 0);
   const [from, setFrom] = useState(localInput(start));
   const [weeks, setWeeks] = useState("1");
+  const [fromEarnings, setFromEarnings] = useState(false);
   const { data: mine, isLoading } = useQuery<MyCar | null>({ queryKey: ["/api/driver/fleet-car"] });
   const fromIso = from ? new Date(from).toISOString() : "";
   const toIso = fromIso ? new Date(new Date(from).getTime() + Math.max(1, Number(weeks) || 1) * 7 * 86400_000).toISOString() : "";
-  const { data: offer } = useQuery<{ cars: FleetCar[]; terms: string; maxWeeks: number }>({
+  const { data: offer } = useQuery<{ cars: FleetCar[]; terms: string; maxWeeks: number; earningsAgreement?: string }>({
     queryKey: [`/api/driver/fleet-cars?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`],
     enabled: open && !mine && !!fromIso,
   });
   const ask = useMutation({
-    mutationFn: async (carId: string) => (await apiRequest("POST", "/api/driver/fleet-car/request", { carId, startsAt: fromIso, weeks: Number(weeks) })).json(),
+    mutationFn: async (carId: string) => (await apiRequest("POST", "/api/driver/fleet-car/request", { carId, startsAt: fromIso, weeks: Number(weeks), rentFromEarnings: fromEarnings })).json(),
     onSuccess: () => { toast({ title: "Asked for the car", description: "PG Ride confirms it shortly. Nothing is charged until you collect it." }); setOpen(false); queryClient.invalidateQueries({ queryKey: ["/api/driver/fleet-car"] }); },
     onError: (e: Error) => toast({ title: "Could not ask for the car", description: e.message, variant: "destructive" }),
   });
@@ -47,6 +49,11 @@ export function DriverFleetCarCard() {
     mutationFn: async () => (await apiRequest("POST", "/api/driver/fleet-car/cancel", {})).json(),
     onSuccess: () => { toast({ title: "Cancelled", description: "Nothing was charged." }); queryClient.invalidateQueries({ queryKey: ["/api/driver/fleet-car"] }); },
     onError: (e: Error) => toast({ title: "Could not cancel", description: e.message, variant: "destructive" }),
+  });
+  const earnings = useMutation({
+    mutationFn: async (agree: boolean) => (await apiRequest("POST", "/api/driver/fleet-car/rent-from-earnings", { agree })).json(),
+    onSuccess: (a: any) => { toast({ title: a?.rentFromEarningsAgreedAt ? "Rent comes from your earnings first" : "Rent goes on your card", description: "From the next week not yet charged." }); queryClient.invalidateQueries({ queryKey: ["/api/driver/fleet-car"] }); },
+    onError: (e: Error) => toast({ title: "Could not save that", description: e.message, variant: "destructive" }),
   });
 
   if (isLoading) return null;
@@ -59,6 +66,15 @@ export function DriverFleetCarCard() {
           <p className="text-sm" data-testid="text-fleet-car-status">{DRIVER_ASSIGNMENT_WORDS[mine.status] ?? mine.status}</p>
           <p className="text-xs text-muted-foreground">{money(mine.weeklyRent)} a week · {day(mine.startsAt)} → {day(mine.endsAt)}{mine.status === "active" ? ` · rent paid to ${day(mine.paidThrough)}` : ""}{mine.car.pickupAddress ? ` · ${mine.car.pickupAddress}` : ""}</p>
           {mine.paymentStatus === "due" && <p className="text-xs text-destructive">This week's rent has not gone through. Update your card; PG Ride will retry it.</p>}
+          {mine.status === "active" && new Date(mine.endsAt).getTime() < Date.now() && (
+            <p className="text-xs text-destructive" data-testid="text-fleet-car-late">Your weeks ended {day(mine.endsAt)}. Every hour you keep the car is charged at {money(Number(mine.weeklyRent) / 168)}, and the car may be stopped remotely. Bring it back now.</p>
+          )}
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <p className="text-xs text-muted-foreground" data-testid="text-fleet-rent-source">Rent is paid {mine.rentFromEarningsAgreedAt ? "from your PG Ride earnings first, then your card" : "by your card"}.</p>
+            <Button variant="outline" size="sm" disabled={earnings.isPending} onClick={() => earnings.mutate(!mine.rentFromEarningsAgreedAt)} data-testid="button-fleet-rent-from-earnings">
+              {mine.rentFromEarningsAgreedAt ? "Pay by card instead" : "Pay from earnings"}
+            </Button>
+          </div>
           {(mine.status === "requested" || mine.status === "assigned") && (
             <Button variant="outline" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate()} data-testid="button-cancel-fleet-car">Cancel (free)</Button>
           )}
@@ -83,6 +99,12 @@ export function DriverFleetCarCard() {
               <label className="text-xs text-muted-foreground">Weeks<Input type="number" min={1} max={offer?.maxWeeks ?? 12} value={weeks} onChange={(e) => setWeeks(e.target.value)} data-testid="input-fleet-weeks" /></label>
             </div>
             {offer?.terms && <p className="text-xs text-muted-foreground">{offer.terms}</p>}
+            {offer?.earningsAgreement && (
+              <label className="flex items-start gap-2 text-xs" data-testid="label-fleet-rent-from-earnings">
+                <input type="checkbox" className="mt-0.5" checked={fromEarnings} onChange={(e) => setFromEarnings(e.target.checked)} data-testid="checkbox-fleet-rent-from-earnings" />
+                <span>{offer.earningsAgreement}</span>
+              </label>
+            )}
             {!offer && <Loader2 className="w-4 h-4 animate-spin" />}
             {offer && offer.cars.length === 0 && <p className="text-sm text-muted-foreground" data-testid="text-no-fleet-cars">No PG Ride car is free from then. Try another start.</p>}
             {offer?.cars.map((c) => (

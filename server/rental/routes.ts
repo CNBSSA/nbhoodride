@@ -22,9 +22,10 @@ import { createOwnerCar, getOwnerPayout, listOwnerBookings, listOwnerCars, owner
 import { OWNER_TERMS_SENTENCE } from "@shared/rental";
 import {
   assignFleetCar, cancelFleetRequest, chargeDamage, chargeDueWeek, declineFleetRequest, extendFleetCar, handOverFleetCar,
-  listAssignments, listFleetCarsForDrivers, myFleetCar, requestFleetCar, runDriverRentSweep, takeBackFleetCar,
+  listAssignments, listFleetCarsForDrivers, myFleetCar, requestFleetCar, runDriverRentSweep, setRentFromEarnings, takeBackFleetCar,
 } from "./drivers";
-import { DRIVER_RENT_SENTENCE, MAX_DRIVER_WEEKS } from "@shared/rental";
+import { getRenter, listRentersToCheck, recordDrivingRecord, renterSelfView } from "./renters";
+import { DRIVER_RENT_SENTENCE, MAX_DRIVER_WEEKS, RENTER_RULES_SENTENCE, RENT_FROM_EARNINGS_SENTENCE } from "@shared/rental";
 import { RENTAL_TERMS_SENTENCE, MAX_RENTAL_DAYS } from "@shared/rental";
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown;
@@ -57,7 +58,7 @@ export function registerRentalRoutes(app: Express, deps: RentalDeps): void {
 
   // ── Renters ────────────────────────────────────────────────────────────────
   app.get("/api/rent/terms", gate, isAuthenticated, (_req, res) => {
-    res.json({ terms: RENTAL_TERMS_SENTENCE, maxDays: MAX_RENTAL_DAYS });
+    res.json({ terms: RENTAL_TERMS_SENTENCE, maxDays: MAX_RENTAL_DAYS, rules: RENTER_RULES_SENTENCE });
   });
 
   app.get("/api/rent/cars", gate, isAuthenticated, async (req, res) => {
@@ -66,9 +67,15 @@ export function registerRentalRoutes(app: Express, deps: RentalDeps): void {
 
   app.post("/api/rent/quote", gate, isAuthenticated, async (req, res) => {
     try {
-      const { car, quote, available } = await quoteFor(String(req.body?.carId ?? ""), req.body?.startsAt, req.body?.endsAt);
-      res.json({ car, quote, available });
+      // The young-renter fee needs an age: the date of birth typed on the form, or the one on file.
+      const dob = req.body?.dateOfBirth || (await getRenter(userIdOf(req)))?.dateOfBirth;
+      res.json(await quoteFor(String(req.body?.carId ?? ""), req.body?.startsAt, req.body?.endsAt, new Date(), dob));
     } catch (err) { fail(res, err, "Could not price that rental"); }
+  });
+
+  // The renter's own facts and where their driving-record check stands.
+  app.get("/api/rent/me", gate, isAuthenticated, async (req, res) => {
+    try { res.json({ renter: renterSelfView(await getRenter(userIdOf(req))), rules: RENTER_RULES_SENTENCE }); } catch (err) { fail(res, err, "Could not load your details"); }
   });
 
   app.post("/api/rent/bookings", gate, isAuthenticated, async (req, res) => {
@@ -120,6 +127,14 @@ export function registerRentalRoutes(app: Express, deps: RentalDeps): void {
     try { res.json(await updateFleetCar(String(req.params.id), req.body ?? {}, userIdOf(req))); } catch (err) { fail(res, err, "Could not update the car"); }
   });
 
+  // The driving-record check (industry practice, 2026-09-28): PG Ride records it; no rental is confirmed without it.
+  app.get("/api/admin/rental/renters", gate, isAdminOrSessionAuth, async (_req, res) => {
+    try { res.json(await listRentersToCheck()); } catch (err) { fail(res, err, "Could not load renters"); }
+  });
+  app.post("/api/admin/rental/renters/:userId/record", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await recordDrivingRecord(String(req.params.userId), userIdOf(req), req.body ?? {})); } catch (err) { fail(res, err, "Could not record the check"); }
+  });
+
   app.get("/api/admin/rental/bookings", gate, isAdminOrSessionAuth, async (_req, res) => {
     try { res.json(await listAllBookings()); } catch (err) { fail(res, err, "Could not load rentals"); }
   });
@@ -146,7 +161,7 @@ export function registerRentalRoutes(app: Express, deps: RentalDeps): void {
 
   // ── Drivers: PG Ride fleet cars to earn with (phase 3) ─────────────────────
   app.get("/api/driver/fleet-cars", gate, isAuthenticated, async (req, res) => {
-    try { res.json({ cars: await listFleetCarsForDrivers(windowOf(req.query)), terms: DRIVER_RENT_SENTENCE, maxWeeks: MAX_DRIVER_WEEKS }); } catch (err) { fail(res, err, "Could not load cars"); }
+    try { res.json({ cars: await listFleetCarsForDrivers(windowOf(req.query)), terms: DRIVER_RENT_SENTENCE, maxWeeks: MAX_DRIVER_WEEKS, earningsAgreement: RENT_FROM_EARNINGS_SENTENCE }); } catch (err) { fail(res, err, "Could not load cars"); }
   });
 
   app.get("/api/driver/fleet-car", gate, isAuthenticated, async (req, res) => {
@@ -155,6 +170,10 @@ export function registerRentalRoutes(app: Express, deps: RentalDeps): void {
 
   app.post("/api/driver/fleet-car/request", gate, isAuthenticated, async (req, res) => {
     try { res.json(await requestFleetCar(userIdOf(req), req.body ?? {})); } catch (err) { fail(res, err, "Could not ask for that car"); }
+  });
+
+  app.post("/api/driver/fleet-car/rent-from-earnings", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await setRentFromEarnings(userIdOf(req), req.body?.agree)); } catch (err) { fail(res, err, "Could not save that"); }
   });
 
   app.post("/api/driver/fleet-car/cancel", gate, isAuthenticated, async (req, res) => {
