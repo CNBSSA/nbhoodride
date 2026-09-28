@@ -8,7 +8,7 @@ import { SUPPORT_CONTACTS } from "@shared/supportContacts";
 import { useFeatureFlags } from "@/hooks/useStripeConfig";
 
 export default function Landing() {
-  const { walletEnabled } = useFeatureFlags();
+  const { walletEnabled, commercialEnabled } = useFeatureFlags();
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-secondary/10 flex items-center justify-center p-4">
       <div className="w-full max-w-md mx-auto">
@@ -95,6 +95,13 @@ export default function Landing() {
                   PG Ride for Business — sign in to your desk
                 </Button>
               </Link>
+              {commercialEnabled && (
+                <Link href="/org/apply">
+                  <Button variant="ghost" size="sm" className="w-full" data-testid="button-business-apply-landing">
+                    Run a clinic, office or restaurant? Open a business account
+                  </Button>
+                </Link>
+              )}
             </div>
 
             {/* Contact / support — visible to riders and to a payment reviewer. */}

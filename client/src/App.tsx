@@ -25,6 +25,7 @@ import AdminDashboard from "@/pages/AdminDashboard";
 import DriverInsights from "@/pages/DriverInsights";
 import RentPage from "@/pages/RentPage";
 import FleetApplyPage from "@/pages/FleetApplyPage";
+import OrgApplyPage from "@/pages/OrgApplyPage";
 import { TermsOfService, PrivacyPolicy } from "@/pages/LegalPages";
 import NotFound from "@/pages/not-found";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
@@ -81,6 +82,9 @@ function Router() {
           business sign-in instead of "not found" and comes back afterwards. */}
       <Route path="/org/login">{() => <BusinessAuthRedirect />}</Route>
       <Route path="/org/join/:token">{(params) => <JoinOrganization token={params.token} />}</Route>
+      {/* Opening a business account (self-serve applications, 2026-09-28): the
+          page itself says "create an account first" when signed out. */}
+      <Route path="/org/apply" component={OrgApplyPage} />
       
       {isLoading || !isAuthenticated ? (
         <>

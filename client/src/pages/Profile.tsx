@@ -52,7 +52,7 @@ export default function Profile() {
   const [showCountySelector, setShowCountySelector] = useState(false);
   const [localCounties, setLocalCounties] = useState<string[]>([]);
   const { user, isLoading } = useAuth();
-  const { walletEnabled, driverMarketplaceEnabled, rentalEnabled, fleetEnabled } = useFeatureFlags();
+  const { walletEnabled, driverMarketplaceEnabled, rentalEnabled, fleetEnabled, commercialEnabled } = useFeatureFlags();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -536,6 +536,26 @@ export default function Profile() {
                 <div className="text-left">
                   <p className="font-medium">Rent a car</p>
                   <p className="text-sm text-muted-foreground">PG Ride cars by the day</p>
+                </div>
+              </div>
+              <i className="fas fa-chevron-right text-muted-foreground" />
+            </Button>
+          )}
+
+          {/* Self-serve organization applications (2026-09-28): a clinic, office
+              or restaurant opens its own account instead of emailing PG Ride. */}
+          {commercialEnabled && (
+            <Button
+              variant="outline"
+              className="w-full justify-between p-4"
+              onClick={() => setLocation("/org/apply")}
+              data-testid="button-open-org-apply"
+            >
+              <div className="flex items-center space-x-3">
+                <i className="fas fa-building text-secondary text-xl" />
+                <div className="text-left">
+                  <p className="font-medium">Run a clinic, office or restaurant?</p>
+                  <p className="text-sm text-muted-foreground">Open a PG Ride business account</p>
                 </div>
               </div>
               <i className="fas fa-chevron-right text-muted-foreground" />

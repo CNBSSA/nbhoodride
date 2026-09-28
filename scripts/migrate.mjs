@@ -1644,6 +1644,9 @@ ALTER TABLE organizations ADD COLUMN IF NOT EXISTS review_note TEXT;
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS payout_method VARCHAR;
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS payout_details VARCHAR;
 
+-- ── Self-serve organization applications (2026-09-28) ──
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS business_details JSONB;
+
 -- ── Fleet management accounts, slice 2: a fleet's cars ──
 CREATE TABLE IF NOT EXISTS fleet_cars (
   id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

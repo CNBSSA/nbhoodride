@@ -37,6 +37,8 @@ import { bookWillCallReturn, createStandingOrder, listStandingOrders, materializ
 import { describeTerms, orgTerms } from "@shared/commercialTerms";
 import { chargeStatement, describePaymentMethod, issueStatement, listStatements, runWeeklyBilling, savePaymentMethod, startPaymentMethodSetup } from "./billing";
 import { describeBillingStatus, previousBillingWeek } from "@shared/billingCycle";
+import { ApplicationError, applicationView, applyForOrganization, resubmitOrganization, reviewOrganization } from "./applications";
+import { ORG_APPLY_SENTENCE } from "@shared/orgApplication";
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown;
 
@@ -53,6 +55,7 @@ export interface CommercialDeps {
 const userIdOf = (req: any): string | undefined => req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
 const fail = (res: Response, err: unknown, fallback: string) => {
+  if (err instanceof ApplicationError) return res.status(err.status).json({ message: err.message, ...(err.problems ? { problems: err.problems } : {}) });
   if (err instanceof CommercialError) return res.status(err.status).json({ message: err.message });
   console.error(fallback, err);
   return res.status(500).json({ message: fallback });
@@ -150,6 +153,10 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       res.json({ ...org, members: await listMembers(org.id) });
     } catch (err) { fail(res, err, "Could not load the organization"); }
   });
+  app.post("/api/admin/organizations/:id/review", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await reviewOrganization(req.params.id, req.body ?? {})); }
+    catch (err) { fail(res, err, "Could not record the check"); }
+  });
   app.patch("/api/admin/organizations/:id", orgGate, isAdminOrSessionAuth, async (req, res) => {
     try {
       const org = await getOrganization(req.params.id);
@@ -208,6 +215,16 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       })));
     } catch (err) { fail(res, err, "Could not list your organizations"); }
   });
+  // Self-serve applications (shared/orgApplication.ts): apply, correct and send again.
+  app.get("/api/org/apply", gate, isAuthenticated, (_req, res) => { res.json({ words: ORG_APPLY_SENTENCE }); });
+  app.post("/api/org/apply", gate, isAuthenticated, async (req: any, res) => {
+    try { res.status(201).json(await applyForOrganization(userIdOf(req)!, req.body ?? {})); }
+    catch (err) { fail(res, err, "Could not send the application"); }
+  });
+  app.patch("/api/org/:orgId/application", gate, isAuthenticated, requireMember((r) => r === "owner"), async (req: any, res) => {
+    try { res.json(await resubmitOrganization(userIdOf(req)!, req.orgId, req.body ?? {})); }
+    catch (err) { fail(res, err, "Could not send the application again"); }
+  });
   app.get("/api/org/:orgId/jobs", gate, isAuthenticated, requireMember(), async (req: any, res) => {
     try { res.json(await listJobs(req.orgId, parseRange(req.query))); }
     catch (err) { fail(res, err, "Could not list jobs"); }
@@ -230,9 +247,10 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       if (!org) return res.status(404).json({ message: "Organization not found." });
       const { stripeCustomerId: _s, notes: _n, ...safe } = org;
       const terms = orgTerms(org.terms);
-      const { defaultPaymentMethodId: _pm, ...rest } = safe as any;
+      // The EIN is shown masked, and only to the desk (applicationView); the raw details stay here.
+      const { defaultPaymentMethodId: _pm, businessDetails: _bd, fleetDetails: _fd, payoutDetails: _pd, reviewNote: _rn, ...rest } = safe as any;
       res.json({
-        ...rest, terms, termsText: describeTerms(terms), role: req.orgRole,
+        ...rest, application: applicationView(org), terms, termsText: describeTerms(terms), role: req.orgRole,
         billingText: describePaymentMethod(org),
         hasPaymentMethod: !!org.defaultPaymentMethodId,
       });

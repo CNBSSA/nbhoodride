@@ -388,6 +388,12 @@
     "button-fleet-car-doc-insurance": "the insurance upload inside the fleet desk's Add a car form (an uploader, like button-owner-doc-insurance); journey 36 uploads over the API",
     "button-fleet-car-doc-inspection": "the inspection upload inside the fleet desk's Add a car form (an uploader, like button-owner-doc-inspection); journey 36 uploads over the API",
     "button-approve-fleet-car-*": "inside a fleet's detail in Admin, Organizations, which the audit does not open; journey 36 approves a car over the API",
-    "button-driver-application-next": "shown on the rider home only to a person with a pending driver application; the audit's rider has none, and journey 37 walks the application over the API"
+    "button-driver-application-next": "shown on the rider home only to a person with a pending driver application; the audit's rider has none, and journey 37 walks the application over the API",
+    "button-org-apply": "disabled until the application's fields are typed, and sending one creates an account; journey 38 applies over the API",
+    "button-approve-organization-*": "inside a pending booking account's detail in Admin, Organizations, which the audit does not open; journey 38 approves over the API",
+    "button-sendback-organization-*": "disabled until a note to the owner is typed; journey 38 sends one back over the API",
+    "button-org-resubmit": "shown only on a booking account PG Ride sent back; journey 38 corrects and sends again over the API",
+    "button-org-apply-open-desk": "shown only to a person with a waiting application; the audit's rider has none, and journey 38 walks the application over the API",
+    "button-portal-apply": "the portal's empty state for a signed-in person in no organization, which no audit fixture is; journey 38 applies over the API"
   }
 }
