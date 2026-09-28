@@ -378,6 +378,8 @@
     "button-record-refused-*": "refusing needs a written reason and declines the renter's waiting requests; journey 34 refuses over the API",
     "button-fleet-rent-from-earnings": "shown only to a driver with a PG Ride car or a request for one; journey 34 sets and withdraws it over the API",
     "button-fleet-resubmit": "shown only on a fleet application PG Ride sent back; journey 35 corrects and sends it again over the API",
-    "button-sendback-fleet-*": "needs a written note before it is enabled, and ends the application's wait; journey 35 sends one back over the API"
+    "button-sendback-fleet-*": "needs a written note before it is enabled, and ends the application's wait; journey 35 sends one back over the API",
+    "button-fleet-apply": "disabled until the application's fields are filled, and sending one creates a fleet; journey 35 applies over the API",
+    "button-approve-fleet-*": "inside a pending fleet application's detail in Admin, Organizations, which the audit does not open; journey 35 approves over the API"
   }
 }
