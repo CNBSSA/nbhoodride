@@ -64,3 +64,37 @@ describe("the split: 25/75 of the driver's 85%", () => {
     expect(fleetSplit("bad")).toEqual({ fleetShare: 0, driverKeeps: 0 });
   });
 });
+
+import { fleetCarProblems, FLEET_CAR_REVIEWED_FIELDS } from "./fleet";
+
+describe("a fleet's cars are checked like any car on PG Ride", () => {
+  const now = new Date("2026-09-28T12:00:00Z");
+  const inAYear = new Date("2027-09-28T00:00:00Z");
+  const good = {
+    year: 2022, seats: 5, licensePlate: "3AB1234", vin: "1HGCM82633A004352", photos: ["/a", "/b", "/c", "/d"],
+    registrationDocUrl: "/r", insuranceDocUrl: "/i", inspectionDocUrl: "/n",
+    inspectionExpires: inAYear, registrationExpires: inAYear, insuranceExpires: inAYear, reviewStatus: "approved",
+  };
+  it("a complete, checked, current car is ready", () => {
+    expect(fleetCarProblems(good, now)).toEqual([]);
+  });
+  it("names every gap, and waits for PG Ride's check", () => {
+    const p = fleetCarProblems({ ...good, year: 2010, seats: 12, vin: "SHORT", photos: ["/a"], insuranceDocUrl: null, inspectionExpires: new Date("2026-01-01"), reviewStatus: "pending" }, now);
+    expect(p.join(" | ")).toMatch(/more than 12 model years/);
+    expect(p.join(" | ")).toMatch(/more than 8/);
+    expect(p.join(" | ")).toMatch(/VIN/);
+    expect(p.join(" | ")).toMatch(/4 photos/);
+    expect(p.join(" | ")).toMatch(/insurance card/);
+    expect(p.join(" | ")).toMatch(/inspection is missing or expired/);
+    expect(p.join(" | ")).toMatch(/has not checked the papers yet/);
+  });
+  it("a sent-back car says so; a lapsed paper alone parks a checked car", () => {
+    expect(fleetCarProblems({ ...good, reviewStatus: "rejected" }, now).join(" ")).toMatch(/could not accept the papers/);
+    expect(fleetCarProblems({ ...good, insuranceExpires: new Date("2026-09-28T11:59:00Z") }, now)).toEqual(["Insurance is missing or expired."]);
+  });
+  it("what the car IS is checked again; a colour or a photo is not", () => {
+    expect(FLEET_CAR_REVIEWED_FIELDS).toContain("vin");
+    expect(FLEET_CAR_REVIEWED_FIELDS).not.toContain("color");
+    expect(FLEET_CAR_REVIEWED_FIELDS).not.toContain("photos");
+  });
+});

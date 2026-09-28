@@ -1643,6 +1643,36 @@ ALTER TABLE organizations ADD COLUMN IF NOT EXISTS fleet_details JSONB;
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS review_note TEXT;
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS payout_method VARCHAR;
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS payout_details VARCHAR;
+
+-- ── Fleet management accounts, slice 2: a fleet's cars ──
+CREATE TABLE IF NOT EXISTS fleet_cars (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id),
+  make VARCHAR NOT NULL,
+  model VARCHAR NOT NULL,
+  year INTEGER NOT NULL,
+  color VARCHAR NOT NULL,
+  seats INTEGER NOT NULL DEFAULT 5,
+  vehicle_type VARCHAR NOT NULL DEFAULT 'standard',
+  license_plate VARCHAR NOT NULL,
+  vin VARCHAR,
+  photos JSONB NOT NULL DEFAULT '[]'::jsonb,
+  registration_doc_url VARCHAR,
+  insurance_doc_url VARCHAR,
+  inspection_doc_url VARCHAR,
+  inspection_expires TIMESTAMP,
+  registration_expires TIMESTAMP,
+  insurance_expires TIMESTAMP,
+  review_status VARCHAR NOT NULL DEFAULT 'pending',
+  review_note TEXT,
+  status VARCHAR NOT NULL DEFAULT 'parked',
+  parked_reason TEXT,
+  driver_user_id VARCHAR REFERENCES users(id),
+  created_by VARCHAR REFERENCES users(id),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_fleet_cars_org ON fleet_cars(organization_id);
 `;
 
 async function migrate() {

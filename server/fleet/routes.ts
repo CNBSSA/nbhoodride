@@ -13,7 +13,9 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { featureFlags } from "../featureFlags";
 import { FLEET_TERMS_SENTENCE } from "@shared/fleet";
 import { FleetError, applyForFleet, fleetDesk, myFleets, resubmitFleet, reviewFleet, saveFleetPayout } from "./accounts";
+import { createFleetCar, listFleetCars, listFleetCarsForAdmin, reviewFleetCar, runFleetCarSweep, updateFleetCar } from "./cars";
 import { CommercialError } from "../commercial/organizations";
+import { RentalError } from "../rental/cars";
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown;
 
@@ -27,6 +29,8 @@ const userIdOf = (req: any): string => req.session?.userId || req.session?.testU
 const fail = (res: Response, err: unknown, fallback: string) => {
   if (err instanceof FleetError) return res.status(err.status).json({ message: err.message, ...(err.problems ? { problems: err.problems } : {}) });
   if (err instanceof CommercialError) return res.status(err.status).json({ message: err.message });
+  // A photo or paper refused by PG Ride's store (not the uploader's own, not a photo) says so with its status.
+  if (err instanceof RentalError) return res.status(err.status).json({ message: err.message });
   console.error(fallback, err);
   return res.status(500).json({ message: fallback });
 };
@@ -58,8 +62,28 @@ export function registerFleetRoutes(app: Express, deps: FleetDeps): void {
     } catch (err) { fail(res, err, "Could not save how the fleet is paid"); }
   });
 
+  // ── The fleet's cars (slice 2) ──
+  app.get("/api/fleet/:orgId/cars", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await listFleetCars(userIdOf(req), String(req.params.orgId))); } catch (err) { fail(res, err, "Could not load the fleet's cars"); }
+  });
+  app.post("/api/fleet/:orgId/cars", gate, isAuthenticated, async (req, res) => {
+    try { res.status(201).json(await createFleetCar(userIdOf(req), String(req.params.orgId), req.body ?? {})); } catch (err) { fail(res, err, "Could not add the car"); }
+  });
+  app.patch("/api/fleet/:orgId/cars/:carId", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await updateFleetCar(userIdOf(req), String(req.params.orgId), String(req.params.carId), req.body ?? {})); } catch (err) { fail(res, err, "Could not update the car"); }
+  });
+
   // ── Operator ──
   app.post("/api/admin/fleets/:id/review", gate, isAdminOrSessionAuth, async (req, res) => {
     try { res.json(await reviewFleet(String(req.params.id), req.body ?? {})); } catch (err) { fail(res, err, "Could not record the check"); }
+  });
+  app.get("/api/admin/fleets/:id/cars", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await listFleetCarsForAdmin(String(req.params.id))); } catch (err) { fail(res, err, "Could not load the fleet's cars"); }
+  });
+  app.post("/api/admin/fleets/:id/cars/:carId/review", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await reviewFleetCar(String(req.params.id), String(req.params.carId), req.body ?? {})); } catch (err) { fail(res, err, "Could not record the check"); }
+  });
+  app.post("/api/admin/analytics/fleet-car-sweep", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await runFleetCarSweep(new Date(), { warnings: !!req.body?.warnings })); } catch (err) { fail(res, err, "Could not run the fleet car sweep"); }
   });
 }

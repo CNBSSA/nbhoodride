@@ -1796,6 +1796,45 @@ export const rentalRenters = pgTable("rental_renters", {
 });
 export type RentalRenter = typeof rentalRenters.$inferSelect;
 
+// A fleet organization's cars (Fleet Management Accounts Plan, slice 2;
+// rules in shared/fleet.ts fleetCarProblems). Checked like a rental car and
+// by PG Ride before it carries riders; "ready" only while every check holds.
+// Slice 3 gives a ready car to one of the fleet's drivers.
+export const fleetCars = pgTable("fleet_cars", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  make: varchar("make").notNull(),
+  model: varchar("model").notNull(),
+  year: integer("year").notNull(),
+  color: varchar("color").notNull(),
+  seats: integer("seats").notNull().default(5),
+  vehicleType: varchar("vehicle_type").notNull().default("standard"),
+  licensePlate: varchar("license_plate").notNull(),
+  vin: varchar("vin"),
+  photos: jsonb("photos").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  /** The papers: photos or PDFs in PG Ride's own store, the uploader's own uploads. */
+  registrationDocUrl: varchar("registration_doc_url"),
+  insuranceDocUrl: varchar("insurance_doc_url"),
+  inspectionDocUrl: varchar("inspection_doc_url"),
+  inspectionExpires: timestamp("inspection_expires"),
+  registrationExpires: timestamp("registration_expires"),
+  insuranceExpires: timestamp("insurance_expires"),
+  /** pending | approved | rejected: PG Ride's check of the papers. */
+  reviewStatus: varchar("review_status").notNull().default("pending"),
+  reviewNote: text("review_note"),
+  /** parked | ready (shared/fleet.ts): ready only while fleetCarProblems is empty. */
+  status: varchar("status").notNull().default("parked"),
+  parkedReason: text("parked_reason"),
+  /** The fleet driver who has the car (slice 3); null while nobody does. */
+  driverUserId: varchar("driver_user_id").references(() => users.id),
+  createdBy: varchar("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_fleet_cars_org").on(table.organizationId),
+]);
+export type FleetCar = typeof fleetCars.$inferSelect;
+
 export const eventTrackingRelations = relations(eventTracking, ({ one }) => ({
   user: one(users, {
     fields: [eventTracking.userId],
