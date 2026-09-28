@@ -307,7 +307,7 @@ ${PAGE_CSS}
         <div class="card"><strong>100%</strong><p>of every tip is yours</p></div>
         <div class="card"><strong>$0</strong><p>card fees taken from you</p></div>
       </div>
-      <p style="margin-top:22px"><a class="cta" style="background:#fff;color:#0c5bb5" href="/signup">Start driving</a></p>
+      <p style="margin-top:22px"><a class="cta" style="background:#fff;color:#0c5bb5" href="/signup?drive=1">Start driving</a></p>
     </div>
   </header>
 
@@ -350,7 +350,7 @@ ${PAGE_CSS}
     <section id="how-it-works">
       <h2>How it works</h2>
       <div class="cards">
-        <div class="card"><h3>1. Sign up</h3><p>Create your account, then open Profile and add your license, insurance and vehicle photos.</p></div>
+        <div class="card"><h3>1. Sign up</h3><p>Sign up with "I want to drive" ticked; your application starts there. Once your account is approved, a banner on your home screen takes you to add your license, insurance and vehicle photos.</p></div>
         <div class="card"><h3>2. Get approved</h3><p>We review your documents and background check. You'll hear from a person, not a bot.</p></div>
         <div class="card"><h3>3. Drive</h3><p>Go online for ride-now requests, or claim scheduled and standing rides from the board ahead of time.</p></div>
         <div class="card"><h3>4. Get paid</h3><p>Your earnings show up per ride in the app. Request a payout from your Earnings tab whenever you like; ${esc(BRAND.appName)} pays you directly.</p></div>
@@ -360,7 +360,7 @@ ${PAGE_CSS}
     <section>
       <h2>Get started</h2>
       <p>
-        <a class="cta" href="/signup">Sign up to drive</a>
+        <a class="cta" href="/signup?drive=1">Sign up to drive</a>
         <a class="cta secondary" href="/login">Log in</a>
         <a class="cta secondary" href="/about">About ${esc(BRAND.appName)}</a>
       </p>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { reportClientError } from "@/lib/reportClientError";
 import { AddPhoneBanner } from "@/components/AddPhoneBanner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,6 +33,13 @@ import { isAppInstalledContext, isIosDevice } from "@/lib/pwaInstall";
 
 export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
+  // The rider home's driver-application banner sends the applicant straight
+  // to their documents (the driver funnel, 2026-09-28).
+  useEffect(() => {
+    const open = () => setIsDocumentModalOpen(true);
+    window.addEventListener("pgride:open-driver-documents", open);
+    return () => window.removeEventListener("pgride:open-driver-documents", open);
+  }, []);
   const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [isSafetyPrivacyModalOpen, setIsSafetyPrivacyModalOpen] = useState(false);
   // Organization memberships decide whether the portal row shows at all.

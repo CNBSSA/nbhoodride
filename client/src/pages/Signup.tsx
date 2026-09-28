@@ -30,6 +30,11 @@ export default function Signup() {
   const [pendingApproval, setPendingApproval] = useState(false);
   const [signupEmail, setSignupEmail] = useState('');
   const [, setLocation] = useLocation();
+  // /signup?drive=1 (from /drive and the landing page's "Drive with PG Ride")
+  // starts the sign-up as a driver application; the box can be unticked.
+  const [wantsToDrive, setWantsToDrive] = useState<boolean>(() => {
+    try { return new URLSearchParams(window.location.search).get("drive") === "1"; } catch { return false; }
+  });
   const { toast } = useToast();
 
   const handleSignup = async (e: React.FormEvent) => {
@@ -66,6 +71,7 @@ export default function Signup() {
           lastName,
           phone,
           termsAccepted,
+          wantsToDrive,
           privacyAccepted,
         }),
         credentials: 'include',
@@ -122,9 +128,15 @@ export default function Signup() {
               <strong className="text-foreground">Account approval</strong> — our team reviews new accounts (usually within 24 hours). We will let you know at{" "}
               <span className="font-medium text-foreground">{signupEmail || email}</span> when you can log in.
             </p>
-            <p className="text-xs text-muted-foreground mb-4">
-              Want to drive? After you can log in, open Profile to upload driver documents. That review is separate from your account approval.
-            </p>
+            {wantsToDrive ? (
+              <p className="text-xs text-muted-foreground mb-4" data-testid="text-pending-driver">
+                <strong className="text-foreground">Your driver application has started.</strong> Once you can log in, a banner on your home screen takes you to upload your driving licence, your insurance card and four photos of your car. PG Ride reviews those, and then you drive.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground mb-4">
+                Want to drive? After you can log in, open Profile to upload driver documents. That review is separate from your account approval.
+              </p>
+            )}
             <Link href="/login">
               <Button variant="outline" className="w-full mb-2" data-testid="btn-back-to-login">Back to Login</Button>
             </Link>
@@ -142,10 +154,10 @@ export default function Signup() {
             <i className="fas fa-car text-2xl text-primary-foreground" />
           </div>
           <CardTitle className="text-2xl" data-testid="text-signup-title">
-            Create Your Account
+            {wantsToDrive ? "Sign up to drive" : "Create Your Account"}
           </CardTitle>
           <CardDescription>
-            Join Maryland's community ride-share platform
+            {wantsToDrive ? "Keep 85% of every fare and 100% of every tip. Your application starts with this form." : "Join Maryland's community ride-share platform"}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -265,6 +277,19 @@ export default function Signup() {
             </div>
 
             <div className="space-y-2 pt-2">
+              <label className="flex items-start gap-2 text-sm cursor-pointer rounded-md border p-2 bg-muted/30">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 rounded border-input cursor-pointer"
+                  checked={wantsToDrive}
+                  onChange={(e) => setWantsToDrive(e.target.checked)}
+                  data-testid="checkbox-wants-to-drive"
+                />
+                <span className="text-foreground">
+                  <strong>I want to drive with PG Ride.</strong>{" "}
+                  <span className="text-muted-foreground">Keep 85% of every fare. You'll upload your licence, insurance and car photos after your account is approved.</span>
+                </span>
+              </label>
               <label className="flex items-start gap-2 text-sm cursor-pointer">
                 <input
                   type="checkbox"

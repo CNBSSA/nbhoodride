@@ -793,6 +793,27 @@ export default function RiderDashboard() {
         />
       </div>
 
+      {/* A driver applicant's next step, front and center (the driver funnel,
+          2026-09-28): until the application is approved, the home screen says
+          where it stands and takes them to their documents in one tap. */}
+      {(user as any)?.driverProfile && !user?.isDriver && (
+        <div className="relative z-20 mx-4 mt-2 rounded-xl border bg-card/95 backdrop-blur px-3 py-2 flex items-center justify-between gap-2 shadow-sm" style={{ marginTop: 'calc(0.5rem + env(safe-area-inset-top, 0px))' }} data-testid="banner-driver-application">
+          <div className="min-w-0">
+            <p className="text-sm font-medium truncate">Your driver application</p>
+            <p className="text-xs text-muted-foreground truncate" data-testid="text-driver-application-next">
+              {(user as any).driverProfile.approvalStatus === "rejected" ? "It could not be approved. Contact support."
+                : (user as any).driverProfile.approvalStatus === "background_check_pending" ? "Background check in progress."
+                : (user as any).driverProfile.licenseImageUrl && (user as any).driverProfile.insuranceImageUrl && ((user as any).driverProfile.vehiclePhotoUrls?.length ?? 0) > 0
+                  ? "Documents in. PG Ride is reviewing them."
+                  : "Next: upload your licence, insurance and car photos."}
+            </p>
+          </div>
+          <Button size="sm" onClick={() => { window.dispatchEvent(new CustomEvent("pgride:open-profile")); setTimeout(() => window.dispatchEvent(new CustomEvent("pgride:open-driver-documents")), 50); }} data-testid="button-driver-application-next">
+            {(user as any).driverProfile.licenseImageUrl ? "Documents" : "Upload"}
+          </Button>
+        </div>
+      )}
+
       {/* Top header — overlays the full-bleed map (the ModeSelector bar no
           longer renders on rider home, so this row is the top of the screen). */}
       <div
