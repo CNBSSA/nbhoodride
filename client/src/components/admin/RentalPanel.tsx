@@ -30,10 +30,16 @@ interface AdminCar {
 interface AdminAssignment {
   id: string; status: string; startsAt: string; endsAt: string; weeks: number; weeklyRent: string; paidThrough: string | null;
   paymentStatus: string; paymentError: string | null; damageAmount: string | null; damageIntentId: string | null;
+  lateHours: number | null; lateCharge: string | null; returnFromEarnings: string | null; rentFromEarningsAgreedAt: string | null;
   car: { make: string; model: string; year: number; licensePlate: string }; driver: { name: string; approvalStatus: string };
+}
+interface RenterToCheck {
+  userId: string; name: string; dateOfBirth: string; licenceNumber: string; licenceIssuedOn: string; licenceExpiresOn: string; licenceImageUrl: string;
+  recordStatus: "pending" | "cleared" | "refused"; recordNote: string | null; recordCheckedAt: string | null; nextStart: string | null; needsCheck: boolean;
 }
 interface AdminBooking {
   id: string; status: string; startsAt: string; endsAt: string; days: number; rentalTotal: string; deposit: string; licenceNumber: string; licenceImageUrl: string;
+  youngRenterFee?: string;
   paymentStatus: string; paymentError: string | null; settlement: Record<string, number> | null; collectOdometer: number | null;
   car: { make: string; model: string; year: number; licensePlate: string };
 }
@@ -101,10 +107,49 @@ export function RentalPanel() {
         <h2 className="text-2xl font-bold">Car rental</h2>
         <p className="text-sm text-muted-foreground">PG Ride's own fleet. A car is listed only while it qualifies; the sweep hides it the hour a document lapses.</p>
       </div>
+      <RentersToCheck />
       <RentalBookings />
       <DriverCars />
       <FleetCars />
     </div>
+  );
+}
+
+/** The driving-record check (industry practice, 2026-09-28): no rental is confirmed until PG Ride records it cleared. */
+function RentersToCheck() {
+  const { toast } = useToast();
+  const { data } = useQuery<{ standard: string; validDays: number; renters: RenterToCheck[] }>({ queryKey: ["/api/admin/rental/renters"], ...REFRESH });
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const record = useMutation({
+    mutationFn: async ({ userId, result }: { userId: string; result: "cleared" | "refused" }) =>
+      (await apiRequest("POST", `/api/admin/rental/renters/${userId}/record`, { result, note: notes[userId] ?? "" })).json(),
+    onSuccess: (r: any) => {
+      toast({ title: r?.recordStatus === "cleared" ? "Driving record cleared" : "Driving record refused", description: r?.recordStatus === "cleared" ? "Their rentals can be confirmed for a year." : "Their waiting requests were declined; they are shown your note." });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/rental/renters"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/rental/bookings"] });
+    },
+    onError: (e: Error) => toast({ title: "Could not record the check", description: e.message, variant: "destructive" }),
+  });
+  const due = data?.renters.filter((r) => r.needsCheck) ?? [];
+  return (
+    <Card>
+      <CardHeader><CardTitle>Renters to check</CardTitle><CardDescription>{due.length} waiting · a driving-record check is needed before a first rental and lasts {data?.validDays ?? 365} days</CardDescription></CardHeader>
+      <CardContent className="space-y-3">
+        {data?.standard && <p className="text-xs text-muted-foreground" data-testid="text-record-standard">{data.standard}</p>}
+        {due.length === 0 && <p className="text-sm text-muted-foreground" data-testid="text-no-renters-to-check">Nobody is waiting for a check.</p>}
+        {due.map((r) => (
+          <div key={r.userId} className="border rounded-md p-3 space-y-1" data-testid={`row-renter-${r.userId}`}>
+            <div className="flex justify-between"><p className="font-medium">{r.name}</p><Badge variant="secondary">{r.recordStatus}</Badge></div>
+            <p className="text-xs text-muted-foreground">Born {r.dateOfBirth} · licence {r.licenceNumber}, issued {r.licenceIssuedOn}, expires {r.licenceExpiresOn} (<a className="underline" href={r.licenceImageUrl} target="_blank" rel="noreferrer">photo</a>){r.nextStart ? ` · first rental ${when(r.nextStart)}` : ""}</p>
+            <div className="flex flex-wrap gap-2 items-center pt-1">
+              <Input className="h-8 max-w-xs" placeholder="Why it does not clear (needed to refuse)" value={notes[r.userId] ?? ""} onChange={(e) => setNotes({ ...notes, [r.userId]: e.target.value })} data-testid={`input-record-note-${r.userId}`} />
+              <Button size="sm" disabled={record.isPending} onClick={() => record.mutate({ userId: r.userId, result: "cleared" })} data-testid={`button-record-cleared-${r.userId}`}>Record cleared</Button>
+              <Button size="sm" variant="outline" disabled={record.isPending} onClick={() => record.mutate({ userId: r.userId, result: "refused" })} data-testid={`button-record-refused-${r.userId}`}>Refuse</Button>
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -177,7 +222,7 @@ function CarForm({ onDone }: { onDone: () => void }) {
           </select>
         </label>
         {field("licensePlate", "Plate")}{field("vin", "VIN (17 characters)")}
-        {field("dailyPrice", "Price per day ($)", "number")}{field("deposit", "Deposit ($)", "number")}
+        {field("dailyPrice", "Price per day ($)", "number")}{field("deposit", "Deposit ($100 to $1,000; blank = $250)", "number")}
         {field("milesPerDay", "Miles a day (0 = unlimited)", "number")}{field("extraMileFee", "Per extra mile ($)", "number")}
         {field("lateHourFee", "Per late hour ($)", "number")}{field("weeklyDriverRent", "Weekly rent for a driver ($, blank = not offered)", "number")}
         {field("inspectionExpires", "Inspection expires", "date")}{field("registrationExpires", "Registration expires", "date")}{field("insuranceExpires", "Insurance expires", "date")}
@@ -211,7 +256,7 @@ function RentalBookings() {
         {bookings?.map((b) => (
           <div key={b.id} className="border rounded-md p-3 space-y-1" data-testid={`row-rental-${b.id}`}>
             <div className="flex justify-between"><p className="font-medium">{b.car.year} {b.car.make} {b.car.model} · {b.car.licensePlate}</p><Badge variant="secondary">{b.status}</Badge></div>
-            <p className="text-xs text-muted-foreground">{when(b.startsAt)} → {when(b.endsAt)} · {money(b.rentalTotal)} · deposit {money(b.deposit)} · licence {b.licenceNumber} (<a className="underline" href={b.licenceImageUrl} target="_blank" rel="noreferrer">photo</a>)</p>
+            <p className="text-xs text-muted-foreground">{when(b.startsAt)} → {when(b.endsAt)} · {money(b.rentalTotal)}{Number(b.youngRenterFee ?? 0) > 0 ? ` (incl. young-renter fee ${money(b.youngRenterFee)})` : ""} · deposit {money(b.deposit)} · licence {b.licenceNumber} (<a className="underline" href={b.licenceImageUrl} target="_blank" rel="noreferrer">photo</a>)</p>
             {b.paymentError && <p className="text-xs text-destructive">{b.paymentError}</p>}
             {b.settlement && <p className="text-xs text-muted-foreground">Driven {b.settlement.milesDriven} mi · extras {money(b.settlement.extrasTotal)} · from deposit {money(b.settlement.fromDeposit)} · beyond {money(b.settlement.beyondDeposit)}</p>}
             <div className="flex flex-wrap gap-2 pt-1">
@@ -273,7 +318,8 @@ function DriverCars() {
         {rows?.map((r) => (
           <div key={r.id} className="border rounded-md p-3 space-y-1" data-testid={`row-driver-car-${r.id}`}>
             <div className="flex justify-between"><p className="font-medium">{r.driver.name} · {r.car.year} {r.car.make} {r.car.model} ({r.car.licensePlate})</p><Badge variant="secondary">{r.status}</Badge></div>
-            <p className="text-xs text-muted-foreground">{when(r.startsAt)} → {when(r.endsAt)} · {r.weeks} week{r.weeks === 1 ? "" : "s"} at {money(r.weeklyRent)} · driver {r.driver.approvalStatus}{r.paidThrough ? ` · paid to ${when(r.paidThrough)}` : ""}</p>
+            <p className="text-xs text-muted-foreground">{when(r.startsAt)} → {when(r.endsAt)} · {r.weeks} week{r.weeks === 1 ? "" : "s"} at {money(r.weeklyRent)} · driver {r.driver.approvalStatus}{r.paidThrough ? ` · paid to ${when(r.paidThrough)}` : ""} · rent {r.rentFromEarningsAgreedAt ? "from earnings first" : "by card"}</p>
+            {(r.lateHours ?? 0) > 0 && <p className="text-xs text-muted-foreground">Kept {r.lateHours} h past its weeks: {money(r.lateCharge ?? 0)}{Number(r.returnFromEarnings ?? 0) > 0 ? ` · ${money(r.returnFromEarnings)} taken from earnings` : ""}</p>}
             {r.paymentError && <p className="text-xs text-destructive">{r.paymentError}</p>}
             <div className="flex flex-wrap gap-2 pt-1">
               {r.status === "requested" && <>
@@ -286,9 +332,9 @@ function DriverCars() {
                 <Button size="sm" variant="outline" onClick={() => act.mutate({ id: r.id, action: "extend", body: { weeks: 1 } })} data-testid={`button-extend-driver-car-${r.id}`}>Add a week</Button>
                 {r.paymentStatus === "due" && <Button size="sm" variant="outline" onClick={() => act.mutate({ id: r.id, action: "charge-rent" })} data-testid={`button-charge-rent-driver-car-${r.id}`}>Retry rent</Button>}
               </>}
-              {r.status === "ended" && r.damageAmount && !r.damageIntentId && <Button size="sm" variant="outline" onClick={() => act.mutate({ id: r.id, action: "charge-damage" })} data-testid={`button-charge-damage-driver-car-${r.id}`}>Retry damage charge</Button>}
+              {r.status === "ended" && (r.damageAmount || r.lateCharge) && !r.damageIntentId && Number(r.damageAmount ?? 0) + Number(r.lateCharge ?? 0) > Number(r.returnFromEarnings ?? 0) && <Button size="sm" variant="outline" onClick={() => act.mutate({ id: r.id, action: "charge-damage" })} data-testid={`button-charge-damage-driver-car-${r.id}`}>Retry damage charge</Button>}
             </div>
-            {handling?.id === r.id && <Handover kind={handling.kind === "handover" ? "collect" : "return"} label={handling.kind === "handover" ? "Charge the first week's rent and hand over" : "Take the car back (charge any damage)"} pending={act.isPending} onSubmit={(body) => act.mutate({ id: r.id, action: handling.kind, body })} />}
+            {handling?.id === r.id && <Handover kind={handling.kind === "handover" ? "collect" : "return"} label={handling.kind === "handover" ? "Charge the first week's rent and hand over" : "Take the car back (charge any damage and late hours)"} pending={act.isPending} onSubmit={(body) => act.mutate({ id: r.id, action: handling.kind, body })} />}
           </div>
         ))}
       </CardContent>

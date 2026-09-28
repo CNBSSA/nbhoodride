@@ -103,8 +103,8 @@ export function qualificationProblems(car: CarForQualification, now: Date = new 
   if (photos.length < MIN_PHOTOS) out.push(`At least ${MIN_PHOTOS} photos of the car are needed (${photos.length} on file).`);
   const daily = num(car.dailyPrice);
   if (!(daily > 0)) out.push("Daily price is missing.");
-  const deposit = num(car.deposit);
-  if (!(deposit >= 0)) out.push("Deposit is missing.");
+  const depositWrong = depositProblem(car.deposit);
+  if (depositWrong) out.push(depositWrong);
   const p = car.pickupLocation;
   if (!p || !Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lng)) || !String(p.address ?? "").trim()) out.push("Pick-up place is missing.");
   if (!expiresAfter(car.inspectionExpires, now)) out.push("Safety inspection is missing or expired.");
@@ -143,6 +143,9 @@ export interface RentalQuote {
   endsAt: Date;
   days: number;
   dailyPrice: number;
+  /** Under 25: $25 a day, PG Ride's. Included in rentalTotal. */
+  youngRenterFee: number;
+  /** The car's price for the days plus the young-renter fee: what is charged at collection. */
   rentalTotal: number;
   deposit: number;
   milesAllowed: number;
@@ -159,6 +162,7 @@ export function quoteRental(
   startsAtRaw: unknown,
   endsAtRaw: unknown,
   now: Date = new Date(),
+  renterAge: number | null = null,
 ): QuoteResult {
   const startsAt = new Date(String(startsAtRaw ?? ""));
   const endsAt = new Date(String(endsAtRaw ?? ""));
@@ -172,12 +176,14 @@ export function quoteRental(
   const deposit = num(car.deposit);
   const milesPerDay = num(car.milesPerDay);
   if (!(dailyPrice > 0) || !(deposit >= 0)) return { ok: false, error: "This car has no price yet." };
+  const young = youngRenterFee(renterAge, days);
   return {
     ok: true,
     quote: {
       startsAt, endsAt, days,
       dailyPrice: round2(dailyPrice),
-      rentalTotal: round2(dailyPrice * days),
+      youngRenterFee: young,
+      rentalTotal: round2(dailyPrice * days + young),
       deposit: round2(deposit),
       milesAllowed: milesPerDay > 0 ? Math.round(milesPerDay * days) : 0,
     },
@@ -265,7 +271,8 @@ export const RENTAL_STATUS_WORDS: Record<RentalBookingStatus, string> = {
 
 export const RENTAL_TERMS_SENTENCE =
   `Rentals run up to ${MAX_RENTAL_DAYS} days. Nothing is charged until you collect the car: then the rental is charged and the deposit is held on your card. ` +
-  `On return, extra miles, every hour late (from the first minute) and any damage come out of the deposit, and the rest is released. A car not back on time may be stopped remotely. Cancelling before collection is free.`;
+  `On return, extra miles, every hour late (from the first minute) and any damage come out of the deposit, and the rest is released. A car not back on time may be stopped remotely. Cancelling before collection is free. ` +
+  `Renters are 21 or older, have held a licence for at least a year (two under 25) and pass a driving-record check; under 25, a young-renter fee of $25 a day is added.`;
 
 export function money(n: unknown): string {
   const v = num(n);
@@ -340,7 +347,7 @@ export const DRIVER_ASSIGNMENT_WORDS: Record<DriverAssignmentStatus, string> = {
 };
 
 export const DRIVER_RENT_SENTENCE =
-  "Rent is charged to your card a week at a time, in advance, starting when you collect the car. You can drive it on PG Ride while the rent is paid. A car not back at the end of its weeks may be stopped remotely. Cancelling before collection is free.";
+  "Rent is paid a week at a time, in advance, starting when you collect the car: from your PG Ride earnings first if you agree to it, otherwise from your card. You can drive it on PG Ride while the rent is paid. Every hour started after the end of your weeks is charged at the weekly rent divided by 168, from the first minute, and a car not back may be stopped remotely. Cancelling before collection is free.";
 
 
 // ── Phase 2: private owners (Festus, 2026-09-27) ────────────────────────────
@@ -364,12 +371,16 @@ export const REVIEWED_FIELDS = [
 /**
  * What a closed rental collected, and how it splits. Collected = the rental
  * charged at collection + what the deposit covered + anything charged beyond
- * it. A deposit that was released is not revenue.
+ * it. A deposit that was released is not revenue. The young-renter fee is
+ * PG Ride's alone (it pays for the risk of a young driver), so the owner's
+ * 90% is of everything else.
  */
-export function ownerSplit(rentalTotal: unknown, settlement: { fromDeposit?: unknown; beyondDeposit?: unknown } | null | undefined): { collected: number; ownerShare: number; platformShare: number } {
+export function ownerSplit(rentalTotal: unknown, settlement: { fromDeposit?: unknown; beyondDeposit?: unknown } | null | undefined, youngFee: unknown = 0): { collected: number; ownerShare: number; platformShare: number } {
   const collected = round2((num(rentalTotal) || 0) + (num(settlement?.fromDeposit) || 0) + (num(settlement?.beyondDeposit) || 0));
-  const platformShare = round2(collected * RENTAL_PLATFORM_SHARE);
-  return { collected, platformShare, ownerShare: round2(collected - platformShare) };
+  const young = Math.min(collected, Math.max(0, num(youngFee) || 0));
+  const cut = round2((collected - young) * RENTAL_PLATFORM_SHARE);
+  const ownerShare = round2(collected - young - cut);
+  return { collected, platformShare: round2(collected - ownerShare), ownerShare };
 }
 
 export const OWNER_PAYOUT_METHODS = ["zelle", "cashapp", "paypal", "check"] as const;
@@ -397,3 +408,147 @@ export function minutesOverdue(endsAt: Date | string, now: Date = new Date()): n
   const ms = now.getTime() - new Date(endsAt).getTime();
   return ms > 0 ? Math.ceil(ms / 60_000) : 0;
 }
+
+
+// ── Industry-standard rental rules (adopted 2026-09-28, changeable) ─────────
+//
+// Festus: "just copy industry standards and practices." Each figure below is
+// the common practice of car-sharing and rideshare rental programmes, named
+// in the Car Rental Master Plan's decisions, and may be changed here alone.
+//   - A renter is at least 21 when the rental starts; under 25 pays a
+//     young-renter fee per day, which is PG Ride's (it pays for the risk),
+//     never the private owner's.
+//   - A licence held at least 1 year (2 under 25), valid through the return.
+//   - A driving-record check before the first rental, good for a year:
+//     PG Ride records the result; no rental is confirmed without it.
+//   - A deposit between $100 and $1,000, $250 unless the lister sets it.
+//   - A driver may agree to have weekly rent taken from their earnings first,
+//     the card covering only what the earnings do not.
+//   - A driver who keeps a PG Ride car past its weeks pays the weekly rent pro
+//     rata for every hour started, no grace, as a public renter does.
+
+export const MIN_RENTER_AGE = 21;
+export const YOUNG_RENTER_AGE = 25;
+export const YOUNG_RENTER_FEE_PER_DAY = 25;
+export const MIN_LICENCE_YEARS = 1;
+export const MIN_LICENCE_YEARS_YOUNG = 2;
+/** A driving-record check is good for this long. */
+export const DRIVING_RECORD_VALID_DAYS = 365;
+export const DEPOSIT_MIN = 100;
+export const DEPOSIT_MAX = 1000;
+export const DEPOSIT_DEFAULT = 250;
+export const HOURS_IN_A_WEEK = 7 * 24;
+
+export const DRIVING_RECORD_STATUSES = ["pending", "cleared", "refused"] as const;
+export type DrivingRecordStatus = (typeof DRIVING_RECORD_STATUSES)[number];
+
+/** What PG Ride looks for on a driving record, shown to the desk beside Cleared / Refused. */
+export const DRIVING_RECORD_STANDARD =
+  "Clear when the renter's driving record shows no DUI or DWI in 7 years, no more than 2 moving violations and no at-fault accident in 3 years, and no suspension or revocation now.";
+
+const dateOnly = (v: unknown): Date | null => {
+  const s = v instanceof Date ? v.toISOString() : String(v ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}/.test(s)) return null;
+  const d = new Date(`${s.slice(0, 10)}T00:00:00Z`);
+  return Number.isFinite(d.getTime()) ? d : null;
+};
+
+/** A date the renter typed, as YYYY-MM-DD, or null. */
+export function dayOf(v: unknown): string | null {
+  const d = dateOnly(v);
+  return d ? d.toISOString().slice(0, 10) : null;
+}
+
+/** Whole years from `from` to `to`, calendar-correct (a birthday counts on the day). */
+export function wholeYears(from: Date, to: Date): number {
+  let years = to.getUTCFullYear() - from.getUTCFullYear();
+  const m = to.getUTCMonth() - from.getUTCMonth();
+  if (m < 0 || (m === 0 && to.getUTCDate() < from.getUTCDate())) years--;
+  return years;
+}
+
+export interface RenterFacts {
+  dateOfBirth: unknown;
+  licenceIssuedOn: unknown;
+  licenceExpiresOn: unknown;
+}
+
+/**
+ * May this person rent for these dates? Empty = yes. Age and licence tenure
+ * are taken at the start of the rental; the licence must still be valid at
+ * its end.
+ */
+export function renterProblems(facts: RenterFacts, startsAt: Date, endsAt: Date): string[] {
+  const out: string[] = [];
+  const dob = dateOnly(facts.dateOfBirth);
+  const issued = dateOnly(facts.licenceIssuedOn);
+  const expires = dateOnly(facts.licenceExpiresOn);
+  if (!dob) out.push("Enter your date of birth.");
+  if (!issued) out.push("Enter the date your licence was first issued.");
+  if (!expires) out.push("Enter the date your licence expires.");
+  if (out.length) return out;
+  const age = wholeYears(dob!, startsAt);
+  if (age > 110 || dob! > startsAt) return ["Check your date of birth."];
+  if (issued! > startsAt || issued! < dob!) return ["Check the date your licence was issued."];
+  if (age < MIN_RENTER_AGE) out.push(`Renters have to be at least ${MIN_RENTER_AGE} on the day the rental starts.`);
+  const needYears = age < YOUNG_RENTER_AGE ? MIN_LICENCE_YEARS_YOUNG : MIN_LICENCE_YEARS;
+  if (wholeYears(issued!, startsAt) < needYears) {
+    out.push(age < YOUNG_RENTER_AGE
+      ? `Under ${YOUNG_RENTER_AGE}, you need to have held your licence for at least ${MIN_LICENCE_YEARS_YOUNG} years.`
+      : `You need to have held your licence for at least ${MIN_LICENCE_YEARS} year.`);
+  }
+  // A licence is good through the whole of the day it expires.
+  if (expires!.getTime() + DAY_MS <= endsAt.getTime()) out.push("Your licence expires before the rental ends. Renew it first.");
+  return out;
+}
+
+/** Age on a day, or null when the date of birth is not a date. */
+export function ageOn(dateOfBirth: unknown, on: Date): number | null {
+  const dob = dateOnly(dateOfBirth);
+  return dob ? wholeYears(dob, on) : null;
+}
+
+/** The young-renter fee for a rental, 0 from 25 on or when the age is unknown. */
+export function youngRenterFee(age: number | null | undefined, days: number): number {
+  return age !== null && age !== undefined && age < YOUNG_RENTER_AGE ? round2(YOUNG_RENTER_FEE_PER_DAY * days) : 0;
+}
+
+/** Is a driving-record result still good for a rental starting then? */
+export function drivingRecordCurrent(record: { recordStatus?: string | null; recordCheckedAt?: Date | string | null } | null | undefined, startsAt: Date): boolean {
+  if (!record || record.recordStatus !== "cleared" || !record.recordCheckedAt) return false;
+  return new Date(record.recordCheckedAt).getTime() + DRIVING_RECORD_VALID_DAYS * DAY_MS > startsAt.getTime();
+}
+
+/** A deposit a lister may set, or the reason it may not. */
+export function depositProblem(deposit: unknown): string | null {
+  const d = num(deposit);
+  if (!Number.isFinite(d)) return "Deposit must be an amount in dollars.";
+  if (d < DEPOSIT_MIN || d > DEPOSIT_MAX) return `Deposit has to be between ${money(DEPOSIT_MIN)} and ${money(DEPOSIT_MAX)}.`;
+  return null;
+}
+
+/**
+ * Late fee for a PG Ride car a driver kept past the end of their weeks: the
+ * weekly rent pro rata, every hour started, from the first minute.
+ */
+export function driverLateFee(weeklyRent: unknown, endsAt: Date | string, returnedAt: Date | string): { lateHours: number; hourlyRate: number; lateCharge: number } {
+  const hourlyRate = round2((num(weeklyRent) || 0) / HOURS_IN_A_WEEK);
+  const lateMinutes = (new Date(returnedAt).getTime() - new Date(endsAt).getTime()) / 60_000;
+  const lateHours = lateMinutes > LATE_GRACE_MINUTES ? Math.ceil(lateMinutes / 60) : 0;
+  return { lateHours, hourlyRate, lateCharge: round2(lateHours * hourlyRate) };
+}
+
+/** How an amount is paid when the driver agreed to pay from earnings: the balance first, the card for the rest. */
+export function splitFromEarnings(amount: unknown, balance: unknown): { fromEarnings: number; fromCard: number } {
+  const a = Math.max(0, num(amount) || 0);
+  const b = Math.max(0, num(balance) || 0);
+  const fromEarnings = round2(Math.min(a, b));
+  return { fromEarnings, fromCard: round2(a - fromEarnings) };
+}
+
+export const RENTER_RULES_SENTENCE =
+  `Renters are ${MIN_RENTER_AGE} or older and have held a licence for at least ${MIN_LICENCE_YEARS} year (${MIN_LICENCE_YEARS_YOUNG} under ${YOUNG_RENTER_AGE}). ` +
+  `Under ${YOUNG_RENTER_AGE}, a young-renter fee of ${money(YOUNG_RENTER_FEE_PER_DAY)} a day is added. PG Ride checks your driving record before your first rental; the check lasts a year.`;
+
+export const RENT_FROM_EARNINGS_SENTENCE =
+  "I agree that PG Ride takes each week's rent for this car, and anything owed when I return it, from my PG Ride earnings before they are paid out, and charges my card only for what my earnings do not cover. I can withdraw this at any time from my Profile.";

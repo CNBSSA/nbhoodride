@@ -205,7 +205,7 @@ export class StripeService {
    * gets a real new attempt, not the old decline replayed. A card that wants the renter present is a decline:
    * these run with the renter at the desk but the card is charged off-session.
    */
-  async chargeRental(params: { amount: number; customerId: string; paymentMethodId: string; bookingId: string; renterId: string; purpose: "rental" | "extras" | "driver_rent" | "driver_damage"; keyPart?: string }): Promise<Stripe.PaymentIntent> {
+  async chargeRental(params: { amount: number; customerId: string; paymentMethodId: string; bookingId: string; renterId: string; purpose: "rental" | "extras" | "driver_rent" | "driver_damage" | "driver_return"; keyPart?: string }): Promise<Stripe.PaymentIntent> {
     const { amount, customerId, paymentMethodId, bookingId, renterId, purpose, keyPart } = params;
     return await requireStripe().paymentIntents.create({
       amount: Math.round(amount * 100),
@@ -216,7 +216,7 @@ export class StripeService {
       confirm: true,
       off_session: true,
       error_on_requires_action: true,
-      description: purpose === "rental" ? "PG Ride car rental" : purpose === "extras" ? "PG Ride car rental: extras on return" : purpose === "driver_rent" ? "PG Ride car for driving: weekly rent" : "PG Ride car for driving: damage on return",
+      description: purpose === "rental" ? "PG Ride car rental" : purpose === "extras" ? "PG Ride car rental: extras on return" : purpose === "driver_rent" ? "PG Ride car for driving: weekly rent" : purpose === "driver_return" ? "PG Ride car for driving: damage and late return" : "PG Ride car for driving: damage on return",
       metadata: { rentalBookingId: bookingId, renterId, type: `rental_${purpose}`, ...(keyPart ? { rentalKeyPart: keyPart } : {}) },
     }, { idempotencyKey: `rental_${purpose}_${bookingId}${keyPart ? `_${keyPart}` : ""}_${paymentMethodId}` });
   }

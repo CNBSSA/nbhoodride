@@ -13,13 +13,14 @@
  */
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../db";
-import { driverCarAssignments, rentalBookings, rentalCars, type RentalBooking } from "@shared/schema";
-import { HOLDS_THE_CAR, RENTER_MAY_CANCEL, money, quoteRental, rentalsOverlap, settleReturn } from "@shared/rental";
+import { driverCarAssignments, rentalBookings, rentalCars, rentalRenters, type RentalBooking } from "@shared/schema";
+import { HOLDS_THE_CAR, RENTER_MAY_CANCEL, ageOn, drivingRecordCurrent, money, quoteRental, rentalsOverlap, renterProblems, settleReturn } from "@shared/rental";
+import { saveRenterFacts } from "./renters";
 import { stripeService } from "../stripeService";
 import { storage } from "../storage";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
 import { riderBookingBlock } from "../rideWorkflowService";
-import { RentalError, getListedCar, holdingBookings, publicCar, verifiedPhotoList, verifiedStorePath } from "./cars";
+import { RentalError, getListedCar, holdingBookings, publicCar, verifiedPhotoList } from "./cars";
 
 const clean = (v: unknown, max = 80) => String(v ?? "").trim().slice(0, max);
 const errText = (err: any) => String(err?.message ?? err ?? "unknown error").slice(0, 300);
@@ -36,13 +37,21 @@ async function renterCard(renterId: string): Promise<{ customerId: string; payme
   return { customerId: u.stripeCustomerId, paymentMethodId: u.stripePaymentMethodId };
 }
 
-export async function quoteFor(carId: string, startsAt: unknown, endsAt: unknown, now: Date = new Date()) {
+/**
+ * Price a stay. With the renter's date of birth (given, or on file), the
+ * young-renter fee is in the price; without it the quote says the age is
+ * not known yet.
+ */
+export async function quoteFor(carId: string, startsAt: unknown, endsAt: unknown, now: Date = new Date(), dateOfBirth?: unknown) {
   const car = await getListedCar(carId, now);
-  const q = quoteRental(car, startsAt, endsAt, now);
+  const first = quoteRental(car, startsAt, endsAt, now);
+  if (!first.ok) throw new RentalError(first.error);
+  const age = dateOfBirth ? ageOn(dateOfBirth, first.quote.startsAt) : null;
+  const q = age === null ? first : quoteRental(car, startsAt, endsAt, now, age);
   if (!q.ok) throw new RentalError(q.error);
   const held = await holdingBookings(car.id);
   const free = !held.some((b: any) => rentalsOverlap(b, q.quote));
-  return { car: publicCar(car), quote: q.quote, available: free };
+  return { car: publicCar(car), quote: q.quote, available: free, ageKnown: age !== null };
 }
 
 /** A renter asks for a car. Nothing is charged; PG Ride confirms. */
@@ -50,21 +59,25 @@ export async function requestRental(renterId: string, body: any, now: Date = new
   const block = await riderBookingBlock(renterId);
   if (block) throw new RentalError(block, 403);
   if (stripeService.isEnabled && !(await renterCard(renterId))) throw new RentalError("Add a payment card in Profile first: the rental and the deposit go on your card at collection.");
-  const licenceNumber = clean(body?.licenceNumber, 20).toUpperCase();
-  if (!/^[A-Z0-9-]{4,20}$/.test(licenceNumber)) throw new RentalError("Enter your driving licence number as it is on the card.");
-  const licenceImageUrl = await verifiedStorePath(body?.licenceImageUrl, renterId, { allowPdf: true, what: "licence photo" });
-  const { car, quote, available } = await quoteFor(clean(body?.carId, 64), body?.startsAt, body?.endsAt, now);
+  const renter = await saveRenterFacts(renterId, body);
+  if (renter.recordStatus === "refused") throw new RentalError(`PG Ride cannot rent a car to you on your driving record${renter.recordNote ? `: ${renter.recordNote}` : "."} If your licence has changed, enter the new one.`, 403);
+  const { car, quote, available } = await quoteFor(clean(body?.carId, 64), body?.startsAt, body?.endsAt, now, renter.dateOfBirth);
+  const problems = renterProblems(renter, quote.startsAt, quote.endsAt);
+  if (problems.length) throw new RentalError(problems.join(" "), 400, problems);
   if (!available) throw new RentalError("That car is already booked for some of those days. Try other dates.", 409);
   const [full] = await db.select().from(rentalCars).where(eq(rentalCars.id, car.id));
   const [booking] = await db.insert(rentalBookings).values({
     carId: car.id, renterId, startsAt: quote.startsAt, endsAt: quote.endsAt, days: quote.days,
-    dailyPrice: quote.dailyPrice.toFixed(2), rentalTotal: quote.rentalTotal.toFixed(2), deposit: quote.deposit.toFixed(2),
+    dailyPrice: quote.dailyPrice.toFixed(2), youngRenterFee: quote.youngRenterFee.toFixed(2), rentalTotal: quote.rentalTotal.toFixed(2), deposit: quote.deposit.toFixed(2),
     milesAllowed: quote.milesAllowed, extraMileFee: full.extraMileFee, lateHourFee: full.lateHourFee,
-    status: "requested", licenceNumber, licenceImageUrl,
+    status: "requested", licenceNumber: renter.licenceNumber, licenceImageUrl: renter.licenceImageUrl,
   }).returning();
+  const recordReady = drivingRecordCurrent(renter, quote.startsAt);
+  const young: Array<[string, string]> = quote.youngRenterFee > 0 ? [["Young-renter fee", money(quote.youngRenterFee)]] : [];
   opsAlert(formatOpsAlert("🔑 Car rental requested", [
     ["Car", `${car.year} ${car.make} ${car.model}`], ["From", quote.startsAt.toISOString()], ["Days", quote.days],
-    ["Rental", money(quote.rentalTotal)], ["Deposit", money(quote.deposit)],
+    ["Rental", money(quote.rentalTotal)], ...young, ["Deposit", money(quote.deposit)],
+    ["Driving record", recordReady ? "cleared" : "NOT CHECKED: check it in Admin, Car rental, Renters before confirming"],
     ["Next", car.ownerKind === "private" ? "The owner accepts or declines in My cars" : "Confirm or decline in Admin, Car rental"],
   ]));
   return booking;
@@ -99,6 +112,13 @@ export async function confirmRental(bookingId: string): Promise<RentalBooking> {
     const [b] = await tx.select().from(rentalBookings).where(eq(rentalBookings.id, bookingId)).for("update");
     if (!b) throw new RentalError("Booking not found.", 404);
     if (b.status !== "requested") throw new RentalError(`This booking is ${b.status}; only a request can be confirmed.`, 409);
+    // No rental is confirmed without a current driving-record clearance (industry practice, 2026-09-28).
+    const [renter] = await tx.select().from(rentalRenters).where(eq(rentalRenters.userId, b.renterId));
+    if (!drivingRecordCurrent(renter, b.startsAt)) {
+      throw new RentalError(renter?.recordStatus === "refused"
+        ? "This renter's driving record did not clear. Decline the request."
+        : "PG Ride has not cleared this renter's driving record yet. It is checked in Admin, Car rental, Renters; confirm once it is cleared.", 409);
+    }
     await tx.select({ id: rentalCars.id }).from(rentalCars).where(eq(rentalCars.id, b.carId)).for("update");
     const held = await holdingBookings(b.carId, tx);
     if (held.some((h: any) => h.id !== b.id && rentalsOverlap(h, b))) throw new RentalError("The car is already confirmed for some of those days. Decline this request.", 409);

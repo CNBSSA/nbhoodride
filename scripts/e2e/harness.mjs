@@ -119,6 +119,15 @@ export async function seedFixtures(db) {
     VALUES ('e2e-rental-request', 'e2e-rental-car', $1, NOW() + interval '60 days', NOW() + interval '62 days', 2, 49.00, 98.00, 200.00, 300, 'requested', 'E2E1234567', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5')
     ON CONFLICT (id) DO UPDATE SET status='requested', starts_at=NOW() + interval '60 days', ends_at=NOW() + interval '62 days', payment_status='none', payment_error=NULL, charge_intent_id=NULL, deposit_intent_id=NULL`,
     [FIXTURES.rider.id]).catch((e) => console.log("  (rental booking seed) " + String(e?.message ?? e).split("\n")[0]));
+  // Renters' facts (industry rules, 2026-09-28): the rider is 36 with a
+  // cleared driving record, so their requests can be confirmed; the driver's
+  // record is waiting for the desk, so the admin's Renters list has a row.
+  await db.query(`INSERT INTO rental_renters (user_id, date_of_birth, licence_number, licence_issued_on, licence_expires_on, licence_image_url, record_status, record_checked_at)
+    VALUES ($1, '1990-01-15', 'M123456789', '2010-03-01', '2035-01-15', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5', 'cleared', NOW()),
+           ($2, '1985-05-05', 'D987654321', '2005-06-01', '2034-05-05', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c6', 'pending', NULL)
+    ON CONFLICT (user_id) DO UPDATE SET date_of_birth=EXCLUDED.date_of_birth, licence_number=EXCLUDED.licence_number, licence_issued_on=EXCLUDED.licence_issued_on,
+      licence_expires_on=EXCLUDED.licence_expires_on, record_status=EXCLUDED.record_status, record_checked_at=EXCLUDED.record_checked_at, record_note=NULL`,
+    [FIXTURES.rider.id, FIXTURES.driver.id]).catch((e) => console.log("  (renter seed) " + String(e?.message ?? e).split("\n")[0]));
 }
 
 export async function startServer(env = {}) {

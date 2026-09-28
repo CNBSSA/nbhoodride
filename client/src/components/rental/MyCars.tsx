@@ -26,7 +26,7 @@ interface OwnerCar {
 }
 interface OwnerBooking {
   id: string; status: RentalBookingStatus; startsAt: string; endsAt: string; days: number; rentalTotal: string; licenceNumber: string; licenceImageUrl: string;
-  paymentError: string | null; ownerShare: string | null; renter: { firstName: string }; car: { make: string; model: string; year: number; licensePlate: string };
+  paymentError: string | null; ownerShare: string | null; renter: { firstName: string }; drivingRecord?: "cleared" | "refused" | "being checked"; car: { make: string; model: string; year: number; licensePlate: string };
 }
 const when = (s: string) => new Date(s).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
@@ -88,6 +88,9 @@ export function MyCars() {
             <p className="font-medium">{b.renter.firstName} · {b.car.year} {b.car.make} {b.car.model}</p>
             <p className="text-xs text-muted-foreground">{when(b.startsAt)} → {when(b.endsAt)} · {money(b.rentalTotal)} · licence {b.licenceNumber} (<a className="underline" href={b.licenceImageUrl} target="_blank" rel="noreferrer">photo</a>)</p>
             <p className="text-sm">{RENTAL_STATUS_WORDS[b.status] ?? b.status}{b.ownerShare ? ` · you are credited ${money(b.ownerShare)}` : ""}</p>
+            {b.status === "requested" && b.drivingRecord && (
+              <p className="text-xs text-muted-foreground" data-testid={`text-owner-renter-record-${b.id}`}>Driving record: {b.drivingRecord === "being checked" ? "PG Ride is checking it; you can accept once it is cleared" : b.drivingRecord}</p>
+            )}
             {b.paymentError && <p className="text-xs text-destructive">{b.paymentError}</p>}
             <div className="flex flex-wrap gap-2">
               {b.status === "requested" && <>
@@ -155,7 +158,7 @@ function OwnerCarForm({ onDone }: { onDone: () => void }) {
           </select>
         </label>
         {field("licensePlate", "Plate")}{field("vin", "VIN (17 characters)")}
-        {field("dailyPrice", "Price per day ($)", "number")}{field("deposit", "Deposit ($)", "number")}
+        {field("dailyPrice", "Price per day ($)", "number")}{field("deposit", "Deposit ($100 to $1,000; blank = $250)", "number")}
         {field("milesPerDay", "Miles a day (0 = unlimited)", "number")}{field("extraMileFee", "Per extra mile ($)", "number")}
         {field("lateHourFee", "Per late hour ($)", "number")}
         {field("inspectionExpires", "Inspection expires", "date")}{field("registrationExpires", "Registration expires", "date")}{field("insuranceExpires", "Insurance expires", "date")}

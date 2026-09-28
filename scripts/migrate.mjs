@@ -1614,6 +1614,29 @@ ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_restored_at TIMESTAMP;
 ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_restored_by VARCHAR;
 ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS overdue_paged_at TIMESTAMP;
 ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS overdue_paged_at TIMESTAMP;
+
+-- ── Car rental: industry-standard rules (Festus 2026-09-28) ──
+ALTER TABLE rental_cars ALTER COLUMN deposit SET DEFAULT 250.00;
+ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS young_renter_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00;
+ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS rent_from_earnings_agreed_at TIMESTAMP;
+ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS late_hours INTEGER;
+ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS late_charge DECIMAL(8,2);
+ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS return_from_earnings DECIMAL(8,2);
+ALTER TABLE driver_rent_charges ADD COLUMN IF NOT EXISTS from_earnings DECIMAL(8,2);
+CREATE TABLE IF NOT EXISTS rental_renters (
+  user_id VARCHAR PRIMARY KEY REFERENCES users(id),
+  date_of_birth VARCHAR(10) NOT NULL,
+  licence_number VARCHAR NOT NULL,
+  licence_issued_on VARCHAR(10) NOT NULL,
+  licence_expires_on VARCHAR(10) NOT NULL,
+  licence_image_url VARCHAR NOT NULL,
+  record_status VARCHAR NOT NULL DEFAULT 'pending',
+  record_note TEXT,
+  record_checked_at TIMESTAMP,
+  record_checked_by VARCHAR,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
 `;
 
 async function migrate() {

@@ -122,21 +122,47 @@ function FindCars({ from, to, setFrom, setTo, onBooked }: { from: string; to: st
   );
 }
 
+interface RenterOnFile {
+  dateOfBirth: string; licenceNumber: string; licenceIssuedOn: string; licenceExpiresOn: string; licenceImageUrl: string;
+  recordStatus: "pending" | "cleared" | "refused"; recordNote: string | null;
+}
+
+const RECORD_WORDS: Record<RenterOnFile["recordStatus"], string> = {
+  pending: "PG Ride checks your driving record before your first rental is confirmed.",
+  cleared: "Your driving record is checked and cleared.",
+  refused: "Your driving record did not clear.",
+};
+
 function RequestForm({ car, startsAt, endsAt, onDone }: { car: PublicCar; startsAt: string; endsAt: string; onDone: () => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { data: me } = useQuery<{ renter: RenterOnFile | null; rules: string }>({ queryKey: ["/api/rent/me"] });
+  const onFile = me?.renter ?? null;
   const [licenceNumber, setLicenceNumber] = useState("");
   const [licenceImageUrl, setLicenceImageUrl] = useState("");
-  const { data: q, error } = useQuery<{ quote: { days: number; rentalTotal: number; deposit: number; milesAllowed: number }; available: boolean }>({
-    queryKey: ["/api/rent/quote", car.id, startsAt, endsAt],
-    queryFn: async () => (await apiRequest("POST", "/api/rent/quote", { carId: car.id, startsAt, endsAt })).json(),
+  const [dateOfBirth, setDateOfBirth] = useState("");
+  const [licenceIssuedOn, setLicenceIssuedOn] = useState("");
+  const [licenceExpiresOn, setLicenceExpiresOn] = useState("");
+  // What is typed wins; what is on file fills the rest.
+  const facts = {
+    licenceNumber: licenceNumber || onFile?.licenceNumber || "",
+    licenceImageUrl: licenceImageUrl || onFile?.licenceImageUrl || "",
+    dateOfBirth: dateOfBirth || onFile?.dateOfBirth || "",
+    licenceIssuedOn: licenceIssuedOn || onFile?.licenceIssuedOn || "",
+    licenceExpiresOn: licenceExpiresOn || onFile?.licenceExpiresOn || "",
+  };
+  const dobForQuote = /^\d{4}-\d{2}-\d{2}$/.test(facts.dateOfBirth) ? facts.dateOfBirth : "";
+  const { data: q, error } = useQuery<{ quote: { days: number; rentalTotal: number; youngRenterFee: number; deposit: number; milesAllowed: number }; available: boolean; ageKnown: boolean }>({
+    queryKey: ["/api/rent/quote", car.id, startsAt, endsAt, dobForQuote],
+    queryFn: async () => (await apiRequest("POST", "/api/rent/quote", { carId: car.id, startsAt, endsAt, ...(dobForQuote ? { dateOfBirth: dobForQuote } : {}) })).json(),
     retry: false,
   });
   const request = useMutation({
-    mutationFn: async () => (await apiRequest("POST", "/api/rent/bookings", { carId: car.id, startsAt, endsAt, licenceNumber, licenceImageUrl })).json(),
+    mutationFn: async () => (await apiRequest("POST", "/api/rent/bookings", { carId: car.id, startsAt, endsAt, ...facts })).json(),
     onSuccess: () => {
       toast({ title: "Rental requested", description: "PG Ride confirms it shortly. Nothing is charged until you collect the car." });
       queryClient.invalidateQueries({ queryKey: ["/api/rent/bookings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rent/me"] });
       onDone();
     },
     onError: (e: Error) => toast({ title: "Could not request the rental", description: e.message, variant: "destructive" }),
@@ -145,13 +171,31 @@ function RequestForm({ car, startsAt, endsAt, onDone }: { car: PublicCar; starts
   if (!q) return <Loader2 className="w-4 h-4 animate-spin" />;
   return (
     <div className="space-y-3 border-t pt-3" data-testid="rent-request-form">
-      <p className="text-sm" data-testid="text-rent-quote">{q.quote.days} day{q.quote.days === 1 ? "" : "s"}: <strong>{money(q.quote.rentalTotal)}</strong>, charged at collection. Deposit {money(q.quote.deposit)} held, released on return.{q.quote.milesAllowed > 0 ? ` ${q.quote.milesAllowed} miles included.` : ""}</p>
+      <p className="text-sm" data-testid="text-rent-quote">{q.quote.days} day{q.quote.days === 1 ? "" : "s"}: <strong>{money(q.quote.rentalTotal)}</strong>, charged at collection{q.quote.youngRenterFee > 0 ? `, including the young-renter fee of ${money(q.quote.youngRenterFee)}` : ""}. Deposit {money(q.quote.deposit)} held, released on return.{q.quote.milesAllowed > 0 ? ` ${q.quote.milesAllowed} miles included.` : ""}</p>
+      {!q.ageKnown && <p className="text-xs text-muted-foreground" data-testid="text-rent-age-unknown">Under 25, a young-renter fee of $25 a day is added once you enter your date of birth.</p>}
       {!q.available && <p className="text-sm text-destructive">This car is already booked for some of those days.</p>}
-      <Input placeholder="Driving licence number" value={licenceNumber} onChange={(e) => setLicenceNumber(e.target.value)} data-testid="input-rent-licence" />
+      {me?.rules && <p className="text-xs text-muted-foreground" data-testid="text-rent-rules">{me.rules}</p>}
+      {onFile && (
+        <p className={`text-xs ${onFile.recordStatus === "refused" ? "text-destructive" : "text-muted-foreground"}`} data-testid="text-rent-record">
+          {RECORD_WORDS[onFile.recordStatus]}{onFile.recordStatus === "refused" && onFile.recordNote ? ` ${onFile.recordNote}` : ""}
+        </p>
+      )}
+      <Input placeholder={onFile ? `Driving licence number (on file: ${onFile.licenceNumber})` : "Driving licence number"} value={licenceNumber} onChange={(e) => setLicenceNumber(e.target.value)} data-testid="input-rent-licence" />
+      <div className="grid grid-cols-3 gap-2">
+        <label className="text-xs text-muted-foreground">Date of birth
+          <Input type="date" value={facts.dateOfBirth} onChange={(e) => setDateOfBirth(e.target.value)} data-testid="input-rent-dob" />
+        </label>
+        <label className="text-xs text-muted-foreground">Licence issued
+          <Input type="date" value={facts.licenceIssuedOn} onChange={(e) => setLicenceIssuedOn(e.target.value)} data-testid="input-rent-licence-issued" />
+        </label>
+        <label className="text-xs text-muted-foreground">Licence expires
+          <Input type="date" value={facts.licenceExpiresOn} onChange={(e) => setLicenceExpiresOn(e.target.value)} data-testid="input-rent-licence-expires" />
+        </label>
+      </div>
       <ObjectUploader maxNumberOfFiles={1} onGetUploadParameters={uploadTarget} onComplete={(r) => { const u = r.successful[0]?.uploadURL; if (u) setLicenceImageUrl(new URL(u, window.location.origin).pathname); }} buttonClassName="w-full border rounded-md py-2 text-sm">
-        <span data-testid="button-rent-upload-licence">{licenceImageUrl ? "Licence photo added ✓" : "Add a photo of your licence"}</span>
+        <span data-testid="button-rent-upload-licence">{licenceImageUrl ? "Licence photo added ✓" : onFile?.licenceImageUrl ? "Licence photo on file ✓ (tap to replace)" : "Add a photo of your licence"}</span>
       </ObjectUploader>
-      <Button className="w-full" disabled={!q.available || !licenceNumber || !licenceImageUrl || request.isPending} onClick={() => request.mutate()} data-testid="button-request-rental">
+      <Button className="w-full" disabled={!q.available || !facts.licenceNumber || !facts.licenceImageUrl || !facts.dateOfBirth || !facts.licenceIssuedOn || !facts.licenceExpiresOn || (onFile?.recordStatus === "refused" && !licenceNumber) || request.isPending} onClick={() => request.mutate()} data-testid="button-request-rental">
         {request.isPending ? "Requesting…" : "Request this rental"}
       </Button>
     </div>

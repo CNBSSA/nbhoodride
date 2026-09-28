@@ -1609,7 +1609,8 @@ export const rentalCars = pgTable("rental_cars", {
   vin: varchar("vin"),
   photos: jsonb("photos").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
   dailyPrice: decimal("daily_price", { precision: 8, scale: 2 }).notNull(),
-  deposit: decimal("deposit", { precision: 8, scale: 2 }).notNull().default("0.00"),
+  /** Between $100 and $1,000, $250 unless the lister sets it (shared/rental.ts depositProblem). */
+  deposit: decimal("deposit", { precision: 8, scale: 2 }).notNull().default("250.00"),
   milesPerDay: integer("miles_per_day").notNull().default(0),
   extraMileFee: decimal("extra_mile_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
   lateHourFee: decimal("late_hour_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
@@ -1649,6 +1650,8 @@ export const rentalBookings = pgTable("rental_bookings", {
   endsAt: timestamp("ends_at").notNull(),
   days: integer("days").notNull(),
   dailyPrice: decimal("daily_price", { precision: 8, scale: 2 }).notNull(),
+  /** Under 25 on the first day: $25 a day, included in rental_total, PG Ride's alone. */
+  youngRenterFee: decimal("young_renter_fee", { precision: 8, scale: 2 }).notNull().default("0.00"),
   rentalTotal: decimal("rental_total", { precision: 10, scale: 2 }).notNull(),
   deposit: decimal("deposit", { precision: 8, scale: 2 }).notNull(),
   milesAllowed: integer("miles_allowed").notNull().default(0),
@@ -1719,6 +1722,13 @@ export const driverCarAssignments = pgTable("driver_car_assignments", {
   cancelReason: text("cancel_reason"),
   /** When ops were paged that the car is overdue (once per assignment). */
   overduePagedAt: timestamp("overdue_paged_at"),
+  /** The driver's written agreement that rent is taken from earnings first (shared/rental.ts RENT_FROM_EARNINGS_SENTENCE); null = card only. */
+  rentFromEarningsAgreedAt: timestamp("rent_from_earnings_agreed_at"),
+  /** Kept past the end of the weeks: hours started and their charge (weekly rent / 168 each). */
+  lateHours: integer("late_hours"),
+  lateCharge: decimal("late_charge", { precision: 8, scale: 2 }),
+  /** Of the damage and late charge, what was taken from the driver's earnings (the card is charged the rest). */
+  returnFromEarnings: decimal("return_from_earnings", { precision: 8, scale: 2 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -1734,8 +1744,10 @@ export const driverRentCharges = pgTable("driver_rent_charges", {
   assignmentId: varchar("assignment_id").notNull().references(() => driverCarAssignments.id),
   periodStart: timestamp("period_start").notNull(),
   amount: decimal("amount", { precision: 8, scale: 2 }).notNull(),
-  /** charging | paid | failed */
+  /** charging | paid | failed | refunded */
   status: varchar("status").notNull().default("charging"),
+  /** Taken from the driver's earnings, once, before the card (null = not decided yet). */
+  fromEarnings: decimal("from_earnings", { precision: 8, scale: 2 }),
   stripePaymentIntentId: varchar("stripe_payment_intent_id"),
   error: text("error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1755,6 +1767,27 @@ export const rentalOwnerProfiles = pgTable("rental_owner_profiles", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 export type RentalOwnerProfile = typeof rentalOwnerProfiles.$inferSelect;
+
+// A renter's facts and their driving-record check (industry rules adopted
+// 2026-09-28; shared/rental.ts renterProblems, drivingRecordCurrent). One row
+// per person, kept between rentals; a changed licence sends the check back to
+// pending. Only PG Ride records a check's result.
+export const rentalRenters = pgTable("rental_renters", {
+  userId: varchar("user_id").primaryKey().references(() => users.id),
+  dateOfBirth: varchar("date_of_birth", { length: 10 }).notNull(),
+  licenceNumber: varchar("licence_number").notNull(),
+  licenceIssuedOn: varchar("licence_issued_on", { length: 10 }).notNull(),
+  licenceExpiresOn: varchar("licence_expires_on", { length: 10 }).notNull(),
+  licenceImageUrl: varchar("licence_image_url").notNull(),
+  /** pending | cleared | refused */
+  recordStatus: varchar("record_status").notNull().default("pending"),
+  recordNote: text("record_note"),
+  recordCheckedAt: timestamp("record_checked_at"),
+  recordCheckedBy: varchar("record_checked_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export type RentalRenter = typeof rentalRenters.$inferSelect;
 
 export const eventTrackingRelations = relations(eventTracking, ({ one }) => ({
   user: one(users, {

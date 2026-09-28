@@ -184,3 +184,91 @@ describe("overdue", () => {
     expect(minutesOverdue(new Date(now.getTime() + 90_000), now)).toBe(0);
   });
 });
+
+
+import {
+  renterProblems, ageOn, youngRenterFee, drivingRecordCurrent, depositProblem, driverLateFee, splitFromEarnings,
+  DEPOSIT_MIN, DEPOSIT_MAX,
+} from "./rental";
+
+describe("renter rules (industry practice, 2026-09-28)", () => {
+  const start = new Date("2026-10-01T10:00:00Z");
+  const end = new Date("2026-10-03T10:00:00Z");
+  const adult = { dateOfBirth: "1990-05-01", licenceIssuedOn: "2010-06-01", licenceExpiresOn: "2030-05-01" };
+  it("a 36-year-old with a 16-year licence may rent", () => {
+    expect(renterProblems(adult, start, end)).toEqual([]);
+  });
+  it("names every missing fact", () => {
+    expect(renterProblems({ dateOfBirth: "", licenceIssuedOn: null, licenceExpiresOn: "x" }, start, end)).toHaveLength(3);
+  });
+  it("21 on the first day, not the day before", () => {
+    expect(renterProblems({ ...adult, dateOfBirth: "2005-10-01", licenceIssuedOn: "2022-01-01" }, start, end)).toEqual([]);
+    expect(renterProblems({ ...adult, dateOfBirth: "2005-10-02", licenceIssuedOn: "2022-01-01" }, start, end).join(" ")).toMatch(/at least 21/);
+  });
+  it("under 25 needs two years of licence; 25 and over, one", () => {
+    expect(renterProblems({ ...adult, dateOfBirth: "2003-01-01", licenceIssuedOn: "2025-06-01" }, start, end).join(" ")).toMatch(/Under 25.*2 years/);
+    expect(renterProblems({ ...adult, dateOfBirth: "2003-01-01", licenceIssuedOn: "2024-09-30" }, start, end)).toEqual([]);
+    expect(renterProblems({ ...adult, licenceIssuedOn: "2025-10-02" }, start, end).join(" ")).toMatch(/at least 1 year/);
+    expect(renterProblems({ ...adult, licenceIssuedOn: "2025-10-01" }, start, end)).toEqual([]);
+  });
+  it("a licence has to last through the return day", () => {
+    expect(renterProblems({ ...adult, licenceExpiresOn: "2026-10-03" }, start, end)).toEqual([]);
+    expect(renterProblems({ ...adult, licenceExpiresOn: "2026-10-02" }, start, end).join(" ")).toMatch(/expires before/);
+  });
+  it("a birth date after the rental, or a licence before birth, is refused", () => {
+    expect(renterProblems({ ...adult, dateOfBirth: "2030-01-01" }, start, end)).toEqual(["Check your date of birth."]);
+    expect(renterProblems({ ...adult, licenceIssuedOn: "1980-01-01" }, start, end)).toEqual(["Check the date your licence was issued."]);
+  });
+  it("the young-renter fee is $25 a day under 25 and nothing from 25", () => {
+    expect(ageOn("2002-10-02", start)).toBe(23);
+    expect(youngRenterFee(24, 3)).toBe(75);
+    expect(youngRenterFee(25, 3)).toBe(0);
+    expect(youngRenterFee(null, 3)).toBe(0);
+  });
+  it("a young renter's quote carries the fee in the total", () => {
+    const q = quoteRental({ dailyPrice: "40", deposit: "250", milesPerDay: 0 }, "2026-10-01T10:00:00Z", "2026-10-03T10:00:00Z", now, 22);
+    expect(q.ok && q.quote.youngRenterFee).toBe(50);
+    expect(q.ok && q.quote.rentalTotal).toBe(130);
+  });
+  it("a driving-record clearance lasts a year, and only a clearance counts", () => {
+    const checked = new Date("2026-01-01T00:00:00Z");
+    expect(drivingRecordCurrent({ recordStatus: "cleared", recordCheckedAt: checked }, start)).toBe(true);
+    expect(drivingRecordCurrent({ recordStatus: "cleared", recordCheckedAt: checked }, new Date("2027-01-02T00:00:00Z"))).toBe(false);
+    expect(drivingRecordCurrent({ recordStatus: "pending", recordCheckedAt: null }, start)).toBe(false);
+    expect(drivingRecordCurrent({ recordStatus: "refused", recordCheckedAt: checked }, start)).toBe(false);
+    expect(drivingRecordCurrent(null, start)).toBe(false);
+  });
+});
+
+describe("deposit limits", () => {
+  it("between $100 and $1,000", () => {
+    expect(depositProblem(DEPOSIT_MIN)).toBeNull();
+    expect(depositProblem(DEPOSIT_MAX)).toBeNull();
+    expect(depositProblem(99.99)).toMatch(/between \$100\.00 and \$1000\.00/);
+    expect(depositProblem(1000.01)).toMatch(/between/);
+    expect(depositProblem("abc")).toMatch(/amount/);
+  });
+  it("a car whose deposit is out of range cannot list", () => {
+    expect(qualificationProblems({ ...good, deposit: "0.00" }, now).join(" ")).toMatch(/Deposit has to be between/);
+  });
+});
+
+describe("driver late fee and earnings", () => {
+  it("every hour started past the end of the weeks, at the weekly rent / 168", () => {
+    const ends = new Date("2026-10-01T10:00:00Z");
+    expect(driverLateFee(336, ends, new Date("2026-10-01T10:00:00Z"))).toEqual({ lateHours: 0, hourlyRate: 2, lateCharge: 0 });
+    expect(driverLateFee(336, ends, new Date("2026-10-01T10:01:00Z"))).toEqual({ lateHours: 1, hourlyRate: 2, lateCharge: 2 });
+    expect(driverLateFee(336, ends, new Date("2026-10-01T13:30:00Z"))).toEqual({ lateHours: 4, hourlyRate: 2, lateCharge: 8 });
+    expect(driverLateFee(260, ends, new Date("2026-10-01T12:00:00Z")).hourlyRate).toBe(1.55);
+  });
+  it("earnings first, the card for the rest", () => {
+    expect(splitFromEarnings(260, 100)).toEqual({ fromEarnings: 100, fromCard: 160 });
+    expect(splitFromEarnings(260, 500)).toEqual({ fromEarnings: 260, fromCard: 0 });
+    expect(splitFromEarnings(260, "-5")).toEqual({ fromEarnings: 0, fromCard: 260 });
+  });
+  it("the young-renter fee is PG Ride's alone in a private owner's split", () => {
+    // $130 collected, $50 of it the young-renter fee: the owner has 90% of $80.
+    expect(ownerSplit(130, null, 50)).toEqual({ collected: 130, platformShare: 58, ownerShare: 72 });
+    expect(ownerSplit(130, null)).toEqual({ collected: 130, platformShare: 13, ownerShare: 117 });
+  });
+});

@@ -11,8 +11,8 @@
  */
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../db";
-import { rentalBookings, rentalCars, rentalOwnerProfiles, type RentalBooking } from "@shared/schema";
-import { OWNER_PAYOUT_METHODS, money, ownerSplit, qualificationProblems } from "@shared/rental";
+import { rentalBookings, rentalCars, rentalOwnerProfiles, rentalRenters, type RentalBooking } from "@shared/schema";
+import { OWNER_PAYOUT_METHODS, drivingRecordCurrent, money, ownerSplit, qualificationProblems } from "@shared/rental";
 import { storage } from "../storage";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
 import { riderBookingBlock } from "../rideWorkflowService";
@@ -81,8 +81,11 @@ export async function listOwnerBookings(ownerId: string) {
   const out = [];
   for (const { b, c } of rows) {
     const renter = await storage.getUser(b.renterId);
+    const [facts] = await db.select({ recordStatus: rentalRenters.recordStatus, recordCheckedAt: rentalRenters.recordCheckedAt }).from(rentalRenters).where(eq(rentalRenters.userId, b.renterId));
     const { chargeIntentId, depositIntentId, beyondDepositIntentId, ...rest } = b;
-    out.push({ ...rest, renter: { firstName: renter?.firstName ?? "Renter" }, car: { id: c.id, make: c.make, model: c.model, year: c.year, licensePlate: c.licensePlate } });
+    // The owner is told whether PG Ride has cleared the renter's driving record, never what is on it.
+    const drivingRecord = drivingRecordCurrent(facts, b.startsAt) ? "cleared" : facts?.recordStatus === "refused" ? "refused" : "being checked";
+    out.push({ ...rest, drivingRecord, renter: { firstName: renter?.firstName ?? "Renter" }, car: { id: c.id, make: c.make, model: c.model, year: c.year, licensePlate: c.licensePlate } });
   }
   return out;
 }
@@ -132,7 +135,7 @@ export async function creditOwnerForClosedRental(bookingId: string): Promise<num
   const [row] = await db.select({ b: rentalBookings, c: rentalCars }).from(rentalBookings)
     .innerJoin(rentalCars, eq(rentalCars.id, rentalBookings.carId)).where(eq(rentalBookings.id, bookingId));
   if (!row || row.c.ownerKind !== "private" || !row.c.ownerUserId || row.b.status !== "closed" || row.b.ownerCreditedAt) return 0;
-  const split = ownerSplit(row.b.rentalTotal, row.b.settlement as any);
+  const split = ownerSplit(row.b.rentalTotal, row.b.settlement as any, row.b.youngRenterFee);
   const [stamped] = await db.update(rentalBookings).set({ ownerCreditedAt: new Date(), ownerShare: split.ownerShare.toFixed(2), platformShare: split.platformShare.toFixed(2) })
     .where(and(eq(rentalBookings.id, bookingId), isNull(rentalBookings.ownerCreditedAt))).returning({ id: rentalBookings.id });
   if (!stamped) return 0;
