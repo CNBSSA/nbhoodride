@@ -169,6 +169,7 @@ import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
 import { registerCommercialRoutes } from "./commercial/routes";
 import { registerRentalRoutes } from "./rental/routes";
 import { registerFleetRoutes } from "./fleet/routes";
+import { PARCEL_REFUSAL, isParcelAsk, parcelRefusalText } from "@shared/parcelAsk";
 import { materializeAllStandingOrders } from "./commercial/standingOrders";
 import { runWeeklyBilling } from "./commercial/billing";
 import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
@@ -8981,6 +8982,7 @@ Platform facts — state these accurately and never invent policies:
 - Coworker shared rides: one person schedules the ride and shares its PG-code; coworkers join by entering the code, and everyone in the group gets 30% off. Any driver can pick up the trip.
 - Riders pay with the card saved in the app; a payment card on file is required to book, and the card is charged when the ride completes.
 - Fares are shown up front, calculated from distance and time only — there is no surge pricing.
+- Parcels and deliveries: PG Ride carries parcels for businesses only. A shop, office or clinic sends parcels from its own business account (it opens one in the app under "Open a business account"), billed weekly, with proof of delivery. A rider cannot send a package, and you must never offer to book a ride to carry one.
 If you're unsure of an answer, or it needs account-specific action you can't perform, say so and point the user to support (text +1 571-245-8187 or email thrynovainsights@gmail.com).
 
 FORMATTING: Your replies render as plain text in a small phone chat window — markdown is NOT rendered. Never use asterisks, hash headings, bullet or numbered list markers, or any other markup. Write short, friendly plain-text paragraphs. Keep responses brief but informative.`;
@@ -9417,6 +9419,12 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
       }
       const parsed = parseMobilityUtterance(parsedBody.data.utterance);
       await recordMobilityIntent(storage, userId, parsed);
+      // A parcel ask is answered with the one honest answer and the business
+      // door; no destination is resolved, so nothing can book from it.
+      if (parsed.intentType === "parcel") {
+        const autonomyLevel = await storage.getUserAutonomyLevel(userId);
+        return res.json({ parsed, refusal: PARCEL_REFUSAL, autonomyLevel });
+      }
       const resolved = await resolveIntentDestination(storage, userId, parsed);
       const autonomyLevel = await storage.getUserAutonomyLevel(userId);
       res.json({ parsed, ...resolved, autonomyLevel });
@@ -9690,6 +9698,20 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
       }
 
       await storage.createChatMessage(id, "user", content);
+
+      // A parcel ask gets the one honest answer, deterministically, before
+      // any model is asked: the answer and the business door, never a ride
+      // (shared/parcelAsk.ts).
+      if (isParcelAsk(content)) {
+        const answer = parcelRefusalText(resolveAppUrl(`https://${req.get("host")}`));
+        await storage.createChatMessage(id, "assistant", answer);
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+        res.write(`data: ${JSON.stringify({ content: answer })}\n\n`);
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        return res.end();
+      }
 
       const existingMessages = await storage.getChatMessages(id);
       const personalizedPrompt = await buildPersonalizedPrompt(userId);
