@@ -79,7 +79,7 @@ export async function resolveIntentDestination(
   storage: IStorage,
   userId: string,
   parsed: ParsedMobilityIntent,
-): Promise<{ destinationAddress?: string; pickup?: { lat: number; lng: number; address: string }; destination?: { lat: number; lng: number; address: string } }> {
+): Promise<{ destinationAddress?: string; pickup?: { lat: number; lng: number; address: string }; destination?: { lat: number; lng: number; address: string }; source?: "template" | "last_pickup"; reason?: "no_home" }> {
   if (parsed.intentType === "repeat_last") {
     const last = await storage.getLastCompletedRideForUser(userId);
     if (last?.destinationLocation && last?.pickupLocation) {
@@ -98,13 +98,16 @@ export async function resolveIntentDestination(
         destinationAddress: home.destination.address,
         destination: home.destination,
         pickup: home.pickup ?? undefined,
+        source: "template" as const,
       };
     }
+    // No saved home: where the last ride started stands in, and the app says so.
     const last = await storage.getLastCompletedRideForUser(userId);
     if (last?.pickupLocation) {
       const pickup = last.pickupLocation as { lat: number; lng: number; address: string };
-      return { destinationAddress: pickup.address, destination: pickup };
+      return { destinationAddress: pickup.address, destination: pickup, source: "last_pickup" as const };
     }
+    return { reason: "no_home" as const };
   }
 
   if (parsed.destinationAddress) {
