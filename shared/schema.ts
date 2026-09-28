@@ -182,6 +182,8 @@ export const vehicles = pgTable("vehicles", {
   vehicleType: varchar("vehicle_type").default("standard"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  /** Set when this row mirrors a PG Ride fleet car assigned to the driver (server/rental/drivers.ts). */
+  rentalCarId: varchar("rental_car_id"),
 });
 
 // Ride status enum
@@ -1587,6 +1589,172 @@ export const safetyAlerts = pgTable("safety_alerts", {
   resolvedAt: timestamp("resolved_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+// ── Car rental (PG Ride Car Rental Master Plan; rules in shared/rental.ts,
+// server in server/rental/, behind RENTAL_ENABLED). Phase 1 lists PG Ride's
+// own fleet; owner_kind and owner_user_id are there for private owners in
+// phase 2. Only fleet cars are ever assigned to drivers (Festus, 2026-09-27).
+export const rentalCars = pgTable("rental_cars", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** fleet | private */
+  ownerKind: varchar("owner_kind").notNull().default("fleet"),
+  ownerUserId: varchar("owner_user_id").references(() => users.id),
+  make: varchar("make").notNull(),
+  model: varchar("model").notNull(),
+  year: integer("year").notNull(),
+  color: varchar("color").notNull(),
+  seats: integer("seats").notNull().default(5),
+  vehicleType: varchar("vehicle_type").notNull().default("standard"),
+  licensePlate: varchar("license_plate").notNull(),
+  vin: varchar("vin"),
+  photos: jsonb("photos").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  dailyPrice: decimal("daily_price", { precision: 8, scale: 2 }).notNull(),
+  deposit: decimal("deposit", { precision: 8, scale: 2 }).notNull().default("0.00"),
+  milesPerDay: integer("miles_per_day").notNull().default(0),
+  extraMileFee: decimal("extra_mile_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  lateHourFee: decimal("late_hour_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** Weekly rent for a PG Ride driver; null = not offered to drivers. Only fleet cars are ever offered. */
+  weeklyDriverRent: decimal("weekly_driver_rent", { precision: 8, scale: 2 }),
+  pickupLocation: jsonb("pickup_location").$type<{ lat: number; lng: number; address: string }>(),
+  inspectionExpires: timestamp("inspection_expires"),
+  registrationExpires: timestamp("registration_expires"),
+  insuranceExpires: timestamp("insurance_expires"),
+  /** The engine cut-off (Festus, 2026-09-27): when the desk recorded it cut off, by whom, and when restored. */
+  engineCutOffAt: timestamp("engine_cut_off_at"),
+  engineCutOffBy: varchar("engine_cut_off_by"),
+  engineRestoredAt: timestamp("engine_restored_at"),
+  engineRestoredBy: varchar("engine_restored_by"),
+  /** A private owner's papers (phase 2): photos or PDFs in PG Ride's own store. */
+  registrationDocUrl: varchar("registration_doc_url"),
+  insuranceDocUrl: varchar("insurance_doc_url"),
+  inspectionDocUrl: varchar("inspection_doc_url"),
+  ownershipDocUrl: varchar("ownership_doc_url"),
+  /** A private owner's car is checked by PG Ride before it lists: pending | approved | rejected. Fleet cars: approved. */
+  reviewStatus: varchar("review_status").notNull().default("approved"),
+  reviewNote: text("review_note"),
+  /** hidden | listed — listed only while shared/rental.ts qualificationProblems is empty. */
+  status: varchar("status").notNull().default("hidden"),
+  hiddenReason: text("hidden_reason"),
+  createdBy: varchar("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export type RentalCar = typeof rentalCars.$inferSelect;
+
+export const rentalBookings = pgTable("rental_bookings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  carId: varchar("car_id").notNull().references(() => rentalCars.id),
+  renterId: varchar("renter_id").notNull().references(() => users.id),
+  startsAt: timestamp("starts_at").notNull(),
+  endsAt: timestamp("ends_at").notNull(),
+  days: integer("days").notNull(),
+  dailyPrice: decimal("daily_price", { precision: 8, scale: 2 }).notNull(),
+  rentalTotal: decimal("rental_total", { precision: 10, scale: 2 }).notNull(),
+  deposit: decimal("deposit", { precision: 8, scale: 2 }).notNull(),
+  milesAllowed: integer("miles_allowed").notNull().default(0),
+  extraMileFee: decimal("extra_mile_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  lateHourFee: decimal("late_hour_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** requested | confirmed | collected | returned | closed | declined | cancelled */
+  status: varchar("status").notNull().default("requested"),
+  licenceNumber: varchar("licence_number").notNull(),
+  licenceImageUrl: varchar("licence_image_url").notNull(),
+  collectedAt: timestamp("collected_at"),
+  collectOdometer: integer("collect_odometer"),
+  collectPhotos: jsonb("collect_photos").$type<string[]>(),
+  returnedAt: timestamp("returned_at"),
+  returnOdometer: integer("return_odometer"),
+  returnPhotos: jsonb("return_photos").$type<string[]>(),
+  /** The figures the return was settled on (shared/rental.ts settleReturn). */
+  settlement: jsonb("settlement").$type<Record<string, number>>(),
+  damageNote: text("damage_note"),
+  chargeIntentId: varchar("charge_intent_id"),
+  depositIntentId: varchar("deposit_intent_id"),
+  beyondDepositIntentId: varchar("beyond_deposit_intent_id"),
+  /** none | charged | settled | failed | refunded */
+  paymentStatus: varchar("payment_status").notNull().default("none"),
+  paymentError: text("payment_error"),
+  cancelReason: text("cancel_reason"),
+  /** When ops were paged that the car is overdue (once per rental). */
+  overduePagedAt: timestamp("overdue_paged_at"),
+  /** A private owner's car: what the rental collected, the owner's 90% and PG Ride's 10%, fixed at close. */
+  ownerShare: decimal("owner_share", { precision: 10, scale: 2 }),
+  platformShare: decimal("platform_share", { precision: 10, scale: 2 }),
+  ownerCreditedAt: timestamp("owner_credited_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_rental_bookings_car").on(table.carId, table.startsAt),
+  index("idx_rental_bookings_renter").on(table.renterId),
+]);
+export type RentalBooking = typeof rentalBookings.$inferSelect;
+
+// A PG Ride fleet car assigned to a driver to earn with, by the week
+// (Car Rental Master Plan, phase 3; only fleet cars, Festus 2026-09-27).
+export const driverCarAssignments = pgTable("driver_car_assignments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  carId: varchar("car_id").notNull().references(() => rentalCars.id),
+  driverUserId: varchar("driver_user_id").notNull().references(() => users.id),
+  /** requested | assigned | active | ended | declined | cancelled */
+  status: varchar("status").notNull().default("requested"),
+  startsAt: timestamp("starts_at").notNull(),
+  weeks: integer("weeks").notNull(),
+  endsAt: timestamp("ends_at").notNull(),
+  weeklyRent: decimal("weekly_rent", { precision: 8, scale: 2 }).notNull(),
+  /** The vehicles row that mirrors the car while the driver has it. */
+  vehicleId: varchar("vehicle_id"),
+  collectedAt: timestamp("collected_at"),
+  collectOdometer: integer("collect_odometer"),
+  collectPhotos: jsonb("collect_photos").$type<string[]>(),
+  returnedAt: timestamp("returned_at"),
+  returnOdometer: integer("return_odometer"),
+  returnPhotos: jsonb("return_photos").$type<string[]>(),
+  damageAmount: decimal("damage_amount", { precision: 8, scale: 2 }),
+  damageNote: text("damage_note"),
+  damageIntentId: varchar("damage_intent_id"),
+  /** Rent is paid up to here; the driver may drive the car until then. */
+  paidThrough: timestamp("paid_through"),
+  /** none | paid | due | failed */
+  paymentStatus: varchar("payment_status").notNull().default("none"),
+  paymentError: text("payment_error"),
+  cancelReason: text("cancel_reason"),
+  /** When ops were paged that the car is overdue (once per assignment). */
+  overduePagedAt: timestamp("overdue_paged_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_driver_car_assignments_car").on(table.carId, table.startsAt),
+  index("idx_driver_car_assignments_driver").on(table.driverUserId),
+]);
+export type DriverCarAssignment = typeof driverCarAssignments.$inferSelect;
+
+// One row per week of rent: written before the card is charged, so a week is
+// charged at most once however often the sweep or the desk asks.
+export const driverRentCharges = pgTable("driver_rent_charges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  assignmentId: varchar("assignment_id").notNull().references(() => driverCarAssignments.id),
+  periodStart: timestamp("period_start").notNull(),
+  amount: decimal("amount", { precision: 8, scale: 2 }).notNull(),
+  /** charging | paid | failed */
+  status: varchar("status").notNull().default("charging"),
+  stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("uq_driver_rent_charge_period").on(table.assignmentId, table.periodStart),
+]);
+export type DriverRentCharge = typeof driverRentCharges.$inferSelect;
+
+// Where a private car owner is paid (phase 2). Owners are paid weekly by the
+// Friday payday, as drivers are (Festus, 2026-09-27).
+export const rentalOwnerProfiles = pgTable("rental_owner_profiles", {
+  userId: varchar("user_id").primaryKey().references(() => users.id),
+  payoutMethod: varchar("payout_method").notNull(),
+  payoutDetails: varchar("payout_details").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export type RentalOwnerProfile = typeof rentalOwnerProfiles.$inferSelect;
 
 export const eventTrackingRelations = relations(eventTracking, ({ one }) => ({
   user: one(users, {

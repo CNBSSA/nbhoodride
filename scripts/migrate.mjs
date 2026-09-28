@@ -1477,6 +1477,143 @@ DO $$ BEGIN
       ADD CONSTRAINT driver_profiles_user_id_unique UNIQUE (user_id);
   END IF;
 END $$;
+
+-- ── Car rental (shared/rental.ts, server/rental/, behind RENTAL_ENABLED) ──
+CREATE TABLE IF NOT EXISTS rental_cars (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_kind VARCHAR NOT NULL DEFAULT 'fleet',
+  owner_user_id VARCHAR REFERENCES users(id),
+  make VARCHAR NOT NULL,
+  model VARCHAR NOT NULL,
+  year INTEGER NOT NULL,
+  color VARCHAR NOT NULL,
+  seats INTEGER NOT NULL DEFAULT 5,
+  vehicle_type VARCHAR NOT NULL DEFAULT 'standard',
+  license_plate VARCHAR NOT NULL,
+  vin VARCHAR,
+  photos JSONB NOT NULL DEFAULT '[]'::jsonb,
+  daily_price DECIMAL(8,2) NOT NULL,
+  deposit DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+  miles_per_day INTEGER NOT NULL DEFAULT 0,
+  extra_mile_fee DECIMAL(6,2) NOT NULL DEFAULT 0.00,
+  late_hour_fee DECIMAL(6,2) NOT NULL DEFAULT 0.00,
+  weekly_driver_rent DECIMAL(8,2),
+  pickup_location JSONB,
+  inspection_expires TIMESTAMP,
+  registration_expires TIMESTAMP,
+  insurance_expires TIMESTAMP,
+  status VARCHAR NOT NULL DEFAULT 'hidden',
+  hidden_reason TEXT,
+  created_by VARCHAR REFERENCES users(id),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS rental_bookings (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  car_id VARCHAR NOT NULL REFERENCES rental_cars(id),
+  renter_id VARCHAR NOT NULL REFERENCES users(id),
+  starts_at TIMESTAMP NOT NULL,
+  ends_at TIMESTAMP NOT NULL,
+  days INTEGER NOT NULL,
+  daily_price DECIMAL(8,2) NOT NULL,
+  rental_total DECIMAL(10,2) NOT NULL,
+  deposit DECIMAL(8,2) NOT NULL,
+  miles_allowed INTEGER NOT NULL DEFAULT 0,
+  extra_mile_fee DECIMAL(6,2) NOT NULL DEFAULT 0.00,
+  late_hour_fee DECIMAL(6,2) NOT NULL DEFAULT 0.00,
+  status VARCHAR NOT NULL DEFAULT 'requested',
+  licence_number VARCHAR NOT NULL,
+  licence_image_url VARCHAR NOT NULL,
+  collected_at TIMESTAMP,
+  collect_odometer INTEGER,
+  collect_photos JSONB,
+  returned_at TIMESTAMP,
+  return_odometer INTEGER,
+  return_photos JSONB,
+  settlement JSONB,
+  damage_note TEXT,
+  charge_intent_id VARCHAR,
+  deposit_intent_id VARCHAR,
+  beyond_deposit_intent_id VARCHAR,
+  payment_status VARCHAR NOT NULL DEFAULT 'none',
+  payment_error TEXT,
+  cancel_reason TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rental_bookings_car ON rental_bookings (car_id, starts_at);
+CREATE INDEX IF NOT EXISTS idx_rental_bookings_renter ON rental_bookings (renter_id);
+
+-- ── Car rental, phase 3: PG Ride fleet cars assigned to drivers ──
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS weekly_driver_rent DECIMAL(8,2);
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS rental_car_id VARCHAR;
+CREATE TABLE IF NOT EXISTS driver_car_assignments (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  car_id VARCHAR NOT NULL REFERENCES rental_cars(id),
+  driver_user_id VARCHAR NOT NULL REFERENCES users(id),
+  status VARCHAR NOT NULL DEFAULT 'requested',
+  starts_at TIMESTAMP NOT NULL,
+  weeks INTEGER NOT NULL,
+  ends_at TIMESTAMP NOT NULL,
+  weekly_rent DECIMAL(8,2) NOT NULL,
+  vehicle_id VARCHAR,
+  collected_at TIMESTAMP,
+  collect_odometer INTEGER,
+  collect_photos JSONB,
+  returned_at TIMESTAMP,
+  return_odometer INTEGER,
+  return_photos JSONB,
+  damage_amount DECIMAL(8,2),
+  damage_note TEXT,
+  damage_intent_id VARCHAR,
+  paid_through TIMESTAMP,
+  payment_status VARCHAR NOT NULL DEFAULT 'none',
+  payment_error TEXT,
+  cancel_reason TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_driver_car_assignments_car ON driver_car_assignments (car_id, starts_at);
+CREATE INDEX IF NOT EXISTS idx_driver_car_assignments_driver ON driver_car_assignments (driver_user_id);
+CREATE TABLE IF NOT EXISTS driver_rent_charges (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  assignment_id VARCHAR NOT NULL REFERENCES driver_car_assignments(id),
+  period_start TIMESTAMP NOT NULL,
+  amount DECIMAL(8,2) NOT NULL,
+  status VARCHAR NOT NULL DEFAULT 'charging',
+  stripe_payment_intent_id VARCHAR,
+  error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_driver_rent_charge_period ON driver_rent_charges (assignment_id, period_start);
+
+-- ── Car rental, phase 2: private owners list their own cars ──
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS registration_doc_url VARCHAR;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS insurance_doc_url VARCHAR;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS inspection_doc_url VARCHAR;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS ownership_doc_url VARCHAR;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS review_status VARCHAR NOT NULL DEFAULT 'approved';
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS review_note TEXT;
+ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS owner_share DECIMAL(10,2);
+ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS platform_share DECIMAL(10,2);
+ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS owner_credited_at TIMESTAMP;
+CREATE TABLE IF NOT EXISTS rental_owner_profiles (
+  user_id VARCHAR PRIMARY KEY REFERENCES users(id),
+  payout_method VARCHAR NOT NULL,
+  payout_details VARCHAR NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- ── Car rental: overdue cars and the engine cut-off (Festus 2026-09-27) ──
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_cut_off_at TIMESTAMP;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_cut_off_by VARCHAR;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_restored_at TIMESTAMP;
+ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_restored_by VARCHAR;
+ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS overdue_paged_at TIMESTAMP;
+ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS overdue_paged_at TIMESTAMP;
 `;
 
 async function migrate() {
