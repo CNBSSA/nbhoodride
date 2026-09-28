@@ -382,6 +382,11 @@
     "button-fleet-apply": "disabled until the application's fields are filled, and sending one creates a fleet; journey 35 applies over the API",
     "button-approve-fleet-*": "inside a pending fleet application's detail in Admin, Organizations, which the audit does not open; journey 35 approves over the API",
     "button-sendback-fleet-car-*": "disabled until a note to the fleet is typed; journey 36 sends a car back over the API",
-    "button-fleet-car-save": "disabled until the car's make, model, year, colour and plate are typed; journey 36 adds a car over the API"
+    "button-fleet-car-save": "disabled until the car's make, model, year, colour and plate are typed; journey 36 adds a car over the API",
+    "button-fleet-car-photos": "the photo picker inside the fleet desk's Add a car form (an uploader, like button-owner-photos); journey 36 uploads over the API",
+    "button-fleet-car-doc-registration": "the registration upload inside the fleet desk's Add a car form (an uploader, like button-owner-doc-registration); journey 36 uploads over the API",
+    "button-fleet-car-doc-insurance": "the insurance upload inside the fleet desk's Add a car form (an uploader, like button-owner-doc-insurance); journey 36 uploads over the API",
+    "button-fleet-car-doc-inspection": "the inspection upload inside the fleet desk's Add a car form (an uploader, like button-owner-doc-inspection); journey 36 uploads over the API",
+    "button-approve-fleet-car-*": "inside a fleet's detail in Admin, Organizations, which the audit does not open; journey 36 approves a car over the API"
   }
 }
