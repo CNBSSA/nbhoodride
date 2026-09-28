@@ -1533,7 +1533,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const mayRental = featureFlags.rentalEnabled
           ? await import("./rental/cars").then((m) => m.rentalPhotoVisibleTo(userId, obj.id)).catch(() => false)
           : false;
-        if (!mayRental && !(await userMaySeeProofPhoto(userId, obj.id).catch(() => false))) {
+        // A fleet car's photos and papers are for the fleet's own desk.
+        const mayFleet = !mayRental && featureFlags.fleetEnabled
+          ? await import("./fleet/cars").then((m) => m.fleetPhotoVisibleTo(userId, obj.id)).catch(() => false)
+          : false;
+        if (!mayRental && !mayFleet && !(await userMaySeeProofPhoto(userId, obj.id).catch(() => false))) {
           return res.status(403).json({ message: "Not allowed" });
         }
       }
@@ -11582,6 +11586,11 @@ Generate the FAQ list.`;
       // ── Car rental: hide a car the hour a document lapses; warn ahead once a day ──
       if (featureFlags.rentalEnabled && now.getMinutes() === 23) {
         import("./rental/sweep").then((m) => m.runRentalSweep(now, { warnings: now.getUTCHours() === 13 })).catch((err) => console.error("rental sweep failed:", err));
+      }
+
+      // ── Fleet cars: park a car the hour a paper lapses; warn ahead once a day ──
+      if (featureFlags.fleetEnabled && now.getMinutes() === 29) {
+        import("./fleet/cars").then((m) => m.runFleetCarSweep(now, { warnings: now.getUTCHours() === 13 })).catch((err) => console.error("fleet car sweep failed:", err));
       }
 
       // ── Ride-risk watch: page ops before the rider finds out ──

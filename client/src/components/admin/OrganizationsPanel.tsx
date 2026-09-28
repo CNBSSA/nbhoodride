@@ -20,6 +20,7 @@ import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { CATEGORY_LABELS, COMMERCIAL_CATEGORIES, DEFAULT_FACILITY_FEE, currentMonthKey, formatJobNumber, rolesForCategory, type CommercialCategory, type OrgRole } from "@shared/commercial";
 import { BUSINESS_TYPE_LABELS, FLEET_LABEL, maskEin, type BusinessType } from "@shared/fleet";
+import { FleetCarsReview } from "@/components/admin/FleetCarsReview";
 import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import { VEHICLE_TYPES, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 
@@ -166,6 +167,7 @@ function OrganizationDetail({ id }: { id: string }) {
     return (
       <div className="space-y-4" data-testid={`organization-detail-${org.id}`}>
         <FleetReviewCard org={org} onChanged={refresh} onToggle={() => toggleStatus.mutate()} toggling={toggleStatus.isPending} />
+        {org.status !== "pending" && org.status !== "rejected" && <FleetCarsReview orgId={org.id} />}
         <MembersCard org={org} onChanged={refresh} />
       </div>
     );

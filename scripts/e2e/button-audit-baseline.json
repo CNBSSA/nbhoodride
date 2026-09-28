@@ -380,6 +380,8 @@
     "button-fleet-resubmit": "shown only on a fleet application PG Ride sent back; journey 35 corrects and sends it again over the API",
     "button-sendback-fleet-*": "needs a written note before it is enabled, and ends the application's wait; journey 35 sends one back over the API",
     "button-fleet-apply": "disabled until the application's fields are filled, and sending one creates a fleet; journey 35 applies over the API",
-    "button-approve-fleet-*": "inside a pending fleet application's detail in Admin, Organizations, which the audit does not open; journey 35 approves over the API"
+    "button-approve-fleet-*": "inside a pending fleet application's detail in Admin, Organizations, which the audit does not open; journey 35 approves over the API",
+    "button-sendback-fleet-car-*": "disabled until a note to the fleet is typed; journey 36 sends a car back over the API",
+    "button-fleet-car-save": "disabled until the car's make, model, year, colour and plate are typed; journey 36 adds a car over the API"
   }
 }

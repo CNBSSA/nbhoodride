@@ -21,12 +21,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { forgetBusinessHome } from "@/lib/businessHome";
 import { BRAND } from "@shared/branding";
 import { BUSINESS_TYPE_LABELS, FLEET_LABEL, FLEET_PAYOUT_METHODS, type BusinessType } from "@shared/fleet";
+import { FleetCarsSection } from "@/components/portal/FleetCars";
 
 interface Desk {
   id: string; name: string; status: "pending" | "active" | "paused" | "rejected"; statusText: string; reviewNote: string | null; role: string;
   business: { legalName: string; businessType: string; ein: string }; contactPhone: string | null;
   payout: { payoutMethod?: string | null; payoutDetails?: string | null; onFile?: boolean };
-  counts: { cars: number; drivers: number }; people: Array<{ userId: string; role: string; name: string | null }>; terms: string;
+  counts: { cars: number; carsReady: number; drivers: number }; people: Array<{ userId: string; role: string; name: string | null }>; terms: string;
 }
 
 const STATUS_TONE: Record<Desk["status"], "default" | "secondary" | "destructive" | "outline"> = { pending: "outline", active: "default", paused: "secondary", rejected: "destructive" };
@@ -86,9 +87,10 @@ export function FleetDesk({ orgId, memberships, onSwitch }: { orgId: string; mem
               {desk.role === "owner" ? <PayoutForm desk={desk} /> : <p className="text-sm text-muted-foreground">{desk.payout.onFile ? "A payout method is on file. The owner manages it." : "The owner has not added a payout method yet."}</p>}
             </section>
 
-            <section className="border rounded-xl p-4 space-y-1" data-testid="fleet-cars-drivers">
+            <section className="border rounded-xl p-4 space-y-2" data-testid="fleet-cars-drivers">
               <p className="font-medium flex items-center gap-2"><Car className="h-4 w-4" /> Cars and drivers</p>
-              <p className="text-sm text-muted-foreground">{desk.counts.cars} cars · {desk.counts.drivers} drivers. {desk.status === "active" ? "Adding cars and inviting drivers opens here next." : "Once PG Ride approves the fleet, you add cars and invite drivers here."}</p>
+              <p className="text-sm text-muted-foreground">{desk.counts.cars} cars, {desk.counts.carsReady} ready · {desk.counts.drivers} drivers. {desk.status === "active" ? "Inviting drivers opens here next." : "Once PG Ride approves the fleet, you add cars and invite drivers here."}</p>
+              {desk.status === "active" && <FleetCarsSection orgId={desk.id} canManage={desk.role === "owner" || desk.role === "manager"} />}
             </section>
 
             <section className="border rounded-xl p-4 space-y-1" data-testid="fleet-people">

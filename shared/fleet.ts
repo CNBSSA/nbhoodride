@@ -137,3 +137,81 @@ export function fleetSplit(driverShare: unknown): { fleetShare: number; driverKe
 
 export const FLEET_TERMS_SENTENCE =
   "PG Ride keeps its 15% of every fare as on every ride. The driver's 85% is shared: 25% to the fleet owner and 75% to the driver, and every tip is the driver's. PG Ride pays the fleet owner and each driver directly, every Friday. A fleet never sees a rider's name, phone or address.";
+
+// ── Slice 2: a fleet's cars ──────────────────────────────────────────────────
+//
+// A fleet's car is checked like any car on PG Ride: the same age, seats,
+// VIN, photo and paper rules as a rental car (shared/rental.ts), plus PG
+// Ride's own check of the papers before the car may carry riders. "Ready"
+// means checked and qualified — the only state in which a car may be given to
+// a driver (slice 3). Changing what the car IS sends it back to be checked;
+// the hourly sweep parks a car the hour a paper lapses, warning ahead.
+
+import { MAX_CAR_AGE_YEARS, MAX_SEATS, MIN_PHOTOS, isPlausibleVin } from "./rental";
+
+export const FLEET_CAR_STATUSES = ["parked", "ready"] as const;
+export type FleetCarStatus = (typeof FLEET_CAR_STATUSES)[number];
+
+export const FLEET_CAR_REVIEW_STATUSES = ["pending", "approved", "rejected"] as const;
+
+/** Fields whose change sends a fleet car back to PG Ride to be checked. A colour or a photo does not. */
+export const FLEET_CAR_REVIEWED_FIELDS = [
+  "make", "model", "year", "licensePlate", "vin", "seats", "vehicleType",
+  "registrationDocUrl", "insuranceDocUrl", "inspectionDocUrl",
+  "inspectionExpires", "registrationExpires", "insuranceExpires",
+] as const;
+
+export interface FleetCarForCheck {
+  year: number | null | undefined;
+  seats: number | null | undefined;
+  licensePlate: string | null | undefined;
+  vin: string | null | undefined;
+  photos: unknown;
+  registrationDocUrl?: string | null;
+  insuranceDocUrl?: string | null;
+  inspectionDocUrl?: string | null;
+  inspectionExpires: Date | string | null | undefined;
+  registrationExpires: Date | string | null | undefined;
+  insuranceExpires: Date | string | null | undefined;
+  reviewStatus?: string | null;
+}
+
+const inDate = (d: Date | string | null | undefined, now: Date): boolean => {
+  if (!d) return false;
+  const t = new Date(d).getTime();
+  return Number.isFinite(t) && t > now.getTime();
+};
+
+/**
+ * Why a fleet car may not carry riders, in words the owner can act on. Empty
+ * = ready. A car is ready only while this is empty; the sweep parks it the
+ * hour it stops being so.
+ */
+export function fleetCarProblems(car: FleetCarForCheck, now: Date = new Date()): string[] {
+  const out: string[] = [];
+  const year = Number(car.year);
+  if (!Number.isInteger(year)) out.push("Model year is missing.");
+  else if (year < now.getUTCFullYear() - MAX_CAR_AGE_YEARS) out.push(`The car is more than ${MAX_CAR_AGE_YEARS} model years old.`);
+  const seats = Number(car.seats);
+  if (!Number.isInteger(seats) || seats < 2) out.push("Number of seats is missing.");
+  else if (seats > MAX_SEATS) out.push(`The car seats more than ${MAX_SEATS} including the driver.`);
+  if (!String(car.licensePlate ?? "").trim()) out.push("Licence plate is missing.");
+  if (!isPlausibleVin(car.vin)) out.push("VIN is missing or not 17 valid characters.");
+  const photos = Array.isArray(car.photos) ? car.photos.filter((p) => typeof p === "string" && p) : [];
+  if (photos.length < MIN_PHOTOS) out.push(`At least ${MIN_PHOTOS} photos of the car are needed (${photos.length} on file).`);
+  const docs: Array<[string, unknown]> = [
+    ["registration card", car.registrationDocUrl], ["insurance card (commercial or rideshare cover)", car.insuranceDocUrl], ["inspection certificate", car.inspectionDocUrl],
+  ];
+  for (const [name, url] of docs) if (!url) out.push(`A photo of the ${name} is missing.`);
+  if (!inDate(car.inspectionExpires, now)) out.push("Safety inspection is missing or expired.");
+  if (!inDate(car.registrationExpires, now)) out.push("Registration is missing or expired.");
+  if (!inDate(car.insuranceExpires, now)) out.push("Insurance is missing or expired.");
+  if (car.reviewStatus === "rejected") out.push("PG Ride could not accept the papers; see the note, fix them and send again.");
+  else if (car.reviewStatus !== "approved") out.push("PG Ride has not checked the papers yet.");
+  return out;
+}
+
+export const FLEET_CAR_STATUS_WORDS: Record<FleetCarStatus, string> = {
+  parked: "Parked: not on the road",
+  ready: "Ready: may carry riders",
+};

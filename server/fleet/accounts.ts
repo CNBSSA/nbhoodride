@@ -11,9 +11,9 @@
  * A fleet never books and is never billed; nothing here touches jobs or
  * statements. Cars (slice 2), drivers (slice 3) and money (slice 4) follow.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
-import { organizationMembers, organizations, users, type Organization } from "@shared/schema";
+import { fleetCars, organizationMembers, organizations, users, type Organization } from "@shared/schema";
 import {
   FLEET_CATEGORY, FLEET_PAYOUT_METHODS, FLEET_STATUS_WORDS, FLEET_TERMS_SENTENCE, approvalProblems, canManageFleetMoney,
   canSeeFleetDesk, checkFleetApplication, maskEin, type FleetStatus,
@@ -106,13 +106,14 @@ export async function fleetDesk(userId: string, orgId: string) {
   if (!canSeeFleetDesk(role)) throw new FleetError("The fleet desk is for the fleet's owner and managers. Your fleet car is in the driver app.", 403);
   const owner = canManageFleetMoney(role);
   const members = await listMembers(orgId);
+  const [cars] = await db.select({ n: sql<number>`count(*)::int`, ready: sql<number>`count(*) filter (where ${fleetCars.status} = 'ready')::int` }).from(fleetCars).where(eq(fleetCars.organizationId, orgId));
   return {
     id: org.id, name: org.name, status: org.status as FleetStatus, statusText: FLEET_STATUS_WORDS[org.status as FleetStatus] ?? org.status,
     reviewNote: org.status === "rejected" ? org.reviewNote : null, role,
     business: { legalName: org.fleetDetails?.legalName ?? "", businessType: org.fleetDetails?.businessType ?? "", ein: maskEin(org.fleetDetails?.ein) },
     contactPhone: org.contactPhone,
     payout: owner ? { payoutMethod: org.payoutMethod, payoutDetails: org.payoutDetails } : { onFile: !!org.payoutMethod },
-    counts: { cars: 0, drivers: members.filter((m) => m.role === "driver").length },
+    counts: { cars: Number(cars?.n ?? 0), carsReady: Number(cars?.ready ?? 0), drivers: members.filter((m) => m.role === "driver").length },
     people: members.filter((m) => m.role !== "driver").map((m) => ({ userId: m.userId, role: m.role, name: `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || m.email })),
     terms: FLEET_TERMS_SENTENCE,
   };
