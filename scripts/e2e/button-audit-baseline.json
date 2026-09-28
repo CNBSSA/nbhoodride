@@ -395,6 +395,7 @@
     "button-org-resubmit": "shown only on a booking account PG Ride sent back; journey 38 corrects and sends again over the API",
     "button-org-apply-open-desk": "shown only to a person with a waiting application; the audit's rider has none, and journey 38 walks the application over the API",
     "button-portal-apply": "the portal's empty state for a signed-in person in no organization, which no audit fixture is; journey 38 applies over the API",
-    "button-drive-landing": "on the app's landing page, which a visitor opening / does not get (the server's About page answers a bare /); it leads to /signup?drive=1, which journey 37 and the visitor screen /signup?drive=1 cover"
+    "button-drive-landing": "on the app's landing page, which a visitor opening / does not get (the server's About page answers a bare /); it leads to /signup?drive=1, which journey 37 and the visitor screen /signup?drive=1 cover",
+    "button-business-apply-landing": "on the app's landing page, which a visitor opening / does not get (the server's About page answers a bare /); it leads to /org/apply, which journey 38 and the visitor and rider /org/apply screens cover"
   }
 }
