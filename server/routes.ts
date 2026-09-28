@@ -168,6 +168,7 @@ import { pageAtRiskRides } from "./rideRiskWatch";
 import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
 import { registerCommercialRoutes } from "./commercial/routes";
 import { registerRentalRoutes } from "./rental/routes";
+import { registerFleetRoutes } from "./fleet/routes";
 import { materializeAllStandingOrders } from "./commercial/standingOrders";
 import { runWeeklyBilling } from "./commercial/billing";
 import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
@@ -5609,6 +5610,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       equityProgramEnabled: featureFlags.equityProgramEnabled,
       commercialEnabled: featureFlags.commercialEnabled,
       rentalEnabled: featureFlags.rentalEnabled,
+      fleetEnabled: featureFlags.fleetEnabled,
     });
   });
 
@@ -11467,6 +11469,7 @@ Generate the FAQ list.`;
   // Handles: 30-min reminders, T-60/15/5 escalations, midnight county cleanup
   // ── Car rental (server/rental/, behind RENTAL_ENABLED) ──
   registerRentalRoutes(app, { isAuthenticated, isAdminOrSessionAuth });
+  registerFleetRoutes(app, { isAuthenticated, isAdminOrSessionAuth });
 
   // ── Commercial riders: organizations that book for other people and are billed ──
   // Registered here so the driver-board broadcast can reuse the live socket map.

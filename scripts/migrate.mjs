@@ -1637,6 +1637,12 @@ CREATE TABLE IF NOT EXISTS rental_renters (
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+-- ── Fleet management accounts, slice 1 (Festus 2026-09-28) ──
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS fleet_details JSONB;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS review_note TEXT;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS payout_method VARCHAR;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS payout_details VARCHAR;
 `;
 
 async function migrate() {

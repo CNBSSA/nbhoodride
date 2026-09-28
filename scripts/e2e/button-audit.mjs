@@ -62,6 +62,8 @@ const SCREENS = [
   { role: "requester", path: "/org" },
   // The same clerk's BUSINESS account: the only place the parcel door exists.
   { role: "requester", path: "/org?org=e2e-biz" },
+  // The fleet desk (Fleet Management Accounts Plan): the same portal, opened on a fleet.
+  { role: "requester", path: "/org?org=e2e-fleet" }, { role: "rider", path: "/fleet/apply" },
   // An admin who is in no organization sees the portal's empty state — the only
   // place the way back to Admin → Organizations is offered. Nobody else can see it.
   { role: "admin", path: "/org" },

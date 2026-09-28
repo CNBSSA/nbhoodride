@@ -28,6 +28,7 @@ import { JobsMap } from "@/components/portal/JobsMap";
 import { StandingOrdersView } from "@/components/portal/StandingOrdersView";
 import { BillingView } from "@/components/portal/BillingView";
 import { BookDeliveryDrawer, type DeliveryPrefill } from "@/components/portal/BookDeliveryDrawer";
+import { FleetDesk } from "@/components/portal/FleetDesk";
 import { describeProof, type DeliveryProof } from "@shared/deliveries";
 import { describeApproval } from "@shared/recipientApproval";
 import { forgetBusinessHome } from "@/lib/businessHome";
@@ -89,7 +90,7 @@ export default function PortalPage() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { setBooking(false); setSendingParcel(false); setParcelPrefill(null); return; }
-      const plain = !e.metaKey && !e.ctrlKey && !e.altKey && !isTyping() && active && canBook(active.role);
+      const plain = !e.metaKey && !e.ctrlKey && !e.altKey && !isTyping() && active && canBook(active.role) && (active.organization.category as string) !== "fleet";
       if ((e.key === "n" || e.key === "N") && plain) { e.preventDefault(); setBooking(true); }
       if ((e.key === "p" || e.key === "P") && plain && categoryMayBook(active.organization.category, "delivery")) { e.preventDefault(); setSendingParcel(true); }
     };
@@ -132,6 +133,9 @@ export default function PortalPage() {
   if (!active) return null;
   const org = active.organization;
   const role = active.role;
+  // A fleet account (Fleet Management Accounts Plan) comes through the same
+  // door and never books: it opens on the fleet desk instead.
+  if ((org.category as string) === "fleet") return <FleetDesk orgId={org.id} memberships={memberships} onSwitch={setOrgId} />;
   // Business and food accounts send parcels as well as book rides. The
   // parcel drawer existed from the day deliveries shipped and nothing on
   // this page opened it — the one door a delivery account exists for.

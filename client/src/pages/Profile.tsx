@@ -45,7 +45,7 @@ export default function Profile() {
   const [showCountySelector, setShowCountySelector] = useState(false);
   const [localCounties, setLocalCounties] = useState<string[]>([]);
   const { user, isLoading } = useAuth();
-  const { walletEnabled, driverMarketplaceEnabled, rentalEnabled } = useFeatureFlags();
+  const { walletEnabled, driverMarketplaceEnabled, rentalEnabled, fleetEnabled } = useFeatureFlags();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -529,6 +529,26 @@ export default function Profile() {
                 <div className="text-left">
                   <p className="font-medium">Rent a car</p>
                   <p className="text-sm text-muted-foreground">PG Ride cars by the day</p>
+                </div>
+              </div>
+              <i className="fas fa-chevron-right text-muted-foreground" />
+            </Button>
+          )}
+
+          {/* Fleet management (Fleet Management Accounts Plan): an investor's
+              way in to open a fleet account. Shown only while FLEET_ENABLED is on. */}
+          {fleetEnabled && (
+            <Button
+              variant="outline"
+              className="w-full justify-between p-4"
+              onClick={() => setLocation("/fleet/apply")}
+              data-testid="button-open-fleet-apply"
+            >
+              <div className="flex items-center space-x-3">
+                <i className="fas fa-car-side text-secondary text-xl" />
+                <div className="text-left">
+                  <p className="font-medium">Own cars? Open a fleet account</p>
+                  <p className="text-sm text-muted-foreground">Your cars, driven by PG Ride drivers</p>
                 </div>
               </div>
               <i className="fas fa-chevron-right text-muted-foreground" />

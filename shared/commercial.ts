@@ -33,8 +33,25 @@ export const DEFAULT_FACILITY_FEE: Record<CommercialCategory, number> = {
   food: 0,
 };
 
+/** Roles on an account that books (medical, business, food). */
 export const ORG_ROLES = ["owner", "requester", "billing"] as const;
-export type OrgRole = (typeof ORG_ROLES)[number];
+/**
+ * Roles on a fleet account (shared/fleet.ts; Fleet Management Accounts Plan):
+ * the owner does everything, a manager runs cars and drivers but not money, a
+ * viewer only looks, and a driver drives one of the fleet's cars.
+ */
+export const FLEET_ROLES = ["owner", "manager", "viewer", "driver"] as const;
+export type OrgRole = (typeof ORG_ROLES)[number] | (typeof FLEET_ROLES)[number];
+
+/** The organization kind that supplies cars and drivers instead of booking (never in COMMERCIAL_CATEGORIES). */
+export const FLEET_CATEGORY = "fleet" as const;
+export const isFleetCategory = (v: unknown): v is typeof FLEET_CATEGORY => v === FLEET_CATEGORY;
+/** Every kind of organization: the three that book, and fleets. */
+export const isOrganizationCategory = (v: unknown): boolean => isCategory(v) || isFleetCategory(v);
+/** The roles a member may hold in an organization of this category. */
+export function rolesForCategory(category: string | null | undefined): readonly OrgRole[] {
+  return isFleetCategory(category) ? FLEET_ROLES : ORG_ROLES;
+}
 
 export const ORG_STATUSES = ["active", "paused"] as const;
 export type OrgStatus = (typeof ORG_STATUSES)[number];
@@ -67,7 +84,8 @@ export function categoryMayBook(category: string | null | undefined, kind: JobKi
   if (kind === "ride") return isCategory(category);
   return category === "business" || category === "food";
 }
-export const isOrgRole = (v: unknown): v is OrgRole => ORG_ROLES.includes(v as OrgRole);
+/** A role on some kind of organization; whether it fits a given one is rolesForCategory's to say. */
+export const isOrgRole = (v: unknown): v is OrgRole => (ORG_ROLES as readonly string[]).includes(v as string) || (FLEET_ROLES as readonly string[]).includes(v as string);
 
 /** Owners and requesters book; billing sees money; owners do everything. */
 export function canBook(role: OrgRole | null | undefined): boolean {

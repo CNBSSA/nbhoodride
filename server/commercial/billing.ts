@@ -397,7 +397,8 @@ export interface WeeklyRunResult {
 /** The Monday run: issue last week for every active organization, then collect. */
 export async function runWeeklyBilling(now: Date = new Date(), weekKey?: string): Promise<WeeklyRunResult> {
   const window = weekKey ? billingWeekWindow(weekKey) : previousBillingWeek(now);
-  const orgs = await db.select().from(organizations).where(eq(organizations.status, "active"));
+  // A fleet is paid, never billed (shared/fleet.ts): it has no statements.
+  const orgs = await db.select().from(organizations).where(and(eq(organizations.status, "active"), sql`${organizations.category} <> 'fleet'`));
   const out: WeeklyRunResult = { weekKey: window.weekKey, issued: 0, charged: 0, failed: 0, skipped: [] };
   for (const org of orgs) {
     try {

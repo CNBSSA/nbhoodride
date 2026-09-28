@@ -132,7 +132,7 @@ export default function AdminDashboard() {
   ];
   // Commercial riders is a new surface, on per deployment (COMMERCIAL_ENABLED).
   const flags = useFeatureFlags();
-  const visibleTabs = tabs.filter((t) => (t.id !== "organizations" || flags.commercialEnabled) && (t.id !== "rentals" || flags.rentalEnabled));
+  const visibleTabs = tabs.filter((t) => (t.id !== "organizations" || flags.commercialEnabled || flags.fleetEnabled) && (t.id !== "rentals" || flags.rentalEnabled));
 
   return (
     <div className="min-h-screen bg-gray-50" data-testid="admin-dashboard">
