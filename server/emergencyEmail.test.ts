@@ -1,20 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Capture what would be sent to Resend without a real key. We stub the module
-// so sendEmail takes the "no resend configured" dev path — but that path logs
-// and returns without exposing the HTML. Instead we spy on the Resend client
-// by injecting a fake via the env + module mock.
+// Capture what would be sent over SMTP without a real mail server. The
+// "not configured" dev path logs and returns without exposing the HTML, so
+// instead the module sees a password and Nodemailer's transport is stubbed:
+// sendMail records the message and nothing ever leaves the test.
 
-const { sendMock } = vi.hoisted(() => ({ sendMock: vi.fn().mockResolvedValue({ id: "test" }) }));
+const { sendMock } = vi.hoisted(() => ({ sendMock: vi.fn().mockResolvedValue({ messageId: "test" }) }));
 
-vi.mock("resend", () => ({
-  Resend: class {
-    emails = { send: sendMock };
-  },
+vi.mock("nodemailer", () => ({
+  default: { createTransport: () => ({ sendMail: sendMock }) },
+  createTransport: () => ({ sendMail: sendMock }),
 }));
 
-// Ensure the module sees a key so it constructs the (mocked) Resend client.
-process.env.RESEND_API_KEY = "test_key";
+// Ensure the module sees a password so it constructs the (stubbed) transport.
+process.env.SMTP_PASS = "test-app-password";
 process.env.NODE_ENV = "test";
 
 const { sendEmergencyAdminAlertEmail } = await import("./emailService");

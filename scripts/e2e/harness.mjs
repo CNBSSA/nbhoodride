@@ -164,7 +164,9 @@ export async function startServer(env = {}) {
       RENTAL_ENABLED: process.env.RENTAL_ENABLED ?? "true",
       // Fleet management accounts likewise.
       FLEET_ENABLED: process.env.FLEET_ENABLED ?? "true",
-      RESEND_API_KEY: "re_e2e_fake", RESEND_FROM: "noreply@peoplegoverned.com",
+      // Email "configured" but pointed at a closed local port: every send path
+      // executes and fails at once, and no email can ever leave a test.
+      SMTP_HOST: "127.0.0.1", SMTP_PORT: "9", SMTP_USER: "noreply@peoplegoverned.com", SMTP_PASS: "e2e-fake-app-password", EMAIL_FROM: "noreply@peoplegoverned.com",
       TELEGRAM_BOT_TOKEN: "e2e", TELEGRAM_CHAT_ID: "1",
       TWILIO_ACCOUNT_SID: "ACe2e", TWILIO_AUTH_TOKEN: "e2e-auth-token", TWILIO_PHONE_NUMBER: "+18882743045",
       ...env,

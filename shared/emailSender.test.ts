@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 // Mirrors normalizeFromAddress in server/emailService.ts. The header builder
 // wraps FROM_ADDRESS in "Name <addr>", so a display-name value pasted into
-// RESEND_FROM must be reduced to the bare address or the header is malformed.
+// EMAIL_FROM must be reduced to the bare address or the header is malformed.
 function normalizeFromAddress(raw: string): string {
   const value = raw.trim();
   const angled = value.match(/<([^>]+)>/);
