@@ -21,7 +21,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // Startup env-var sanity check. Fails fast on missing essentials in production
-// and warns loudly on missing-but-recoverable ones. Same RESEND warning lives
+// and warns loudly on missing-but-recoverable ones. Same SMTP warning lives
 // in emailService.ts; we surface a consolidated banner here too.
 function checkEnv() {
   const isProd = process.env.NODE_ENV === "production";
@@ -31,8 +31,7 @@ function checkEnv() {
   const recommendedInProd: { name: string; why: string; ok?: () => boolean }[] = [
     { name: "ALLOWED_ORIGINS", why: "without it, CORS is fully disabled — browser clients on a different origin can't reach the API" },
     { name: "PUBLIC_APP_URL", why: "email/share links will fall back to req.host which can be wrong behind Railway's proxy", ok: () => resolveAppUrl() !== "" },
-    { name: "RESEND_API_KEY", why: "all transactional email (approvals, receipts, announcements) will fail" },
-    { name: "RESEND_FROM", why: "Resend will reject sends without a verified sender" },
+    { name: "SMTP_PASS", why: "all transactional email (approvals, receipts, announcements) will fail — set the Gmail app password" },
   ];
 
   const missingRequired = required.filter((k) => !process.env[k]);

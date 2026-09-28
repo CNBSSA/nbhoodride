@@ -1,12 +1,30 @@
-import { Resend } from "resend";
+import nodemailer, { type Transporter } from "nodemailer";
 import { resolveAppUrl } from "./appUrl";
 import { featureFlags } from "./featureFlags";
 
 /**
- * Bare sender address. RESEND_FROM is often pasted in display-name form
+ * Outbound email leaves through Gmail SMTP (work order of 2026-09-28,
+ * Chairman-approved: Resend retired). Nodemailer talks to smtp.gmail.com on
+ * port 587 with STARTTLS, signed in with the account's 16-character app
+ * password. Configuration comes only from the environment; the password is
+ * never logged or reported.
+ *
+ *   SMTP_HOST   default smtp.gmail.com
+ *   SMTP_PORT   default 587
+ *   SMTP_USER   the Gmail account (default thrynovainsights@gmail.com)
+ *   SMTP_PASS   the app password — required; without it nothing is sent
+ *   EMAIL_FROM  the From address (default: the account itself)
+ *
+ * Gmail sends only as the signed-in account (or a send-as address verified in
+ * Gmail's own settings): a From address on any other domain is rewritten by
+ * Google to the account, so the default and the diagnostic both keep it there.
+ */
+
+/**
+ * Bare sender address. EMAIL_FROM is often pasted in display-name form
  * ("PG Ride <noreply@example.com>"), which the header builder below would
  * wrap a second time into "PG Ride <PG Ride <noreply@…>>" — malformed, and
- * rejected by the provider with an error about the from address. Extract the
+ * rejected by the server with an error about the from address. Extract the
  * address so either form works.
  */
 function normalizeFromAddress(raw: string): string {
@@ -15,25 +33,34 @@ function normalizeFromAddress(raw: string): string {
   return (angled ? angled[1] : value).trim();
 }
 
-const FROM_ADDRESS = normalizeFromAddress(process.env.RESEND_FROM || "noreply@pgride.app");
+const SMTP_HOST = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
+const SMTP_PORT = Number.parseInt(process.env.SMTP_PORT || "587", 10) || 587;
+const SMTP_USER = (process.env.SMTP_USER || "thrynovainsights@gmail.com").trim();
+const SMTP_PASS = process.env.SMTP_PASS?.trim() || "";
+const FROM_ADDRESS = normalizeFromAddress(process.env.EMAIL_FROM || SMTP_USER);
 const FROM_NAME = "PG Ride";
 
 /**
  * Non-secret view of the email configuration, for the admin diagnostic and the
- * readiness report. Never exposes the API key itself.
+ * readiness report. Never exposes the password.
  *
- * `usingUnverifiedDefault` is the trap this exists to catch: when RESEND_FROM
- * is unset the sender falls back to noreply@pgride.app, a domain with no DNS
- * and therefore no possible Resend verification — so every send fails with a
- * domain error that is invisible unless someone reads the server logs.
+ * `fromMismatch` is the trap this exists to catch: Gmail only sends as the
+ * account itself (or a send-as address verified in Gmail), so an EMAIL_FROM on
+ * another domain is silently rewritten by Google — mail still goes out, but not
+ * from the address the operator thinks, and replies land elsewhere.
  */
 export function getEmailConfigSummary() {
   const fromDomain = FROM_ADDRESS.includes("@") ? FROM_ADDRESS.split("@")[1] : "";
   return {
-    apiKeyPresent: Boolean(process.env.RESEND_API_KEY?.trim()),
+    transport: "smtp" as const,
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    user: SMTP_USER,
+    userPresent: Boolean(SMTP_USER),
+    passwordPresent: Boolean(SMTP_PASS),
     from: FROM_ADDRESS,
     fromDomain,
-    usingUnverifiedDefault: !process.env.RESEND_FROM?.trim(),
+    fromMismatch: FROM_ADDRESS.toLowerCase() !== SMTP_USER.toLowerCase(),
   };
 }
 
@@ -55,26 +82,39 @@ export async function sendTestEmail(to: string): Promise<{ ok: true } | { ok: fa
     );
     return { ok: true };
   } catch (err: any) {
-    // Resend puts the useful part (e.g. "The domain is not verified") in
-    // message/name; surface it verbatim rather than a generic failure.
-    const parts = [err?.name, err?.message, err?.error?.message].filter(Boolean);
+    // Nodemailer puts the useful part (e.g. "Invalid login: 535-5.7.8
+    // Username and Password not accepted") in message, with the SMTP
+    // response beside it; surface it verbatim rather than a generic failure.
+    const parts = [err?.name, err?.message, err?.response].filter(Boolean);
     return { ok: false, error: parts.join(": ").slice(0, 300) || "Unknown email error" };
   }
 }
 
 const APP_URL = resolveAppUrl();
 
-const resend = process.env.RESEND_API_KEY
-  ? new Resend(process.env.RESEND_API_KEY)
+// One transport for the process; null when there is no password to sign in
+// with. Short timeouts: a mail server that does not answer must not hold a
+// signup or an invitation for minutes (Nodemailer's defaults are two).
+const transporter: Transporter | null = SMTP_PASS
+  ? nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: false,
+      requireTLS: true,
+      auth: { user: SMTP_USER, pass: SMTP_PASS },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
+    })
   : null;
 
 // Loud startup warning if email isn't configured. In production this is
 // almost always a misconfiguration (signup flow advertises "check your email"
 // but nothing goes out). In dev/test we log once and move on.
-if (!resend) {
+if (!transporter) {
   const msg =
-    "[EMAIL] RESEND_API_KEY is not set. Outbound email will fail. " +
-    "Set RESEND_API_KEY (and RESEND_FROM) in Railway → Variables.";
+    "[EMAIL] SMTP_PASS is not set. Outbound email will fail. " +
+    "Set SMTP_PASS (the Gmail app password; and SMTP_USER / EMAIL_FROM if not the default account) in Railway → Variables.";
   if (process.env.NODE_ENV === "production") {
     console.error(`\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n${msg}\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n`);
   } else {
@@ -96,42 +136,35 @@ function escapeHtml(s: string): string {
 
 export class EmailNotConfiguredError extends Error {
   constructor() {
-    super("Email service is not configured. RESEND_API_KEY is missing.");
+    super("Email service is not configured. SMTP_PASS (the Gmail app password) is missing.");
     this.name = "EmailNotConfiguredError";
   }
 }
 
 async function sendEmail(to: string, subject: string, html: string): Promise<void> {
-  if (!resend) {
+  if (!transporter) {
     // In production, fail loudly so the calling route surfaces the issue
     // instead of silently succeeding while the user waits for an email that
     // will never arrive. In dev, keep the old log-and-no-op behaviour so
-    // local development without a Resend key still works.
+    // local development without an SMTP password still works.
     if (process.env.NODE_ENV === "production") {
-      console.error(`[EMAIL] Refusing to send (RESEND_API_KEY missing): to=${to} subject=${subject}`);
+      console.error(`[EMAIL] Refusing to send (SMTP_PASS missing): to=${to} subject=${subject}`);
       throw new EmailNotConfiguredError();
     }
-    console.log(`[EMAIL — not sent in dev, RESEND_API_KEY not set]\nTo: ${to}\nSubject: ${subject}`);
+    console.log(`[EMAIL — not sent in dev, SMTP_PASS not set]\nTo: ${to}\nSubject: ${subject}`);
     return;
   }
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      // The Resend SDK does NOT throw on API errors — it resolves with
-      // { data: null, error }. Awaiting it and moving on therefore counted
-      // every rejected send (unverified sender domain, bad key, rate limit)
-      // as a success: no retry, no log, and the caller told the user their
-      // email was on its way. Inspect the payload and throw so the existing
-      // retry and error handling actually apply.
-      const response = await resend.emails.send({
+      // Nodemailer rejects on any SMTP failure (refused login, refused
+      // recipient, connection lost), so the retry and the error handling
+      // below apply to every rejected send.
+      await transporter.sendMail({
         from: `${FROM_NAME} <${FROM_ADDRESS}>`,
         to,
         subject,
         html,
       });
-      if (response?.error) {
-        const { name, message } = response.error as { name?: string; message?: string };
-        throw new Error(`Resend rejected the message (${name ?? "error"}): ${message ?? "no detail"}`);
-      }
       return;
     } catch (err) {
       if (attempt === 2) {

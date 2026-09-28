@@ -7164,7 +7164,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Approve user (admin or super admin)
   // Admin attests the user's email in person (family, signup tables, church
   // onboarding) — removes the dependency on email delivery, which blocks ALL
-  // registration when the Resend domain isn't verified yet.
+  // registration when the mail server isn't configured yet.
   app.post('/api/admin/users/:userId/approve', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const { userId } = req.params;
