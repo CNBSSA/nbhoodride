@@ -48,6 +48,8 @@ const SCREENS = [
   { role: "visitor", path: "/" }, { role: "visitor", path: "/login" }, { role: "visitor", path: "/signup" },
   // The business door (2026-09-16): signed-out portal shows the business
   // sign-in, and the invitation link opens the join page.
+  // Sign up as a driver applicant (the driver funnel): the same form, "I want to drive" ticked.
+  { role: "visitor", path: "/signup?drive=1" },
   { role: "visitor", path: "/org/login" }, { role: "visitor", path: "/org" }, { role: "visitor", path: `/org/join/${E2E_INVITE_TOKEN}` },
   // A link that is the right shape but matches nothing: the "invitation not found" state and its way to the sign-in.
   { role: "visitor", path: `/org/join/${"0".repeat(48)}` },

@@ -841,9 +841,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         privacyAccepted: z.boolean().refine(v => v === true, {
           message: "You must accept the Privacy Policy to register",
         }),
+        // "I want to drive": the application starts at sign-up (the driver
+        // funnel, 2026-09-28), so the operator knows from minute one and the
+        // applicant is in the Drivers queue before they can even log in.
+        wantsToDrive: z.boolean().optional(),
       });
 
-      const { email, password, firstName, lastName, phone, termsAccepted, privacyAccepted } =
+      const { email, password, firstName, lastName, phone, termsAccepted, privacyAccepted, wantsToDrive } =
         signupSchema.parse(req.body);
 
       // ── Password complexity ──────────────────────────────────────────────
@@ -934,15 +938,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       sendSignupPendingEmail({ email: user.email, firstName: user.firstName }).catch(console.error);
 
-      opsAlert(formatOpsAlert("👤 New signup (awaiting approval)", [
+      // A driver applicant's application exists from sign-up: a pending
+      // driver profile, so the Drivers queue shows them at once and the
+      // documents screen is their next step the moment they can log in.
+      // It is an application, never approval: isDriver stays false until
+      // an admin approves it (PATCH /api/admin/drivers/:userId).
+      let driverApplication = false;
+      if (wantsToDrive) {
+        try {
+          await storage.createDriverProfile({ userId: user.id } as any);
+          driverApplication = true;
+        } catch (err) {
+          console.error(`[signup] driver application for ${user.id} could not be started:`, err);
+          opsAlert(formatOpsAlert("🚙 Driver application FAILED at sign-up", [["Email", user.email], ["Reason", String((err as any)?.message ?? err).slice(0, 200)], ["Next", "Ask them to tap Apply on their Profile once approved"]]));
+        }
+      }
+
+      opsAlert(formatOpsAlert(driverApplication ? "🚙 New signup: wants to DRIVE (awaiting approval)" : "👤 New signup (awaiting approval)", [
         ["Name", `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim()],
         ["Email", user.email],
+        ...(driverApplication ? [["Phone", user.phone ?? ""] as [string, string], ["Next", "Approve the person in Admin; they then upload licence, insurance and car photos, and you approve the driver in Drivers"] as [string, string]] : []),
         ["Approve", `${resolveAppUrl(`https://${req.get("host")}`)}/admin`],
       ]));
 
       res.json({
         message: "Account created! Your account needs administrator approval before you can log in.",
         pendingApproval: true,
+        driverApplication,
         user: {
           id: user.id,
           email: user.email,
@@ -1603,9 +1625,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const validatedDriverData = driverRegistrationSchema.parse(req.body);
 
+      // Only what an applicant may say about themselves. Before 2026-09-28
+      // the whole body went in, so an app could write approvalStatus,
+      // badges or isVerifiedNeighbor on its own application; approval is
+      // the operator's alone (PATCH /api/admin/drivers/:userId).
       const profileData = insertDriverProfileSchema.parse({
-        ...req.body,
-        userId
+        userId,
+        ...(validatedDriverData.licenseNumber ? { licenseNumber: validatedDriverData.licenseNumber } : {}),
+        ...(validatedDriverData.licenseImageUrl ? { licenseImageUrl: validatedDriverData.licenseImageUrl } : {}),
+        ...(validatedDriverData.insuranceImageUrl ? { insuranceImageUrl: validatedDriverData.insuranceImageUrl } : {}),
+        ...(Array.isArray(req.body?.vehiclePhotoUrls) ? { vehiclePhotoUrls: req.body.vehiclePhotoUrls.filter((u: unknown) => typeof u === "string" && u.length <= 600).slice(0, 12) } : {}),
       });
 
       let profile;
@@ -1672,8 +1701,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put('/api/driver/profile', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const updates = req.body;
-      
+      // The documents screen saves one field at a time. Only those fields:
+      // approval, badges, suspension and the rest are the operator's, and
+      // until 2026-09-28 this route wrote whatever the app sent.
+      const driverUpdateSchema = z.object({
+        licenseNumber: z.string().regex(/^[A-Z0-9\-]{4,20}$/i, "License number must be 4–20 alphanumeric characters").optional(),
+        licenseImageUrl: z.string().min(1).max(600).nullable().optional(),
+        insuranceImageUrl: z.string().min(1).max(600).nullable().optional(),
+        vehiclePhotoUrls: z.array(z.string().min(1).max(600)).max(12).optional(),
+      });
+      const updates = driverUpdateSchema.parse(req.body ?? {});
+      if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to save: send a licence number, a licence or insurance image, or vehicle photos." });
+
       const profile = await storage.updateDriverProfile(userId, updates);
       res.json(profile);
     } catch (error) {

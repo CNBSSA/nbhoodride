@@ -75,6 +75,8 @@
     "button-delete-confirm",
     "button-dismiss-push",
     "button-download-receipt",
+    "button-drive-landing",
+    "button-driver-application-next",
     "button-driver-badge-*",
     "button-driver-cancel-*",
     "button-driver-documents",

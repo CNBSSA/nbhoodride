@@ -85,6 +85,11 @@ export default function Landing() {
                   Login
                 </Button>
               </Link>
+              <Link href="/signup?drive=1">
+                <Button variant="secondary" className="w-full py-5" data-testid="button-drive-landing">
+                  Drive with PG Ride — keep 85% of every fare
+                </Button>
+              </Link>
               <Link href="/org/login">
                 <Button variant="ghost" size="sm" className="w-full" data-testid="button-business-landing">
                   PG Ride for Business — sign in to your desk

@@ -387,6 +387,7 @@
     "button-fleet-car-doc-registration": "the registration upload inside the fleet desk's Add a car form (an uploader, like button-owner-doc-registration); journey 36 uploads over the API",
     "button-fleet-car-doc-insurance": "the insurance upload inside the fleet desk's Add a car form (an uploader, like button-owner-doc-insurance); journey 36 uploads over the API",
     "button-fleet-car-doc-inspection": "the inspection upload inside the fleet desk's Add a car form (an uploader, like button-owner-doc-inspection); journey 36 uploads over the API",
-    "button-approve-fleet-car-*": "inside a fleet's detail in Admin, Organizations, which the audit does not open; journey 36 approves a car over the API"
+    "button-approve-fleet-car-*": "inside a fleet's detail in Admin, Organizations, which the audit does not open; journey 36 approves a car over the API",
+    "button-driver-application-next": "shown on the rider home only to a person with a pending driver application; the audit's rider has none, and journey 37 walks the application over the API"
   }
 }
