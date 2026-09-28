@@ -86,6 +86,16 @@ export async function seedFixtures(db) {
     [JSON.stringify(fleetBiz), JSON.stringify({ ...fleetBiz, legalName: "E2E Fleet Applicant Inc", ein: "98-7654321", businessType: "corporation" })]).catch((e) => console.log("  (fleet seed) " + String(e?.message ?? e).split("\n")[0]));
   await db.query(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES ('e2e-fleet', $1, 'owner', NOW() - interval '2 days'), ('e2e-fleet-app', $2, 'owner', NOW())
     ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner'`, [FIXTURES.rider.id, FIXTURES.driver.id]).catch((e) => console.log("  (fleet members seed) " + String(e?.message ?? e).split("\n")[0]));
+  // A booking account that applied for itself and waits for PG Ride's check
+  // (self-serve applications), owned by the driver fixture so the admin's
+  // Organizations list has one to check and the rider's portal default is
+  // unchanged. Reset on every seed.
+  await db.query(`INSERT INTO organizations (id, name, category, status, facility_fee, business_details, contact_phone)
+    VALUES ('e2e-org-app', 'E2E Applicant Clinic', 'medical', 'pending', 4.00, $1, '2405550102')
+    ON CONFLICT (id) DO UPDATE SET status='pending', business_details=$1, review_note=NULL`,
+    [JSON.stringify({ legalName: "E2E Applicant Clinic LLC", ein: "45-6789012", businessType: "llc" })]).catch((e) => console.log("  (org application seed) " + String(e?.message ?? e).split("\n")[0]));
+  await db.query(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES ('e2e-org-app', $1, 'owner', NOW())
+    ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner'`, [FIXTURES.driver.id]).catch((e) => console.log("  (org application member seed) " + String(e?.message ?? e).split("\n")[0]));
   // The approved fleet's cars: one ready (checked, papers in date) and one
   // waiting for PG Ride's check, so the fleet desk and the admin's car review
   // have something to show the audits. Reset on every seed.

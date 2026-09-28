@@ -66,6 +66,8 @@ const SCREENS = [
   { role: "requester", path: "/org?org=e2e-biz" },
   // The fleet desk (Fleet Management Accounts Plan): the same portal, opened on a fleet.
   { role: "requester", path: "/org?org=e2e-fleet" }, { role: "rider", path: "/fleet/apply" },
+  // Opening a business account (self-serve applications): signed out and signed in.
+  { role: "visitor", path: "/org/apply" }, { role: "rider", path: "/org/apply" },
   // An admin who is in no organization sees the portal's empty state — the only
   // place the way back to Admin → Organizations is offered. Nobody else can see it.
   { role: "admin", path: "/org" },

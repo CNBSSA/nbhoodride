@@ -924,7 +924,7 @@ export const organizations = pgTable("organizations", {
   name: varchar("name").notNull(),
   /** medical | business | food | fleet (a fleet supplies cars and drivers and never books; shared/fleet.ts) */
   category: varchar("category").notNull(),
-  /** active | paused — paused organizations cannot book. A fleet is also pending (applied) or rejected (sent back). */
+  /** active | paused — paused organizations cannot book. An account that applied for itself, a fleet or a booking one, is also pending or rejected (sent back). */
   status: varchar("status").notNull().default("active"),
   /** weekly_debit | net_terms */
   billingMode: varchar("billing_mode").notNull().default("weekly_debit"),
@@ -946,6 +946,8 @@ export const organizations = pgTable("organizations", {
   askRecipientByDefault: boolean("ask_recipient_by_default").notNull().default(false),
   /** A fleet's business: legal name, EIN, kind (shared/fleet.ts checkFleetApplication). Null for other organizations. */
   fleetDetails: jsonb("fleet_details").$type<{ legalName: string; ein: string; businessType: string }>(),
+  /** A booking account that applied for itself: its legal name, EIN, kind (shared/orgApplication.ts). Null for accounts PG Ride created. */
+  businessDetails: jsonb("business_details").$type<{ legalName: string; ein: string; businessType: string }>(),
   /** PG Ride's note when a fleet application is sent back; the owner sees it. */
   reviewNote: text("review_note"),
   /** Where a fleet is paid (the business's own account): shared/fleet.ts FLEET_PAYOUT_METHODS. */

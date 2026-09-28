@@ -94,7 +94,7 @@ export async function listOrganizations(): Promise<OrganizationSummary[]> {
     address: r.address, notes: r.notes, stripeCustomerId: r.stripe_customer_id, terms: r.terms,
     defaultPaymentMethodId: r.default_payment_method_id, defaultPaymentMethodKind: r.default_payment_method_kind,
     askRecipientByDefault: !!r.ask_recipient_by_default,
-    fleetDetails: r.fleet_details ?? null, reviewNote: r.review_note ?? null,
+    fleetDetails: r.fleet_details ?? null, businessDetails: r.business_details ?? null, reviewNote: r.review_note ?? null,
     payoutMethod: r.payout_method ?? null, payoutDetails: r.payout_details ?? null,
     createdAt: r.created_at, updatedAt: r.updated_at,
     memberCount: Number(r.member_count ?? 0), jobCount: Number(r.job_count ?? 0),
@@ -120,7 +120,9 @@ export async function updateOrganization(id: string, patch: Partial<Organization
   }
   if (patch.status !== undefined) {
     if (!["active", "paused"].includes(patch.status)) throw new CommercialError("Status must be active or paused.");
-    if (isFleetCategory(fleetNow?.category) && !["active", "paused"].includes(fleetNow?.status ?? "")) throw new CommercialError("This fleet has not been approved yet. Approve or send back its application first.", 409);
+    // An application, a fleet's or a booking account's, is approved or sent
+    // back through its review, never by setting its status here.
+    if (!["active", "paused"].includes(fleetNow?.status ?? "")) throw new CommercialError(`This ${isFleetCategory(fleetNow?.category) ? "fleet" : "account"} has not been approved yet. Approve or send back its application first.`, 409);
     set.status = patch.status;
   }
   if (patch.billingMode !== undefined) { if (!["weekly_debit", "net_terms"].includes(patch.billingMode)) throw new CommercialError("Billing must be weekly_debit or net_terms."); set.billingMode = patch.billingMode; }

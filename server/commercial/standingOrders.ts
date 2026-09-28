@@ -12,6 +12,7 @@
  */
 
 import { and, desc, eq, sql } from "drizzle-orm";
+import { bookingRefusal } from "@shared/orgApplication";
 import { db } from "../db";
 import { commercialJobs, commercialStandingOrders, organizations, rides, type CommercialStandingOrder } from "@shared/schema";
 import { normalizePlanDays } from "@shared/weeklyPlan";
@@ -67,7 +68,7 @@ const isLocation = (v: any): v is Location =>
 export async function createStandingOrder(input: StandingOrderInput): Promise<CommercialStandingOrder> {
   const org = await getOrganization(input.organizationId);
   if (!org) throw new CommercialError("Organization not found.", 404);
-  if (org.status !== "active") throw new CommercialError("This organization is paused.", 409);
+  if (org.status !== "active") throw new CommercialError(bookingRefusal(org.status), 409);
   // A standing delivery: the "passenger" is who receives the parcel, there
   // is no return leg, and the account pays (a recurring recipient-pays job
   // would text the recipient every day — not in this version).

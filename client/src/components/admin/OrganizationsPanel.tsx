@@ -27,6 +27,7 @@ import { VEHICLE_TYPES, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 interface OrgSummary {
   id: string; name: string; category: CommercialCategory; status: string; billingMode: string; facilityFee: string;
   contactName: string | null; contactEmail: string | null; contactPhone: string | null; memberCount: number; jobCount: number;
+  businessDetails?: { legalName: string; ein: string; businessType: string } | null;
   fleetDetails?: { legalName: string; ein: string; businessType: string } | null; reviewNote?: string | null; payoutMethod?: string | null; payoutDetails?: string | null;
 }
 /** A fleet (Fleet Management Accounts Plan) is listed here beside the booking accounts; it has no facility fee, jobs or statements. */
@@ -83,7 +84,7 @@ export function OrganizationsPanel() {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-medium truncate">{o.name}</span>
-                    <Badge variant={o.status === "active" ? "default" : o.status === "pending" ? "outline" : "secondary"}>{isFleet(o) && o.status === "pending" ? "to check" : o.status}</Badge>
+                    <Badge variant={o.status === "active" ? "default" : o.status === "pending" ? "outline" : "secondary"}>{o.status === "pending" ? "to check" : o.status}</Badge>
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">{categoryLabel(o.category)} · {o.memberCount} people{isFleet(o) ? "" : ` · ${o.jobCount} jobs`}</div>
                 </button>
@@ -173,6 +174,17 @@ function OrganizationDetail({ id }: { id: string }) {
     );
   }
 
+  // A booking account that applied for itself (self-serve applications,
+  // 2026-09-28) is checked here before it can book anything.
+  if (org.status === "pending" || org.status === "rejected") {
+    return (
+      <div className="space-y-4" data-testid={`organization-detail-${org.id}`}>
+        <OrgApplicationReviewCard org={org} onChanged={refresh} />
+        <MembersCard org={org} onChanged={refresh} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4" data-testid={`organization-detail-${org.id}`}>
       <Card>
@@ -218,6 +230,38 @@ function OrganizationDetail({ id }: { id: string }) {
 
       <StatementCard org={org} />
     </div>
+  );
+}
+
+/** PG Ride's check of a booking account's application: the business in full, Approve or Send back with a note the owner sees. */
+function OrgApplicationReviewCard({ org, onChanged }: { org: OrgDetail; onChanged: () => void }) {
+  const { toast } = useToast();
+  const [note, setNote] = useState("");
+  const review = useMutation({
+    mutationFn: (decision: "approve" | "reject") => json<OrgSummary>("POST", `/api/admin/organizations/${org.id}/review`, { decision, note }),
+    onSuccess: (o) => { setNote(""); onChanged(); toast({ title: o.status === "active" ? "Account approved" : "Sent back", description: o.status === "active" ? "The owner's desk can book now." : "The owner is shown your note." }); },
+    onError: (e: Error) => toast({ title: "Could not record the check", description: e.message, variant: "destructive" }),
+  });
+  const d = org.businessDetails;
+  return (
+    <Card data-testid={`org-application-review-${org.id}`}>
+      <CardHeader>
+        <CardTitle>{org.name}</CardTitle>
+        <CardDescription>{categoryLabel(org.category)} · {org.status === "pending" ? "application to check" : "sent back"}{org.contactName ? ` · ${org.contactName}` : ""}{org.contactPhone ? ` · ${org.contactPhone}` : ""}{org.contactEmail ? ` · ${org.contactEmail}` : ""}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <p><span className="text-muted-foreground">Business:</span> {d?.legalName ?? "—"} · {BUSINESS_TYPE_LABELS[d?.businessType as BusinessType] ?? d?.businessType ?? "—"} · EIN {d?.ein ?? "—"} <span className="text-muted-foreground">(the desk sees {maskEin(d?.ein)})</span></p>
+        <p className="text-xs text-muted-foreground">Check the organization is registered under that name and EIN before approving. Facility fee {money(org.facilityFee)} per completed job, billed weekly; change either on the account once approved.</p>
+        {org.reviewNote && <p className="text-xs text-destructive">Sent back: {org.reviewNote}</p>}
+        {org.status === "pending" && (
+          <div className="flex flex-wrap gap-2 items-center pt-1">
+            <Input className="h-8 max-w-xs" placeholder="Note to the owner (needed to send back)" value={note} onChange={(e) => setNote(e.target.value)} data-testid={`input-org-review-note-${org.id}`} />
+            <Button size="sm" disabled={review.isPending} onClick={() => review.mutate("approve")} data-testid={`button-approve-organization-${org.id}`}>Approve account</Button>
+            <Button size="sm" variant="outline" disabled={review.isPending || !note.trim()} onClick={() => review.mutate("reject")} data-testid={`button-sendback-organization-${org.id}`}>Send back</Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
