@@ -710,7 +710,12 @@ export default function RiderDashboard() {
       navigator.vibrate?.([200]);
     } else if (lastMessage.type === 'ride_cancelled') {
       refetchActiveRides();
-      toast({ title: "Ride Cancelled", description: "Your ride has been cancelled.", variant: "destructive" });
+      // The server sends why (reason / message) and by whom; until
+      // 2026-09-29 both were dropped on the floor here.
+      const why = typeof lastMessage.reason === 'string' && lastMessage.reason.trim() ? lastMessage.reason.trim()
+        : typeof lastMessage.message === 'string' && lastMessage.message.trim() ? lastMessage.message.trim() : '';
+      const who = lastMessage.cancelledBy === 'driver' ? 'by your driver' : lastMessage.cancelledBy === 'admin' ? 'by PG Ride support' : '';
+      toast({ title: "Ride Cancelled", description: `Your ride has been cancelled${who ? ` ${who}` : ''}.${why ? ` ${why}` : ''}`, variant: "destructive" });
     } else if (lastMessage.type === 'ride_driver_cancelled') {
       refetchActiveRides();
       queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });

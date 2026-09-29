@@ -178,6 +178,7 @@ import { noteWatchRan } from "./watchHeartbeat";
 import { emailFailureRecorder } from "./emailFailures";
 import { DRIVER_DROP_GRACE_MS, DRIVER_DROP_WINDOW_MINUTES, DRIVER_DROP_WORDS, dropHasExpired } from "@shared/driverPresence";
 import { WS_HEARTBEAT_MS } from "@shared/liveLocation";
+import { UserSockets, socketsFor } from "./wsFanout";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { describeClientBuild } from "@shared/clientBuild";
 import { registerMapTileRoutes } from "./mapTiles";
@@ -5104,9 +5105,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ? (goodwillCredit > 0
                 ? `Your driver had to cancel — a $${goodwillCredit.toFixed(2)} credit was added to your wallet while we rematch you.`
                 : "Your driver had to cancel. We're finding you a new driver — your fare is unchanged.")
-            : cancellationFee > 0
-              ? `Ride cancelled. A $${cancellationFee.toFixed(2)} cancellation fee has been applied.`
-              : "Your ride has been cancelled.",
+            : `${cancellationFee > 0
+                ? `Ride cancelled. A $${cancellationFee.toFixed(2)} cancellation fee has been applied.`
+                : "Your ride has been cancelled."}${reason && reason.trim() && reason.trim() !== "Ride cancelled" ? ` ${reason.trim().slice(0, 120)}` : ""}`,
           tag: "ride-cancelled",
           url: "/",
           data: { rideId, cancellationFee },
@@ -11244,7 +11245,10 @@ Generate the FAQ list.`;
   // WebSocket server for real-time communication
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
   
-  const activeConnections = new Map<string, WebSocket>();
+  // One entry per person, every open tab inside it (server/wsFanout.ts):
+  // `get(id)?.send(...)` reaches all of them and `readyState` is OPEN while
+  // any is, so the sites below read exactly as they did with one socket.
+  const activeConnections = new Map<string, UserSockets>();
   setRideMessageConnections(activeConnections);
 
   // County preferences per connected driver (userId → acceptedCounties[])
@@ -11332,7 +11336,7 @@ Generate the FAQ list.`;
                   ws.close();
                   return;
                 }
-                activeConnections.set(message.userId, ws);
+                socketsFor(activeConnections, message.userId).add(ws);
                 // The driver is back: a socket close only started a clock
                 // (shared/driverPresence.ts); a join stops it.
                 if (user.isDriver) storage.clearDriverSocketDrop(message.userId).catch(() => {});
@@ -11493,7 +11497,10 @@ Generate the FAQ list.`;
       }
       // Remove from active connections and clear county cache
       for (const [userId, connection] of Array.from(activeConnections.entries())) {
-        if (connection === ws) {
+        if (connection.has(ws)) {
+          connection.delete(ws);
+          // Another tab still open: the person is still here.
+          if (connection.size > 0) break;
           activeConnections.delete(userId);
           driverCountyCache.delete(userId);
 
