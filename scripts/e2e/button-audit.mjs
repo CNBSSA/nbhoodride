@@ -58,6 +58,8 @@ const SCREENS = [
   // The receiver's "delivered" page (2026-09-17).
   { role: "visitor", path: `/delivered/${E2E_DELIVERED_TOKEN}` },
   { role: "visitor", path: "/forgot-password" }, { role: "visitor", path: "/terms" }, { role: "visitor", path: "/privacy" },
+  // The link a rider is emailed to reset their password (2026-09-29): the page must read the token from it.
+  { role: "visitor", path: "/reset-password?token=e2e-not-a-real-token" }, { role: "visitor", path: "/reset-password" },
   { role: "rider", path: "/" }, { role: "rider", path: "/rent" }, { role: "rider", path: "/ratings" }, { role: "rider", path: "/payments" }, { role: "rider", path: "/card-setup" },
   { role: "driver", path: "/" }, { role: "driver", path: "/driver/insights" },
   { role: "admin", path: "/admin" }, { role: "admin", path: "/" },
