@@ -157,6 +157,10 @@ export const driverProfiles = pgTable("driver_profiles", {
   // Background check identifiers (Checkr)
   checkrCandidateId: varchar("checkr_candidate_id"),
   checkrReportId: varchar("checkr_report_id"),
+  // When this driver's last WebSocket closed and nothing has re-joined since
+  // (shared/driverPresence.ts). Null while a socket is open. Their claimed
+  // scheduled rides are released only once this is older than the grace.
+  presenceDroppedAt: timestamp("presence_dropped_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [

@@ -141,6 +141,8 @@ ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS daily_counties TEXT[];
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS daily_session_start TIMESTAMP;
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS checkr_candidate_id VARCHAR;
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS checkr_report_id VARCHAR;
+-- Socket-drop grace (2026-09-29): when the driver's last socket closed; null while one is open.
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS presence_dropped_at TIMESTAMP;
 
 -- ── Vehicles ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vehicles (
