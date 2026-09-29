@@ -3802,6 +3802,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
     try {
+      // SECURITY (2026-09-29): the car must be this driver's own, as for
+      // PUT /api/vehicles/:vehicleId below. Until now any signed-in user
+      // could overwrite any driver's car photos by naming its id. A copy of
+      // a PG Ride car (rental_car_id) is the car's, not the driver's, and its
+      // photos are changed on the car itself.
+      const driverProfile = await storage.getDriverProfile(userId);
+      if (!driverProfile) {
+        return res.status(403).json({ error: "Driver profile required" });
+      }
+      const ownVehicles = await storage.getVehiclesByDriverId(driverProfile.id);
+      const target = ownVehicles.find((v: any) => v.id === req.body.vehicleId);
+      if (!target) {
+        return res.status(403).json({ error: "Not authorized to update this vehicle" });
+      }
+      if ((target as any).rentalCarId || (target as any).fleetCarId) {
+        return res.status(409).json({ error: "This car's photos are kept on the car itself, not on your copy of it." });
+      }
+
       // DB-fallback objects carry owner-or-admin ACL inherently; GCS objects
       // need the explicit ACL policy stamped here.
       let objectPath: string = req.body.photoURL;
