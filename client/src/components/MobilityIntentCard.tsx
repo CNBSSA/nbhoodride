@@ -39,6 +39,9 @@ export interface IntentResolution {
   destinationAddress?: string;
   pickup?: { lat: number; lng: number; address: string };
   destination?: { lat: number; lng: number; address: string };
+  /** Where "home" came from: a saved home, or where the last ride started (orchestrator); "no_home" when there is neither. */
+  source?: "template" | "last_pickup";
+  reason?: "no_home";
   autonomyLevel: number;
 }
 
@@ -117,12 +120,26 @@ export function MobilityIntentCard({ onResolved, onGuardianShare, disabled }: Mo
     },
   });
 
+  // The Home and Repeat chips used to do nothing at all when PG Ride had
+  // nothing to go on (no ride yet, so no home), and nothing on a failed
+  // request either: a dead button. Now every outcome is said.
+  const chipError = (err: any) => {
+    toast({ title: err?.message?.startsWith("429:") ? "Slow down a bit, then try again." : "Could not reach PG Ride — please try again.", variant: "destructive" });
+  };
+
   const repeatLast = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/mobility/intent", { utterance: "same as last time" });
       return res.json() as Promise<IntentResolution>;
     },
-    onSuccess: onResolved,
+    onSuccess: (data) => {
+      if (!data.destinationAddress) {
+        toast({ title: "No ride to repeat yet", description: "Once you have taken a ride, this brings you back to the same place." });
+        return;
+      }
+      onResolved(data);
+    },
+    onError: chipError,
   });
 
   const rideHome = useMutation({
@@ -130,7 +147,17 @@ export function MobilityIntentCard({ onResolved, onGuardianShare, disabled }: Mo
       const res = await apiRequest("POST", "/api/mobility/intent", { utterance: "take me home" });
       return res.json() as Promise<IntentResolution>;
     },
-    onSuccess: onResolved,
+    onSuccess: (data) => {
+      if (!data.destinationAddress) {
+        toast({ title: "PG Ride doesn't know your home yet", description: "Type your address once and book; from then on Home brings you back to it." });
+        return;
+      }
+      if (data.source === "last_pickup") {
+        toast({ title: "Heading to where your last ride started", description: "Not home? Type your address instead." });
+      }
+      onResolved(data);
+    },
+    onError: chipError,
   });
 
   const guardianShare = useMutation({
