@@ -6932,12 +6932,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       if (emailAlso) {
-        for (const user of recipients) {
-          if (!user.email) continue;
-          sendAnnouncementEmail({ email: user.email, firstName: user.firstName, title, body }).catch((err) =>
-            console.error('[announcement] email failed:', err),
-          );
-        }
+        // One at a time, in the background: firing every recipient at once
+        // opened a connection per message and Gmail refused the burst; each
+        // failure is isolated and reported by the email module itself.
+        const toEmail = recipients.filter((u) => !!u.email);
+        void (async () => {
+          for (const user of toEmail) {
+            await sendAnnouncementEmail({ email: user.email!, firstName: user.firstName, title, body }).catch((err) =>
+              console.error('[announcement] email failed:', err),
+            );
+          }
+        })();
       }
 
       const record = await storage.createAnnouncement({
