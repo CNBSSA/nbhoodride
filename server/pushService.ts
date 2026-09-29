@@ -81,11 +81,17 @@ export async function sendPushNotification(
     );
     return true;
   } catch (err: any) {
-    if (err.statusCode === 410 || err.statusCode === 404) {
-      return false; // Subscription expired — caller should remove it
-    }
-    console.error("Push send error:", err.message);
-    return false;
+    // Every failure is written down (reliability audit 2026-09-29): a pruned
+    // subscription and a send error used to leave no trace, so nobody could
+    // say how many riders a push never reached. Fire-and-forget, imported
+    // here so the module stays free of the database for its unit tests.
+    const expired = err?.statusCode === 410 || err?.statusCode === 404;
+    const message = `${expired ? "pruned" : "failed"} ${err?.statusCode ?? ""} ${String(err?.message ?? err).slice(0, 200)}`.trim();
+    if (!expired) console.error("Push send error:", err?.message);
+    import("./reliabilityEvents")
+      .then((m) => m.recordReliabilityEvent({ kind: expired ? "push_pruned" : "push_failed", page: payload.tag ?? null, message }))
+      .catch(() => {});
+    return false; // Expired: the caller removes the subscription
   }
 }
 

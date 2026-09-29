@@ -523,9 +523,14 @@ export default function DriverDashboard() {
     } else if (lastMessage.type === 'ride_cancelled') {
       refetchPendingRides();
       refetchActiveRides();
+      // Say who and why when the server said (2026-09-29): a rider's own
+      // cancel, support, a payment that failed, or an organization's desk.
+      const why = typeof lastMessage.reason === 'string' && lastMessage.reason.trim() ? lastMessage.reason.trim()
+        : typeof lastMessage.message === 'string' && lastMessage.message.trim() ? lastMessage.message.trim() : '';
+      const who = lastMessage.cancelledBy === 'admin' ? 'by PG Ride support' : lastMessage.cancelledBy === 'driver' ? '' : 'by the rider';
       toast({
         title: "Ride Cancelled",
-        description: "A ride has been cancelled by the rider.",
+        description: `A ride has been cancelled${who ? ` ${who}` : ''}.${why ? ` ${why}` : ''}`,
         variant: "destructive",
       });
     } else if (lastMessage.type === 'tip_received') {
