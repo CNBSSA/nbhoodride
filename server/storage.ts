@@ -956,11 +956,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateDriverLocation(userId: string, location: {lat: number, lng: number}): Promise<void> {
+    const now = new Date();
     await db
       .update(driverProfiles)
       .set({ 
         currentLocation: location,
-        updatedAt: new Date() 
+        locationUpdatedAt: now,
+        updatedAt: now 
       })
       .where(eq(driverProfiles.userId, userId));
   }
