@@ -139,6 +139,7 @@ import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/refe
 import { db } from "./db";
 import { isUniqueViolation } from "./pgErrors";
 import { eq, and, desc, asc, sql, or, isNull, isNotNull, gt, like, inArray, count, sum, gte, lte, lt } from "drizzle-orm";
+import { hashResetToken } from "./resetTokens";
 import { alias } from "drizzle-orm/pg-core";
 
 function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -862,10 +863,11 @@ export class DatabaseStorage implements IStorage {
   // `WHERE email = 'Festus@Gmail.com'` matched no row while the email still
   // went out with a link that could never work (reliability audit 2026-09-29).
   async setPasswordResetToken(userId: string, token: string, expiry: Date): Promise<void> {
+    // Only the hash is stored (server/resetTokens.ts); the email carries the token.
     await db
       .update(users)
       .set({ 
-        passwordResetToken: token,
+        passwordResetToken: hashResetToken(token),
         passwordResetExpiry: expiry,
         updatedAt: new Date() 
       })
@@ -873,12 +875,19 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUserByResetToken(token: string): Promise<User | undefined> {
+    // The hash is what is stored now; a plain token from a row written by
+    // the code before 2026-09-29 is accepted for the hour it lives.
     const [user] = await db
       .select()
       .from(users)
       .where(
         and(
-          eq(users.passwordResetToken, token),
+          or(
+            eq(users.passwordResetToken, hashResetToken(token)),
+            // A plain token only where a plain token is stored: the stored
+            // hash itself must never open the account.
+            and(eq(users.passwordResetToken, token), sql`${users.passwordResetToken} !~ '^[0-9a-f]{64}$'`),
+          ),
           sql`${users.passwordResetExpiry} > NOW()`
         )
       );

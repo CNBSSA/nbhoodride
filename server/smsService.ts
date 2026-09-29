@@ -1,6 +1,12 @@
 /**
  * Outbound SMS with opt-out enforcement.
  *
+ * A one-time reset code is NOT exempt from STOP (decided 2026-09-29): the
+ * code goes out through Twilio Verify rather than this sender, so the
+ * forgot-password-by-text route checks the opt-out registry itself before
+ * asking Verify, answers with the same generic line, and pages ops so a
+ * person can reach the rider another way.
+ *
  * Every ride-related text goes through here so that three rules hold without
  * each caller having to remember them:
  *   1. Nothing is sent to a number that replied STOP (TCPA — the opt-out
