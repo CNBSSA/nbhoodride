@@ -161,6 +161,10 @@ export const driverProfiles = pgTable("driver_profiles", {
   // (shared/driverPresence.ts). Null while a socket is open. Their claimed
   // scheduled rides are released only once this is older than the grace.
   presenceDroppedAt: timestamp("presence_dropped_at"),
+  // When the position in current_location was last written (shared/
+  // liveLocation.ts). updated_at moves on any profile change, so the
+  // ride-risk watch used to read a fresh profile edit as a fresh position.
+  locationUpdatedAt: timestamp("location_updated_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [

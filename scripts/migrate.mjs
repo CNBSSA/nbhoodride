@@ -143,6 +143,8 @@ ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS checkr_candidate_id VARCHAR
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS checkr_report_id VARCHAR;
 -- Socket-drop grace (2026-09-29): when the driver's last socket closed; null while one is open.
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS presence_dropped_at TIMESTAMP;
+-- Live position stamp (2026-09-29): when current_location was last written, apart from any other profile change.
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS location_updated_at TIMESTAMP;
 
 -- ── Vehicles ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vehicles (
