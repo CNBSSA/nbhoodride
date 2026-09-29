@@ -60,12 +60,17 @@ export async function run({ base, db }) {
     let muteClosed = false; let liveClosed = false;
     mute.on("close", () => { muteClosed = true; });
     live.on("close", () => { liveClosed = true; });
+    // The server runs the same round by itself every 30 seconds, so its own
+    // tick can land between opening these sockets and the admin's first
+    // round and ping the silent one first. What must hold either way: no
+    // socket that answers is ever dropped, and the silent one is gone within
+    // two rounds of the admin's.
     const round1 = await admin.req("POST", "/api/admin/analytics/ws-heartbeat", {});
-    check("the first round pings every socket and drops none", round1.status === 200 && round1.json?.pinged >= 2 && round1.json?.dropped === 0, JSON.stringify(round1.json));
     await wait(500);
+    check("the first round pings the open sockets and drops none that answered", round1.status === 200 && round1.json?.pinged >= 1 && !liveClosed, JSON.stringify(round1.json));
     const round2 = await admin.req("POST", "/api/admin/analytics/ws-heartbeat", {});
     await wait(500);
-    check("the second round drops the socket that never answered", round2.json?.dropped >= 1 && muteClosed, JSON.stringify({ r: round2.json, muteClosed }));
+    check("by the second round the socket that never answered is dropped", (round1.json?.dropped ?? 0) + (round2.json?.dropped ?? 0) >= 1 && muteClosed, JSON.stringify({ r1: round1.json, r2: round2.json, muteClosed }));
     check("and keeps the one that did", !liveClosed && live.readyState === WebSocket.OPEN);
     live.close();
   } finally {
