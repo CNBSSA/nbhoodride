@@ -230,6 +230,7 @@ export interface IStorage {
   createUser(user: UpsertUser): Promise<User>;
   upsertUser(user: UpsertUser): Promise<User>;
   updatePassword(userId: string, hashedPassword: string): Promise<void>;
+  endAllSessionsFor(userId: string, reason: string): Promise<void>;
   setPasswordResetToken(userId: string, token: string, expiry: Date): Promise<void>;
   getUserByResetToken(token: string): Promise<User | undefined>;
   updateLastLogin(userId: string): Promise<void>;
@@ -825,6 +826,22 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  /**
+   * Every session this user holds is ended (reliability audit 2026-09-29).
+   * A password is reset because the old one is forgotten or feared stolen;
+   * either way a session opened with it must not outlive the reset. The
+   * same statement `adminUpdateUser` uses on revoke and suspend.
+   */
+  async endAllSessionsFor(userId: string, reason: string): Promise<void> {
+    await db.execute(sql`DELETE FROM sessions WHERE sess->>'userId' = ${userId} OR sess->>'testUserId' = ${userId}`)
+      .then(() => console.log(`[AUDIT] sessions_ended userId=${userId} reason=${reason}`))
+      .catch((err) => console.error(`[AUDIT] could not end sessions for ${userId}:`, err));
+  }
+
+  // A reset by emailed link. Also clears the login lockout — the usual
+  // reason someone is here — which the SMS and admin resets already did
+  // (reliability audit 2026-09-29: a rider locked out at five tries who
+  // reset by email was still told to wait up to fifteen minutes).
   async updatePassword(userId: string, hashedPassword: string): Promise<void> {
     await db
       .update(users)
@@ -832,9 +849,12 @@ export class DatabaseStorage implements IStorage {
         password: hashedPassword,
         passwordResetToken: null,
         passwordResetExpiry: null,
+        failedLoginAttempts: 0,
+        lockoutUntil: null,
         updatedAt: new Date() 
       })
       .where(eq(users.id, userId));
+    await this.endAllSessionsFor(userId, "password_reset");
   }
 
   // Keyed by the user's id, never by the email as typed: accounts are stored
@@ -881,11 +901,15 @@ export class DatabaseStorage implements IStorage {
   // R-L5: bump the failed-login counter for a user and, once we've crossed
   // the threshold, set lockoutUntil. Returns the new attempt count and the
   // resulting lockout time (or null) so the route can branch.
+  // A reset by text code or by an admin. Also voids any emailed reset link
+  // still out there, so a link requested before this reset cannot change
+  // the password again for its hour, and ends every session.
   async setTemporaryPassword(userId: string, passwordHash: string): Promise<void> {
     await db
       .update(users)
-      .set({ password: passwordHash, failedLoginAttempts: 0, lockoutUntil: null, updatedAt: new Date() })
+      .set({ password: passwordHash, failedLoginAttempts: 0, lockoutUntil: null, passwordResetToken: null, passwordResetExpiry: null, updatedAt: new Date() })
       .where(eq(users.id, userId));
+    await this.endAllSessionsFor(userId, "password_reset");
   }
 
   async recordFailedLogin(userId: string, opts: { threshold: number; lockoutMinutes: number }): Promise<{ attempts: number; lockoutUntil: Date | null }> {

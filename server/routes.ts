@@ -26,6 +26,7 @@ import {
   sendAccountApprovedEmail,
   sendDriverApprovedEmail,
   sendPasswordResetEmail,
+  setEmailFailureRecorder,
   sendRideAcceptedEmail,
   sendRideReceiptEmail,
   sendSignupPendingEmail,
@@ -174,6 +175,7 @@ import { materializeAllStandingOrders } from "./commercial/standingOrders";
 import { runWeeklyBilling } from "./commercial/billing";
 import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { noteWatchRan } from "./watchHeartbeat";
+import { emailFailureRecorder } from "./emailFailures";
 import { DRIVER_DROP_GRACE_MS, DRIVER_DROP_WINDOW_MINUTES, DRIVER_DROP_WORDS, dropHasExpired } from "@shared/driverPresence";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { describeClientBuild } from "@shared/clientBuild";
@@ -409,6 +411,8 @@ async function notifyRideMessageRecipient(
 export async function registerRoutes(app: Express): Promise<Server> {
   // Every rider alert also lands in reliability_events for the daily review.
   setRiderAlertRecorder(reliabilityEventRecorder);
+  // A failed email pages ops once an hour per kind and is counted every time.
+  setEmailFailureRecorder(emailFailureRecorder);
 
   /** An Anthropic SDK connection/API failure: an outage to report as 503, not a bug to report as 500. */
   const aiUnavailable = (error: unknown): boolean => {
@@ -1137,6 +1141,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       const { email } = forgotPasswordSchema.parse(req.body);
+
+      // No email can leave at all (no app password in production): say so,
+      // as the text door does, instead of "check your email" for an email
+      // that will never come. Not user-specific, so it reveals nothing.
+      if (process.env.NODE_ENV === "production" && !getEmailConfigSummary().passwordPresent) {
+        riderAlert("server_error", "POST /api/auth/forgot-password", [["Route", "forgot-password"], ["Error", "email is not configured (SMTP_PASS missing)"]]);
+        return res.status(503).json({ message: "Reset by email is not available right now. Use reset by text, or contact support." });
+      }
 
       // Find user by email
       const user = await storage.getUserByEmail(email);

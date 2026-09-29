@@ -26,6 +26,20 @@ async function loginAs(page, base, email) {
     return (await fetch("/api/auth/email-login", { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": decodeURIComponent(t) }, body: JSON.stringify({ email, password }), credentials: "include" })).status;
   }, { email, password: PASSWORD });
   if (status !== 200) throw new Error(`login as ${email} failed: ${status}`);
+  // A 200 from the sign-in is not yet a session the next page load can use:
+  // on a cold, loaded runner the desk pass and the install pass have both
+  // opened their first page and been treated as signed out (the business
+  // sign-in, no tab bar), while the same head passed warm and passed here.
+  // So wait until the session answers for itself before navigating anywhere.
+  const live = await page.evaluate(async () => {
+    for (let i = 0; i < 40; i++) {
+      const r = await fetch("/api/auth/user", { credentials: "include" }).catch(() => null);
+      if (r && r.status === 200) return i;
+      await new Promise((res) => setTimeout(res, 250));
+    }
+    return -1;
+  });
+  if (live < 0) throw new Error(`login as ${email}: signed in but /api/auth/user never answered 200 within 10s`);
   await page.goto(base + "/", { waitUntil: "domcontentloaded" });
   try { await page.tap('[data-testid="welcome-dismiss"]', { timeout: 3000 }); } catch {}
 }
