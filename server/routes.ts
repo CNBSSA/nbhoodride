@@ -177,6 +177,7 @@ import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { noteWatchRan } from "./watchHeartbeat";
 import { emailFailureRecorder } from "./emailFailures";
 import { DRIVER_DROP_GRACE_MS, DRIVER_DROP_WINDOW_MINUTES, DRIVER_DROP_WORDS, dropHasExpired } from "@shared/driverPresence";
+import { WS_HEARTBEAT_MS } from "@shared/liveLocation";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { describeClientBuild } from "@shared/clientBuild";
 import { registerMapTileRoutes } from "./mapTiles";
@@ -1851,22 +1852,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "lat and lng must be numbers" });
       }
       await storage.updateDriverLocation(userId, { lat, lng });
-      if (rideId) {
-        checkRouteDeviationForRide(storage, rideId, lat, lng).catch(console.error);
-        const ride = await storage.getRide(rideId);
-        if (ride?.riderId && activeConnections.has(ride.riderId)) {
-          const riderWs = activeConnections.get(ride.riderId)!;
-          if (riderWs.readyState === WebSocket.OPEN) {
-            riderWs.send(JSON.stringify(buildDriverLocationMessage({
-              rideId,
-              driverId: userId,
-              lat,
-              lng,
-            })));
-          }
+      // This is the driver app's fallback when its socket is down
+      // (shared/liveLocation.ts), so it must do everything the socket path
+      // does: the rider of every active ride is sent the position when they
+      // have a socket, and the route is checked for deviation.
+      const forwardTo = (ride: any) => {
+        if (!ride?.riderId) return;
+        checkRouteDeviationForRide(storage, ride.id, lat, lng).catch(() => {});
+        const riderWs = activeConnections.get(ride.riderId);
+        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+          riderWs.send(JSON.stringify(buildDriverLocationMessage({ rideId: ride.id, driverId: userId, lat, lng })));
         }
+      };
+      if (rideId) {
+        forwardTo(await storage.getRide(rideId));
+      } else {
+        for (const ride of await storage.getActiveRidesForDriver(userId)) forwardTo(ride);
       }
-      res.json({ success: true });
+      res.json({ success: true, at: new Date().toISOString() });
     } catch (error) {
       console.error("Error updating driver location:", error);
       res.status(500).json({ message: "Failed to update location" });
@@ -5174,6 +5177,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const driverProfile = await storage.getDriverProfile(ride.driverId);
             const driverVehicles = driverProfile ? await storage.getVehiclesByDriverId(driverProfile.id) : [];
             driver = {
+              id: ride.driverId,
               firstName: driverUser.firstName,
               lastName: driverUser.lastName,
               rating: driverUser.rating,
@@ -5181,6 +5185,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
               profileImageUrl: driverUser.profileImageUrl,
               vehicle: driverVehicles[0] ? `${driverVehicles[0].year} ${driverVehicles[0].make} ${driverVehicles[0].model} - ${driverVehicles[0].color}` : null,
               licensePlate: driverVehicles[0]?.licensePlate || null,
+              // The driver's last stored position and when it was written, so
+              // the rider's 5-second poll keeps the map moving when the socket
+              // is down (shared/liveLocation.ts).
+              currentLocation: driverProfile?.currentLocation ?? null,
+              locationUpdatedAt: driverProfile?.locationUpdatedAt ?? null,
             };
           }
         }
@@ -11247,8 +11256,36 @@ Generate the FAQ list.`;
     console.error('WebSocket server error (non-fatal):', err);
   });
 
+  // Heartbeat (shared/liveLocation.ts): a socket that misses a ping is
+  // closed, so a half-open one — a phone that lost signal without a FIN —
+  // stops counting as "delivered" and the chat push fallback fires.
+  const socketAlive = new WeakMap<WebSocket, boolean>();
+  function runHeartbeat(): { pinged: number; dropped: number } {
+    let pinged = 0; let dropped = 0;
+    wss.clients.forEach((ws) => {
+      if (socketAlive.get(ws) === false) {
+        dropped++;
+        ws.terminate();
+        return;
+      }
+      socketAlive.set(ws, false);
+      pinged++;
+      try { ws.ping(); } catch { /* closing */ }
+    });
+    return { pinged, dropped };
+  }
+  const heartbeatTimer = setInterval(runHeartbeat, WS_HEARTBEAT_MS);
+  wss.on('close', () => clearInterval(heartbeatTimer));
+
+  // Admin: run one heartbeat round now (journey 43 and an operator's check).
+  app.post('/api/admin/analytics/ws-heartbeat', isAdminOrSessionAuth, async (_req: any, res) => {
+    res.json({ at: new Date().toISOString(), ...runHeartbeat() });
+  });
+
   wss.on('connection', (ws, req) => {
     console.log('WebSocket connection established');
+    socketAlive.set(ws, true);
+    ws.on('pong', () => socketAlive.set(ws, true));
     
     // Reuse the single session middleware instance initialised above.
     // The session-store lookup is async, so expose it as a promise and make
