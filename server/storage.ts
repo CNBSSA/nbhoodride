@@ -386,6 +386,12 @@ export interface IStorage {
   claimScheduledRide(rideId: string, driverId: string): Promise<Ride>;
   unclaimScheduledRide(rideId: string): Promise<Ride | null>;
   getClaimedScheduledRidesForDriver(driverId: string, withinMinutes: number): Promise<any[]>;
+  /** A driver's socket closed: note when, unless one is already noted (the first close counts). */
+  noteDriverSocketDropped(userId: string): Promise<void>;
+  /** A driver's socket joined: they are back. */
+  clearDriverSocketDrop(userId: string): Promise<void>;
+  /** Drivers whose last socket closed at or before `cutoff` and who have not re-joined. */
+  getDriversDroppedBefore(cutoff: Date): Promise<Array<{ userId: string; presenceDroppedAt: Date }>>;
   getDriverUpcomingRides(driverId: string): Promise<any[]>;
 
   // Driver ride management operations
@@ -1399,6 +1405,30 @@ export class DatabaseStorage implements IStorage {
       .where(eq(rides.id, rideId))
       .returning();
     return updated ?? null;
+  }
+
+  async noteDriverSocketDropped(userId: string): Promise<void> {
+    // The FIRST close starts the clock; a later close while still dropped
+    // must not push the release out again.
+    await db
+      .update(driverProfiles)
+      .set({ presenceDroppedAt: new Date() })
+      .where(and(eq(driverProfiles.userId, userId), isNull(driverProfiles.presenceDroppedAt)));
+  }
+
+  async clearDriverSocketDrop(userId: string): Promise<void> {
+    await db
+      .update(driverProfiles)
+      .set({ presenceDroppedAt: null })
+      .where(and(eq(driverProfiles.userId, userId), isNotNull(driverProfiles.presenceDroppedAt)));
+  }
+
+  async getDriversDroppedBefore(cutoff: Date): Promise<Array<{ userId: string; presenceDroppedAt: Date }>> {
+    const rows = await db
+      .select({ userId: driverProfiles.userId, presenceDroppedAt: driverProfiles.presenceDroppedAt })
+      .from(driverProfiles)
+      .where(and(isNotNull(driverProfiles.presenceDroppedAt), lte(driverProfiles.presenceDroppedAt, cutoff)));
+    return rows.filter((r): r is { userId: string; presenceDroppedAt: Date } => !!r.presenceDroppedAt);
   }
 
   async getClaimedScheduledRidesForDriver(driverId: string, withinMinutes: number): Promise<any[]> {
