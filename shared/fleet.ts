@@ -215,3 +215,90 @@ export const FLEET_CAR_STATUS_WORDS: Record<FleetCarStatus, string> = {
   parked: "Parked: not on the road",
   ready: "Ready: may carry riders",
 };
+
+// ── Slice 3: drivers and cars ────────────────────────────────────────────────
+//
+// A fleet invites its drivers; PG Ride alone approves a driver (a fleet can
+// never approve its own); a driver drives for one fleet at a time; the owner
+// or a manager gives a ready car to one of the fleet's approved drivers, one
+// car per driver and one driver per car, and takes it back. While a driver
+// has a car it is copied into their vehicles so riders and dispatch see it
+// like an owned car; a car that is parked stops being drivable at once.
+
+/** A driver drives for one fleet at a time (Festus, 2026-09-28). */
+export const ONE_FLEET_RULE = "A driver drives for one fleet at a time.";
+
+/** What the inviting fleet is told: it never learns which other fleet. */
+export const OTHER_FLEET_FOR_DESK = `That person already drives for another fleet on PG Ride. ${ONE_FLEET_RULE} They leave that fleet first.`;
+
+/** What the driver is told when they try to join a second fleet. */
+export function otherFleetForDriver(otherFleetName: string): string {
+  return `You already drive for ${otherFleetName}. ${ONE_FLEET_RULE} Ask ${otherFleetName} to remove you first, then open this invitation again.`;
+}
+
+/** PG Ride's driver approval, in words the fleet desk shows. A fleet never changes it. */
+export function driverApprovalWords(approvalStatus: string | null | undefined): string {
+  switch (approvalStatus) {
+    case "approved": return "Approved by PG Ride";
+    case "pending": return "Waiting for PG Ride to check their documents";
+    case "background_check_pending": return "Background check under way";
+    case "rejected": return "Not approved by PG Ride";
+    case "suspended": return "Suspended by PG Ride";
+    case null: case undefined: case "": return "Has not applied to drive yet";
+    default: return `PG Ride: ${approvalStatus}`;
+  }
+}
+
+export interface AssignCheck {
+  car: FleetCarForCheck & { status?: string | null; driverUserId?: string | null; organizationId?: string | null };
+  fleetId: string;
+  fleetStatus: string | null | undefined;
+  /** The driver's role in THIS fleet, or null. */
+  driverRole: OrgRole | null | undefined;
+  /** driver_profiles.approval_status, or null when they never applied. */
+  driverApproval: string | null | undefined;
+  driverSuspended?: boolean | null;
+  /** Another car of this fleet the driver already has, or null. */
+  driverHasCarId?: string | null;
+  now?: Date;
+}
+
+/**
+ * Why a car may not be given to a driver, in words the desk can act on.
+ * Empty = it may. The car must be the fleet's, ready (checked and
+ * qualified) and free; the driver the fleet's own driver, approved by PG
+ * Ride and not suspended, without another of the fleet's cars.
+ */
+export function assignProblems(input: AssignCheck): string[] {
+  const out: string[] = [];
+  const now = input.now ?? new Date();
+  if (input.fleetStatus !== "active") out.push("PG Ride has not approved this fleet, or it is paused: cars are given to drivers only while it is open.");
+  if (input.car.organizationId && input.car.organizationId !== input.fleetId) out.push("That car is not this fleet's.");
+  const carProblems = fleetCarProblems(input.car, now);
+  if (input.car.status !== "ready" || carProblems.length) out.push(`The car is not ready to carry riders${carProblems.length ? `: ${carProblems.join(" ")}` : "."}`);
+  if (input.car.driverUserId) out.push("The car is already with a driver. Take it back first.");
+  if (input.driverRole !== "driver") out.push("That person is not one of this fleet's drivers. Invite them as a driver first.");
+  if (input.driverApproval !== "approved") out.push(`PG Ride has not approved them as a driver (status: ${driverApprovalWords(input.driverApproval)}). A fleet cannot approve its own drivers: they finish PG Ride's driver application and PG Ride checks it.`);
+  else if (input.driverSuspended) out.push("PG Ride has suspended them as a driver.");
+  if (input.driverHasCarId) out.push("They already have one of the fleet's cars. One car per driver: take that one back first.");
+  return out;
+}
+
+/**
+ * May a driver go online, as far as fleet cars go? `otherCars` counts every
+ * vehicle of theirs that is not a fleet car's copy (their own, or a PG Ride
+ * rental, which has its own check). A driver whose only car is a fleet car
+ * drives it only while it is ready.
+ */
+export function fleetCarMayDrive(input: {
+  otherCars: number;
+  fleetCar: { label: string; status: string; parkedReason?: string | null } | null;
+  hasFleetCopy: boolean;
+}): { ok: true } | { ok: false; reason: string } {
+  if (input.otherCars > 0) return { ok: true };
+  if (input.fleetCar && input.fleetCar.status === "ready" && input.hasFleetCopy) return { ok: true };
+  if (input.fleetCar) {
+    return { ok: false, reason: `Your fleet car ${input.fleetCar.label} is parked${input.fleetCar.parkedReason ? `: ${input.fleetCar.parkedReason}` : "."} You can go online in it once your fleet puts it right.` };
+  }
+  return { ok: true };
+}

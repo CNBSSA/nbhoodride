@@ -1108,9 +1108,10 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(vehicles)
       .where(eq(vehicles.driverProfileId, driverProfileId))
-      // A driver's own car before a PG Ride car they are renting, then oldest
-      // first: dispatch and the rider's card read the first one.
-      .orderBy(sql`${vehicles.rentalCarId} IS NOT NULL`, vehicles.createdAt);
+      // A driver's own car before a PG Ride car they are renting or a fleet
+      // car they were given, then oldest first: dispatch and the rider's card
+      // read the first one.
+      .orderBy(sql`(${vehicles.rentalCarId} IS NOT NULL OR ${vehicles.fleetCarId} IS NOT NULL)`, vehicles.createdAt);
   }
 
   async updateVehicle(vehicleId: string, updates: Partial<InsertVehicle>): Promise<Vehicle> {

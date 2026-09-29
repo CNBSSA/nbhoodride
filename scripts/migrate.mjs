@@ -1680,6 +1680,10 @@ CREATE TABLE IF NOT EXISTS fleet_cars (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_fleet_cars_org ON fleet_cars(organization_id);
+
+-- ── Fleet management accounts, slice 3: drivers and cars ──
+ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS fleet_car_id VARCHAR;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_cars_driver ON fleet_cars(driver_user_id) WHERE driver_user_id IS NOT NULL;
 `;
 
 async function migrate() {

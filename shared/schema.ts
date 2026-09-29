@@ -192,6 +192,8 @@ export const vehicles = pgTable("vehicles", {
   updatedAt: timestamp("updated_at").defaultNow(),
   /** Set when this row mirrors a PG Ride fleet car assigned to the driver (server/rental/drivers.ts). */
   rentalCarId: varchar("rental_car_id"),
+  /** Set when this row mirrors a fleet management account's car given to the driver (server/fleet/drivers.ts). */
+  fleetCarId: varchar("fleet_car_id"),
 });
 
 // Ride status enum
@@ -1842,6 +1844,8 @@ export const fleetCars = pgTable("fleet_cars", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   index("idx_fleet_cars_org").on(table.organizationId),
+  // One fleet car per driver (slice 3).
+  uniqueIndex("uq_fleet_cars_driver").on(table.driverUserId).where(sql`driver_user_id IS NOT NULL`),
 ]);
 export type FleetCar = typeof fleetCars.$inferSelect;
 
