@@ -230,7 +230,7 @@ export interface IStorage {
   createUser(user: UpsertUser): Promise<User>;
   upsertUser(user: UpsertUser): Promise<User>;
   updatePassword(userId: string, hashedPassword: string): Promise<void>;
-  setPasswordResetToken(email: string, token: string, expiry: Date): Promise<void>;
+  setPasswordResetToken(userId: string, token: string, expiry: Date): Promise<void>;
   getUserByResetToken(token: string): Promise<User | undefined>;
   updateLastLogin(userId: string): Promise<void>;
   recordFailedLogin(userId: string, opts: { threshold: number; lockoutMinutes: number }): Promise<{ attempts: number; lockoutUntil: Date | null }>;
@@ -837,7 +837,11 @@ export class DatabaseStorage implements IStorage {
       .where(eq(users.id, userId));
   }
 
-  async setPasswordResetToken(email: string, token: string, expiry: Date): Promise<void> {
+  // Keyed by the user's id, never by the email as typed: accounts are stored
+  // lowercased and looked up case-insensitively, so a token written by
+  // `WHERE email = 'Festus@Gmail.com'` matched no row while the email still
+  // went out with a link that could never work (reliability audit 2026-09-29).
+  async setPasswordResetToken(userId: string, token: string, expiry: Date): Promise<void> {
     await db
       .update(users)
       .set({ 
@@ -845,7 +849,7 @@ export class DatabaseStorage implements IStorage {
         passwordResetExpiry: expiry,
         updatedAt: new Date() 
       })
-      .where(eq(users.email, email));
+      .where(eq(users.id, userId));
   }
 
   async getUserByResetToken(token: string): Promise<User | undefined> {

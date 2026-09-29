@@ -1149,11 +1149,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const resetToken = nanoid(32);
       const resetExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
 
-      // Save reset token
-      await storage.setPasswordResetToken(email, resetToken, resetExpiry);
+      // Save reset token on the account that was found (by id: the email as
+      // typed may differ in case from the one stored) and send the link to
+      // the address on the account.
+      await storage.setPasswordResetToken(user.id, resetToken, resetExpiry);
 
       const appUrl = resolveAppUrl(`https://${req.get('host')}`);
-      sendPasswordResetEmail(email, user.firstName, resetToken, appUrl).catch(console.error);
+      sendPasswordResetEmail(user.email ?? email, user.firstName, resetToken, appUrl).catch(console.error);
 
       res.json({ 
         message: "If the email exists, a password reset link will be sent",
