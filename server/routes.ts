@@ -1204,13 +1204,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await storage.getUserByEmail(email);
       const phone = normalizePhoneE164(user?.phone);
       if (!user || user.deletedAt || !phone) return res.json(generic);
+      // A number that replied STOP gets no text from PG Ride, the code
+      // included (server/smsService.ts): the answer is the same generic
+      // line and ops are paged so a person can help. Answering differently
+      // here would tell a stranger which emails have a phone on file.
+      if (await storage.isPhoneOptedOut(phone).catch(() => false)) {
+        riderAlert("login_locked_out", user.id, [["Name", `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim()], ["Email", email], ["Phone", phone], ["Note", "asked for a reset code by text but replied STOP earlier — reach out another way"]]);
+        return res.json(generic);
+      }
       try {
         await startPhoneVerification(phone);
         console.log(`[AUDIT] password_reset_sms_sent userId=${user.id}`);
       } catch (err) {
+        // A landline or an unreachable number: the same generic answer (a
+        // different one was an existence oracle), and ops are paged.
         console.error("[verify] start failed:", err);
-        riderAlert("server_error", "POST /api/auth/forgot-password-sms", [["Route", "forgot-password-sms"], ["Error", String((err as any)?.message ?? err).slice(0, 200)]]);
-        return res.status(503).json({ message: "We couldn't send a code right now. Please try again in a minute or contact support." });
+        riderAlert("server_error", "POST /api/auth/forgot-password-sms", [["Route", "forgot-password-sms"], ["User id", user.id], ["Error", String((err as any)?.message ?? err).slice(0, 200)]]);
       }
       res.json(generic);
     } catch (error) {
