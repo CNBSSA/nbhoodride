@@ -134,6 +134,8 @@ import {
 import { filterDriversByVehicleType } from "@shared/vehicleTypes";
 import { resolveCompletedFare, type FarePricing } from "@shared/farePolicy";
 import { splitFare, driverBasisFor } from "@shared/payoutPolicy";
+import { fleetRideSplit } from "@shared/fleet";
+import { fleetStampForDriver, writeFleetFareEarning } from "./fleet/earnings";
 import { CASH_DISCONTINUED_MESSAGE, mayCreateWithPaymentMethod, settlesInCash } from "@shared/paymentMethods";
 import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/referralPolicy";
 import { db } from "./db";
@@ -2225,6 +2227,25 @@ export class DatabaseStorage implements IStorage {
     updateData.platformFee = split.platformFee.toFixed(2);
     updateData.driverEarnings = split.driverEarnings.toFixed(2);
 
+    // Fleet management accounts, slice 4: a ride driven in a fleet's car
+    // shares the driver's 85% of the fare 25% to the fleet owner and 75% to
+    // the driver; the tip stays the driver's. Decided once, here: a ride
+    // already stamped keeps its stamp. driver_earnings then reads what the
+    // driver actually gets, so every earnings screen and the ledger credit
+    // agree, and fleet_share is what the fleet is credited alongside it
+    // (creditDriverEarningsOnce). With FLEET_ENABLED off nothing is stamped.
+    const fleetStamp = ride.fleetCarId && ride.fleetOrgId
+      ? { fleetCarId: ride.fleetCarId, fleetOrgId: ride.fleetOrgId }
+      : await fleetStampForDriver(driverId, ride.paymentMethod);
+    if (fleetStamp) {
+      const shared = fleetRideSplit(split.driverFareShare, split.tip);
+      updateData.fleetCarId = fleetStamp.fleetCarId;
+      updateData.fleetOrgId = fleetStamp.fleetOrgId;
+      updateData.fleetShare = shared.fleetShare.toFixed(2);
+      updateData.driverEarnings = shared.driverEarnings.toFixed(2);
+      console.log(`[fleet] ride ${rideId}: driven in fleet car ${fleetStamp.fleetCarId}; driver $${shared.driverEarnings.toFixed(2)} (75% + tip), fleet $${shared.fleetShare.toFixed(2)}`);
+    }
+
     // Update ride status to completed — only from in_progress, so two
     // completions racing (Complete and an early end) finish the ride once
     // and only the winner goes on to pay the driver.
@@ -2877,6 +2898,10 @@ export class DatabaseStorage implements IStorage {
         reason: "ride_earnings",
         rideId,
       });
+      // A ride driven in a fleet's car credits the fleet its 25% in the same
+      // transaction and under the same lock, so the driver's credit and the
+      // fleet's are written together, once (server/fleet/earnings.ts).
+      await writeFleetFareEarning(tx as any, rideId, driverId);
       return true;
     });
   }
@@ -3923,6 +3948,8 @@ export class DatabaseStorage implements IStorage {
     platformShareCollected: number;
     platformShareUncollected: number;
     driverShare: number;
+    /** Fleet management accounts, slice 4: the fleet owners' 25% of their drivers' share on rides in fleet cars. */
+    fleetShare: number;
     /** Rides taken in cash before it was discontinued, not yet confirmed by their driver. */
     cashRidesUnsettled: number;
     /** Rides taken in cash at all this year, so the tail can be watched out. */
@@ -3937,6 +3964,7 @@ export class DatabaseStorage implements IStorage {
       cancelFee: rides.cancellationFee,
       platformFee: rides.platformFee,
       driverEarnings: rides.driverEarnings,
+      fleetShare: rides.fleetShare,
       paymentMethod: rides.paymentMethod,
       paymentStatus: rides.paymentStatus,
       billedStatus: commercialJobs.billedStatus,
@@ -3959,7 +3987,7 @@ export class DatabaseStorage implements IStorage {
     );
 
     let totalFares = 0, totalTips = 0, totalCancelFees = 0;
-    let platformShare = 0, platformShareCollected = 0, driverShare = 0;
+    let platformShare = 0, platformShareCollected = 0, driverShare = 0, fleetShare = 0;
     // Cash is discontinued (shared/paymentMethods.ts). These two say how much
     // of that tail is left: how many cash rides there were this year, and how
     // many of them a driver has still not confirmed the money for.
@@ -3973,6 +4001,9 @@ export class DatabaseStorage implements IStorage {
       const earned = r.driverEarnings != null ? parseFloat(r.driverEarnings) - parseFloat(r.tip || "0") : parseFloat(r.fare || "0");
       platformShare += fee;
       driverShare += Math.max(0, earned);
+      // On a fleet car the driver's 85% is shared; the fleet's 25% is counted
+      // here, so fares = PG Ride's share + drivers' + fleets' still holds.
+      fleetShare += parseFloat(r.fleetShare || "0");
       // Collected: a card that settled, or an invoice job whose statement was
       // paid. A cash fare is the driver's in hand — nothing of it reached
       // PG Ride — and a statement still charging or failed has not either.
@@ -4000,6 +4031,7 @@ export class DatabaseStorage implements IStorage {
       platformShareCollected: round2(platformShareCollected),
       platformShareUncollected: round2(platformShare - platformShareCollected),
       driverShare: round2(driverShare),
+      fleetShare: round2(fleetShare),
       cashRides,
       cashRidesUnsettled,
     };

@@ -182,6 +182,7 @@ import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial
 import { describeClientBuild } from "@shared/clientBuild";
 import { registerMapTileRoutes } from "./mapTiles";
 import { runWeeklyPayday } from "./payday";
+import { creditDriverCutOnce } from "./fleet/earnings";
 import { paydayKeyOf, paydayRunDue } from "@shared/paydayCycle";
 import { BUILD_ID } from "./buildInfo";
 import { payDriverForCompletedJob, payDriverForWaiting } from "./commercial/driverPay";
@@ -2961,7 +2962,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // sorts the account's statement out afterwards (post-implementation
       // audit, 2026-09-18 — the same rule as every other commercial payment).
       const splitOn = commercialFeeUnwritten ? RIDER_NO_SHOW_FEE : (commercialNoShowFee ?? collected);
-      const split = await routeFeeWithFairnessSplit(splitOn, userId, rideId);
+      const split = await routeFeeWithFairnessSplit(splitOn, userId, rideId, "no_show_fee");
       const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
       if (ride.paymentMethod === 'invoice') {
@@ -3375,16 +3376,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // and FAIRNESS_FUND_RATE of it feeds the community bonus pool that pays
   // for goodwill credits when a driver lets a rider down (see /cancel).
   // The fee never routes anywhere when there's no driver to compensate.
+  // In a fleet's car the driver's cut is shared 25/75 with the fleet, once
+  // (server/fleet/earnings.ts); in their own car, or with fleets switched
+  // off, it is credited exactly as before. `driverCut` stays the driver's
+  // whole cut before any fleet share, as the audit log has always recorded.
   async function routeFeeWithFairnessSplit(
     fee: number,
     driverId: string | null | undefined,
     rideId: string,
+    kind: "cancel_fee" | "no_show_fee" = "cancel_fee",
   ): Promise<{ driverCut: number; fundCut: number }> {
     if (fee <= 0 || !driverId) return { driverCut: 0, fundCut: 0 };
     const fundCut = Number((fee * FAIRNESS_FUND_RATE).toFixed(2));
     const driverCut = Number((fee - fundCut).toFixed(2));
     if (driverCut > 0) {
-      await storage.addVirtualCardBalance(driverId, driverCut, "cancellation_fee", rideId);
+      await creditDriverCutOnce(storage, { rideId, driverUserId: driverId, amount: driverCut, reason: "cancellation_fee", kind });
     }
     if (fundCut > 0) {
       await storage.fundCommunityBonusPool(fundCut);
@@ -4950,7 +4956,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         if (cancellationFee > 0) {
           const collected = await collectFeeFromRide(ride, cancellationFee);
-          await routeFeeWithFairnessSplit(collected, ride.driverId, rideId);
+          await routeFeeWithFairnessSplit(collected, ride.driverId, rideId, "cancel_fee");
           await storage.cancelRideWithFee(
             rideId, cancellationFee, reason || "Ride cancelled",
             undefined, undefined, userId, "rider",

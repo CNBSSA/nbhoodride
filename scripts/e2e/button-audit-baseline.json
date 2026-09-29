@@ -397,6 +397,7 @@
     "button-portal-apply": "the portal's empty state for a signed-in person in no organization, which no audit fixture is; journey 38 applies over the API",
     "button-drive-landing": "on the app's landing page, which a visitor opening / does not get (the server's About page answers a bare /); it leads to /signup?drive=1, which journey 37 and the visitor screen /signup?drive=1 cover",
     "button-business-apply-landing": "on the app's landing page, which a visitor opening / does not get (the server's About page answers a bare /); it leads to /org/apply, which journey 38 and the visitor and rider /org/apply screens cover",
+    "button-fleet-payout-sent-*": "inside a fleet's detail in Admin, Organizations, which the audit does not open, and it records that PG Ride sent a fleet its money; journey 47 marks a payout sent over the API",
     "button-fleet-invite-driver": "disabled until a driver's email is typed, and pressing it sends a real invitation; journey 45 invites a driver over the API",
     "button-fleet-assign-car-*": "disabled until one of the fleet's approved drivers is chosen (the seed fleet has none), and it gives a car away; journey 45 assigns a car over the API",
     "button-fleet-take-back-*": "never pressed: shown only on a fleet car a driver has, and it takes the car off them; journey 45 takes a car back over the API",

@@ -5,13 +5,14 @@
  * portal as a booking account, but it never books: the desk shows where the
  * application stands, the business on file, how the fleet is paid, and the
  * split it works on, its cars (slice 2) and its drivers and who has which
- * car (slice 3). Earnings (slice 4) arrive later. Everything comes from /api/fleet/*, which answers
+ * car (slice 3), and its money (slice 4): what its cars earned this week and
+ * last, and each Friday's payout. Everything comes from /api/fleet/*, which answers
  * only for fleets the signed-in person belongs to.
  */
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { ArrowLeft, Car, Landmark, ShieldCheck, Users } from "lucide-react";
+import { ArrowLeft, Car, Landmark, ShieldCheck, Users, Wallet } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import { BRAND } from "@shared/branding";
 import { BUSINESS_TYPE_LABELS, FLEET_LABEL, FLEET_PAYOUT_METHODS, type BusinessType } from "@shared/fleet";
 import { FleetCarsSection } from "@/components/portal/FleetCars";
 import { FleetDriversSection } from "@/components/portal/FleetDrivers";
+import { FleetEarningsSection, FleetPayoutsSection } from "@/components/portal/FleetMoney";
 
 interface Desk {
   id: string; name: string; status: "pending" | "active" | "paused" | "rejected"; statusText: string; reviewNote: string | null; role: string;
@@ -94,6 +96,14 @@ export function FleetDesk({ orgId, memberships, onSwitch }: { orgId: string; mem
               {desk.status === "active" && <FleetCarsSection orgId={desk.id} canManage={desk.role === "owner" || desk.role === "manager"} />}
               {desk.status === "active" && <FleetDriversSection orgId={desk.id} canManage={desk.role === "owner" || desk.role === "manager"} />}
             </section>
+
+            {desk.status !== "pending" && desk.status !== "rejected" && (
+              <section className="border rounded-xl p-4 space-y-3" data-testid="fleet-money">
+                <p className="font-medium flex items-center gap-2"><Wallet className="h-4 w-4" /> Money</p>
+                <FleetEarningsSection orgId={desk.id} />
+                <FleetPayoutsSection orgId={desk.id} />
+              </section>
+            )}
 
             <section className="border rounded-xl p-4 space-y-1" data-testid="fleet-people">
               <p className="font-medium flex items-center gap-2"><Users className="h-4 w-4" /> People</p>

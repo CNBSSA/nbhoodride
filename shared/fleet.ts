@@ -302,3 +302,159 @@ export function fleetCarMayDrive(input: {
   }
   return { ok: true };
 }
+
+// ── Slice 4: the 25/75 split and the Friday payout ───────────────────────────
+//
+// PG Ride keeps its 15% of every fare as on any ride. On a ride driven in a
+// fleet's car the driver's 85% of the FARE is shared: 25% to the fleet owner,
+// 75% to the driver (fleetSplit above). A tip is never shared. The driver's
+// cut of a waiting charge, a cancellation fee or a no-show fee earned in a
+// fleet car is shared the same way, because the car earned it. Anything
+// earned in the driver's own car is theirs alone. Each split is written once,
+// whatever retries happen; the fleet's money waits in fleet_earnings until
+// the Friday payday sends it to the fleet's own account.
+//
+// Tax forms: PG Ride pays a fleet as a business, so it will owe the fleet a
+// year-end information return (1099). How and by whom is to be settled with
+// Festus's accountant BEFORE fleet money moves in production: FLEET_ENABLED
+// stays off there until that decision. The admin's yearly total per fleet
+// (legal name, EIN, paid in the year) is the record the accountant files from.
+
+import { paydayFor, type PaydayDecision } from "./paydayCycle";
+import { settlesInCash } from "./paymentMethods";
+
+/** What a fleet can earn from, one row per ride and kind (fleet_earnings.kind). */
+export const FLEET_EARNING_KINDS = ["fare", "waiting", "cancel_fee", "no_show_fee"] as const;
+export type FleetEarningKind = (typeof FLEET_EARNING_KINDS)[number];
+
+export const FLEET_EARNING_KIND_WORDS: Record<FleetEarningKind, string> = {
+  fare: "Ride",
+  waiting: "Waiting at the door",
+  cancel_fee: "Late cancel fee",
+  no_show_fee: "No-show fee",
+};
+
+export interface VehicleForFleetRide { fleetCarId?: string | null }
+export interface FleetCarForRide { id: string; organizationId: string; driverUserId: string | null }
+export interface FleetForRide { id: string; category: string | null; status: string | null }
+
+/**
+ * Was this ride driven in a fleet's car? Rides do not record a vehicle, so
+ * the rule follows what the rider was shown: the driver's FIRST vehicle in
+ * the order riders and dispatch read (their own cars first, then a PG Ride
+ * rental or fleet copy; storage.getVehiclesByDriverId). It is a fleet ride
+ * when fleets are switched on, that first vehicle is a fleet car's copy, the
+ * car is still with this driver, and its fleet is open. A driver with a car
+ * of their own drives it first, so nothing they earn is shared. A ride taken
+ * in cash (before cash was discontinued) is never split: the fleet's share
+ * would be in the driver's pocket, and there is nothing to credit.
+ */
+export function fleetRideFor(input: {
+  enabled: boolean;
+  driverUserId: string | null | undefined;
+  paymentMethod?: string | null;
+  vehiclesInOrder: VehicleForFleetRide[];
+  car: FleetCarForRide | null | undefined;
+  fleet: FleetForRide | null | undefined;
+}): { fleetCarId: string; fleetOrgId: string } | null {
+  if (!input.enabled || !input.driverUserId) return null;
+  if (input.paymentMethod !== undefined && settlesInCash(input.paymentMethod)) return null;
+  const first = input.vehiclesInOrder[0];
+  if (!first?.fleetCarId) return null;
+  const car = input.car;
+  if (!car || car.id !== first.fleetCarId || car.driverUserId !== input.driverUserId) return null;
+  const fleet = input.fleet;
+  if (!fleet || fleet.id !== car.organizationId || fleet.category !== "fleet" || fleet.status !== "active") return null;
+  return { fleetCarId: car.id, fleetOrgId: fleet.id };
+}
+
+const cents = (v: unknown): number => {
+  const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : 0;
+};
+
+/**
+ * A completed fleet ride's figures. `driverFareShare` is the driver's 85%
+ * (shared/payoutPolicy.ts splitFare); the tip rides beside it untouched.
+ * driverEarnings is what the driver is credited (their 75% plus the whole
+ * tip) and fleetShare the fleet's 25%, so driverEarnings + fleetShare + PG
+ * Ride's 15% accounts for every cent of the fare and the tip.
+ */
+export function fleetRideSplit(driverFareShare: unknown, tip: unknown): { gross: number; fleetShare: number; driverKeeps: number; tip: number; driverEarnings: number } {
+  const gross = cents(driverFareShare) / 100;
+  const t = cents(tip);
+  const { fleetShare, driverKeeps } = fleetSplit(gross);
+  return { gross, fleetShare, driverKeeps, tip: t / 100, driverEarnings: (Math.round(driverKeeps * 100) + t) / 100 };
+}
+
+/** The driver's cut of a fee earned in a fleet car: shared 25/75 like the fare. */
+export function fleetFeeSplit(driverCut: unknown): { gross: number; fleetShare: number; driverKeeps: number } {
+  const gross = cents(driverCut) / 100;
+  return { gross, ...fleetSplit(gross) };
+}
+
+/**
+ * What a fleet is paid on Friday: everything credited to it and not yet
+ * paid, when it is open and has an account on file, and at least the
+ * payday minimum (a smaller sum rides to next Friday, as for drivers).
+ */
+export function fleetPaydayFor(input: { owed: unknown; status: string | null | undefined; payoutMethod?: string | null; payoutDetails?: string | null }): PaydayDecision {
+  const owed = cents(input.owed) / 100;
+  if (owed <= 0) return { amount: 0, pay: false, reason: "Nothing owed" };
+  if (input.status !== "active") return { amount: 0, pay: false, reason: `The fleet is ${input.status ?? "not open"}; PG Ride decides by hand` };
+  const d = paydayFor(owed, !!(input.payoutMethod && input.payoutDetails));
+  if (!d.pay && /payout method/i.test(d.reason)) return { ...d, reason: "No payout method on file — the fleet's owner adds one on the fleet desk" };
+  return d;
+}
+
+export interface FleetEarningLine {
+  kind: string;
+  fleetCarId: string;
+  carLabel: string;
+  driverUserId: string;
+  driverName: string;
+  /** The ride's fare (0 on a fee). */
+  fare: number;
+  gross: number;
+  fleetShare: number;
+  driverKeeps: number;
+}
+
+export interface FleetEarningTotals { rides: number; fares: number; gross: number; fleetShare: number; driversShare: number }
+
+const add = (a: number, b: number) => Math.round((a + b) * 100) / 100;
+const emptyTotals = (): FleetEarningTotals => ({ rides: 0, fares: 0, gross: 0, fleetShare: 0, driversShare: 0 });
+const addLine = (t: FleetEarningTotals, l: FleetEarningLine) => {
+  if (l.kind === "fare") { t.rides += 1; t.fares = add(t.fares, l.fare); }
+  t.gross = add(t.gross, l.gross); t.fleetShare = add(t.fleetShare, l.fleetShare); t.driversShare = add(t.driversShare, l.driverKeeps);
+};
+
+/**
+ * The fleet desk's Earnings view: the week's totals, per car and per
+ * driver. Rides counts completed fares only (a fee is not a ride); the
+ * drivers' share is their 75%, never their tips, which are not the fleet's
+ * business.
+ */
+export function groupFleetEarnings(lines: FleetEarningLine[]): {
+  totals: FleetEarningTotals;
+  byCar: Array<FleetEarningTotals & { fleetCarId: string; carLabel: string }>;
+  byDriver: Array<FleetEarningTotals & { driverUserId: string; driverName: string }>;
+} {
+  const totals = emptyTotals();
+  const cars = new Map<string, FleetEarningTotals & { fleetCarId: string; carLabel: string }>();
+  const drivers = new Map<string, FleetEarningTotals & { driverUserId: string; driverName: string }>();
+  for (const l of lines) {
+    addLine(totals, l);
+    if (!cars.has(l.fleetCarId)) cars.set(l.fleetCarId, { fleetCarId: l.fleetCarId, carLabel: l.carLabel, ...emptyTotals() });
+    addLine(cars.get(l.fleetCarId)!, l);
+    if (!drivers.has(l.driverUserId)) drivers.set(l.driverUserId, { driverUserId: l.driverUserId, driverName: l.driverName, ...emptyTotals() });
+    addLine(drivers.get(l.driverUserId)!, l);
+  }
+  const byShare = <T extends FleetEarningTotals>(a: T, b: T) => b.fleetShare - a.fleetShare;
+  return { totals, byCar: Array.from(cars.values()).sort(byShare), byDriver: Array.from(drivers.values()).sort(byShare) };
+}
+
+export const FLEET_PAYOUT_STATUS_WORDS: Record<string, string> = {
+  requested: "Waiting for PG Ride to send it",
+  sent: "Sent by PG Ride",
+};
