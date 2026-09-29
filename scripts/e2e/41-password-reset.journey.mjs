@@ -44,7 +44,8 @@ export async function run({ base, db, server }) {
   section("A reset by email clears the lockout and ends other sessions");
   const other = new Session(base); await other.csrf();
   const otherLogin = await other.login(email, "Newpassw0rd!");
-  check("a second device is signed in", otherLogin.status === 200 && (await other.req("GET", "/api/auth/user")).status === 200);
+  const otherMe = await other.req("GET", "/api/auth/user");
+  check("a second device is signed in", otherLogin.status === 200 && otherMe.status === 200, `login ${otherLogin.status} ${JSON.stringify(otherLogin.json?.message)}; me ${otherMe.status}`);
   for (let i = 0; i < 5; i++) await rider.login(email, "WrongPass1!");
   check("five wrong tries lock the account", (await rider.login(email, "Newpassw0rd!")).status === 429);
   await rider.req("POST", "/api/auth/forgot-password", { email });
