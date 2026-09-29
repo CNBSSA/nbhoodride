@@ -134,6 +134,28 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * Where a failed send is reported beyond the log (reliability audit
+ * 2026-09-29: every user-facing email failure was swallowed to console.error,
+ * so an approval notice or a reset link that never left was invisible to the
+ * operator). The server registers a recorder that pages ops and writes a
+ * reliability_events row; this module stays free of the database and of
+ * Telegram so it can be unit-tested with Nodemailer stubbed.
+ */
+export type EmailFailureRecorder = (event: { to: string; subject: string; reason: string; attempts: number }) => void;
+let failureRecorder: EmailFailureRecorder | null = null;
+export function setEmailFailureRecorder(fn: EmailFailureRecorder | null): void {
+  failureRecorder = fn;
+}
+function reportEmailFailure(to: string, subject: string, err: unknown, attempts: number): void {
+  const reason = String((err as any)?.message ?? err).slice(0, 300);
+  try {
+    failureRecorder?.({ to, subject, reason, attempts });
+  } catch (recorderErr) {
+    console.error("[EMAIL] failure recorder threw:", recorderErr);
+  }
+}
+
 export class EmailNotConfiguredError extends Error {
   constructor() {
     super("Email service is not configured. SMTP_PASS (the Gmail app password) is missing.");
@@ -149,7 +171,9 @@ async function sendEmail(to: string, subject: string, html: string): Promise<voi
     // local development without an SMTP password still works.
     if (process.env.NODE_ENV === "production") {
       console.error(`[EMAIL] Refusing to send (SMTP_PASS missing): to=${to} subject=${subject}`);
-      throw new EmailNotConfiguredError();
+      const notConfigured = new EmailNotConfiguredError();
+      reportEmailFailure(to, subject, notConfigured, 0);
+      throw notConfigured;
     }
     console.log(`[EMAIL — not sent in dev, SMTP_PASS not set]\nTo: ${to}\nSubject: ${subject}`);
     return;
@@ -169,6 +193,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<voi
     } catch (err) {
       if (attempt === 2) {
         console.error(`[EMAIL] Failed to send to ${to} after 2 attempts:`, err);
+        reportEmailFailure(to, subject, err, attempt);
         // Bubble the failure up so endpoints can decide whether to mark the
         // request as a soft success (fire-and-forget) or a hard failure.
         throw err;
