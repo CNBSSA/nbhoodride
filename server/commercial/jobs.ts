@@ -20,7 +20,8 @@ import { commercialJobs, organizations, rides, users, type CommercialJob, type R
 import { checkScheduleTime } from "@shared/schedulingPolicy";
 import { estimateRoute } from "@shared/routeEstimate";
 import { DEFAULT_VEHICLE_FARE_MULTIPLIERS, VEHICLE_TYPES } from "@shared/vehicleTypes";
-import { jobTotal } from "@shared/commercial";
+import { isCategory, jobTotal } from "@shared/commercial";
+import { bookingRefusal } from "@shared/orgApplication";
 import { deliverySummary } from "./deliveries";
 import { estimateFare, validateRideRequest, type Location } from "../rideWorkflowService";
 import type { IStorage } from "../storage";
@@ -69,7 +70,9 @@ const isLocation = (v: any): v is Location =>
 export async function bookJob(storage: IStorage, input: BookJobInput, now: Date = new Date()): Promise<BookedJob> {
   const org = await getOrganization(input.organizationId);
   if (!org) throw new CommercialError("Organization not found.", 404);
-  if (org.status !== "active") throw new CommercialError("This organization is paused; nothing can be booked for it until it is active again.", 409);
+  // A fleet supplies cars and drivers; it never books (shared/fleet.ts).
+  if (!isCategory(org.category)) throw new CommercialError("A fleet account does not book rides.", 409);
+  if (org.status !== "active") throw new CommercialError(bookingRefusal(org.status), 409);
 
   const passengerName = String(input.passengerName ?? "").trim().slice(0, 120);
   if (!passengerName) throw new CommercialError("Who is riding? A passenger name is needed.");

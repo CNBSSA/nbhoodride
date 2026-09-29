@@ -39,8 +39,10 @@
 | `TWILIO_VERIFY_SERVICE_SID` | Twilio Verify service | **Optional** | With Twilio | Password reset by text |
 | `TELEGRAM_BOT_TOKEN` | Ops paging bot (@BotFather) | **Wired** | Before anyone relies on alerts | Every operator page: SOS, rider trouble, outages, 4 AM review, payday |
 | `TELEGRAM_CHAT_ID` | Ops chat the bot posts to | **Wired** | With the bot token | Same — without both, pages go to the server log and nobody is told |
-| `RESEND_API_KEY` | Transactional email | **Optional** | Before production email | Signup, receipts, approvals |
-| `RESEND_FROM` | From address (verified domain) | **Optional** | With Resend | Email deliverability |
+| `SMTP_PASS` | Gmail app password (16 chars) for transactional email | **Wired** | Before production email | Signup confirmation, password reset, invitations, receipts, approvals |
+| `SMTP_USER` | The Gmail account (default `thrynovainsights@gmail.com`) | **Optional** | With SMTP_PASS | Which account sends |
+| `SMTP_HOST` / `SMTP_PORT` | Mail server (default `smtp.gmail.com` / `587`) | **Optional** | With SMTP_PASS | STARTTLS on 587 |
+| `EMAIL_FROM` | From address (default: the account; Gmail sends only as the account or a verified send-as) | **Optional** | With SMTP_PASS | Email deliverability |
 | `PUBLIC_APP_URL` | Canonical app URL | **Wired** | Before guardian/SMS links in prod | Tracking share links |
 | `APP_URL` | Fallback app URL (email service) | **Optional** | Email links | Email CTAs |
 | `RAILWAY_PUBLIC_DOMAIN` | Auto-set on Railway | **Optional** | Railway deploy | OAuth redirects, emails |
@@ -110,7 +112,7 @@
 1. **Deploy minimum:** `DATABASE_URL`, `SESSION_SECRET`, `SUPER_ADMIN_SETUP_TOKEN`
 2. **Payments:** Stripe keys + webhook — see **[STRIPE_SETUP.md](./STRIPE_SETUP.md)** (~10 min paste)
 3. **Driver docs:** GCS bucket + credentials
-4. **Comms:** Resend (email), Twilio (SMS), VAPID (push) — pick what you want live first
+4. **Comms:** Gmail SMTP (email), Twilio (SMS), VAPID (push) — pick what you want live first
 5. **Maps:** `MAPBOX_TOKEN` from [mapbox.com](https://account.mapbox.com/) — recommended before real launch volume
 6. **Transit:** `WMATA_API_KEY` from [WMATA developer portal](https://developer.wmata.com/)
 7. **Tax:** Choose `TAX_COMPLIANCE_PATH` with CPA input

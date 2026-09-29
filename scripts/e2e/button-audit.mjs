@@ -48,6 +48,8 @@ const SCREENS = [
   { role: "visitor", path: "/" }, { role: "visitor", path: "/login" }, { role: "visitor", path: "/signup" },
   // The business door (2026-09-16): signed-out portal shows the business
   // sign-in, and the invitation link opens the join page.
+  // Sign up as a driver applicant (the driver funnel): the same form, "I want to drive" ticked.
+  { role: "visitor", path: "/signup?drive=1" },
   { role: "visitor", path: "/org/login" }, { role: "visitor", path: "/org" }, { role: "visitor", path: `/org/join/${E2E_INVITE_TOKEN}` },
   // A link that is the right shape but matches nothing: the "invitation not found" state and its way to the sign-in.
   { role: "visitor", path: `/org/join/${"0".repeat(48)}` },
@@ -56,12 +58,18 @@ const SCREENS = [
   // The receiver's "delivered" page (2026-09-17).
   { role: "visitor", path: `/delivered/${E2E_DELIVERED_TOKEN}` },
   { role: "visitor", path: "/forgot-password" }, { role: "visitor", path: "/terms" }, { role: "visitor", path: "/privacy" },
+  // The link a rider is emailed to reset their password (2026-09-29): the page must read the token from it.
+  { role: "visitor", path: "/reset-password?token=e2e-not-a-real-token" }, { role: "visitor", path: "/reset-password" },
   { role: "rider", path: "/" }, { role: "rider", path: "/rent" }, { role: "rider", path: "/ratings" }, { role: "rider", path: "/payments" }, { role: "rider", path: "/card-setup" },
   { role: "driver", path: "/" }, { role: "driver", path: "/driver/insights" },
   { role: "admin", path: "/admin" }, { role: "admin", path: "/" },
   { role: "requester", path: "/org" },
   // The same clerk's BUSINESS account: the only place the parcel door exists.
   { role: "requester", path: "/org?org=e2e-biz" },
+  // The fleet desk (Fleet Management Accounts Plan): the same portal, opened on a fleet.
+  { role: "requester", path: "/org?org=e2e-fleet" }, { role: "rider", path: "/fleet/apply" },
+  // Opening a business account (self-serve applications): signed out and signed in.
+  { role: "visitor", path: "/org/apply" }, { role: "rider", path: "/org/apply" },
   // An admin who is in no organization sees the portal's empty state — the only
   // place the way back to Admin → Organizations is offered. Nobody else can see it.
   { role: "admin", path: "/org" },

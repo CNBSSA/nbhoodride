@@ -184,6 +184,27 @@ export default function RiderDashboard() {
 
   useEffect(() => { trackPageView("rider_dashboard"); }, [trackPageView]);
 
+  // The booking sheet closes like a sheet should (product feedback,
+  // 2026-09-28: "sticky booking sheet"): Escape closes it, the phone's back
+  // button closes it instead of leaving the app, and a ride that starts by
+  // any other door (the assistant, a schedule, a coworker code) puts it away.
+  const panelRef = useRef<BookingPanel>("idle");
+  useEffect(() => { panelRef.current = panel; }, [panel]);
+  useEffect(() => {
+    if (panel === "idle") return;
+    if (!window.history.state?.pgridePanel) {
+      try { window.history.pushState({ ...(window.history.state ?? {}), pgridePanel: true }, ""); } catch {}
+    }
+  }, [panel]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && panelRef.current !== "idle") closeBooking(); };
+    const onPop = () => { if (panelRef.current !== "idle") resetBooking(); };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("popstate", onPop);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("popstate", onPop); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Listen for "I need a ride" tap from the ModeSelector while already in rider mode
   useEffect(() => {
     const handler = () => {
@@ -477,6 +498,12 @@ export default function RiderDashboard() {
   }, [drivers, trackRideSearch]);
 
   // ── Helpers ──
+  /** Close the sheet from a button or Escape: pops the history entry the open pushed, which resets through popstate; else resets directly. */
+  const closeBooking = useCallback(() => {
+    if (window.history.state?.pgridePanel) { try { window.history.back(); return; } catch {} }
+    resetBooking();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const resetBooking = useCallback(() => {
     setPanel("idle");
     setDestinationAddress("");
@@ -759,6 +786,12 @@ export default function RiderDashboard() {
     }
   }, [activeRide?.id, activeRide?.status]);
 
+  // A ride that begins by any other door puts the booking sheet away.
+  useEffect(() => {
+    if (activeRide?.id && panelRef.current !== "idle") resetBooking();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRide?.id]);
+
   const { data: rideSurface } = useQuery<RideSurfaceSpec>({
     queryKey: ["/api/mobility/surface", activeRide?.id],
     enabled: !!activeRide?.id,
@@ -792,6 +825,27 @@ export default function RiderDashboard() {
           }
         />
       </div>
+
+      {/* A driver applicant's next step, front and center (the driver funnel,
+          2026-09-28): until the application is approved, the home screen says
+          where it stands and takes them to their documents in one tap. */}
+      {(user as any)?.driverProfile && !user?.isDriver && (
+        <div className="relative z-20 mx-4 mt-2 rounded-xl border bg-card/95 backdrop-blur px-3 py-2 flex items-center justify-between gap-2 shadow-sm" style={{ marginTop: 'calc(0.5rem + env(safe-area-inset-top, 0px))' }} data-testid="banner-driver-application">
+          <div className="min-w-0">
+            <p className="text-sm font-medium truncate">Your driver application</p>
+            <p className="text-xs text-muted-foreground truncate" data-testid="text-driver-application-next">
+              {(user as any).driverProfile.approvalStatus === "rejected" ? "It could not be approved. Contact support."
+                : (user as any).driverProfile.approvalStatus === "background_check_pending" ? "Background check in progress."
+                : (user as any).driverProfile.licenseImageUrl && (user as any).driverProfile.insuranceImageUrl && ((user as any).driverProfile.vehiclePhotoUrls?.length ?? 0) > 0
+                  ? "Documents in. PG Ride is reviewing them."
+                  : "Next: upload your licence, insurance and car photos."}
+            </p>
+          </div>
+          <Button size="sm" onClick={() => { window.dispatchEvent(new CustomEvent("pgride:open-profile")); setTimeout(() => window.dispatchEvent(new CustomEvent("pgride:open-driver-documents")), 50); }} data-testid="button-driver-application-next">
+            {(user as any).driverProfile.licenseImageUrl ? "Documents" : "Upload"}
+          </Button>
+        </div>
+      )}
 
       {/* Top header — overlays the full-bleed map (the ModeSelector bar no
           longer renders on rider home, so this row is the top of the screen). */}
@@ -1034,7 +1088,7 @@ export default function RiderDashboard() {
           {/* Input row — pinned to top so keyboard never covers it */}
           <div className="flex items-center gap-2 px-3 pt-4 pb-3 border-b border-gray-100 flex-shrink-0">
             <button
-              onClick={resetBooking}
+              onClick={closeBooking}
               className="w-11 h-11 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0 active:bg-gray-200"
               data-testid="button-close-booking"
             >
@@ -1368,7 +1422,7 @@ export default function RiderDashboard() {
             {/* Destination display with Change button (no keyboard triggered) */}
             <div className="flex items-center gap-3 px-4 pt-1 pb-3 border-b border-gray-100 flex-shrink-0">
               <button
-                onClick={resetBooking}
+                onClick={closeBooking}
                 className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0 active:bg-gray-200"
                 data-testid="button-close-booking"
               >

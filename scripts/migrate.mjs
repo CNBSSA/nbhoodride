@@ -141,6 +141,8 @@ ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS daily_counties TEXT[];
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS daily_session_start TIMESTAMP;
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS checkr_candidate_id VARCHAR;
 ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS checkr_report_id VARCHAR;
+-- Socket-drop grace (2026-09-29): when the driver's last socket closed; null while one is open.
+ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS presence_dropped_at TIMESTAMP;
 
 -- ── Vehicles ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS vehicles (
@@ -1614,6 +1616,68 @@ ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_restored_at TIMESTAMP;
 ALTER TABLE rental_cars ADD COLUMN IF NOT EXISTS engine_restored_by VARCHAR;
 ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS overdue_paged_at TIMESTAMP;
 ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS overdue_paged_at TIMESTAMP;
+
+-- ── Car rental: industry-standard rules (Festus 2026-09-28) ──
+ALTER TABLE rental_cars ALTER COLUMN deposit SET DEFAULT 250.00;
+ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS young_renter_fee DECIMAL(8,2) NOT NULL DEFAULT 0.00;
+ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS rent_from_earnings_agreed_at TIMESTAMP;
+ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS late_hours INTEGER;
+ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS late_charge DECIMAL(8,2);
+ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS return_from_earnings DECIMAL(8,2);
+ALTER TABLE driver_rent_charges ADD COLUMN IF NOT EXISTS from_earnings DECIMAL(8,2);
+CREATE TABLE IF NOT EXISTS rental_renters (
+  user_id VARCHAR PRIMARY KEY REFERENCES users(id),
+  date_of_birth VARCHAR(10) NOT NULL,
+  licence_number VARCHAR NOT NULL,
+  licence_issued_on VARCHAR(10) NOT NULL,
+  licence_expires_on VARCHAR(10) NOT NULL,
+  licence_image_url VARCHAR NOT NULL,
+  record_status VARCHAR NOT NULL DEFAULT 'pending',
+  record_note TEXT,
+  record_checked_at TIMESTAMP,
+  record_checked_by VARCHAR,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- ── Fleet management accounts, slice 1 (Festus 2026-09-28) ──
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS fleet_details JSONB;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS review_note TEXT;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS payout_method VARCHAR;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS payout_details VARCHAR;
+
+-- ── Self-serve organization applications (2026-09-28) ──
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS business_details JSONB;
+
+-- ── Fleet management accounts, slice 2: a fleet's cars ──
+CREATE TABLE IF NOT EXISTS fleet_cars (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id),
+  make VARCHAR NOT NULL,
+  model VARCHAR NOT NULL,
+  year INTEGER NOT NULL,
+  color VARCHAR NOT NULL,
+  seats INTEGER NOT NULL DEFAULT 5,
+  vehicle_type VARCHAR NOT NULL DEFAULT 'standard',
+  license_plate VARCHAR NOT NULL,
+  vin VARCHAR,
+  photos JSONB NOT NULL DEFAULT '[]'::jsonb,
+  registration_doc_url VARCHAR,
+  insurance_doc_url VARCHAR,
+  inspection_doc_url VARCHAR,
+  inspection_expires TIMESTAMP,
+  registration_expires TIMESTAMP,
+  insurance_expires TIMESTAMP,
+  review_status VARCHAR NOT NULL DEFAULT 'pending',
+  review_note TEXT,
+  status VARCHAR NOT NULL DEFAULT 'parked',
+  parked_reason TEXT,
+  driver_user_id VARCHAR REFERENCES users(id),
+  created_by VARCHAR REFERENCES users(id),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_fleet_cars_org ON fleet_cars(organization_id);
 `;
 
 async function migrate() {

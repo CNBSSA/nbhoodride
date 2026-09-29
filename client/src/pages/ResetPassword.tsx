@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,13 +9,25 @@ import { useLocation, Link } from 'wouter';
 import { getCsrfToken } from '@/lib/queryClient';
 
 export default function ResetPassword() {
-  const [token, setToken] = useState('');
+  // The emailed link is /reset-password?token=…; until 2026-09-29 this page
+  // never read it, so a rider who tapped the button met an empty "Reset
+  // Token" box and had to copy the token out of the address bar by hand.
+  const [token, setToken] = useState(() => tokenFromLink());
+  const [fromLink] = useState(() => token.length > 0);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+
+  useEffect(() => {
+    // Take the token out of the address bar once it is held in state, so it
+    // is not left in the browser history or sent on as a referrer.
+    if (fromLink && typeof window !== 'undefined' && window.location.search) {
+      window.history.replaceState(window.history.state, '', window.location.pathname);
+    }
+  }, [fromLink]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,7 +91,7 @@ export default function ResetPassword() {
             Set New Password
           </CardTitle>
           <CardDescription>
-            Enter your reset token and choose a new password
+            {fromLink ? 'Choose a new password' : 'Enter your reset token and choose a new password'}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -103,8 +115,8 @@ export default function ResetPassword() {
                 required
                 data-testid="input-token"
               />
-              <p className="text-xs text-muted-foreground">
-                Copy and paste the reset token you received
+              <p className="text-xs text-muted-foreground" data-testid="text-token-hint">
+                {fromLink ? 'Filled in from the link in your email' : 'Copy and paste the reset token you received'}
               </p>
             </div>
 
@@ -160,4 +172,14 @@ export default function ResetPassword() {
       </Card>
     </div>
   );
+}
+
+/** The token carried by the emailed link, or '' when the page was opened by hand. */
+function tokenFromLink(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    return new URLSearchParams(window.location.search).get('token')?.trim() ?? '';
+  } catch {
+    return '';
+  }
 }

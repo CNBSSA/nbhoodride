@@ -73,6 +73,37 @@ export async function seedFixtures(db) {
   // reach this one by ?org=e2e-biz.
   await db.query(`INSERT INTO organizations (id, name, category, facility_fee, address) VALUES ('e2e-biz', 'E2E Books Expert LLC', 'business', 0.00, $1) ON CONFLICT (id) DO UPDATE SET address=$1`, [JSON.stringify({ lat: 38.9073, lng: -76.7781, address: "Bowie, MD" })]);
   await db.query(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES ('e2e-biz', $1, 'owner', NOW() - interval '1 day') ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner', created_at=NOW() - interval '1 day'`, [FIXTURES.rider.id]);
+  // A standing, approved FLEET account with the rider as owner (reached by the
+  // audits at ?org=e2e-fleet; its name sorts after the others, so it is never
+  // the portal's default), and a fleet application waiting for PG Ride with
+  // the driver as owner, so the admin's Organizations list has one to check.
+  // Both reset on every seed.
+  const fleetBiz = { legalName: "E2E Fleet Motors LLC", ein: "12-3456789", businessType: "llc" };
+  await db.query(`INSERT INTO organizations (id, name, category, status, facility_fee, fleet_details, payout_method, payout_details, contact_phone)
+    VALUES ('e2e-fleet', 'E2E Fleet Motors', 'fleet', 'active', 0.00, $1, 'zelle', 'fleet@example.com', '2405550100'),
+           ('e2e-fleet-app', 'E2E Fleet Applicant', 'fleet', 'pending', 0.00, $2, 'check', '12 Elm St, Bowie, MD', '2405550101')
+    ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, fleet_details=EXCLUDED.fleet_details, payout_method=EXCLUDED.payout_method, payout_details=EXCLUDED.payout_details, review_note=NULL`,
+    [JSON.stringify(fleetBiz), JSON.stringify({ ...fleetBiz, legalName: "E2E Fleet Applicant Inc", ein: "98-7654321", businessType: "corporation" })]).catch((e) => console.log("  (fleet seed) " + String(e?.message ?? e).split("\n")[0]));
+  await db.query(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES ('e2e-fleet', $1, 'owner', NOW() - interval '2 days'), ('e2e-fleet-app', $2, 'owner', NOW())
+    ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner'`, [FIXTURES.rider.id, FIXTURES.driver.id]).catch((e) => console.log("  (fleet members seed) " + String(e?.message ?? e).split("\n")[0]));
+  // A booking account that applied for itself and waits for PG Ride's check
+  // (self-serve applications), owned by the driver fixture so the admin's
+  // Organizations list has one to check and the rider's portal default is
+  // unchanged. Reset on every seed.
+  await db.query(`INSERT INTO organizations (id, name, category, status, facility_fee, business_details, contact_phone)
+    VALUES ('e2e-org-app', 'E2E Applicant Clinic', 'medical', 'pending', 4.00, $1, '2405550102')
+    ON CONFLICT (id) DO UPDATE SET status='pending', business_details=$1, review_note=NULL`,
+    [JSON.stringify({ legalName: "E2E Applicant Clinic LLC", ein: "45-6789012", businessType: "llc" })]).catch((e) => console.log("  (org application seed) " + String(e?.message ?? e).split("\n")[0]));
+  await db.query(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES ('e2e-org-app', $1, 'owner', NOW())
+    ON CONFLICT (organization_id, user_id) DO UPDATE SET role='owner'`, [FIXTURES.driver.id]).catch((e) => console.log("  (org application member seed) " + String(e?.message ?? e).split("\n")[0]));
+  // The approved fleet's cars: one ready (checked, papers in date) and one
+  // waiting for PG Ride's check, so the fleet desk and the admin's car review
+  // have something to show the audits. Reset on every seed.
+  await db.query(`INSERT INTO fleet_cars (id, organization_id, make, model, year, color, seats, license_plate, vin, photos, registration_doc_url, insurance_doc_url, inspection_doc_url, inspection_expires, registration_expires, insurance_expires, review_status, status)
+    VALUES ('e2e-fleet-car', 'e2e-fleet', 'Toyota', 'Camry', $1, 'White', 5, 'FLT0001', '4T1BF1FK5CU000001', '["/api/objects/db-upload/00000000-0000-4000-8000-0000000000c1","/api/objects/db-upload/00000000-0000-4000-8000-0000000000c2","/api/objects/db-upload/00000000-0000-4000-8000-0000000000c3","/api/objects/db-upload/00000000-0000-4000-8000-0000000000c4"]'::jsonb, '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5', $2, $2, $2, 'approved', 'ready'),
+           ('e2e-fleet-car-2', 'e2e-fleet', 'Honda', 'Accord', $1, 'Black', 5, 'FLT0002', '1HGCV1F30LA000002', '["/api/objects/db-upload/00000000-0000-4000-8000-0000000000c1","/api/objects/db-upload/00000000-0000-4000-8000-0000000000c2","/api/objects/db-upload/00000000-0000-4000-8000-0000000000c3","/api/objects/db-upload/00000000-0000-4000-8000-0000000000c4"]'::jsonb, '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5', $2, $2, $2, 'pending', 'parked')
+    ON CONFLICT (id) DO UPDATE SET review_status=EXCLUDED.review_status, status=EXCLUDED.status, review_note=NULL, driver_user_id=NULL, inspection_expires=$2, registration_expires=$2, insurance_expires=$2, year=$1`,
+    [new Date().getUTCFullYear() - 2, new Date(Date.now() + 365 * 86400_000).toISOString()]).catch((e) => console.log("  (fleet car seed) " + String(e?.message ?? e).split("\n")[0]));
   // An open invitation to the medical organization, re-opened on every seed,
   // so the every-button audit can open the join page and press its buttons.
   const inviteHash = createHash("sha256").update(E2E_INVITE_TOKEN).digest("hex");
@@ -119,6 +150,15 @@ export async function seedFixtures(db) {
     VALUES ('e2e-rental-request', 'e2e-rental-car', $1, NOW() + interval '60 days', NOW() + interval '62 days', 2, 49.00, 98.00, 200.00, 300, 'requested', 'E2E1234567', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5')
     ON CONFLICT (id) DO UPDATE SET status='requested', starts_at=NOW() + interval '60 days', ends_at=NOW() + interval '62 days', payment_status='none', payment_error=NULL, charge_intent_id=NULL, deposit_intent_id=NULL`,
     [FIXTURES.rider.id]).catch((e) => console.log("  (rental booking seed) " + String(e?.message ?? e).split("\n")[0]));
+  // Renters' facts (industry rules, 2026-09-28): the rider is 36 with a
+  // cleared driving record, so their requests can be confirmed; the driver's
+  // record is waiting for the desk, so the admin's Renters list has a row.
+  await db.query(`INSERT INTO rental_renters (user_id, date_of_birth, licence_number, licence_issued_on, licence_expires_on, licence_image_url, record_status, record_checked_at)
+    VALUES ($1, '1990-01-15', 'M123456789', '2010-03-01', '2035-01-15', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5', 'cleared', NOW()),
+           ($2, '1985-05-05', 'D987654321', '2005-06-01', '2034-05-05', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c6', 'pending', NULL)
+    ON CONFLICT (user_id) DO UPDATE SET date_of_birth=EXCLUDED.date_of_birth, licence_number=EXCLUDED.licence_number, licence_issued_on=EXCLUDED.licence_issued_on,
+      licence_expires_on=EXCLUDED.licence_expires_on, record_status=EXCLUDED.record_status, record_checked_at=EXCLUDED.record_checked_at, record_note=NULL`,
+    [FIXTURES.rider.id, FIXTURES.driver.id]).catch((e) => console.log("  (renter seed) " + String(e?.message ?? e).split("\n")[0]));
 }
 
 export async function startServer(env = {}) {
@@ -140,7 +180,11 @@ export async function startServer(env = {}) {
       COMMERCIAL_ENABLED: process.env.COMMERCIAL_ENABLED ?? "true",
       // Car rental likewise: off in production, on for the journeys and audits.
       RENTAL_ENABLED: process.env.RENTAL_ENABLED ?? "true",
-      RESEND_API_KEY: "re_e2e_fake", RESEND_FROM: "noreply@peoplegoverned.com",
+      // Fleet management accounts likewise.
+      FLEET_ENABLED: process.env.FLEET_ENABLED ?? "true",
+      // Email "configured" but pointed at a closed local port: every send path
+      // executes and fails at once, and no email can ever leave a test.
+      SMTP_HOST: "127.0.0.1", SMTP_PORT: "9", SMTP_USER: "noreply@peoplegoverned.com", SMTP_PASS: "e2e-fake-app-password", EMAIL_FROM: "noreply@peoplegoverned.com",
       TELEGRAM_BOT_TOKEN: "e2e", TELEGRAM_CHAT_ID: "1",
       TWILIO_ACCOUNT_SID: "ACe2e", TWILIO_AUTH_TOKEN: "e2e-auth-token", TWILIO_PHONE_NUMBER: "+18882743045",
       ...env,

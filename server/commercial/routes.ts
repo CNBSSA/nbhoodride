@@ -16,7 +16,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { featureFlags } from "../featureFlags";
 import type { IStorage } from "../storage";
 import type { Ride } from "@shared/schema";
-import { canBook, canManageMembers, canSeeStatement, currentMonthKey, formatJobNumber, type OrgRole } from "@shared/commercial";
+import { canBook, canManageMembers, canSeeStatement, currentMonthKey, formatJobNumber, isFleetCategory, type OrgRole } from "@shared/commercial";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
 import {
   CommercialError, addMemberByEmail, createOrganization, firstBookingMember, getOrganization,
@@ -37,6 +37,8 @@ import { bookWillCallReturn, createStandingOrder, listStandingOrders, materializ
 import { describeTerms, orgTerms } from "@shared/commercialTerms";
 import { chargeStatement, describePaymentMethod, issueStatement, listStatements, runWeeklyBilling, savePaymentMethod, startPaymentMethodSetup } from "./billing";
 import { describeBillingStatus, previousBillingWeek } from "@shared/billingCycle";
+import { ApplicationError, applicationView, applyForOrganization, resubmitOrganization, reviewOrganization } from "./applications";
+import { ORG_APPLY_SENTENCE } from "@shared/orgApplication";
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown;
 
@@ -53,6 +55,7 @@ export interface CommercialDeps {
 const userIdOf = (req: any): string | undefined => req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
 const fail = (res: Response, err: unknown, fallback: string) => {
+  if (err instanceof ApplicationError) return res.status(err.status).json({ message: err.message, ...(err.problems ? { problems: err.problems } : {}) });
   if (err instanceof CommercialError) return res.status(err.status).json({ message: err.message });
   console.error(fallback, err);
   return res.status(500).json({ message: fallback });
@@ -73,6 +76,16 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
     if (!featureFlags.commercialEnabled) return res.status(404).json({ message: "Not found" });
     next();
   };
+  // The organization list and the operator's view of an account are shared
+  // with fleet accounts (Fleet Management Accounts Plan): open when either
+  // switch is on, and each organization is served only while its own switch
+  // is on (a fleet under FLEET_ENABLED, the rest under COMMERCIAL_ENABLED).
+  const orgGate: Handler = (_req, res, next) => {
+    if (!featureFlags.commercialEnabled && !featureFlags.fleetEnabled) return res.status(404).json({ message: "Not found" });
+    next();
+  };
+  const categoryOn = (category: string | null | undefined): boolean =>
+    isFleetCategory(category) ? featureFlags.fleetEnabled : featureFlags.commercialEnabled;
   // A held delivery, once the recipient has paid, is offered to drivers the
   // same way a freshly booked one is.
   setReleaseHook((ride, pickupCounty) => deps.notifyDriversOfScheduledRide(ride, pickupCounty));
@@ -85,6 +98,9 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       if (!userId || !orgId) return res.status(403).json({ message: "Not a member of this organization." });
       const role = await membershipRole(userId, orgId);
       if (!role) return res.status(403).json({ message: "Not a member of this organization." });
+      // A fleet's desk is /api/fleet (server/fleet/routes.ts); nothing here books, bills or lists for a fleet.
+      const org = await getOrganization(orgId);
+      if (!org || isFleetCategory(org.category) || !categoryOn(org.category)) return res.status(404).json({ message: "Organization not found." });
       if (allowed && !allowed(role)) return res.status(403).json({ message: "Your role in this organization does not allow that." });
       req.orgRole = role;
       req.orgId = orgId;
@@ -126,29 +142,41 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
     try { res.status(201).json(await createOrganization(req.body ?? {})); }
     catch (err) { fail(res, err, "Could not create the organization"); }
   });
-  app.get("/api/admin/organizations", gate, isAdminOrSessionAuth, async (_req, res) => {
-    try { res.json(await listOrganizations()); }
+  app.get("/api/admin/organizations", orgGate, isAdminOrSessionAuth, async (_req, res) => {
+    try { res.json((await listOrganizations()).filter((o) => categoryOn(o.category))); }
     catch (err) { fail(res, err, "Could not list organizations"); }
   });
-  app.get("/api/admin/organizations/:id", gate, isAdminOrSessionAuth, async (req, res) => {
+  app.get("/api/admin/organizations/:id", orgGate, isAdminOrSessionAuth, async (req, res) => {
     try {
       const org = await getOrganization(req.params.id);
-      if (!org) return res.status(404).json({ message: "Organization not found." });
+      if (!org || !categoryOn(org.category)) return res.status(404).json({ message: "Organization not found." });
       res.json({ ...org, members: await listMembers(org.id) });
     } catch (err) { fail(res, err, "Could not load the organization"); }
   });
-  app.patch("/api/admin/organizations/:id", gate, isAdminOrSessionAuth, async (req, res) => {
-    try { res.json(await updateOrganization(req.params.id, req.body ?? {})); }
+  app.post("/api/admin/organizations/:id/review", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await reviewOrganization(req.params.id, req.body ?? {})); }
+    catch (err) { fail(res, err, "Could not record the check"); }
+  });
+  app.patch("/api/admin/organizations/:id", orgGate, isAdminOrSessionAuth, async (req, res) => {
+    try {
+      const org = await getOrganization(req.params.id);
+      if (!org || !categoryOn(org.category)) return res.status(404).json({ message: "Organization not found." });
+      res.json(await updateOrganization(req.params.id, req.body ?? {}));
+    }
     catch (err) { fail(res, err, "Could not update the organization"); }
   });
-  app.post("/api/admin/organizations/:id/members", gate, isAdminOrSessionAuth, async (req, res) => {
+  app.post("/api/admin/organizations/:id/members", orgGate, isAdminOrSessionAuth, async (req, res) => {
     try {
-      if (!(await getOrganization(req.params.id))) return res.status(404).json({ message: "Organization not found." });
-      res.status(201).json(await addMemberByEmail(req.params.id, req.body?.email, req.body?.role ?? "requester"));
+      const org = await getOrganization(req.params.id);
+      if (!org || !categoryOn(org.category)) return res.status(404).json({ message: "Organization not found." });
+      res.status(201).json(await addMemberByEmail(req.params.id, req.body?.email, req.body?.role ?? (isFleetCategory(org.category) ? "viewer" : "requester")));
     } catch (err) { fail(res, err, "Could not add the member"); }
   });
-  app.delete("/api/admin/organizations/:id/members/:userId", gate, isAdminOrSessionAuth, async (req, res) => {
-    try { res.json({ removed: await removeMember(req.params.id, req.params.userId) }); }
+  app.delete("/api/admin/organizations/:id/members/:userId", orgGate, isAdminOrSessionAuth, async (req, res) => {
+    try {
+      const org = await getOrganization(req.params.id);
+      if (!org || !categoryOn(org.category)) return res.status(404).json({ message: "Organization not found." });
+      res.json({ removed: await removeMember(req.params.id, req.params.userId) }); }
     catch (err) { fail(res, err, "Could not remove the member"); }
   });
   app.post("/api/admin/organizations/:id/jobs", gate, isAdminOrSessionAuth, async (req: any, res) => {
@@ -171,12 +199,31 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
   });
 
   // ── Members ──
-  app.get("/api/org/mine", gate, isAuthenticated, async (req: any, res) => {
+  app.get("/api/org/mine", orgGate, isAuthenticated, async (req: any, res) => {
     try {
       const userId = userIdOf(req);
       if (!userId) return res.status(401).json({ message: "Unauthorized" });
-      res.json(await organizationsForUser(userId));
+      // Only what the portal lists by: never the Stripe customer or payment
+      // method, the operator's notes, a fleet's EIN or its payout account
+      // (every member, a fleet's drivers included, reads this list).
+      res.json((await organizationsForUser(userId)).filter((m) => categoryOn(m.organization.category)).map(({ organization: o, role }) => ({
+        role,
+        organization: {
+          id: o.id, name: o.name, category: o.category, status: o.status, facilityFee: o.facilityFee, billingMode: o.billingMode,
+          askRecipientByDefault: o.askRecipientByDefault, address: o.address,
+        },
+      })));
     } catch (err) { fail(res, err, "Could not list your organizations"); }
+  });
+  // Self-serve applications (shared/orgApplication.ts): apply, correct and send again.
+  app.get("/api/org/apply", gate, isAuthenticated, (_req, res) => { res.json({ words: ORG_APPLY_SENTENCE }); });
+  app.post("/api/org/apply", gate, isAuthenticated, async (req: any, res) => {
+    try { res.status(201).json(await applyForOrganization(userIdOf(req)!, req.body ?? {})); }
+    catch (err) { fail(res, err, "Could not send the application"); }
+  });
+  app.patch("/api/org/:orgId/application", gate, isAuthenticated, requireMember((r) => r === "owner"), async (req: any, res) => {
+    try { res.json(await resubmitOrganization(userIdOf(req)!, req.orgId, req.body ?? {})); }
+    catch (err) { fail(res, err, "Could not send the application again"); }
   });
   app.get("/api/org/:orgId/jobs", gate, isAuthenticated, requireMember(), async (req: any, res) => {
     try { res.json(await listJobs(req.orgId, parseRange(req.query))); }
@@ -200,9 +247,10 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
       if (!org) return res.status(404).json({ message: "Organization not found." });
       const { stripeCustomerId: _s, notes: _n, ...safe } = org;
       const terms = orgTerms(org.terms);
-      const { defaultPaymentMethodId: _pm, ...rest } = safe as any;
+      // The EIN is shown masked, and only to the desk (applicationView); the raw details stay here.
+      const { defaultPaymentMethodId: _pm, businessDetails: _bd, fleetDetails: _fd, payoutDetails: _pd, reviewNote: _rn, ...rest } = safe as any;
       res.json({
-        ...rest, terms, termsText: describeTerms(terms), role: req.orgRole,
+        ...rest, application: applicationView(org), terms, termsText: describeTerms(terms), role: req.orgRole,
         billingText: describePaymentMethod(org),
         hasPaymentMethod: !!org.defaultPaymentMethodId,
       });

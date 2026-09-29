@@ -132,7 +132,7 @@ export default function AdminDashboard() {
   ];
   // Commercial riders is a new surface, on per deployment (COMMERCIAL_ENABLED).
   const flags = useFeatureFlags();
-  const visibleTabs = tabs.filter((t) => (t.id !== "organizations" || flags.commercialEnabled) && (t.id !== "rentals" || flags.rentalEnabled));
+  const visibleTabs = tabs.filter((t) => (t.id !== "organizations" || flags.commercialEnabled || flags.fleetEnabled) && (t.id !== "rentals" || flags.rentalEnabled));
 
   return (
     <div className="min-h-screen bg-gray-50" data-testid="admin-dashboard">
@@ -1385,7 +1385,7 @@ function EmailHealthCard() {
   const { toast } = useToast();
   const [result, setResult] = useState<{ ok: boolean; error?: string; to?: string } | null>(null);
   const { data: status } = useQuery<{
-    apiKeyPresent: boolean; from: string; fromDomain: string; usingUnverifiedDefault: boolean;
+    host: string; port: number; user: string; passwordPresent: boolean; from: string; fromDomain: string; fromMismatch: boolean;
   }>({ queryKey: ["/api/admin/email-status"] });
 
   const testMutation = useMutation({
@@ -1404,7 +1404,7 @@ function EmailHealthCard() {
     },
   });
 
-  const broken = status && (!status.apiKeyPresent || status.usingUnverifiedDefault);
+  const broken = status && (!status.passwordPresent || status.fromMismatch);
 
   return (
     <Card data-testid="email-health-card">
@@ -1414,7 +1414,7 @@ function EmailHealthCard() {
             <h3 className="font-semibold text-sm">Email delivery</h3>
             {status ? (
               <p className="text-xs text-muted-foreground mt-1" data-testid="text-email-status">
-                {status.apiKeyPresent ? "Resend key set" : "No Resend API key"} · sending as{" "}
+                {status.passwordPresent ? "Gmail app password set" : "No Gmail app password"} · {status.host}:{status.port} · sending as{" "}
                 <span className="font-mono">{status.from}</span>
               </p>
             ) : (
@@ -1422,9 +1422,9 @@ function EmailHealthCard() {
             )}
             {broken && (
               <p className="text-xs text-red-600 mt-1" data-testid="text-email-warning">
-                {!status?.apiKeyPresent
-                  ? "RESEND_API_KEY is missing — no email can be sent."
-                  : "RESEND_FROM is not set, so mail is sent from an unverifiable domain and every send is rejected."}
+                {!status?.passwordPresent
+                  ? "SMTP_PASS (the Gmail app password) is missing — no email can be sent."
+                  : `EMAIL_FROM (${status.from}) is not the Gmail account (${status.user}): Gmail rewrites the sender unless that address is verified as a send-as in Gmail.`}
               </p>
             )}
           </div>

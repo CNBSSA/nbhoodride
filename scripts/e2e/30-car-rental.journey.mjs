@@ -81,8 +81,11 @@ export async function run({ base, db, server }) {
     check("longer than six days is refused with the reason", long.status === 400 && /up to 6 days/.test(long.json?.message ?? ""), JSON.stringify(long.json));
     const photoSeen = await rider.req("GET", photos[0]);
     check("a renter may see a listed car's photo", photoSeen.status === 200, `${photoSeen.status}`);
-    const noLicence = await rider.req("POST", "/api/rent/bookings", { carId, startsAt: from, endsAt: to, licenceNumber: "M123456789" });
-    check("a request without a licence photo is refused", noLicence.status === 400 && /licence photo/i.test(noLicence.json?.message ?? ""), JSON.stringify(noLicence.json));
+    // A returning renter's licence photo is on file (rental_renters) and is reused;
+    // a first-time renter without one is refused (journey 34).
+    const onFile = await rider.req("POST", "/api/rent/bookings", { carId, startsAt: from, endsAt: to, licenceNumber: "M123456789" });
+    check("a returning renter's licence photo on file is used", onFile.status === 200 && /^\/api\/objects\/db-upload\//.test(onFile.json?.licenceImageUrl ?? ""), JSON.stringify(onFile.json?.message ?? onFile.json?.licenceImageUrl));
+    await rider.req("POST", `/api/rent/bookings/${onFile.json?.id}/cancel`);
     const licence = await upload(rider);
     const asked = await rider.req("POST", "/api/rent/bookings", { carId, startsAt: from, endsAt: to, licenceNumber: "m123456789", licenceImageUrl: licence, rentalTotal: 1 });
     check("a request with a licence is taken, priced by the server, and charges nothing", asked.status === 200 && asked.json?.status === "requested" && asked.json?.rentalTotal === "135.00" && asked.json?.paymentStatus === "none" && asked.json?.licenceNumber === "M123456789", JSON.stringify(asked.json?.message ?? { s: asked.json?.status, t: asked.json?.rentalTotal }));
@@ -94,6 +97,8 @@ export async function run({ base, db, server }) {
     const otherLicence = await upload(other);
     const clash = await other.req("POST", "/api/rent/bookings", { carId, startsAt: inDays(4), endsAt: inDays(5), licenceNumber: "D987654321", licenceImageUrl: otherLicence });
     check("a second person may ask for overlapping days while the first is only a request", clash.status === 200 && clash.json?.status === "requested", JSON.stringify(clash.json?.message ?? clash.json?.status));
+    // The second renter's driving record is checked first (journey 34 walks that step).
+    await admin.req("POST", `/api/admin/rental/renters/${FIXTURES.driver.id}/record`, { result: "cleared" });
     const [c1, c2] = await Promise.all([
       admin.req("POST", `/api/admin/rental/bookings/${bookingId}/confirm`),
       admin.req("POST", `/api/admin/rental/bookings/${clash.json?.id}/confirm`),

@@ -230,7 +230,8 @@ export interface IStorage {
   createUser(user: UpsertUser): Promise<User>;
   upsertUser(user: UpsertUser): Promise<User>;
   updatePassword(userId: string, hashedPassword: string): Promise<void>;
-  setPasswordResetToken(email: string, token: string, expiry: Date): Promise<void>;
+  endAllSessionsFor(userId: string, reason: string): Promise<void>;
+  setPasswordResetToken(userId: string, token: string, expiry: Date): Promise<void>;
   getUserByResetToken(token: string): Promise<User | undefined>;
   updateLastLogin(userId: string): Promise<void>;
   recordFailedLogin(userId: string, opts: { threshold: number; lockoutMinutes: number }): Promise<{ attempts: number; lockoutUntil: Date | null }>;
@@ -385,6 +386,12 @@ export interface IStorage {
   claimScheduledRide(rideId: string, driverId: string): Promise<Ride>;
   unclaimScheduledRide(rideId: string): Promise<Ride | null>;
   getClaimedScheduledRidesForDriver(driverId: string, withinMinutes: number): Promise<any[]>;
+  /** A driver's socket closed: note when, unless one is already noted (the first close counts). */
+  noteDriverSocketDropped(userId: string): Promise<void>;
+  /** A driver's socket joined: they are back. */
+  clearDriverSocketDrop(userId: string): Promise<void>;
+  /** Drivers whose last socket closed at or before `cutoff` and who have not re-joined. */
+  getDriversDroppedBefore(cutoff: Date): Promise<Array<{ userId: string; presenceDroppedAt: Date }>>;
   getDriverUpcomingRides(driverId: string): Promise<any[]>;
 
   // Driver ride management operations
@@ -819,6 +826,22 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  /**
+   * Every session this user holds is ended (reliability audit 2026-09-29).
+   * A password is reset because the old one is forgotten or feared stolen;
+   * either way a session opened with it must not outlive the reset. The
+   * same statement `adminUpdateUser` uses on revoke and suspend.
+   */
+  async endAllSessionsFor(userId: string, reason: string): Promise<void> {
+    await db.execute(sql`DELETE FROM sessions WHERE sess->>'userId' = ${userId} OR sess->>'testUserId' = ${userId}`)
+      .then(() => console.log(`[AUDIT] sessions_ended userId=${userId} reason=${reason}`))
+      .catch((err) => console.error(`[AUDIT] could not end sessions for ${userId}:`, err));
+  }
+
+  // A reset by emailed link. Also clears the login lockout — the usual
+  // reason someone is here — which the SMS and admin resets already did
+  // (reliability audit 2026-09-29: a rider locked out at five tries who
+  // reset by email was still told to wait up to fifteen minutes).
   async updatePassword(userId: string, hashedPassword: string): Promise<void> {
     await db
       .update(users)
@@ -826,12 +849,19 @@ export class DatabaseStorage implements IStorage {
         password: hashedPassword,
         passwordResetToken: null,
         passwordResetExpiry: null,
+        failedLoginAttempts: 0,
+        lockoutUntil: null,
         updatedAt: new Date() 
       })
       .where(eq(users.id, userId));
+    await this.endAllSessionsFor(userId, "password_reset");
   }
 
-  async setPasswordResetToken(email: string, token: string, expiry: Date): Promise<void> {
+  // Keyed by the user's id, never by the email as typed: accounts are stored
+  // lowercased and looked up case-insensitively, so a token written by
+  // `WHERE email = 'Festus@Gmail.com'` matched no row while the email still
+  // went out with a link that could never work (reliability audit 2026-09-29).
+  async setPasswordResetToken(userId: string, token: string, expiry: Date): Promise<void> {
     await db
       .update(users)
       .set({ 
@@ -839,7 +869,7 @@ export class DatabaseStorage implements IStorage {
         passwordResetExpiry: expiry,
         updatedAt: new Date() 
       })
-      .where(eq(users.email, email));
+      .where(eq(users.id, userId));
   }
 
   async getUserByResetToken(token: string): Promise<User | undefined> {
@@ -871,11 +901,15 @@ export class DatabaseStorage implements IStorage {
   // R-L5: bump the failed-login counter for a user and, once we've crossed
   // the threshold, set lockoutUntil. Returns the new attempt count and the
   // resulting lockout time (or null) so the route can branch.
+  // A reset by text code or by an admin. Also voids any emailed reset link
+  // still out there, so a link requested before this reset cannot change
+  // the password again for its hour, and ends every session.
   async setTemporaryPassword(userId: string, passwordHash: string): Promise<void> {
     await db
       .update(users)
-      .set({ password: passwordHash, failedLoginAttempts: 0, lockoutUntil: null, updatedAt: new Date() })
+      .set({ password: passwordHash, failedLoginAttempts: 0, lockoutUntil: null, passwordResetToken: null, passwordResetExpiry: null, updatedAt: new Date() })
       .where(eq(users.id, userId));
+    await this.endAllSessionsFor(userId, "password_reset");
   }
 
   async recordFailedLogin(userId: string, opts: { threshold: number; lockoutMinutes: number }): Promise<{ attempts: number; lockoutUntil: Date | null }> {
@@ -1371,6 +1405,30 @@ export class DatabaseStorage implements IStorage {
       .where(eq(rides.id, rideId))
       .returning();
     return updated ?? null;
+  }
+
+  async noteDriverSocketDropped(userId: string): Promise<void> {
+    // The FIRST close starts the clock; a later close while still dropped
+    // must not push the release out again.
+    await db
+      .update(driverProfiles)
+      .set({ presenceDroppedAt: new Date() })
+      .where(and(eq(driverProfiles.userId, userId), isNull(driverProfiles.presenceDroppedAt)));
+  }
+
+  async clearDriverSocketDrop(userId: string): Promise<void> {
+    await db
+      .update(driverProfiles)
+      .set({ presenceDroppedAt: null })
+      .where(and(eq(driverProfiles.userId, userId), isNotNull(driverProfiles.presenceDroppedAt)));
+  }
+
+  async getDriversDroppedBefore(cutoff: Date): Promise<Array<{ userId: string; presenceDroppedAt: Date }>> {
+    const rows = await db
+      .select({ userId: driverProfiles.userId, presenceDroppedAt: driverProfiles.presenceDroppedAt })
+      .from(driverProfiles)
+      .where(and(isNotNull(driverProfiles.presenceDroppedAt), lte(driverProfiles.presenceDroppedAt, cutoff)));
+    return rows.filter((r): r is { userId: string; presenceDroppedAt: Date } => !!r.presenceDroppedAt);
   }
 
   async getClaimedScheduledRidesForDriver(driverId: string, withinMinutes: number): Promise<any[]> {

@@ -56,6 +56,14 @@ export const featureFlags = {
    * route answers 404, the sweep does not run, and the buttons are hidden.
    */
   rentalEnabled: flag(process.env.RENTAL_ENABLED, false),
+  /**
+   * Fleet management accounts (PG Ride Fleet Management Accounts Plan): an
+   * investor's cars driven by PG Ride drivers, the driver's share split 25/75.
+   * OFF by default, proven slice by slice. Off => every /api/fleet route
+   * answers 404, fleet organizations are hidden everywhere, and the buttons
+   * are hidden.
+   */
+  fleetEnabled: flag(process.env.FLEET_ENABLED, false),
 } as const;
 
 export type FeatureFlags = typeof featureFlags;

@@ -197,21 +197,21 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
     detail: "Served as static HTML at /privacy and /terms (readable without JavaScript); content verified daily by smoke:production",
   });
 
-  // Reports the SENDER too, not just the key: the usual cause of silently
-  // failing email is RESEND_FROM being unset, which falls back to a domain
-  // that cannot be verified, so every send is rejected by the provider.
+  // Reports the SENDER too, not just the password: Gmail sends only as the
+  // signed-in account, so an EMAIL_FROM on another address is rewritten by
+  // Google and replies go somewhere the operator is not looking.
   const emailCfg = getEmailConfigSummary();
-  const emailReady = emailCfg.apiKeyPresent && !emailCfg.usingUnverifiedDefault;
+  const emailReady = emailCfg.passwordPresent && !emailCfg.fromMismatch;
   checks.push({
     id: "0.5-email",
-    label: "Transactional email (Resend)",
-    status: emailReady ? "pass" : emailCfg.apiKeyPresent ? "fail" : "warn",
+    label: "Transactional email (Gmail SMTP)",
+    status: emailReady ? "pass" : emailCfg.passwordPresent ? "warn" : "warn",
     owner: "track_b",
-    detail: !emailCfg.apiKeyPresent
-      ? "RESEND_API_KEY missing — signups see success but no verification email is sent"
-      : emailCfg.usingUnverifiedDefault
-        ? `RESEND_FROM is not set, so mail is sent from ${emailCfg.from} — that domain has no DNS and cannot be verified, so every send is rejected. Set RESEND_FROM to an address on your verified domain.`
-        : `Sending as ${emailCfg.from}`,
+    detail: !emailCfg.passwordPresent
+      ? `SMTP_PASS missing — signups see success but no verification email is sent. Set the Gmail app password for ${emailCfg.user} in Railway → Variables.`
+      : emailCfg.fromMismatch
+        ? `EMAIL_FROM is ${emailCfg.from} but the account is ${emailCfg.user}: Gmail rewrites the sender to the account unless that address is a verified send-as in Gmail. Set EMAIL_FROM to the account, or verify it in Gmail.`
+        : `Sending as ${emailCfg.from} through ${emailCfg.host}:${emailCfg.port}`,
   });
 
   const twilioReady =

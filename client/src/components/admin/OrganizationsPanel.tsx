@@ -18,13 +18,21 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
-import { CATEGORY_LABELS, COMMERCIAL_CATEGORIES, DEFAULT_FACILITY_FEE, ORG_ROLES, currentMonthKey, formatJobNumber, type CommercialCategory, type OrgRole } from "@shared/commercial";
+import { CATEGORY_LABELS, COMMERCIAL_CATEGORIES, DEFAULT_FACILITY_FEE, currentMonthKey, formatJobNumber, rolesForCategory, type CommercialCategory, type OrgRole } from "@shared/commercial";
+import { BUSINESS_TYPE_LABELS, FLEET_LABEL, maskEin, type BusinessType } from "@shared/fleet";
+import { FleetCarsReview } from "@/components/admin/FleetCarsReview";
+import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import { VEHICLE_TYPES, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 
 interface OrgSummary {
   id: string; name: string; category: CommercialCategory; status: string; billingMode: string; facilityFee: string;
   contactName: string | null; contactEmail: string | null; contactPhone: string | null; memberCount: number; jobCount: number;
+  businessDetails?: { legalName: string; ein: string; businessType: string } | null;
+  fleetDetails?: { legalName: string; ein: string; businessType: string } | null; reviewNote?: string | null; payoutMethod?: string | null; payoutDetails?: string | null;
 }
+/** A fleet (Fleet Management Accounts Plan) is listed here beside the booking accounts; it has no facility fee, jobs or statements. */
+const isFleet = (o: { category: string }) => o.category === "fleet";
+const categoryLabel = (c: string) => (c === "fleet" ? FLEET_LABEL : CATEGORY_LABELS[c as CommercialCategory] ?? c);
 interface Member { userId: string; role: OrgRole; firstName: string | null; lastName: string | null; email: string | null; phone: string | null }
 interface OrgDetail extends OrgSummary { members: Member[] }
 interface JobRow {
@@ -48,18 +56,19 @@ async function json<T>(method: string, url: string, body?: unknown): Promise<T> 
 export function OrganizationsPanel() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { data: orgs = [], isLoading } = useQuery<OrgSummary[]>({ queryKey: ["/api/admin/organizations"] });
+  const { commercialEnabled } = useFeatureFlags();
   const selected = orgs.find((o) => o.id === selectedId) ?? null;
 
   return (
     <div className="space-y-6" data-testid="organizations-panel">
       <div>
         <h2 className="text-2xl font-bold">Organizations</h2>
-        <p className="text-sm text-muted-foreground">Companies that book rides for other people and are billed for them. The business places every order.</p>
+        <p className="text-sm text-muted-foreground">Companies that book rides for other people and are billed for them. The business places every order. Fleet accounts, which supply cars and drivers and are paid, are checked and approved here too.</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="space-y-4 lg:col-span-1">
-          <CreateOrganizationCard onCreated={(id) => setSelectedId(id)} />
+          {commercialEnabled && <CreateOrganizationCard onCreated={(id) => setSelectedId(id)} />}
           <Card>
             <CardHeader><CardTitle className="text-base">Accounts</CardTitle></CardHeader>
             <CardContent className="space-y-2">
@@ -75,9 +84,9 @@ export function OrganizationsPanel() {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-medium truncate">{o.name}</span>
-                    <Badge variant={o.status === "active" ? "default" : "secondary"}>{o.status}</Badge>
+                    <Badge variant={o.status === "active" ? "default" : o.status === "pending" ? "outline" : "secondary"}>{o.status === "pending" ? "to check" : o.status}</Badge>
                   </div>
-                  <div className="text-xs text-muted-foreground mt-1">{CATEGORY_LABELS[o.category] ?? o.category} · {o.memberCount} people · {o.jobCount} jobs</div>
+                  <div className="text-xs text-muted-foreground mt-1">{categoryLabel(o.category)} · {o.memberCount} people{isFleet(o) ? "" : ` · ${o.jobCount} jobs`}</div>
                 </button>
               ))}
             </CardContent>
@@ -143,7 +152,7 @@ function CreateOrganizationCard({ onCreated }: { onCreated: (id: string) => void
 function OrganizationDetail({ id }: { id: string }) {
   const { toast } = useToast();
   const { data: org } = useQuery<OrgDetail>({ queryKey: ["/api/admin/organizations", id], queryFn: () => json("GET", `/api/admin/organizations/${id}`) });
-  const { data: jobs = [] } = useQuery<JobRow[]>({ queryKey: ["/api/admin/organizations", id, "jobs"], queryFn: () => json("GET", `/api/admin/organizations/${id}/jobs`) });
+  const { data: jobs = [] } = useQuery<JobRow[]>({ queryKey: ["/api/admin/organizations", id, "jobs"], queryFn: () => json("GET", `/api/admin/organizations/${id}/jobs`), enabled: !!org && !isFleet(org) });
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/organizations"] });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/organizations", id] });
@@ -155,6 +164,26 @@ function OrganizationDetail({ id }: { id: string }) {
     onError: (e: Error) => toast({ title: "Could not change status", description: e.message, variant: "destructive" }),
   });
   if (!org) return <Card><CardContent className="pt-6 text-sm text-muted-foreground">Loading…</CardContent></Card>;
+  if (isFleet(org)) {
+    return (
+      <div className="space-y-4" data-testid={`organization-detail-${org.id}`}>
+        <FleetReviewCard org={org} onChanged={refresh} onToggle={() => toggleStatus.mutate()} toggling={toggleStatus.isPending} />
+        {org.status !== "pending" && org.status !== "rejected" && <FleetCarsReview orgId={org.id} />}
+        <MembersCard org={org} onChanged={refresh} />
+      </div>
+    );
+  }
+
+  // A booking account that applied for itself (self-serve applications,
+  // 2026-09-28) is checked here before it can book anything.
+  if (org.status === "pending" || org.status === "rejected") {
+    return (
+      <div className="space-y-4" data-testid={`organization-detail-${org.id}`}>
+        <OrgApplicationReviewCard org={org} onChanged={refresh} />
+        <MembersCard org={org} onChanged={refresh} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4" data-testid={`organization-detail-${org.id}`}>
@@ -204,13 +233,90 @@ function OrganizationDetail({ id }: { id: string }) {
   );
 }
 
+/** PG Ride's check of a booking account's application: the business in full, Approve or Send back with a note the owner sees. */
+function OrgApplicationReviewCard({ org, onChanged }: { org: OrgDetail; onChanged: () => void }) {
+  const { toast } = useToast();
+  const [note, setNote] = useState("");
+  const review = useMutation({
+    mutationFn: (decision: "approve" | "reject") => json<OrgSummary>("POST", `/api/admin/organizations/${org.id}/review`, { decision, note }),
+    onSuccess: (o) => { setNote(""); onChanged(); toast({ title: o.status === "active" ? "Account approved" : "Sent back", description: o.status === "active" ? "The owner's desk can book now." : "The owner is shown your note." }); },
+    onError: (e: Error) => toast({ title: "Could not record the check", description: e.message, variant: "destructive" }),
+  });
+  const d = org.businessDetails;
+  return (
+    <Card data-testid={`org-application-review-${org.id}`}>
+      <CardHeader>
+        <CardTitle>{org.name}</CardTitle>
+        <CardDescription>{categoryLabel(org.category)} · {org.status === "pending" ? "application to check" : "sent back"}{org.contactName ? ` · ${org.contactName}` : ""}{org.contactPhone ? ` · ${org.contactPhone}` : ""}{org.contactEmail ? ` · ${org.contactEmail}` : ""}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <p><span className="text-muted-foreground">Business:</span> {d?.legalName ?? "—"} · {BUSINESS_TYPE_LABELS[d?.businessType as BusinessType] ?? d?.businessType ?? "—"} · EIN {d?.ein ?? "—"} <span className="text-muted-foreground">(the desk sees {maskEin(d?.ein)})</span></p>
+        <p className="text-xs text-muted-foreground">Check the organization is registered under that name and EIN before approving. Facility fee {money(org.facilityFee)} per completed job, billed weekly; change either on the account once approved.</p>
+        {org.reviewNote && <p className="text-xs text-destructive">Sent back: {org.reviewNote}</p>}
+        {org.status === "pending" && (
+          <div className="flex flex-wrap gap-2 items-center pt-1">
+            <Input className="h-8 max-w-xs" placeholder="Note to the owner (needed to send back)" value={note} onChange={(e) => setNote(e.target.value)} data-testid={`input-org-review-note-${org.id}`} />
+            <Button size="sm" disabled={review.isPending} onClick={() => review.mutate("approve")} data-testid={`button-approve-organization-${org.id}`}>Approve account</Button>
+            <Button size="sm" variant="outline" disabled={review.isPending || !note.trim()} onClick={() => review.mutate("reject")} data-testid={`button-sendback-organization-${org.id}`}>Send back</Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * PG Ride's check of a fleet application (Fleet Management Accounts Plan,
+ * slice 1): the business on file in full, how it is paid, and Approve or
+ * Send back with a note the owner sees. An approved fleet can be paused.
+ */
+function FleetReviewCard({ org, onChanged, onToggle, toggling }: { org: OrgDetail; onChanged: () => void; onToggle: () => void; toggling: boolean }) {
+  const { toast } = useToast();
+  const [note, setNote] = useState("");
+  const review = useMutation({
+    mutationFn: (decision: "approve" | "reject") => json<OrgSummary>("POST", `/api/admin/fleets/${org.id}/review`, { decision, note }),
+    onSuccess: (o) => { setNote(""); onChanged(); toast({ title: o.status === "active" ? "Fleet approved" : "Sent back", description: o.status === "active" ? "The owner's fleet desk is open." : "The owner is shown your note." }); },
+    onError: (e: Error) => toast({ title: "Could not record the check", description: e.message, variant: "destructive" }),
+  });
+  const d = org.fleetDetails;
+  return (
+    <Card data-testid={`fleet-review-${org.id}`}>
+      <CardHeader className="flex flex-row items-start justify-between gap-3">
+        <div>
+          <CardTitle>{org.name}</CardTitle>
+          <CardDescription>{FLEET_LABEL} · {org.status === "pending" ? "application to check" : org.status}{org.contactName ? ` · ${org.contactName}` : ""}{org.contactPhone ? ` · ${org.contactPhone}` : ""}</CardDescription>
+        </div>
+        {(org.status === "active" || org.status === "paused") && (
+          <Button variant="outline" size="sm" onClick={onToggle} disabled={toggling} data-testid="button-toggle-organization-status">
+            {org.status === "active" ? "Pause account" : "Activate account"}
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <p><span className="text-muted-foreground">Business:</span> {d?.legalName ?? "—"} · {BUSINESS_TYPE_LABELS[d?.businessType as BusinessType] ?? d?.businessType ?? "—"} · EIN {d?.ein ?? "—"} <span className="text-muted-foreground">(the owner sees {maskEin(d?.ein)})</span></p>
+        <p><span className="text-muted-foreground">Paid by:</span> {org.payoutMethod ? `${org.payoutMethod}, ${org.payoutDetails}` : "no payout method yet — the owner adds it on their fleet desk"}</p>
+        <p className="text-xs text-muted-foreground">Check the business is registered under that name and EIN, and that the payout account is in the business's name, before approving.</p>
+        {org.reviewNote && <p className="text-xs text-destructive">Sent back: {org.reviewNote}</p>}
+        {org.status === "pending" && (
+          <div className="flex flex-wrap gap-2 items-center pt-1">
+            <Input className="h-8 max-w-xs" placeholder="Note to the owner (needed to send back)" value={note} onChange={(e) => setNote(e.target.value)} data-testid={`input-fleet-review-note-${org.id}`} />
+            <Button size="sm" disabled={review.isPending} onClick={() => review.mutate("approve")} data-testid={`button-approve-fleet-${org.id}`}>Approve fleet</Button>
+            <Button size="sm" variant="outline" disabled={review.isPending || !note.trim()} onClick={() => review.mutate("reject")} data-testid={`button-sendback-fleet-${org.id}`}>Send back</Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function MembersCard({ org, onChanged }: { org: OrgDetail; onChanged: () => void }) {
   const { toast } = useToast();
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<OrgRole>("requester");
+  const roles = rolesForCategory(org.category);
+  const [role, setRole] = useState<OrgRole>(isFleet(org) ? "viewer" : "requester");
   const add = useMutation({
     mutationFn: () => json<Member>("POST", `/api/admin/organizations/${org.id}/members`, { email, role }),
-    onSuccess: (m) => { setEmail(""); onChanged(); toast({ title: "Person added", description: `${m.firstName ?? ""} ${m.lastName ?? ""} can now ${m.role === "billing" ? "see statements" : "book"} for ${org.name}.` }); },
+    onSuccess: (m) => { setEmail(""); onChanged(); toast({ title: "Person added", description: isFleet(org) ? `${m.firstName ?? ""} ${m.lastName ?? ""} is now ${m.role} of ${org.name}.` : `${m.firstName ?? ""} ${m.lastName ?? ""} can now ${m.role === "billing" ? "see statements" : "book"} for ${org.name}.` }); },
     onError: (e: Error) => toast({ title: "Could not add them", description: e.message, variant: "destructive" }),
   });
   const remove = useMutation({
@@ -220,13 +326,13 @@ function MembersCard({ org, onChanged }: { org: OrgDetail; onChanged: () => void
   });
   return (
     <Card>
-      <CardHeader><CardTitle className="text-base">People</CardTitle><CardDescription>Owners do everything. Requesters book. Billing sees statements. They need a PG Ride account first.</CardDescription></CardHeader>
+      <CardHeader><CardTitle className="text-base">People</CardTitle><CardDescription>{isFleet(org) ? "Owners do everything. Managers run cars and drivers. Viewers look. Drivers drive the fleet's cars. They need a PG Ride account first." : "Owners do everything. Requesters book. Billing sees statements. They need a PG Ride account first."}</CardDescription></CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-col sm:flex-row gap-2">
           <Input placeholder="Email of an existing PG Ride account" type="email" value={email} onChange={(e) => setEmail(e.target.value)} data-testid="input-member-email" />
           <Select value={role} onValueChange={(v) => setRole(v as OrgRole)}>
             <SelectTrigger className="sm:w-40" data-testid="select-member-role"><SelectValue /></SelectTrigger>
-            <SelectContent>{ORG_ROLES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
+            <SelectContent>{roles.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
           </Select>
           <Button disabled={!email.trim() || add.isPending} onClick={() => add.mutate()} data-testid="button-add-member">Add</Button>
         </div>

@@ -28,6 +28,8 @@ import { JobsMap } from "@/components/portal/JobsMap";
 import { StandingOrdersView } from "@/components/portal/StandingOrdersView";
 import { BillingView } from "@/components/portal/BillingView";
 import { BookDeliveryDrawer, type DeliveryPrefill } from "@/components/portal/BookDeliveryDrawer";
+import { FleetDesk } from "@/components/portal/FleetDesk";
+import { ApplicationStatus } from "@/components/portal/ApplicationStatus";
 import { describeProof, type DeliveryProof } from "@shared/deliveries";
 import { describeApproval } from "@shared/recipientApproval";
 import { forgetBusinessHome } from "@/lib/businessHome";
@@ -89,7 +91,7 @@ export default function PortalPage() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { setBooking(false); setSendingParcel(false); setParcelPrefill(null); return; }
-      const plain = !e.metaKey && !e.ctrlKey && !e.altKey && !isTyping() && active && canBook(active.role);
+      const plain = !e.metaKey && !e.ctrlKey && !e.altKey && !isTyping() && active && canBook(active.role) && (active.organization.category as string) !== "fleet";
       if ((e.key === "n" || e.key === "N") && plain) { e.preventDefault(); setBooking(true); }
       if ((e.key === "p" || e.key === "P") && plain && categoryMayBook(active.organization.category, "delivery")) { e.preventDefault(); setSendingParcel(true); }
     };
@@ -121,10 +123,16 @@ export default function PortalPage() {
             </Link>
           </>
         ) : (
-          <p className="text-muted-foreground">
-            Your account is not attached to an organization yet. Ask the person who runs your account
-            with {BRAND.appName} to add your email, then open this page again.
-          </p>
+          <>
+            <p className="text-muted-foreground">
+              Your account is not attached to an organization yet. Ask the person who runs your account
+              with {BRAND.appName} to add your email, then open this page again.
+            </p>
+            <p className="text-muted-foreground">Run the organization yourself? Open its account here.</p>
+            <Link href="/org/apply" className="inline-flex items-center gap-2 rounded-xl bg-primary text-primary-foreground px-4 py-2 text-sm font-medium" data-testid="button-portal-apply">
+              Open a business account
+            </Link>
+          </>
         )}
       </div>
     );
@@ -132,6 +140,9 @@ export default function PortalPage() {
   if (!active) return null;
   const org = active.organization;
   const role = active.role;
+  // A fleet account (Fleet Management Accounts Plan) comes through the same
+  // door and never books: it opens on the fleet desk instead.
+  if ((org.category as string) === "fleet") return <FleetDesk orgId={org.id} memberships={memberships} onSwitch={setOrgId} />;
   // Business and food accounts send parcels as well as book rides. The
   // parcel drawer existed from the day deliveries shipped and nothing on
   // this page opened it — the one door a delivery account exists for.
@@ -161,7 +172,7 @@ export default function PortalPage() {
             </Select>
           ) : <div className="truncate" data-testid="text-portal-org">{org.name}</div>}
           <Badge variant="outline" className="hidden sm:inline-flex">{role}</Badge>
-          {org.status !== "active" && <Badge variant="destructive">paused</Badge>}
+          {org.status !== "active" && <Badge variant={org.status === "pending" ? "outline" : "destructive"} data-testid="badge-portal-status">{org.status === "pending" ? "waiting for approval" : org.status === "rejected" ? "sent back" : "paused"}</Badge>}
           <div className="ml-auto flex items-center gap-2">
             {canInstall && (
               <Button variant="outline" size="sm" onClick={async () => { const ok = await install(); if (ok) toast({ title: "Installed", description: `${BRAND.appName} now opens from your taskbar.` }); }} data-testid="button-portal-install">
@@ -207,6 +218,7 @@ export default function PortalPage() {
         </nav>
 
         <main className="p-4 md:p-6 space-y-6 min-w-0">
+          {(org.status === "pending" || org.status === "rejected") && <ApplicationStatus orgId={org.id} status={org.status} isOwner={role === "owner"} />}
           {view === "today" && <TodayBoard org={org} onBook={() => setBooking(true)} canBook={canBook(role)} />}
           {view === "jobs" && <JobsList org={org} canCancel={canBook(role)} onSendAgain={parcels && canBook(role) ? sendAgain : undefined} />}
           {view === "recipients" && parcels && canBook(role) && <RecipientsView org={org} onSend={sendAgain} />}

@@ -1,4 +1,5 @@
 import { sendSms as sendThroughRegistry } from "../smsService";
+import { isParcelAsk, parcelRefusalText } from "@shared/parcelAsk";
 import type { IStorage } from "../storage";
 import { createGuardianShareToken } from "./orchestrator";
 import { resolveAppUrl } from "../appUrl";
@@ -49,6 +50,12 @@ export async function handleInboundSms(
   const normalized = normalizePhone(phone);
   const text = body.trim().toLowerCase();
   const session = await storage.getOrCreateSmsBookingSession(normalized);
+
+  // A text asking to send a thing, not a person, is answered and never
+  // booked, whichever word it starts with (shared/parcelAsk.ts).
+  if (isParcelAsk(body)) {
+    return `PG Ride: ${parcelRefusalText(resolveAppUrl("https://pgride.app"))}`;
+  }
 
   if (text === "help" || text === "ayuda" || text === "aide") {
     return "PG Ride SMS: RIDE <address> to book. STATUS for active trip. TRACK for link. HELP for menu.";

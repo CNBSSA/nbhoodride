@@ -1,4 +1,5 @@
 import type { MobilityIntentType, ParsedMobilityIntent } from "./genui/schema";
+import { isParcelAsk } from "./parcelAsk";
 
 export type { ParsedMobilityIntent };
 
@@ -14,6 +15,13 @@ export function parseMobilityUtterance(utterance: string): ParsedMobilityIntent 
 
   if (!text) {
     return { intentType: "unknown", confidence: 0, label: "What do you need?", utterance: text };
+  }
+
+  // "Send a package to 123 Main St" used to become a ride to 123 Main St,
+  // and "send a package" alone a ride to "send a package". A parcel is
+  // answered, never booked (shared/parcelAsk.ts).
+  if (isParcelAsk(text)) {
+    return { intentType: "parcel", confidence: 0.9, label: "Send a parcel", utterance: text };
   }
 
   if (GUARDIAN_PATTERNS.test(lower)) {
@@ -63,6 +71,7 @@ export function intentTypeLabel(type: MobilityIntentType): string {
     repeat_last: "Repeat last ride",
     book_ride: "Book a ride",
     guardian_share: "Family tracking",
+    parcel: "Send a parcel (businesses only)",
     unknown: "Unknown intent",
   };
   return map[type];

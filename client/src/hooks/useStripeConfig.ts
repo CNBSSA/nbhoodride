@@ -11,6 +11,7 @@ export interface StripeConfig {
   equityProgramEnabled: boolean;
   commercialEnabled?: boolean;
   rentalEnabled?: boolean;
+  fleetEnabled?: boolean;
 }
 
 export function useStripeConfig() {
@@ -37,5 +38,6 @@ export function useFeatureFlags() {
     equityProgramEnabled: data?.equityProgramEnabled ?? false,
     commercialEnabled: data?.commercialEnabled ?? false,
     rentalEnabled: data?.rentalEnabled ?? false,
+    fleetEnabled: data?.fleetEnabled ?? false,
   };
 }

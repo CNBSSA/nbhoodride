@@ -157,6 +157,10 @@ export const driverProfiles = pgTable("driver_profiles", {
   // Background check identifiers (Checkr)
   checkrCandidateId: varchar("checkr_candidate_id"),
   checkrReportId: varchar("checkr_report_id"),
+  // When this driver's last WebSocket closed and nothing has re-joined since
+  // (shared/driverPresence.ts). Null while a socket is open. Their claimed
+  // scheduled rides are released only once this is older than the grace.
+  presenceDroppedAt: timestamp("presence_dropped_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
@@ -922,9 +926,9 @@ export const reliabilityEvents = pgTable("reliability_events", {
 export const organizations = pgTable("organizations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: varchar("name").notNull(),
-  /** medical | business | food */
+  /** medical | business | food | fleet (a fleet supplies cars and drivers and never books; shared/fleet.ts) */
   category: varchar("category").notNull(),
-  /** active | paused — paused organizations cannot book */
+  /** active | paused — paused organizations cannot book. An account that applied for itself, a fleet or a booking one, is also pending or rejected (sent back). */
   status: varchar("status").notNull().default("active"),
   /** weekly_debit | net_terms */
   billingMode: varchar("billing_mode").notNull().default("weekly_debit"),
@@ -944,6 +948,15 @@ export const organizations = pgTable("organizations", {
   terms: jsonb("terms").$type<Record<string, unknown>>(),
   /** Whether the parcel form starts with "ask the recipient to approve the delivery fee first" (shared/recipientApproval.ts). */
   askRecipientByDefault: boolean("ask_recipient_by_default").notNull().default(false),
+  /** A fleet's business: legal name, EIN, kind (shared/fleet.ts checkFleetApplication). Null for other organizations. */
+  fleetDetails: jsonb("fleet_details").$type<{ legalName: string; ein: string; businessType: string }>(),
+  /** A booking account that applied for itself: its legal name, EIN, kind (shared/orgApplication.ts). Null for accounts PG Ride created. */
+  businessDetails: jsonb("business_details").$type<{ legalName: string; ein: string; businessType: string }>(),
+  /** PG Ride's note when a fleet application is sent back; the owner sees it. */
+  reviewNote: text("review_note"),
+  /** Where a fleet is paid (the business's own account): shared/fleet.ts FLEET_PAYOUT_METHODS. */
+  payoutMethod: varchar("payout_method"),
+  payoutDetails: varchar("payout_details"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -1609,7 +1622,8 @@ export const rentalCars = pgTable("rental_cars", {
   vin: varchar("vin"),
   photos: jsonb("photos").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
   dailyPrice: decimal("daily_price", { precision: 8, scale: 2 }).notNull(),
-  deposit: decimal("deposit", { precision: 8, scale: 2 }).notNull().default("0.00"),
+  /** Between $100 and $1,000, $250 unless the lister sets it (shared/rental.ts depositProblem). */
+  deposit: decimal("deposit", { precision: 8, scale: 2 }).notNull().default("250.00"),
   milesPerDay: integer("miles_per_day").notNull().default(0),
   extraMileFee: decimal("extra_mile_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
   lateHourFee: decimal("late_hour_fee", { precision: 6, scale: 2 }).notNull().default("0.00"),
@@ -1649,6 +1663,8 @@ export const rentalBookings = pgTable("rental_bookings", {
   endsAt: timestamp("ends_at").notNull(),
   days: integer("days").notNull(),
   dailyPrice: decimal("daily_price", { precision: 8, scale: 2 }).notNull(),
+  /** Under 25 on the first day: $25 a day, included in rental_total, PG Ride's alone. */
+  youngRenterFee: decimal("young_renter_fee", { precision: 8, scale: 2 }).notNull().default("0.00"),
   rentalTotal: decimal("rental_total", { precision: 10, scale: 2 }).notNull(),
   deposit: decimal("deposit", { precision: 8, scale: 2 }).notNull(),
   milesAllowed: integer("miles_allowed").notNull().default(0),
@@ -1719,6 +1735,13 @@ export const driverCarAssignments = pgTable("driver_car_assignments", {
   cancelReason: text("cancel_reason"),
   /** When ops were paged that the car is overdue (once per assignment). */
   overduePagedAt: timestamp("overdue_paged_at"),
+  /** The driver's written agreement that rent is taken from earnings first (shared/rental.ts RENT_FROM_EARNINGS_SENTENCE); null = card only. */
+  rentFromEarningsAgreedAt: timestamp("rent_from_earnings_agreed_at"),
+  /** Kept past the end of the weeks: hours started and their charge (weekly rent / 168 each). */
+  lateHours: integer("late_hours"),
+  lateCharge: decimal("late_charge", { precision: 8, scale: 2 }),
+  /** Of the damage and late charge, what was taken from the driver's earnings (the card is charged the rest). */
+  returnFromEarnings: decimal("return_from_earnings", { precision: 8, scale: 2 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -1734,8 +1757,10 @@ export const driverRentCharges = pgTable("driver_rent_charges", {
   assignmentId: varchar("assignment_id").notNull().references(() => driverCarAssignments.id),
   periodStart: timestamp("period_start").notNull(),
   amount: decimal("amount", { precision: 8, scale: 2 }).notNull(),
-  /** charging | paid | failed */
+  /** charging | paid | failed | refunded */
   status: varchar("status").notNull().default("charging"),
+  /** Taken from the driver's earnings, once, before the card (null = not decided yet). */
+  fromEarnings: decimal("from_earnings", { precision: 8, scale: 2 }),
   stripePaymentIntentId: varchar("stripe_payment_intent_id"),
   error: text("error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1755,6 +1780,66 @@ export const rentalOwnerProfiles = pgTable("rental_owner_profiles", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 export type RentalOwnerProfile = typeof rentalOwnerProfiles.$inferSelect;
+
+// A renter's facts and their driving-record check (industry rules adopted
+// 2026-09-28; shared/rental.ts renterProblems, drivingRecordCurrent). One row
+// per person, kept between rentals; a changed licence sends the check back to
+// pending. Only PG Ride records a check's result.
+export const rentalRenters = pgTable("rental_renters", {
+  userId: varchar("user_id").primaryKey().references(() => users.id),
+  dateOfBirth: varchar("date_of_birth", { length: 10 }).notNull(),
+  licenceNumber: varchar("licence_number").notNull(),
+  licenceIssuedOn: varchar("licence_issued_on", { length: 10 }).notNull(),
+  licenceExpiresOn: varchar("licence_expires_on", { length: 10 }).notNull(),
+  licenceImageUrl: varchar("licence_image_url").notNull(),
+  /** pending | cleared | refused */
+  recordStatus: varchar("record_status").notNull().default("pending"),
+  recordNote: text("record_note"),
+  recordCheckedAt: timestamp("record_checked_at"),
+  recordCheckedBy: varchar("record_checked_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export type RentalRenter = typeof rentalRenters.$inferSelect;
+
+// A fleet organization's cars (Fleet Management Accounts Plan, slice 2;
+// rules in shared/fleet.ts fleetCarProblems). Checked like a rental car and
+// by PG Ride before it carries riders; "ready" only while every check holds.
+// Slice 3 gives a ready car to one of the fleet's drivers.
+export const fleetCars = pgTable("fleet_cars", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  make: varchar("make").notNull(),
+  model: varchar("model").notNull(),
+  year: integer("year").notNull(),
+  color: varchar("color").notNull(),
+  seats: integer("seats").notNull().default(5),
+  vehicleType: varchar("vehicle_type").notNull().default("standard"),
+  licensePlate: varchar("license_plate").notNull(),
+  vin: varchar("vin"),
+  photos: jsonb("photos").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  /** The papers: photos or PDFs in PG Ride's own store, the uploader's own uploads. */
+  registrationDocUrl: varchar("registration_doc_url"),
+  insuranceDocUrl: varchar("insurance_doc_url"),
+  inspectionDocUrl: varchar("inspection_doc_url"),
+  inspectionExpires: timestamp("inspection_expires"),
+  registrationExpires: timestamp("registration_expires"),
+  insuranceExpires: timestamp("insurance_expires"),
+  /** pending | approved | rejected: PG Ride's check of the papers. */
+  reviewStatus: varchar("review_status").notNull().default("pending"),
+  reviewNote: text("review_note"),
+  /** parked | ready (shared/fleet.ts): ready only while fleetCarProblems is empty. */
+  status: varchar("status").notNull().default("parked"),
+  parkedReason: text("parked_reason"),
+  /** The fleet driver who has the car (slice 3); null while nobody does. */
+  driverUserId: varchar("driver_user_id").references(() => users.id),
+  createdBy: varchar("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_fleet_cars_org").on(table.organizationId),
+]);
+export type FleetCar = typeof fleetCars.$inferSelect;
 
 export const eventTrackingRelations = relations(eventTracking, ({ one }) => ({
   user: one(users, {

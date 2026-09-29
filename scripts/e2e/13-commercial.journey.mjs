@@ -43,7 +43,8 @@ export async function run({ base, db, server }) {
     if (noUser.json?.id) orgIds.push(noUser.json.id);
 
     section("The surface does not exist while the flag is off");
-    const off = await startServer({ COMMERCIAL_ENABLED: "false" });
+    // As production runs: commercial and fleets both off (journey 35 proves each switch alone).
+    const off = await startServer({ COMMERCIAL_ENABLED: "false", FLEET_ENABLED: "false" });
     try {
       const a2 = new Session(off.base); await a2.login(FIXTURES.admin.email);
       check("flag off: admin organizations route answers 404", (await a2.req("GET", "/api/admin/organizations")).status === 404);

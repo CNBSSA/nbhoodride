@@ -99,7 +99,9 @@ export default function BusinessLogin() {
           <div className="mt-6 space-y-2 text-center text-sm text-muted-foreground">
             <p>Invited by your organization? Open the link in that email to set up your sign-in.</p>
             <p>
-              Need an organization account? Email{" "}
+              Need an organization account?{" "}
+              <Link href="/org/apply"><span className="text-primary hover:underline cursor-pointer" data-testid="link-business-apply">Apply here</span></Link>
+              {" "}or email{" "}
               <a href={`mailto:${BRAND.supportEmail}`} className="text-primary hover:underline" data-testid="link-business-support">{BRAND.supportEmail}</a>.
             </p>
             <p>

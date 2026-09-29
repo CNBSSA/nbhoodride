@@ -26,6 +26,7 @@ import {
   sendAccountApprovedEmail,
   sendDriverApprovedEmail,
   sendPasswordResetEmail,
+  setEmailFailureRecorder,
   sendRideAcceptedEmail,
   sendRideReceiptEmail,
   sendSignupPendingEmail,
@@ -168,10 +169,14 @@ import { pageAtRiskRides } from "./rideRiskWatch";
 import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
 import { registerCommercialRoutes } from "./commercial/routes";
 import { registerRentalRoutes } from "./rental/routes";
+import { registerFleetRoutes } from "./fleet/routes";
+import { PARCEL_REFUSAL, isParcelAsk, parcelRefusalText } from "@shared/parcelAsk";
 import { materializeAllStandingOrders } from "./commercial/standingOrders";
 import { runWeeklyBilling } from "./commercial/billing";
 import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { noteWatchRan } from "./watchHeartbeat";
+import { emailFailureRecorder } from "./emailFailures";
+import { DRIVER_DROP_GRACE_MS, DRIVER_DROP_WINDOW_MINUTES, DRIVER_DROP_WORDS, dropHasExpired } from "@shared/driverPresence";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { describeClientBuild } from "@shared/clientBuild";
 import { registerMapTileRoutes } from "./mapTiles";
@@ -406,6 +411,8 @@ async function notifyRideMessageRecipient(
 export async function registerRoutes(app: Express): Promise<Server> {
   // Every rider alert also lands in reliability_events for the daily review.
   setRiderAlertRecorder(reliabilityEventRecorder);
+  // A failed email pages ops once an hour per kind and is counted every time.
+  setEmailFailureRecorder(emailFailureRecorder);
 
   /** An Anthropic SDK connection/API failure: an outage to report as 503, not a bug to report as 500. */
   const aiUnavailable = (error: unknown): boolean => {
@@ -840,9 +847,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         privacyAccepted: z.boolean().refine(v => v === true, {
           message: "You must accept the Privacy Policy to register",
         }),
+        // "I want to drive": the application starts at sign-up (the driver
+        // funnel, 2026-09-28), so the operator knows from minute one and the
+        // applicant is in the Drivers queue before they can even log in.
+        wantsToDrive: z.boolean().optional(),
       });
 
-      const { email, password, firstName, lastName, phone, termsAccepted, privacyAccepted } =
+      const { email, password, firstName, lastName, phone, termsAccepted, privacyAccepted, wantsToDrive } =
         signupSchema.parse(req.body);
 
       // ── Password complexity ──────────────────────────────────────────────
@@ -933,15 +944,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       sendSignupPendingEmail({ email: user.email, firstName: user.firstName }).catch(console.error);
 
-      opsAlert(formatOpsAlert("👤 New signup (awaiting approval)", [
+      // A driver applicant's application exists from sign-up: a pending
+      // driver profile, so the Drivers queue shows them at once and the
+      // documents screen is their next step the moment they can log in.
+      // It is an application, never approval: isDriver stays false until
+      // an admin approves it (PATCH /api/admin/drivers/:userId).
+      let driverApplication = false;
+      if (wantsToDrive) {
+        try {
+          await storage.createDriverProfile({ userId: user.id } as any);
+          driverApplication = true;
+        } catch (err) {
+          console.error(`[signup] driver application for ${user.id} could not be started:`, err);
+          opsAlert(formatOpsAlert("🚙 Driver application FAILED at sign-up", [["Email", user.email], ["Reason", String((err as any)?.message ?? err).slice(0, 200)], ["Next", "Ask them to tap Apply on their Profile once approved"]]));
+        }
+      }
+
+      opsAlert(formatOpsAlert(driverApplication ? "🚙 New signup: wants to DRIVE (awaiting approval)" : "👤 New signup (awaiting approval)", [
         ["Name", `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim()],
         ["Email", user.email],
+        ...(driverApplication ? [["Phone", user.phone ?? ""] as [string, string], ["Next", "Approve the person in Admin; they then upload licence, insurance and car photos, and you approve the driver in Drivers"] as [string, string]] : []),
         ["Approve", `${resolveAppUrl(`https://${req.get("host")}`)}/admin`],
       ]));
 
       res.json({
         message: "Account created! Your account needs administrator approval before you can log in.",
         pendingApproval: true,
+        driverApplication,
         user: {
           id: user.id,
           email: user.email,
@@ -1113,6 +1142,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { email } = forgotPasswordSchema.parse(req.body);
 
+      // No email can leave at all (no app password in production): say so,
+      // as the text door does, instead of "check your email" for an email
+      // that will never come. Not user-specific, so it reveals nothing.
+      if (process.env.NODE_ENV === "production" && !getEmailConfigSummary().passwordPresent) {
+        riderAlert("server_error", "POST /api/auth/forgot-password", [["Route", "forgot-password"], ["Error", "email is not configured (SMTP_PASS missing)"]]);
+        return res.status(503).json({ message: "Reset by email is not available right now. Use reset by text, or contact support." });
+      }
+
       // Find user by email
       const user = await storage.getUserByEmail(email);
       if (!user) {
@@ -1124,11 +1161,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const resetToken = nanoid(32);
       const resetExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
 
-      // Save reset token
-      await storage.setPasswordResetToken(email, resetToken, resetExpiry);
+      // Save reset token on the account that was found (by id: the email as
+      // typed may differ in case from the one stored) and send the link to
+      // the address on the account.
+      await storage.setPasswordResetToken(user.id, resetToken, resetExpiry);
 
       const appUrl = resolveAppUrl(`https://${req.get('host')}`);
-      sendPasswordResetEmail(email, user.firstName, resetToken, appUrl).catch(console.error);
+      sendPasswordResetEmail(user.email ?? email, user.firstName, resetToken, appUrl).catch(console.error);
 
       res.json({ 
         message: "If the email exists, a password reset link will be sent",
@@ -1532,7 +1571,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const mayRental = featureFlags.rentalEnabled
           ? await import("./rental/cars").then((m) => m.rentalPhotoVisibleTo(userId, obj.id)).catch(() => false)
           : false;
-        if (!mayRental && !(await userMaySeeProofPhoto(userId, obj.id).catch(() => false))) {
+        // A fleet car's photos and papers are for the fleet's own desk.
+        const mayFleet = !mayRental && featureFlags.fleetEnabled
+          ? await import("./fleet/cars").then((m) => m.fleetPhotoVisibleTo(userId, obj.id)).catch(() => false)
+          : false;
+        if (!mayRental && !mayFleet && !(await userMaySeeProofPhoto(userId, obj.id).catch(() => false))) {
           return res.status(403).json({ message: "Not allowed" });
         }
       }
@@ -1598,9 +1641,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const validatedDriverData = driverRegistrationSchema.parse(req.body);
 
+      // Only what an applicant may say about themselves. Before 2026-09-28
+      // the whole body went in, so an app could write approvalStatus,
+      // badges or isVerifiedNeighbor on its own application; approval is
+      // the operator's alone (PATCH /api/admin/drivers/:userId).
       const profileData = insertDriverProfileSchema.parse({
-        ...req.body,
-        userId
+        userId,
+        ...(validatedDriverData.licenseNumber ? { licenseNumber: validatedDriverData.licenseNumber } : {}),
+        ...(validatedDriverData.licenseImageUrl ? { licenseImageUrl: validatedDriverData.licenseImageUrl } : {}),
+        ...(validatedDriverData.insuranceImageUrl ? { insuranceImageUrl: validatedDriverData.insuranceImageUrl } : {}),
+        ...(Array.isArray(req.body?.vehiclePhotoUrls) ? { vehiclePhotoUrls: req.body.vehiclePhotoUrls.filter((u: unknown) => typeof u === "string" && u.length <= 600).slice(0, 12) } : {}),
       });
 
       let profile;
@@ -1667,8 +1717,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put('/api/driver/profile', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const updates = req.body;
-      
+      // The documents screen saves one field at a time. Only those fields:
+      // approval, badges, suspension and the rest are the operator's, and
+      // until 2026-09-28 this route wrote whatever the app sent.
+      const driverUpdateSchema = z.object({
+        licenseNumber: z.string().regex(/^[A-Z0-9\-]{4,20}$/i, "License number must be 4–20 alphanumeric characters").optional(),
+        licenseImageUrl: z.string().min(1).max(600).nullable().optional(),
+        insuranceImageUrl: z.string().min(1).max(600).nullable().optional(),
+        vehiclePhotoUrls: z.array(z.string().min(1).max(600)).max(12).optional(),
+      });
+      const updates = driverUpdateSchema.parse(req.body ?? {});
+      if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Nothing to save: send a licence number, a licence or insurance image, or vehicle photos." });
+
       const profile = await storage.updateDriverProfile(userId, updates);
       res.json(profile);
     } catch (error) {
@@ -5609,6 +5669,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       equityProgramEnabled: featureFlags.equityProgramEnabled,
       commercialEnabled: featureFlags.commercialEnabled,
       rentalEnabled: featureFlags.rentalEnabled,
+      fleetEnabled: featureFlags.fleetEnabled,
     });
   });
 
@@ -7162,7 +7223,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Approve user (admin or super admin)
   // Admin attests the user's email in person (family, signup tables, church
   // onboarding) — removes the dependency on email delivery, which blocks ALL
-  // registration when the Resend domain isn't verified yet.
+  // registration when the mail server isn't configured yet.
   app.post('/api/admin/users/:userId/approve', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const { userId } = req.params;
@@ -8936,6 +8997,7 @@ Platform facts — state these accurately and never invent policies:
 - Coworker shared rides: one person schedules the ride and shares its PG-code; coworkers join by entering the code, and everyone in the group gets 30% off. Any driver can pick up the trip.
 - Riders pay with the card saved in the app; a payment card on file is required to book, and the card is charged when the ride completes.
 - Fares are shown up front, calculated from distance and time only — there is no surge pricing.
+- Parcels and deliveries: PG Ride carries parcels for businesses only. A shop, office or clinic sends parcels from its own business account (it opens one in the app under "Open a business account"), billed weekly, with proof of delivery. A rider cannot send a package, and you must never offer to book a ride to carry one.
 If you're unsure of an answer, or it needs account-specific action you can't perform, say so and point the user to support (text +1 571-245-8187 or email thrynovainsights@gmail.com).
 
 FORMATTING: Your replies render as plain text in a small phone chat window — markdown is NOT rendered. Never use asterisks, hash headings, bullet or numbered list markers, or any other markup. Write short, friendly plain-text paragraphs. Keep responses brief but informative.`;
@@ -9372,6 +9434,12 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
       }
       const parsed = parseMobilityUtterance(parsedBody.data.utterance);
       await recordMobilityIntent(storage, userId, parsed);
+      // A parcel ask is answered with the one honest answer and the business
+      // door; no destination is resolved, so nothing can book from it.
+      if (parsed.intentType === "parcel") {
+        const autonomyLevel = await storage.getUserAutonomyLevel(userId);
+        return res.json({ parsed, refusal: PARCEL_REFUSAL, autonomyLevel });
+      }
       const resolved = await resolveIntentDestination(storage, userId, parsed);
       const autonomyLevel = await storage.getUserAutonomyLevel(userId);
       res.json({ parsed, ...resolved, autonomyLevel });
@@ -9645,6 +9713,20 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
       }
 
       await storage.createChatMessage(id, "user", content);
+
+      // A parcel ask gets the one honest answer, deterministically, before
+      // any model is asked: the answer and the business door, never a ride
+      // (shared/parcelAsk.ts).
+      if (isParcelAsk(content)) {
+        const answer = parcelRefusalText(resolveAppUrl(`https://${req.get("host")}`));
+        await storage.createChatMessage(id, "assistant", answer);
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+        res.write(`data: ${JSON.stringify({ content: answer })}\n\n`);
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        return res.end();
+      }
 
       const existingMessages = await storage.getChatMessages(id);
       const personalizedPrompt = await buildPersonalizedPrompt(userId);
@@ -11209,6 +11291,9 @@ Generate the FAQ list.`;
                   return;
                 }
                 activeConnections.set(message.userId, ws);
+                // The driver is back: a socket close only started a clock
+                // (shared/driverPresence.ts); a join stops it.
+                if (user.isDriver) storage.clearDriverSocketDrop(message.userId).catch(() => {});
                 // Cache driver county preferences for filtered broadcasting
                 // Use daily session counties if active, otherwise fall back to permanent prefs
                 if (user.isDriver) {
@@ -11370,49 +11455,12 @@ Generate the FAQ list.`;
           activeConnections.delete(userId);
           driverCountyCache.delete(userId);
 
-          // Fix 2: if this driver had a claimed scheduled ride within 2h, unclaim and re-broadcast
-          storage.getClaimedScheduledRidesForDriver(userId, 120).then(async (claimedRides) => {
-            for (const ride of claimedRides) {
-              try {
-                const unclaimed = await storage.unclaimScheduledRide(ride.id);
-                if (!unclaimed) continue;
-
-                // Tell the rider their driver dropped off
-                if (ride.riderId && activeConnections.has(ride.riderId)) {
-                  const riderWs = activeConnections.get(ride.riderId);
-                  if (riderWs?.readyState === WebSocket.OPEN) {
-                    riderWs.send(JSON.stringify({
-                      type: 'scheduled_ride_driver_dropped',
-                      rideId: ride.id,
-                      message: 'Your driver went offline. We\'re finding you a new one right away.',
-                    }));
-                  }
-                }
-
-                // Re-broadcast to all online drivers who cover the pickup county
-                const rebroadcast = JSON.stringify({
-                  type: 'new_scheduled_ride',
-                  rideId: ride.id,
-                  riderId: ride.riderId,
-                  riderName: 'Rider',
-                  pickupAddress: (ride.pickupLocation as any)?.address || '',
-                  destinationAddress: (ride.destinationLocation as any)?.address || '',
-                  estimatedFare: ride.estimatedFare,
-                  scheduledAt: ride.scheduledAt,
-                  pickupCounty: ride.pickupCounty || '',
-                  urgent: true,
-                  urgentReason: 'driver_dropped',
-                });
-                activeConnections.forEach((driverWs, driverId) => {
-                  if (driverId === userId) return;
-                  const counties = driverCountyCache.get(driverId) ?? [];
-                  if (driverCoversCounty(counties, ride.pickupCounty) && driverWs.readyState === WebSocket.OPEN) {
-                    driverWs.send(rebroadcast);
-                  }
-                });
-              } catch { /* non-fatal */ }
-            }
-          }).catch(() => {});
+          // A closed socket is not a driver gone (reliability audit
+          // 2026-09-29): the app closes it on every navigation, refresh and
+          // iOS background. Note the time; the minute sweep releases this
+          // driver's claimed rides only if they are still gone after the
+          // grace (releaseRidesOfDroppedDrivers below).
+          storage.noteDriverSocketDropped(userId).catch(() => {});
 
           break;
         }
@@ -11428,6 +11476,120 @@ Generate the FAQ list.`;
       }
     });
   }
+
+  /**
+   * Release every scheduled ride this driver holds for the next two hours:
+   * the rider is told and the ride is offered again (as before), and now the
+   * driver and ops are told too. Returns the rides released.
+   */
+  async function releaseClaimedRidesOfDroppedDriver(userId: string, droppedAt: Date, now: Date): Promise<string[]> {
+    const released: string[] = [];
+    const claimedRides = await storage.getClaimedScheduledRidesForDriver(userId, DRIVER_DROP_WINDOW_MINUTES);
+    const minutesGone = Math.max(1, Math.round((now.getTime() - droppedAt.getTime()) / 60000));
+    for (const ride of claimedRides) {
+      try {
+        const unclaimed = await storage.unclaimScheduledRide(ride.id);
+        if (!unclaimed) continue;
+        released.push(ride.id);
+        const pickupAddress = (ride.pickupLocation as any)?.address || '';
+
+        // Tell the rider their driver dropped off
+        if (ride.riderId && activeConnections.has(ride.riderId)) {
+          const riderWs = activeConnections.get(ride.riderId);
+          if (riderWs?.readyState === WebSocket.OPEN) {
+            riderWs.send(JSON.stringify({
+              type: 'scheduled_ride_driver_dropped',
+              rideId: ride.id,
+              message: DRIVER_DROP_WORDS.rider,
+            }));
+          }
+        }
+
+        // Tell the driver: an in-app notification they meet when they open
+        // the app again, pushed past calm mode because it is about a ride
+        // they held.
+        deliverUserNotification(userId, {
+          type: 'scheduled-ride-released',
+          title: DRIVER_DROP_WORDS.driverTitle,
+          body: DRIVER_DROP_WORDS.driver(pickupAddress, minutesGone),
+          data: { rideId: ride.id },
+          url: '/',
+          bypassQuietPreferences: true,
+        }).catch((err) => console.error('[driver-drop] driver notification failed:', err));
+
+        // Re-broadcast to all online drivers who cover the pickup county
+        const rebroadcast = JSON.stringify({
+          type: 'new_scheduled_ride',
+          rideId: ride.id,
+          riderId: ride.riderId,
+          riderName: 'Rider',
+          pickupAddress,
+          destinationAddress: (ride.destinationLocation as any)?.address || '',
+          estimatedFare: ride.estimatedFare,
+          scheduledAt: ride.scheduledAt,
+          pickupCounty: ride.pickupCounty || '',
+          urgent: true,
+          urgentReason: 'driver_dropped',
+        });
+        activeConnections.forEach((driverWs, driverId) => {
+          if (driverId === userId) return;
+          const counties = driverCountyCache.get(driverId) ?? [];
+          if (driverCoversCounty(counties, ride.pickupCounty) && driverWs.readyState === WebSocket.OPEN) {
+            driverWs.send(rebroadcast);
+          }
+        });
+
+        opsAlert(formatOpsAlert('🚗 Driver dropped a scheduled ride', [
+          ['Ride', ride.id],
+          ['Pickup', pickupAddress],
+          ['Scheduled', ride.scheduledAt ? new Date(ride.scheduledAt).toISOString() : ''],
+          ['Driver', userId],
+          ['Gone for', `${minutesGone} min with no connection`],
+          ['Now', 'offered to other drivers; the rider has been told'],
+        ]));
+      } catch (err) {
+        console.error('[driver-drop] release failed for ride', ride.id, err);
+      }
+    }
+    return released;
+  }
+
+  /**
+   * The grace sweep: every driver whose last socket closed at least
+   * DRIVER_DROP_GRACE_MS ago and who has not re-joined. One with a live
+   * socket after all (a join the close raced) is simply cleared.
+   */
+  async function releaseRidesOfDroppedDrivers(now = new Date()): Promise<{ checked: number; released: string[]; cleared: string[] }> {
+    const cutoff = new Date(now.getTime() - DRIVER_DROP_GRACE_MS);
+    const dropped = await storage.getDriversDroppedBefore(cutoff);
+    const released: string[] = []; const cleared: string[] = [];
+    for (const { userId, presenceDroppedAt } of dropped) {
+      const live = activeConnections.get(userId);
+      if (live && live.readyState === WebSocket.OPEN) {
+        await storage.clearDriverSocketDrop(userId).catch(() => {});
+        cleared.push(userId);
+        continue;
+      }
+      if (!dropHasExpired(presenceDroppedAt, now)) continue;
+      released.push(...await releaseClaimedRidesOfDroppedDriver(userId, presenceDroppedAt, now));
+      // The clock is cleared once acted on, so a driver still gone is not
+      // paged again every minute; the next close starts a new one.
+      await storage.clearDriverSocketDrop(userId).catch(() => {});
+    }
+    return { checked: dropped.length, released, cleared };
+  }
+
+  // Admin: run the grace sweep now (journey 42 and an operator's check).
+  app.post('/api/admin/analytics/driver-drop-sweep', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const at = typeof req.body?.at === "string" && req.body.at ? new Date(req.body.at) : new Date();
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ message: "at must be an ISO timestamp" });
+      res.json({ at: at.toISOString(), ...(await releaseRidesOfDroppedDrivers(at)) });
+    } catch (error) {
+      console.error("driver drop sweep error:", error);
+      res.status(500).json({ message: "Failed to run the driver drop sweep" });
+    }
+  });
 
   // SOS watcher registry: sockets subscribed (via a valid share token) to one
   // incident's live location — the guardian tracking page. Keyed by incident id.
@@ -11467,6 +11629,7 @@ Generate the FAQ list.`;
   // Handles: 30-min reminders, T-60/15/5 escalations, midnight county cleanup
   // ── Car rental (server/rental/, behind RENTAL_ENABLED) ──
   registerRentalRoutes(app, { isAuthenticated, isAdminOrSessionAuth });
+  registerFleetRoutes(app, { isAuthenticated, isAdminOrSessionAuth });
 
   // ── Commercial riders: organizations that book for other people and are billed ──
   // Registered here so the driver-board broadcast can reuse the live socket map.
@@ -11521,6 +11684,9 @@ Generate the FAQ list.`;
 
       // ── Heartbeats: prove to tomorrow's review that these ran ──
       noteWatchRan("minute-sweep", now);
+
+      // ── Drivers whose socket has been gone past the grace: release their claims ──
+      releaseRidesOfDroppedDrivers(now).catch((err) => console.error("driver drop sweep failed:", err));
 
       // ── Rider Promise Review: 4:00 AM Eastern, once a day, to Telegram ──
       maybeSendRiderPromiseReview(storage, now).catch((err) => console.error("rider promise review failed:", err));
@@ -11579,6 +11745,11 @@ Generate the FAQ list.`;
       // ── Car rental: hide a car the hour a document lapses; warn ahead once a day ──
       if (featureFlags.rentalEnabled && now.getMinutes() === 23) {
         import("./rental/sweep").then((m) => m.runRentalSweep(now, { warnings: now.getUTCHours() === 13 })).catch((err) => console.error("rental sweep failed:", err));
+      }
+
+      // ── Fleet cars: park a car the hour a paper lapses; warn ahead once a day ──
+      if (featureFlags.fleetEnabled && now.getMinutes() === 29) {
+        import("./fleet/cars").then((m) => m.runFleetCarSweep(now, { warnings: now.getUTCHours() === 13 })).catch((err) => console.error("fleet car sweep failed:", err));
       }
 
       // ── Ride-risk watch: page ops before the rider finds out ──

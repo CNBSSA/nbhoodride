@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { reportClientError } from "@/lib/reportClientError";
 import { AddPhoneBanner } from "@/components/AddPhoneBanner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,6 +33,13 @@ import { isAppInstalledContext, isIosDevice } from "@/lib/pwaInstall";
 
 export default function Profile() {
   const [isDocumentModalOpen, setIsDocumentModalOpen] = useState(false);
+  // The rider home's driver-application banner sends the applicant straight
+  // to their documents (the driver funnel, 2026-09-28).
+  useEffect(() => {
+    const open = () => setIsDocumentModalOpen(true);
+    window.addEventListener("pgride:open-driver-documents", open);
+    return () => window.removeEventListener("pgride:open-driver-documents", open);
+  }, []);
   const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [isSafetyPrivacyModalOpen, setIsSafetyPrivacyModalOpen] = useState(false);
   // Organization memberships decide whether the portal row shows at all.
@@ -45,7 +52,7 @@ export default function Profile() {
   const [showCountySelector, setShowCountySelector] = useState(false);
   const [localCounties, setLocalCounties] = useState<string[]>([]);
   const { user, isLoading } = useAuth();
-  const { walletEnabled, driverMarketplaceEnabled, rentalEnabled } = useFeatureFlags();
+  const { walletEnabled, driverMarketplaceEnabled, rentalEnabled, fleetEnabled, commercialEnabled } = useFeatureFlags();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -529,6 +536,46 @@ export default function Profile() {
                 <div className="text-left">
                   <p className="font-medium">Rent a car</p>
                   <p className="text-sm text-muted-foreground">PG Ride cars by the day</p>
+                </div>
+              </div>
+              <i className="fas fa-chevron-right text-muted-foreground" />
+            </Button>
+          )}
+
+          {/* Self-serve organization applications (2026-09-28): a clinic, office
+              or restaurant opens its own account instead of emailing PG Ride. */}
+          {commercialEnabled && (
+            <Button
+              variant="outline"
+              className="w-full justify-between p-4"
+              onClick={() => setLocation("/org/apply")}
+              data-testid="button-open-org-apply"
+            >
+              <div className="flex items-center space-x-3">
+                <i className="fas fa-building text-secondary text-xl" />
+                <div className="text-left">
+                  <p className="font-medium">Run a clinic, office or restaurant?</p>
+                  <p className="text-sm text-muted-foreground">Open a PG Ride business account</p>
+                </div>
+              </div>
+              <i className="fas fa-chevron-right text-muted-foreground" />
+            </Button>
+          )}
+
+          {/* Fleet management (Fleet Management Accounts Plan): an investor's
+              way in to open a fleet account. Shown only while FLEET_ENABLED is on. */}
+          {fleetEnabled && (
+            <Button
+              variant="outline"
+              className="w-full justify-between p-4"
+              onClick={() => setLocation("/fleet/apply")}
+              data-testid="button-open-fleet-apply"
+            >
+              <div className="flex items-center space-x-3">
+                <i className="fas fa-car-side text-secondary text-xl" />
+                <div className="text-left">
+                  <p className="font-medium">Own cars? Open a fleet account</p>
+                  <p className="text-sm text-muted-foreground">Your cars, driven by PG Ride drivers</p>
                 </div>
               </div>
               <i className="fas fa-chevron-right text-muted-foreground" />

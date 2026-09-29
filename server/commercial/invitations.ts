@@ -14,7 +14,7 @@ import bcrypt from "bcrypt";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "../db";
 import { organizationInvitations, organizationMembers, organizations, users } from "@shared/schema";
-import { isOrgRole, type OrgRole } from "@shared/commercial";
+import { isOrgRole, rolesForCategory, type OrgRole } from "@shared/commercial";
 import { invitationExpiresAt, invitationRefusal, invitationState, INVITATION_DAYS, type InvitationState } from "@shared/invitations";
 import { normalizePhone } from "@shared/smsMessages";
 import { validatePasswordComplexity } from "../passwordPolicy";
@@ -40,10 +40,12 @@ export interface CreatedInvitation extends InvitationSummary {
 
 /** Invite an email that holds no account. Re-inviting the same email issues a fresh link. */
 export async function inviteByEmail(organizationId: string, email: string, role: OrgRole, invitedBy: string, appUrl: string, now: Date = new Date()): Promise<CreatedInvitation> {
-  if (!isOrgRole(role)) throw new CommercialError("Role must be owner, requester or billing.");
   const addr = clean(email, 200).toLowerCase();
-  if (!addr || !addr.includes("@")) throw new CommercialError("An email is needed.");
   const [org] = await db.select().from(organizations).where(eq(organizations.id, organizationId));
+  // The roles a fleet's people hold are a fleet's own (shared/commercial.ts rolesForCategory).
+  const allowed = rolesForCategory(org?.category);
+  if (!isOrgRole(role) || !allowed.includes(role)) throw new CommercialError(`Role must be ${allowed.slice(0, -1).join(", ")} or ${allowed[allowed.length - 1]}.`);
+  if (!addr || !addr.includes("@")) throw new CommercialError("An email is needed.");
   if (!org) throw new CommercialError("Organization not found.", 404);
   const token = randomBytes(24).toString("hex");
   const expiresAt = invitationExpiresAt(now);
@@ -113,7 +115,9 @@ export async function acceptInvitation(token: string, input: AcceptInput, now: D
   const state = invitationState(row.inv, now);
   const refusal = invitationRefusal(state, row.org.name);
   if (refusal) throw new CommercialError(refusal, 410);
-  const role = isOrgRole(row.inv.role) ? row.inv.role : "requester";
+  const fits = rolesForCategory(row.org.category);
+  // An unknown role falls back to the least a member of that kind of organization may do.
+  const role: OrgRole = isOrgRole(row.inv.role) && fits.includes(row.inv.role) ? row.inv.role : (fits === rolesForCategory("fleet") ? "viewer" : "requester");
 
   const [existing] = await db.select().from(users).where(and(eq(users.email, row.inv.email), isNull(users.deletedAt)));
   if (existing) {
