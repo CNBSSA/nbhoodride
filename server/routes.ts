@@ -174,6 +174,7 @@ import { materializeAllStandingOrders } from "./commercial/standingOrders";
 import { runWeeklyBilling } from "./commercial/billing";
 import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { noteWatchRan } from "./watchHeartbeat";
+import { DRIVER_DROP_GRACE_MS, DRIVER_DROP_WINDOW_MINUTES, DRIVER_DROP_WORDS, dropHasExpired } from "@shared/driverPresence";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { describeClientBuild } from "@shared/clientBuild";
 import { registerMapTileRoutes } from "./mapTiles";
@@ -11278,6 +11279,9 @@ Generate the FAQ list.`;
                   return;
                 }
                 activeConnections.set(message.userId, ws);
+                // The driver is back: a socket close only started a clock
+                // (shared/driverPresence.ts); a join stops it.
+                if (user.isDriver) storage.clearDriverSocketDrop(message.userId).catch(() => {});
                 // Cache driver county preferences for filtered broadcasting
                 // Use daily session counties if active, otherwise fall back to permanent prefs
                 if (user.isDriver) {
@@ -11439,49 +11443,12 @@ Generate the FAQ list.`;
           activeConnections.delete(userId);
           driverCountyCache.delete(userId);
 
-          // Fix 2: if this driver had a claimed scheduled ride within 2h, unclaim and re-broadcast
-          storage.getClaimedScheduledRidesForDriver(userId, 120).then(async (claimedRides) => {
-            for (const ride of claimedRides) {
-              try {
-                const unclaimed = await storage.unclaimScheduledRide(ride.id);
-                if (!unclaimed) continue;
-
-                // Tell the rider their driver dropped off
-                if (ride.riderId && activeConnections.has(ride.riderId)) {
-                  const riderWs = activeConnections.get(ride.riderId);
-                  if (riderWs?.readyState === WebSocket.OPEN) {
-                    riderWs.send(JSON.stringify({
-                      type: 'scheduled_ride_driver_dropped',
-                      rideId: ride.id,
-                      message: 'Your driver went offline. We\'re finding you a new one right away.',
-                    }));
-                  }
-                }
-
-                // Re-broadcast to all online drivers who cover the pickup county
-                const rebroadcast = JSON.stringify({
-                  type: 'new_scheduled_ride',
-                  rideId: ride.id,
-                  riderId: ride.riderId,
-                  riderName: 'Rider',
-                  pickupAddress: (ride.pickupLocation as any)?.address || '',
-                  destinationAddress: (ride.destinationLocation as any)?.address || '',
-                  estimatedFare: ride.estimatedFare,
-                  scheduledAt: ride.scheduledAt,
-                  pickupCounty: ride.pickupCounty || '',
-                  urgent: true,
-                  urgentReason: 'driver_dropped',
-                });
-                activeConnections.forEach((driverWs, driverId) => {
-                  if (driverId === userId) return;
-                  const counties = driverCountyCache.get(driverId) ?? [];
-                  if (driverCoversCounty(counties, ride.pickupCounty) && driverWs.readyState === WebSocket.OPEN) {
-                    driverWs.send(rebroadcast);
-                  }
-                });
-              } catch { /* non-fatal */ }
-            }
-          }).catch(() => {});
+          // A closed socket is not a driver gone (reliability audit
+          // 2026-09-29): the app closes it on every navigation, refresh and
+          // iOS background. Note the time; the minute sweep releases this
+          // driver's claimed rides only if they are still gone after the
+          // grace (releaseRidesOfDroppedDrivers below).
+          storage.noteDriverSocketDropped(userId).catch(() => {});
 
           break;
         }
@@ -11497,6 +11464,120 @@ Generate the FAQ list.`;
       }
     });
   }
+
+  /**
+   * Release every scheduled ride this driver holds for the next two hours:
+   * the rider is told and the ride is offered again (as before), and now the
+   * driver and ops are told too. Returns the rides released.
+   */
+  async function releaseClaimedRidesOfDroppedDriver(userId: string, droppedAt: Date, now: Date): Promise<string[]> {
+    const released: string[] = [];
+    const claimedRides = await storage.getClaimedScheduledRidesForDriver(userId, DRIVER_DROP_WINDOW_MINUTES);
+    const minutesGone = Math.max(1, Math.round((now.getTime() - droppedAt.getTime()) / 60000));
+    for (const ride of claimedRides) {
+      try {
+        const unclaimed = await storage.unclaimScheduledRide(ride.id);
+        if (!unclaimed) continue;
+        released.push(ride.id);
+        const pickupAddress = (ride.pickupLocation as any)?.address || '';
+
+        // Tell the rider their driver dropped off
+        if (ride.riderId && activeConnections.has(ride.riderId)) {
+          const riderWs = activeConnections.get(ride.riderId);
+          if (riderWs?.readyState === WebSocket.OPEN) {
+            riderWs.send(JSON.stringify({
+              type: 'scheduled_ride_driver_dropped',
+              rideId: ride.id,
+              message: DRIVER_DROP_WORDS.rider,
+            }));
+          }
+        }
+
+        // Tell the driver: an in-app notification they meet when they open
+        // the app again, pushed past calm mode because it is about a ride
+        // they held.
+        deliverUserNotification(userId, {
+          type: 'scheduled-ride-released',
+          title: DRIVER_DROP_WORDS.driverTitle,
+          body: DRIVER_DROP_WORDS.driver(pickupAddress, minutesGone),
+          data: { rideId: ride.id },
+          url: '/',
+          bypassQuietPreferences: true,
+        }).catch((err) => console.error('[driver-drop] driver notification failed:', err));
+
+        // Re-broadcast to all online drivers who cover the pickup county
+        const rebroadcast = JSON.stringify({
+          type: 'new_scheduled_ride',
+          rideId: ride.id,
+          riderId: ride.riderId,
+          riderName: 'Rider',
+          pickupAddress,
+          destinationAddress: (ride.destinationLocation as any)?.address || '',
+          estimatedFare: ride.estimatedFare,
+          scheduledAt: ride.scheduledAt,
+          pickupCounty: ride.pickupCounty || '',
+          urgent: true,
+          urgentReason: 'driver_dropped',
+        });
+        activeConnections.forEach((driverWs, driverId) => {
+          if (driverId === userId) return;
+          const counties = driverCountyCache.get(driverId) ?? [];
+          if (driverCoversCounty(counties, ride.pickupCounty) && driverWs.readyState === WebSocket.OPEN) {
+            driverWs.send(rebroadcast);
+          }
+        });
+
+        opsAlert(formatOpsAlert('🚗 Driver dropped a scheduled ride', [
+          ['Ride', ride.id],
+          ['Pickup', pickupAddress],
+          ['Scheduled', ride.scheduledAt ? new Date(ride.scheduledAt).toISOString() : ''],
+          ['Driver', userId],
+          ['Gone for', `${minutesGone} min with no connection`],
+          ['Now', 'offered to other drivers; the rider has been told'],
+        ]));
+      } catch (err) {
+        console.error('[driver-drop] release failed for ride', ride.id, err);
+      }
+    }
+    return released;
+  }
+
+  /**
+   * The grace sweep: every driver whose last socket closed at least
+   * DRIVER_DROP_GRACE_MS ago and who has not re-joined. One with a live
+   * socket after all (a join the close raced) is simply cleared.
+   */
+  async function releaseRidesOfDroppedDrivers(now = new Date()): Promise<{ checked: number; released: string[]; cleared: string[] }> {
+    const cutoff = new Date(now.getTime() - DRIVER_DROP_GRACE_MS);
+    const dropped = await storage.getDriversDroppedBefore(cutoff);
+    const released: string[] = []; const cleared: string[] = [];
+    for (const { userId, presenceDroppedAt } of dropped) {
+      const live = activeConnections.get(userId);
+      if (live && live.readyState === WebSocket.OPEN) {
+        await storage.clearDriverSocketDrop(userId).catch(() => {});
+        cleared.push(userId);
+        continue;
+      }
+      if (!dropHasExpired(presenceDroppedAt, now)) continue;
+      released.push(...await releaseClaimedRidesOfDroppedDriver(userId, presenceDroppedAt, now));
+      // The clock is cleared once acted on, so a driver still gone is not
+      // paged again every minute; the next close starts a new one.
+      await storage.clearDriverSocketDrop(userId).catch(() => {});
+    }
+    return { checked: dropped.length, released, cleared };
+  }
+
+  // Admin: run the grace sweep now (journey 42 and an operator's check).
+  app.post('/api/admin/analytics/driver-drop-sweep', isAdminOrSessionAuth, async (req: any, res) => {
+    try {
+      const at = typeof req.body?.at === "string" && req.body.at ? new Date(req.body.at) : new Date();
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ message: "at must be an ISO timestamp" });
+      res.json({ at: at.toISOString(), ...(await releaseRidesOfDroppedDrivers(at)) });
+    } catch (error) {
+      console.error("driver drop sweep error:", error);
+      res.status(500).json({ message: "Failed to run the driver drop sweep" });
+    }
+  });
 
   // SOS watcher registry: sockets subscribed (via a valid share token) to one
   // incident's live location — the guardian tracking page. Keyed by incident id.
@@ -11591,6 +11672,9 @@ Generate the FAQ list.`;
 
       // ── Heartbeats: prove to tomorrow's review that these ran ──
       noteWatchRan("minute-sweep", now);
+
+      // ── Drivers whose socket has been gone past the grace: release their claims ──
+      releaseRidesOfDroppedDrivers(now).catch((err) => console.error("driver drop sweep failed:", err));
 
       // ── Rider Promise Review: 4:00 AM Eastern, once a day, to Telegram ──
       maybeSendRiderPromiseReview(storage, now).catch((err) => console.error("rider promise review failed:", err));
