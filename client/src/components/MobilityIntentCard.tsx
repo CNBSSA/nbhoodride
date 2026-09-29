@@ -5,7 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { Link } from "wouter";
 import type { ParsedMobilityIntent } from "@shared/genui/schema";
+import { PARCEL_REFUSAL } from "@shared/parcelAsk";
 
 /**
  * Feature-detect SpeechRecognition once at module scope. Returning the
@@ -48,6 +50,7 @@ interface MobilityIntentCardProps {
 
 export function MobilityIntentCard({ onResolved, onGuardianShare, disabled }: MobilityIntentCardProps) {
   const [utterance, setUtterance] = useState("");
+  const [parcelAsked, setParcelAsked] = useState(false);
   const [listening, setListening] = useState(false);
   // Pending voice transcript awaiting explicit confirmation. The supervisor
   // review caught that the previous version fired parseIntent.mutate
@@ -81,6 +84,13 @@ export function MobilityIntentCard({ onResolved, onGuardianShare, disabled }: Mo
         guardianShare.mutate();
         return;
       }
+      // A parcel ask: the honest answer and the business door, in place,
+      // instead of a ride to "send a package" (shared/parcelAsk.ts).
+      if (data.parsed.intentType === "parcel") {
+        setParcelAsked(true);
+        return;
+      }
+      setParcelAsked(false);
       // Previously a successful parse with intentType="unknown" silently
       // landed the rider in the search panel with no guidance — they'd
       // just see the booking screen and wonder why. Now we surface the
@@ -244,12 +254,20 @@ export function MobilityIntentCard({ onResolved, onGuardianShare, disabled }: Mo
         <Button
           type="button"
           disabled={!utterance.trim() || disabled || parseIntent.isPending || !!pendingTranscript}
-          onClick={() => parseIntent.mutate(utterance.trim())}
+          onClick={() => { setParcelAsked(false); parseIntent.mutate(utterance.trim()); }}
           data-testid="btn-parse-intent"
         >
           Go
         </Button>
       </div>
+
+      {parcelAsked && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm space-y-1" data-testid="text-parcel-refusal">
+          <p className="font-medium text-gray-900">{PARCEL_REFUSAL.title}</p>
+          <p className="text-gray-700">{PARCEL_REFUSAL.message}</p>
+          <Link href={PARCEL_REFUSAL.path} className="text-blue-700 underline" data-testid="link-parcel-business-door">{PARCEL_REFUSAL.action}</Link>
+        </div>
+      )}
 
       {/*
         Voice-transcript confirmation strip. Appears only after a

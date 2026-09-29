@@ -76,6 +76,8 @@ export const mobilityIntentTypeSchema = z.enum([
   "repeat_last",
   "book_ride",
   "guardian_share",
+  /** A rider asking to send a thing, not a person (shared/parcelAsk.ts): answered, never booked. */
+  "parcel",
   "unknown",
 ]);
 
