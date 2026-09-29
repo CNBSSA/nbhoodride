@@ -14,7 +14,9 @@ import { featureFlags } from "../featureFlags";
 import { FLEET_TERMS_SENTENCE } from "@shared/fleet";
 import { FleetError, applyForFleet, fleetDesk, myFleets, resubmitFleet, reviewFleet, saveFleetPayout } from "./accounts";
 import { createFleetCar, listFleetCars, listFleetCarsForAdmin, reviewFleetCar, runFleetCarSweep, updateFleetCar } from "./cars";
+import { assignFleetCarToDriver, inviteFleetDriver, listFleetDrivers, removeFleetDriver, takeBackFleetCarFromDriver } from "./drivers";
 import { CommercialError } from "../commercial/organizations";
+import { resolveAppUrl } from "../appUrl";
 import { RentalError } from "../rental/cars";
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown;
@@ -71,6 +73,26 @@ export function registerFleetRoutes(app: Express, deps: FleetDeps): void {
   });
   app.patch("/api/fleet/:orgId/cars/:carId", gate, isAuthenticated, async (req, res) => {
     try { res.json(await updateFleetCar(userIdOf(req), String(req.params.orgId), String(req.params.carId), req.body ?? {})); } catch (err) { fail(res, err, "Could not update the car"); }
+  });
+
+  // ── The fleet's drivers and who has which car (slice 3) ──
+  app.get("/api/fleet/:orgId/drivers", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await listFleetDrivers(userIdOf(req), String(req.params.orgId))); } catch (err) { fail(res, err, "Could not load the fleet's drivers"); }
+  });
+  app.post("/api/fleet/:orgId/drivers", gate, isAuthenticated, async (req, res) => {
+    try {
+      const appUrl = resolveAppUrl(`${req.protocol}://${req.get("host")}`);
+      res.status(202).json(await inviteFleetDriver(userIdOf(req), String(req.params.orgId), req.body ?? {}, appUrl));
+    } catch (err) { fail(res, err, "Could not invite the driver"); }
+  });
+  app.delete("/api/fleet/:orgId/drivers/:userId", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await removeFleetDriver(userIdOf(req), String(req.params.orgId), String(req.params.userId))); } catch (err) { fail(res, err, "Could not remove the driver"); }
+  });
+  app.post("/api/fleet/:orgId/cars/:carId/assign", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await assignFleetCarToDriver(userIdOf(req), String(req.params.orgId), String(req.params.carId), req.body ?? {})); } catch (err) { fail(res, err, "Could not give the car to the driver"); }
+  });
+  app.post("/api/fleet/:orgId/cars/:carId/take-back", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await takeBackFleetCarFromDriver(userIdOf(req), String(req.params.orgId), String(req.params.carId))); } catch (err) { fail(res, err, "Could not take the car back"); }
   });
 
   // ── Operator ──

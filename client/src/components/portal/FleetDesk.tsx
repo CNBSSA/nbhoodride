@@ -4,8 +4,8 @@
  * A fleet account opens here from the same business door and the same /org
  * portal as a booking account, but it never books: the desk shows where the
  * application stands, the business on file, how the fleet is paid, and the
- * split it works on. Cars (slice 2), drivers (slice 3) and earnings (slice 4)
- * arrive in later slices. Everything comes from /api/fleet/*, which answers
+ * split it works on, its cars (slice 2) and its drivers and who has which
+ * car (slice 3). Earnings (slice 4) arrive later. Everything comes from /api/fleet/*, which answers
  * only for fleets the signed-in person belongs to.
  */
 import { useState } from "react";
@@ -22,6 +22,7 @@ import { forgetBusinessHome } from "@/lib/businessHome";
 import { BRAND } from "@shared/branding";
 import { BUSINESS_TYPE_LABELS, FLEET_LABEL, FLEET_PAYOUT_METHODS, type BusinessType } from "@shared/fleet";
 import { FleetCarsSection } from "@/components/portal/FleetCars";
+import { FleetDriversSection } from "@/components/portal/FleetDrivers";
 
 interface Desk {
   id: string; name: string; status: "pending" | "active" | "paused" | "rejected"; statusText: string; reviewNote: string | null; role: string;
@@ -89,8 +90,9 @@ export function FleetDesk({ orgId, memberships, onSwitch }: { orgId: string; mem
 
             <section className="border rounded-xl p-4 space-y-2" data-testid="fleet-cars-drivers">
               <p className="font-medium flex items-center gap-2"><Car className="h-4 w-4" /> Cars and drivers</p>
-              <p className="text-sm text-muted-foreground">{desk.counts.cars} cars, {desk.counts.carsReady} ready · {desk.counts.drivers} drivers. {desk.status === "active" ? "Inviting drivers opens here next." : "Once PG Ride approves the fleet, you add cars and invite drivers here."}</p>
+              <p className="text-sm text-muted-foreground">{desk.counts.cars} cars, {desk.counts.carsReady} ready · {desk.counts.drivers} drivers. {desk.status === "active" ? "Give each ready car to one of your approved drivers." : "Once PG Ride approves the fleet, you add cars and invite drivers here."}</p>
               {desk.status === "active" && <FleetCarsSection orgId={desk.id} canManage={desk.role === "owner" || desk.role === "manager"} />}
+              {desk.status === "active" && <FleetDriversSection orgId={desk.id} canManage={desk.role === "owner" || desk.role === "manager"} />}
             </section>
 
             <section className="border rounded-xl p-4 space-y-1" data-testid="fleet-people">

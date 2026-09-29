@@ -1817,6 +1817,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // A driver whose only car is a fleet management account's car drives it
+      // only while it is ready (fleet slice 3, server/fleet/drivers.ts).
+      if (isOnline && featureFlags.fleetEnabled) {
+        const block = await import("./fleet/drivers").then((m) => m.fleetCarDriveBlock(userId)).catch(() => null);
+        if (block) return res.status(403).json({ message: block, fleetCar: true });
+      }
+
       // A driver whose only car is a PG Ride fleet car drives it only while
       // it is theirs and its rent is paid (server/rental/drivers.ts).
       if (isOnline && featureFlags.rentalEnabled) {
@@ -3870,6 +3877,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const owns = existingVehicles.some((v: any) => v.id === vehicleId);
       if (!owns) {
         return res.status(403).json({ message: "Not authorized to update this vehicle" });
+      }
+      // A fleet's car given to this driver is the fleet's to change (fleet slice 3).
+      if (existingVehicles.some((v: any) => v.id === vehicleId && v.fleetCarId)) {
+        return res.status(409).json({ message: "This car belongs to your fleet. The fleet's owner changes it on the fleet desk." });
       }
       
       const vehicle = await storage.updateVehicle(vehicleId, updates);
@@ -7923,9 +7934,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // (Car Rental Master Plan, phase 3): an assigned or collected fleet
         // car stands in for their own insurance card and car photos. Their
         // licence is still required.
-        const fleetCar = featureFlags.rentalEnabled
+        // Likewise a driver of an open fleet management account (fleet slice
+        // 3): the fleet's cars, each checked by PG Ride with its commercial
+        // insurance, stand in for their own. The fleet never approves them;
+        // this is still PG Ride's approval, and the licence is still required.
+        const fleetCar = (featureFlags.rentalEnabled
           ? await import("./rental/drivers").then((m) => m.hasFleetCar(userId)).catch(() => false)
-          : false;
+          : false) || (featureFlags.fleetEnabled
+          ? await import("./fleet/drivers").then((m) => m.isFleetDriver(userId)).catch(() => false)
+          : false);
         if (!profile.insuranceImageUrl && !fleetCar) missing.push("insurance image");
         const stashedVehiclePhotos = (profile as any).vehiclePhotoUrls;
         const hasVehiclePhotos = Array.isArray(stashedVehiclePhotos) && stashedVehiclePhotos.length > 0;
