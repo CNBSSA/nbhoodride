@@ -333,6 +333,15 @@ export const rides = pgTable("rides", {
    * (shared/groupRatePolicy.ts): cancelling is free until this moment.
    */
   freeCancelUntil: timestamp("free_cancel_until"),
+  /**
+   * Fleet management accounts, slice 4: set when the ride was driven in a
+   * fleet's car (shared/fleet.ts fleetRideFor, decided once at completion or
+   * when a fee is earned). driverEarnings is then the driver's 75% of their
+   * fare share plus the whole tip, and fleetShare the fleet owner's 25%.
+   */
+  fleetCarId: varchar("fleet_car_id"),
+  fleetOrgId: varchar("fleet_org_id"),
+  fleetShare: decimal("fleet_share", { precision: 8, scale: 2 }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
@@ -1848,6 +1857,50 @@ export const fleetCars = pgTable("fleet_cars", {
   uniqueIndex("uq_fleet_cars_driver").on(table.driverUserId).where(sql`driver_user_id IS NOT NULL`),
 ]);
 export type FleetCar = typeof fleetCars.$inferSelect;
+
+// Fleet management accounts, slice 4: the fleet owner's 25% of what its
+// drivers earned in its cars (shared/fleet.ts). A fleet is not a user and has
+// no wallet: its money lives here until the Friday payday takes it into a
+// fleet_payouts row. One row per (ride, kind), so a retried credit writes once.
+export const fleetPayouts = pgTable("fleet_payouts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  /** The Friday it belongs to (shared/paydayCycle.ts paydayKeyOf). */
+  paydayKey: varchar("payday_key").notNull(),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  /** Where it was to be sent, as the fleet had it on file that Friday. */
+  payoutMethod: varchar("payout_method").notNull(),
+  payoutDetails: varchar("payout_details").notNull(),
+  /** requested | sent */
+  status: varchar("status").notNull().default("requested"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  sentAt: timestamp("sent_at"),
+  sentBy: varchar("sent_by").references(() => users.id),
+}, (table) => [
+  uniqueIndex("uq_fleet_payouts_org_payday").on(table.organizationId, table.paydayKey),
+]);
+export type FleetPayout = typeof fleetPayouts.$inferSelect;
+
+export const fleetEarnings = pgTable("fleet_earnings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id),
+  fleetCarId: varchar("fleet_car_id").notNull(),
+  driverUserId: varchar("driver_user_id").notNull().references(() => users.id),
+  rideId: varchar("ride_id").notNull().references(() => rides.id),
+  /** fare | waiting | cancel_fee | no_show_fee (shared/fleet.ts FLEET_EARNING_KINDS) */
+  kind: varchar("kind").notNull(),
+  /** The driver's share before the split (their 85% of the fare, or their cut of a fee). */
+  gross: decimal("gross", { precision: 10, scale: 2 }).notNull(),
+  fleetShare: decimal("fleet_share", { precision: 10, scale: 2 }).notNull(),
+  driverKeeps: decimal("driver_keeps", { precision: 10, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  /** Set by the Friday payday that paid it; null while it is owed. */
+  payoutId: varchar("payout_id").references(() => fleetPayouts.id),
+}, (table) => [
+  uniqueIndex("uq_fleet_earnings_ride_kind").on(table.rideId, table.kind),
+  index("idx_fleet_earnings_org").on(table.organizationId),
+]);
+export type FleetEarning = typeof fleetEarnings.$inferSelect;
 
 export const eventTrackingRelations = relations(eventTracking, ({ one }) => ({
   user: one(users, {

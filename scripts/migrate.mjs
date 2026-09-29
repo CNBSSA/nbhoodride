@@ -1684,6 +1684,39 @@ CREATE INDEX IF NOT EXISTS idx_fleet_cars_org ON fleet_cars(organization_id);
 -- ── Fleet management accounts, slice 3: drivers and cars ──
 ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS fleet_car_id VARCHAR;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_cars_driver ON fleet_cars(driver_user_id) WHERE driver_user_id IS NOT NULL;
+
+-- ── Fleet management accounts, slice 4: the 25/75 split and the Friday payout ──
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS fleet_car_id VARCHAR;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS fleet_org_id VARCHAR;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS fleet_share DECIMAL(8,2);
+CREATE TABLE IF NOT EXISTS fleet_payouts (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id),
+  payday_key VARCHAR NOT NULL,
+  amount DECIMAL(10,2) NOT NULL,
+  payout_method VARCHAR NOT NULL,
+  payout_details VARCHAR NOT NULL,
+  status VARCHAR NOT NULL DEFAULT 'requested',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  sent_at TIMESTAMP,
+  sent_by VARCHAR REFERENCES users(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_payouts_org_payday ON fleet_payouts(organization_id, payday_key);
+CREATE TABLE IF NOT EXISTS fleet_earnings (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id),
+  fleet_car_id VARCHAR NOT NULL,
+  driver_user_id VARCHAR NOT NULL REFERENCES users(id),
+  ride_id VARCHAR NOT NULL REFERENCES rides(id),
+  kind VARCHAR NOT NULL,
+  gross DECIMAL(10,2) NOT NULL,
+  fleet_share DECIMAL(10,2) NOT NULL,
+  driver_keeps DECIMAL(10,2) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  payout_id VARCHAR REFERENCES fleet_payouts(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fleet_earnings_ride_kind ON fleet_earnings(ride_id, kind);
+CREATE INDEX IF NOT EXISTS idx_fleet_earnings_org ON fleet_earnings(organization_id);
 `;
 
 async function migrate() {

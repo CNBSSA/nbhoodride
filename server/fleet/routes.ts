@@ -4,7 +4,9 @@
  *   /api/fleet/*              a signed-in investor: apply, the fleet desk, the
  *                             payout method. Every desk route loads the caller's
  *                             role in THAT fleet (server/fleet/accounts.ts).
- *   /api/admin/fleets/:id/*   the operator: approve or send back.
+ *   /api/admin/fleets/:id/*   the operator: approve or send back, the cars,
+ *                             the fleet's payouts and its yearly total.
+ *   /api/admin/fleet-payouts  the operator marks a Friday payout sent.
  *
  * The whole surface answers 404 while FLEET_ENABLED is off. Fleets also show
  * in Admin → Organizations and in the /org portal list (server/commercial).
@@ -18,6 +20,7 @@ import { assignFleetCarToDriver, inviteFleetDriver, listFleetDrivers, removeFlee
 import { CommercialError } from "../commercial/organizations";
 import { resolveAppUrl } from "../appUrl";
 import { RentalError } from "../rental/cars";
+import { fleetEarningsView, fleetPayoutsView, fleetYearTotal, listFleetPayoutsForAdmin, markFleetPayoutSent } from "./money";
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown;
 
@@ -95,7 +98,25 @@ export function registerFleetRoutes(app: Express, deps: FleetDeps): void {
     try { res.json(await takeBackFleetCarFromDriver(userIdOf(req), String(req.params.orgId), String(req.params.carId))); } catch (err) { fail(res, err, "Could not take the car back"); }
   });
 
+  // ── The fleet's money (slice 4): what its cars earned, and each Friday's payout ──
+  app.get("/api/fleet/:orgId/earnings", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await fleetEarningsView(userIdOf(req), String(req.params.orgId), String(req.query.week ?? "this"))); } catch (err) { fail(res, err, "Could not load the fleet's earnings"); }
+  });
+  app.get("/api/fleet/:orgId/payouts", gate, isAuthenticated, async (req, res) => {
+    try { res.json(await fleetPayoutsView(userIdOf(req), String(req.params.orgId))); } catch (err) { fail(res, err, "Could not load the fleet's payouts"); }
+  });
+
   // ── Operator ──
+  app.get("/api/admin/fleets/:id/payouts", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await listFleetPayoutsForAdmin(String(req.params.id))); } catch (err) { fail(res, err, "Could not load the fleet's payouts"); }
+  });
+  app.post("/api/admin/fleet-payouts/:id/sent", gate, isAdminOrSessionAuth, async (req: any, res) => {
+    try { res.json(await markFleetPayoutSent(String(req.params.id), req.adminUser?.id ?? userIdOf(req))); } catch (err) { fail(res, err, "Could not mark the payout sent"); }
+  });
+  // 1099 support, records only: the fleet's legal name, full EIN and what was sent to it in the year.
+  app.get("/api/admin/fleets/:id/earnings-by-year", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await fleetYearTotal(String(req.params.id), Number(req.query.year ?? new Date().getUTCFullYear()))); } catch (err) { fail(res, err, "Could not total the fleet's year"); }
+  });
   app.post("/api/admin/fleets/:id/review", gate, isAdminOrSessionAuth, async (req, res) => {
     try { res.json(await reviewFleet(String(req.params.id), req.body ?? {})); } catch (err) { fail(res, err, "Could not record the check"); }
   });
