@@ -47,7 +47,12 @@ export function _resetEmailFailureState(): void {
 export const emailFailureRecorder: EmailFailureRecorder = ({ to, subject, reason, attempts }) => {
   const cls = emailFailureClass(reason);
   if (shouldPageEmailFailure(subject, reason)) {
-    opsAlert(formatOpsAlert("📧 Email FAILED to send", [
+    const title = cls === "quota"
+      ? "📧 Gmail sending limit reached — email is paused until Google resets it"
+      : cls === "auth"
+        ? "📧 Gmail refused the sign-in — check SMTP_PASS (the app password) on Railway"
+        : "📧 Email FAILED to send";
+    opsAlert(formatOpsAlert(title, [
       ["Email", subject],
       ["To", to],
       ["Reason", reason],
