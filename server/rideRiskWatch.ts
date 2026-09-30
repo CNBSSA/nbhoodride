@@ -51,7 +51,7 @@ export async function pageAtRiskRides(now: Date = new Date()): Promise<RiskPage[
            r.estimated_fare, r.plan_id,
            ru.first_name AS rider_first, ru.last_name AS rider_last, ru.phone AS rider_phone,
            du.first_name AS driver_first, du.last_name AS driver_last,
-           dp.current_location AS driver_location, COALESCE(dp.location_updated_at, dp.updated_at) AS driver_location_at,
+           dp.current_location AS driver_location, dp.updated_at AS driver_location_at,
            o.name AS org_name, cj.job_number, cj.category AS job_category
     FROM rides r
     JOIN users ru ON ru.id = r.rider_id

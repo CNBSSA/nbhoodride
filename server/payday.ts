@@ -23,8 +23,6 @@ import { db } from "./db";
 import { driverProfiles, payoutRequests, rentalOwnerProfiles, users } from "@shared/schema";
 import { MINIMUM_PAYDAY_AMOUNT, paydayFor, paydayKeyOf, paydayLabel } from "@shared/paydayCycle";
 import { opsAlert, formatOpsAlert } from "./telegramOps";
-import { featureFlags } from "./featureFlags";
-import { runFleetPayday, type FleetPaydayLine } from "./fleet/money";
 
 export interface PaydayLine {
   driverId: string;
@@ -41,12 +39,6 @@ export interface PaydayResult {
   paid: PaydayLine[];
   skipped: PaydayLine[];
   total: number;
-  /**
-   * Fleets (Fleet management accounts, slice 4): each fleet's credited,
-   * unpaid 25% share, paid to the fleet's own account. Empty while
-   * FLEET_ENABLED is off.
-   */
-  fleets: { paid: FleetPaydayLine[]; skipped: FleetPaydayLine[]; total: number };
 }
 
 /**
@@ -162,23 +154,6 @@ export async function runWeeklyPayday(now: Date = new Date()): Promise<PaydayRes
   const total = Math.round(paid.reduce((s, l) => s + l.amount, 0) * 100) / 100;
   console.log(`[payday] ${label} :: ${paid.length} paid $${total.toFixed(2)}, ${skipped.length} skipped`);
 
-  // Fleets are paid after drivers and car owners, from what the rides in
-  // their cars credited them (server/fleet/money.ts). A failure here never
-  // undoes anyone's payout above; it is named in the alert.
-  let fleets: PaydayResult["fleets"] = { paid: [], skipped: [], total: 0 };
-  if (featureFlags.fleetEnabled) {
-    try {
-      const f = await runFleetPayday(paydayKey);
-      fleets = { ...f, total: Math.round(f.paid.reduce((s, l) => s + l.amount, 0) * 100) / 100 };
-    } catch (err) {
-      console.error("[payday] fleets not paid:", err);
-      fleets.skipped.push({ organizationId: "—", name: "Every fleet", amount: 0, method: "—", paid: false, reason: `Not paid: ${err instanceof Error ? err.message : String(err)}` });
-    }
-    console.log(`[payday] ${label} :: fleets paid ${fleets.paid.length} ($${fleets.total.toFixed(2)})` +
-      `${fleets.paid.length ? " :: " + fleets.paid.map((l) => `${l.name} $${l.amount.toFixed(2)} ${l.method}`).join("; ") : ""}` +
-      `${fleets.skipped.length ? ` :: fleets skipped ${fleets.skipped.map((l) => `${l.name} (${l.reason})`).join("; ")}` : ""}`);
-  }
-
   // The operator has to actually send these, so tell them, and name anyone
   // who is owed money but has nowhere for it to go.
   const noMethod = skipped.filter((l) => /payout method/i.test(l.reason));
@@ -198,13 +173,9 @@ export async function runWeeklyPayday(now: Date = new Date()): Promise<PaydayRes
     ["Total", `$${total.toFixed(2)}`],
     ["Waiting on a payout method", noMethod.length > 0 ? noMethod.map((l) => l.name).join(", ") : "nobody"],
     ["Next", paid.length > 0 ? "Send them from Admin → Payout requests" : "Nothing to send"],
-    ...(featureFlags.fleetEnabled ? [
-      ["Fleets paid", fleets.paid.length > 0 ? `${fleets.paid.length} ($${fleets.total.toFixed(2)}): send from Admin → Organizations → the fleet → Payouts` : "none"] as [string, string],
-      ["Fleets skipped", fleets.skipped.length > 0 ? fleets.skipped.map((l) => `${l.name} (${l.reason})`).join(", ") : "nobody"] as [string, string],
-    ] : []),
   ]));
 
-  return { paydayKey, label, paid, skipped, total, fleets };
+  return { paydayKey, label, paid, skipped, total };
 }
 
 export { MINIMUM_PAYDAY_AMOUNT };

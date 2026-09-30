@@ -336,11 +336,6 @@ async function auditScreen(browser, base, screen) {
     if (!(await locatorFor(page, target.key).isVisible().catch(() => false))) {
       await page.goto(base + screen.path, { waitUntil: "domcontentloaded" }).catch(() => {});
       await afterLoad(page, opts);
-      // A screen drawn from several queries (the fleet desk: its cars,
-      // drivers and money) may still be filling in when afterLoad returns;
-      // give the button it came for a moment to appear before passing it by,
-      // or a slow query decides which button goes unpressed on the day.
-      await locatorFor(page, target.key).waitFor({ state: "visible", timeout: 3000 }).catch(() => {});
     }
     let r = await pressOne(page, base, screen, opts, target, []);
     if (r === "covered") {

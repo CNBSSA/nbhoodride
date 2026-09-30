@@ -13,7 +13,6 @@ import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import { useToast } from "@/hooks/use-toast";
 import { useGeolocationWatcher } from "@/hooks/useGeolocation";
 import { useWebSocket } from "@/hooks/useWebSocket";
-import { DRIVER_LOCATION_SEND_EVERY_MS } from "@shared/liveLocation";
 import IncomingRideRequest from "@/components/IncomingRideRequest";
 import { ActiveRideCard } from "@/components/ActiveRideCard";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -362,9 +361,8 @@ export default function DriverDashboard() {
       navigator.geolocation.getCurrentPosition((pos) => {
         const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         lastLocationUpdateRef.current = Date.now();
-        if (isOnline && user?.id) {
-          if (isConnected) sendMessage({ type: 'location_update', userId: user.id, location: loc });
-          else apiRequest('POST', '/api/driver/location', loc).catch(() => {});
+        if (isOnline && isConnected && user?.id) {
+          sendMessage({ type: 'location_update', userId: user.id, location: loc });
         }
         const ride = activeRidesRef.current.find((r: any) => r.status === 'in_progress');
         if (ride?.id) apiRequest('POST', `/api/driver/rides/${ride.id}/track-location`, loc).catch(() => {});
@@ -380,26 +378,25 @@ export default function DriverDashboard() {
     };
   }, [isOnline, isConnected, user?.id, sendMessage]);
 
-  // Send location updates when location changes and driver is online: over
-  // the socket while it is up, over HTTP while it is down (shared/
-  // liveLocation.ts) — before 2026-09-29 a dropped socket stopped the
-  // position altogether, so the rider's map froze and the stored position
-  // went stale enough for the ride-risk watch to page ops.
+  // Send location updates via WebSocket when location changes and driver is online
   // SECURITY/PERFORMANCE: Throttled to once every 5 seconds to prevent server flooding
   useEffect(() => {
-    if (location && isOnline && user?.id) {
+    if (location && isOnline && isConnected && user?.id) {
       const now = Date.now();
       const timeSinceLastUpdate = now - lastLocationUpdateRef.current;
       
       // Only send update if at least 5 seconds have passed since last update
-      if (timeSinceLastUpdate >= DRIVER_LOCATION_SEND_EVERY_MS) {
+      if (timeSinceLastUpdate >= 5000) {
         lastLocationUpdateRef.current = now;
-        const loc = { lat: location.latitude, lng: location.longitude };
-        if (isConnected) {
-          sendMessage({ type: 'location_update', userId: user.id, location: loc });
-        } else {
-          apiRequest('POST', '/api/driver/location', loc).catch(() => {});
-        }
+        
+        sendMessage({
+          type: 'location_update',
+          userId: user.id,
+          location: {
+            lat: location.latitude,
+            lng: location.longitude
+          }
+        });
       }
     }
   }, [location, isOnline, isConnected, user?.id, sendMessage]);
@@ -523,14 +520,9 @@ export default function DriverDashboard() {
     } else if (lastMessage.type === 'ride_cancelled') {
       refetchPendingRides();
       refetchActiveRides();
-      // Say who and why when the server said (2026-09-29): a rider's own
-      // cancel, support, a payment that failed, or an organization's desk.
-      const why = typeof lastMessage.reason === 'string' && lastMessage.reason.trim() ? lastMessage.reason.trim()
-        : typeof lastMessage.message === 'string' && lastMessage.message.trim() ? lastMessage.message.trim() : '';
-      const who = lastMessage.cancelledBy === 'admin' ? 'by PG Ride support' : lastMessage.cancelledBy === 'driver' ? '' : 'by the rider';
       toast({
         title: "Ride Cancelled",
-        description: `A ride has been cancelled${who ? ` ${who}` : ''}.${why ? ` ${why}` : ''}`,
+        description: "A ride has been cancelled by the rider.",
         variant: "destructive",
       });
     } else if (lastMessage.type === 'tip_received') {

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "@/hooks/useAuth";
-import { reconnectDelayMs } from "@shared/liveLocation";
 
 interface WebSocketMessage {
   type: string;
@@ -22,7 +21,6 @@ export function useWebSocket(): UseWebSocketReturn {
   const isAuthenticatedRef = useRef(isAuthenticated);
   const userRef = useRef(user);
   const shouldReconnectRef = useRef(false);
-  const reconnectAttemptRef = useRef(0);
 
   isAuthenticatedRef.current = isAuthenticated;
   userRef.current = user;
@@ -42,7 +40,6 @@ export function useWebSocket(): UseWebSocketReturn {
 
       ws.current.onopen = () => {
         console.log("WebSocket connected");
-        reconnectAttemptRef.current = 0;
         setIsConnected(true);
         
         const currentUser = userRef.current;
@@ -82,13 +79,9 @@ export function useWebSocket(): UseWebSocketReturn {
         setIsConnected(false);
         
         if (shouldReconnectRef.current && isAuthenticatedRef.current) {
-          // Back off with jitter (shared/liveLocation.ts): 3 s, 6 s, 12 s,
-          // 24 s, then 30 s — a fixed 3 s beat hammered a server that was
-          // restarting, and every phone hit it in step.
-          reconnectAttemptRef.current += 1;
           reconnectTimeoutRef.current = setTimeout(() => {
             connect();
-          }, reconnectDelayMs(reconnectAttemptRef.current));
+          }, 3000);
         }
       };
 

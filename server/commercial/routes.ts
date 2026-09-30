@@ -23,7 +23,7 @@ import {
   listMembers, listOrganizations, membershipRole, organizationsForUser, removeMember, updateOrganization,
 } from "./organizations";
 import { bookJob, jobForRide, listJobs } from "./jobs";
-import { acceptInvitation, describeInvitation, invitationCategory, inviteByEmail, listOpenInvitations, revokeInvitation } from "./invitations";
+import { acceptInvitation, describeInvitation, inviteByEmail, listOpenInvitations, revokeInvitation } from "./invitations";
 import { sendOrganizationInviteEmail } from "../emailService";
 import { resolveAppUrl } from "../appUrl";
 import { INVITATION_DAYS } from "@shared/invitations";
@@ -357,29 +357,18 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
     catch (err) { fail(res, err, "Could not revoke the invitation"); }
   });
   // The invitee's side: no account yet, so no auth. Rate-limited in routes.ts.
-  // A fleet invites its drivers through the same links (fleet slice 3), so
-  // these two open when either switch is on and serve an invitation only
-  // while its own organization's switch is on.
-  const invitationOn: Handler = async (req, res, next) => {
-    try {
-      const category = await invitationCategory(String(req.params.token));
-      if (category && !categoryOn(category)) return res.status(404).json({ message: "This invitation link is not valid." });
-      next();
-    } catch (err) { fail(res, err, "Could not read the invitation"); }
-  };
-  app.get("/api/org/invitations/:token", orgGate, invitationOn, async (req, res) => {
+  app.get("/api/org/invitations/:token", gate, async (req, res) => {
     try { res.json(await describeInvitation(String(req.params.token))); }
     catch (err) { fail(res, err, "Could not read the invitation"); }
   });
-  app.post("/api/org/invitations/:token/accept", orgGate, invitationOn, async (req: any, res) => {
+  app.post("/api/org/invitations/:token/accept", gate, async (req: any, res) => {
     try {
       const result = await acceptInvitation(String(req.params.token), req.body ?? {});
-      // A fleet's new driver waits for PG Ride's approval like any sign-up, so is not signed in here.
-      if (!result.existing && !result.pendingApproval) {
+      if (!result.existing) {
         req.session.userId = result.userId;
         await storage.updateLastLogin(result.userId).catch(() => {});
       }
-      res.json({ organizationId: result.organizationId, organizationName: result.organizationName, existing: result.existing, ...(result.pendingApproval ? { pendingApproval: true } : {}) });
+      res.json({ organizationId: result.organizationId, organizationName: result.organizationName, existing: result.existing });
     } catch (err) { fail(res, err, "Could not accept the invitation"); }
   });
   app.delete("/api/org/:orgId/members/:userId", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
