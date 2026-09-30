@@ -15,11 +15,12 @@
  */
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../db";
-import { fleetCars, organizationMembers, organizations, type FleetCar } from "@shared/schema";
+import { driverProfiles, fleetCars, organizationMembers, organizations, users, vehicles, type FleetCar } from "@shared/schema";
 import { FLEET_CAR_REVIEWED_FIELDS, canManageFleet, canSeeFleetDesk, fleetCarProblems } from "@shared/fleet";
 import { expiryWarnings } from "@shared/rental";
 import { VEHICLE_TYPES } from "@shared/vehicleTypes";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
+import { storage } from "../storage";
 import { verifiedStorePath } from "../rental/cars";
 import { FleetError, fleetRole } from "./accounts";
 
@@ -81,9 +82,53 @@ function deskView(car: FleetCar, now: Date) {
 export async function listFleetCars(userId: string, orgId: string) {
   const { role } = await fleetRole(userId, orgId);
   if (!canSeeFleetDesk(role)) throw new FleetError("The fleet desk is for the fleet's owner and managers.", 403);
-  const rows = await db.select().from(fleetCars).where(eq(fleetCars.organizationId, orgId)).orderBy(desc(fleetCars.createdAt));
+  const rows = await db.select({ car: fleetCars, first: users.firstName, last: users.lastName }).from(fleetCars)
+    .leftJoin(users, eq(users.id, fleetCars.driverUserId))
+    .where(eq(fleetCars.organizationId, orgId)).orderBy(desc(fleetCars.createdAt));
   const now = new Date();
-  return rows.map((c) => deskView(c, now));
+  // Which of the fleet's drivers has the car (slice 3): their name, nothing else.
+  return rows.map(({ car, first, last }) => ({ ...deskView(car, now), driverName: car.driverUserId ? `${first ?? ""} ${last ?? ""}`.trim() || "A driver" : null }));
+}
+
+export const carLabelOf = carLabel;
+
+/**
+ * Keep the driver's copy of a fleet car true to the car (slice 3): while the
+ * car is with a driver AND ready, the driver has a vehicle row mirroring it
+ * (vehicles.fleet_car_id), so riders and dispatch see it like an owned car;
+ * an edit reaches the copy. The moment the car is parked or taken back, the
+ * copy goes, and a driver left with no car who is not on a ride is taken
+ * offline. Safe to call after any change to the car.
+ */
+export async function syncFleetCarVehicle(carId: string, now: Date = new Date()): Promise<"copied" | "removed" | "none"> {
+  const [car] = await db.select().from(fleetCars).where(eq(fleetCars.id, carId));
+  const copies = await db.select({ id: vehicles.id, driverProfileId: vehicles.driverProfileId }).from(vehicles).where(eq(vehicles.fleetCarId, carId));
+  const profile = car?.driverUserId ? await storage.getDriverProfile(car.driverUserId) : undefined;
+  const drivable = !!car && !!car.driverUserId && car.status === "ready" && !!profile;
+  if (drivable) {
+    const fields = {
+      make: car.make, model: car.model, year: car.year, color: car.color, licensePlate: car.licensePlate,
+      vehicleType: car.vehicleType, photos: car.photos ?? [], updatedAt: now,
+    };
+    const mine = copies.find((c) => c.driverProfileId === profile!.id);
+    // A copy left on someone else (never expected) goes.
+    const stray = copies.filter((c) => c !== mine).map((c) => c.id);
+    for (const id of stray) await db.delete(vehicles).where(eq(vehicles.id, id));
+    if (mine) await db.update(vehicles).set(fields).where(eq(vehicles.id, mine.id));
+    else await db.insert(vehicles).values({ driverProfileId: profile!.id, fleetCarId: car.id, ...fields });
+    return "copied";
+  }
+  if (!copies.length) return "none";
+  await db.delete(vehicles).where(eq(vehicles.fleetCarId, carId));
+  for (const profileId of Array.from(new Set(copies.map((c) => c.driverProfileId)))) {
+    const [p] = await db.select({ userId: driverProfiles.userId }).from(driverProfiles).where(eq(driverProfiles.id, profileId));
+    if (!p) continue;
+    const left = await storage.getVehiclesByDriverId(profileId);
+    if (left.length) continue;
+    const onRide = await storage.getActiveRidesForDriver(p.userId).catch(() => [1]);
+    if (!onRide.length) await storage.toggleDriverOnlineStatus(p.userId, false).catch(() => {});
+  }
+  return "removed";
 }
 
 /** The owner or a manager adds a car. It starts parked, waiting for PG Ride's check. */
@@ -134,6 +179,8 @@ export async function updateFleetCar(userId: string, orgId: string, carId: strin
   if (changed && car.reviewStatus === "approved") {
     opsAlert(formatOpsAlert("🚗 A fleet car changed: check it again", [["Fleet", org.name], ["Car", carLabel(updated)], ["Next", "Admin, Organizations"]]));
   }
+  // A colour or photo reaches the driver's copy (slice 3).
+  if (updated.driverUserId) await syncFleetCarVehicle(updated.id, now);
   return deskView(updated, now);
 }
 
@@ -157,6 +204,7 @@ export async function reviewFleetCar(orgId: string, carId: string, body: any, no
     reviewStatus: decision, reviewNote: note || null, status: problems.length ? "parked" : "ready", parkedReason: problems.length ? problems.join(" ") : null, updatedAt: now,
   }).where(eq(fleetCars.id, carId)).returning();
   console.log(`[fleet] car ${decision} :: ${carLabel(updated)} :: ${problems.length ? problems.join(" ") : "ready"}`);
+  if (updated.driverUserId) await syncFleetCarVehicle(updated.id, now);
   return deskView(updated, now);
 }
 
@@ -178,6 +226,8 @@ export async function runFleetCarSweep(now: Date = new Date(), opts: { warnings?
     if (!done) continue;
     parked++;
     console.log(`[fleet] car parked :: ${orgName} :: ${carLabel(car)} :: ${problems.join(" ")}`);
+    // A parked car stops being drivable at once (slice 3): the driver's copy goes, and they go offline unless on a ride.
+    if (car.driverUserId) await syncFleetCarVehicle(car.id, now).catch((err) => console.error(`[fleet] could not take the parked car off the driver :: ${car.id}`, err));
     opsAlert(formatOpsAlert("🚗 Fleet car taken off the road", [
       ["Fleet", orgName], ["Car", carLabel(car)], ["Why", problems.join(" ")],
       ["Driver", car.driverUserId ? "a driver has this car — they cannot go online in it until it is put right" : "none"],
