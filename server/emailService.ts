@@ -436,20 +436,34 @@ export async function sendPasswordResetEmail(
   );
 }
 
-/** An owner invited this email to book for their organization (shared/invitations.ts). */
+/**
+ * An owner invited this email to their organization (shared/invitations.ts).
+ * A booking account's people are invited to book; a fleet's driver (fleet
+ * slice 3) is invited to drive, and is told that PG Ride still approves every
+ * driver itself, how the fare is shared, and that tips are theirs. Until
+ * 2026-09-30 a fleet's driver was told they had been invited "to book rides".
+ */
 export async function sendOrganizationInviteEmail(params: {
-  email: string; organizationName: string; inviterName: string | null; link: string; days: number;
+  email: string; organizationName: string; inviterName: string | null; link: string; days: number; role?: string;
 }): Promise<void> {
   const org = escapeHtml(params.organizationName);
   const who = params.inviterName ? `${escapeHtml(params.inviterName)} at ${org}` : org;
   const link = escapeHtml(params.link);
+  const asDriver = params.role === "driver";
+  const subject = asDriver
+    ? `${params.organizationName} invited you to drive for their fleet on PG Ride`
+    : `${params.organizationName} invited you to book rides on PG Ride`;
+  const intro = asDriver
+    ? `<p>${who} has invited you to drive one of <strong>${org}</strong>'s cars on PG Ride.</p>
+      <p>PG Ride checks and approves every driver itself, so after you accept you finish PG Ride's driver application (your licence) and PG Ride reviews it. Once you are approved, ${org} can give you one of its cars. On rides in a fleet's car your 85% of each fare is shared 75% to you and 25% to the fleet, and every tip is yours.</p>`
+    : `<p>${who} has invited you to book rides and deliveries for <strong>${org}</strong> on PG Ride. Set up your sign-in and you land straight in their booking desk:</p>`;
   await sendEmail(
     params.email,
-    `${params.organizationName} invited you to book rides on PG Ride`,
+    subject,
     baseTemplate(`
       <p>Hi,</p>
-      <p>${who} has invited you to book rides and deliveries for <strong>${org}</strong> on PG Ride. Set up your sign-in and you land straight in their booking desk:</p>
-      <a href="${link}" class="btn">Join ${org}</a>
+      ${intro}
+      <a href="${link}" class="btn">${asDriver ? `Drive for ${org}` : `Join ${org}`}</a>
       <p>This link is for this email address only and expires in <strong>${params.days} days</strong>. If you were not expecting it, you can ignore this email.</p>
       <p style="font-size:13px; color:#6b7280;">If the button above doesn't work, copy and paste this link into your browser:<br/>
       <a href="${link}" style="color:#2563eb; word-break:break-all;">${link}</a></p>

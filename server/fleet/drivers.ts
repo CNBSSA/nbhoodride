@@ -18,12 +18,13 @@
  * the driver, is refused while the driver is on a ride. No money moves here:
  * the 25/75 split is slice 4. Rules in shared/fleet.ts.
  */
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import { driverProfiles, fleetCars, organizationInvitations, organizationMembers, organizations, users } from "@shared/schema";
-import { assignProblems, canManageFleet, canSeeFleetDesk, driverApprovalWords, fleetCarMayDrive } from "@shared/fleet";
+import { assignProblems, canManageFleet, canSeeFleetDesk, driverApprovalWords, fleetCarGivenNotice, fleetCarHoldProblem, fleetCarMayDrive, fleetCarTakenBackNotice } from "@shared/fleet";
 import { INVITATION_DAYS, invitationState } from "@shared/invitations";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
+import { deliverUserNotification } from "../notificationService";
 import { sendOrganizationInviteEmail } from "../emailService";
 import { storage } from "../storage";
 import { CommercialError, removeMember } from "../commercial/organizations";
@@ -97,7 +98,7 @@ export async function inviteFleetDriver(userId: string, orgId: string, body: any
   let emailSent = false;
   try {
     const inviter = await storage.getUser(userId);
-    await sendOrganizationInviteEmail({ email: inv.email, organizationName: inv.organizationName, inviterName: inviter?.firstName ?? null, link: inv.link, days: INVITATION_DAYS });
+    await sendOrganizationInviteEmail({ email: inv.email, organizationName: inv.organizationName, inviterName: inviter?.firstName ?? null, link: inv.link, days: INVITATION_DAYS, role: "driver" });
     emailSent = true;
   } catch (err) {
     console.error(`[fleet] driver invitation email to ${inv.email} not sent; the desk gets the link to send itself:`, (err as any)?.message ?? err);
@@ -138,6 +139,7 @@ export async function assignFleetCarToDriver(userId: string, orgId: string, carI
   const driver = await storage.getUser(driverUserId);
   console.log(`[fleet] car assigned :: ${org.name} :: ${carLabelOf(car)} :: driver ${driverUserId}`);
   opsAlert(formatOpsAlert("🚗 Fleet car given to a driver", [["Fleet", org.name], ["Car", carLabelOf(car)], ["Driver", nameOf(driver)]]));
+  await tellDriver(driverUserId, "fleet-car-assigned", fleetCarGivenNotice(org.name, carLabelOf(car)));
   return { ...car, driverName: nameOf(driver) };
 }
 
@@ -147,17 +149,93 @@ export async function takeBackFleetCarFromDriver(userId: string, orgId: string, 
   const [car] = await db.select().from(fleetCars).where(and(eq(fleetCars.id, carId), eq(fleetCars.organizationId, orgId)));
   if (!car) throw new FleetError("Car not found.", 404);
   if (!car.driverUserId) throw new FleetError("Nobody has this car.", 409);
-  const driverUserId = car.driverUserId;
+  const done = await releaseCar(car.id, car.driverUserId, org.name, null, now);
+  if (done === "on_ride") throw new FleetError("The driver is on a ride. Take the car back when the ride ends.", 409);
+  if (done === "changed") throw new FleetError("The car changed just now. Refresh and try again.", 409);
+  return { ...done, driverName: null };
+}
+
+/**
+ * Take a car off its driver: the copy in their vehicles goes, ops are paged
+ * and the driver is told in the app. `why` is PG Ride's reason when PG Ride
+ * takes it (approval revoked); null when the fleet does. Never while the
+ * driver is on a ride: that answers "on_ride" and the caller decides.
+ */
+async function releaseCar(carId: string, driverUserId: string, orgName: string, why: string | null, now: Date) {
   const onRide = await storage.getActiveRidesForDriver(driverUserId).catch(() => [1]);
-  if (onRide.length) throw new FleetError("The driver is on a ride. Take the car back when the ride ends.", 409);
+  if (onRide.length) return "on_ride" as const;
   const [done] = await db.update(fleetCars).set({ driverUserId: null, updatedAt: now })
     .where(and(eq(fleetCars.id, carId), eq(fleetCars.driverUserId, driverUserId))).returning();
-  if (!done) throw new FleetError("The car changed just now. Refresh and try again.", 409);
+  if (!done) return "changed" as const;
   await syncFleetCarVehicle(carId, now);
   const driver = await storage.getUser(driverUserId);
-  console.log(`[fleet] car taken back :: ${org.name} :: ${carLabelOf(done)} :: driver ${driverUserId}`);
-  opsAlert(formatOpsAlert("🚗 Fleet car taken back", [["Fleet", org.name], ["Car", carLabelOf(done)], ["From", nameOf(driver)]]));
-  return { ...done, driverName: null };
+  console.log(`[fleet] car taken back :: ${orgName} :: ${carLabelOf(done)} :: driver ${driverUserId}${why ? ` :: ${why}` : ""}`);
+  opsAlert(formatOpsAlert(why ? "🚗 Fleet car taken back: driver no longer approved" : "🚗 Fleet car taken back", [
+    ["Fleet", orgName], ["Car", carLabelOf(done)], ["From", nameOf(driver)], ...(why ? [["Why", why] as [string, string]] : []),
+  ]));
+  await tellDriver(driverUserId, "fleet-car-taken-back", fleetCarTakenBackNotice(orgName, carLabelOf(done), { hasOtherCar: await hasOwnCar(driverUserId), why }));
+  return done;
+}
+
+/** Any car left on the driver once the fleet's copy is gone: their own, or a PG Ride rental. */
+async function hasOwnCar(driverUserId: string): Promise<boolean> {
+  const profile = await storage.getDriverProfile(driverUserId).catch(() => undefined);
+  if (!profile) return false;
+  const cars = await storage.getVehiclesByDriverId(profile.id).catch(() => []);
+  return cars.some((v: any) => !v.fleetCarId);
+}
+
+/** The driver hears about their car in the app. A failed notice never undoes the change. */
+async function tellDriver(driverUserId: string, type: string, notice: { title: string; body: string }) {
+  try {
+    await deliverUserNotification(driverUserId, { type, title: notice.title, body: notice.body, url: "/driver" });
+  } catch (err) {
+    console.error(`[fleet] could not tell driver ${driverUserId} about their car (${type}):`, (err as any)?.message ?? err);
+  }
+}
+
+/**
+ * PG Ride revoked, suspended or closed a driver who has a fleet car: the car
+ * goes back to the fleet (slice 3, finished 2026-09-30). Called when PG Ride
+ * changes a driver or an account, and by the hourly sweep. A driver on a ride
+ * keeps the car until it ends; the sweep takes it back then. Returns what
+ * happened, for the caller's log and the journey.
+ */
+export async function releaseFleetCarIfRevoked(driverUserId: string, now: Date = new Date()): Promise<"none" | "allowed" | "released" | "on_ride"> {
+  const [row] = await db.select({
+    carId: fleetCars.id, orgName: organizations.name,
+    approvalStatus: driverProfiles.approvalStatus, driverSuspended: driverProfiles.isSuspended,
+    accountApproved: users.isApproved, accountSuspended: users.isSuspended, deletedAt: users.deletedAt,
+  }).from(fleetCars)
+    .innerJoin(organizations, eq(organizations.id, fleetCars.organizationId))
+    .innerJoin(users, eq(users.id, fleetCars.driverUserId))
+    .leftJoin(driverProfiles, eq(driverProfiles.userId, fleetCars.driverUserId))
+    .where(eq(fleetCars.driverUserId, driverUserId));
+  if (!row) return "none";
+  const why = fleetCarHoldProblem({
+    approvalStatus: row.approvalStatus, driverSuspended: row.driverSuspended,
+    accountApproved: row.accountApproved, accountSuspended: row.accountSuspended, deleted: !!row.deletedAt,
+  });
+  if (!why) return "allowed";
+  const done = await releaseCar(row.carId, driverUserId, row.orgName, why, now);
+  if (done === "on_ride") {
+    console.log(`[fleet] driver ${driverUserId} no longer approved but on a ride; the car goes back when it ends :: ${why}`);
+    return "on_ride";
+  }
+  return done === "changed" ? "none" : "released";
+}
+
+/** The hourly net: every fleet car still with someone PG Ride no longer approves goes back. */
+export async function sweepRevokedFleetDrivers(now: Date = new Date()): Promise<{ released: number; waitingOnRide: number }> {
+  const held = await db.select({ driverUserId: fleetCars.driverUserId }).from(fleetCars).where(sql`${fleetCars.driverUserId} IS NOT NULL`);
+  let released = 0, waitingOnRide = 0;
+  for (const { driverUserId } of held) {
+    if (!driverUserId) continue;
+    const r = await releaseFleetCarIfRevoked(driverUserId, now).catch((err) => { console.error(`[fleet] revoked-driver check failed :: ${driverUserId}`, err); return "none" as const; });
+    if (r === "released") released++;
+    if (r === "on_ride") waitingOnRide++;
+  }
+  return { released, waitingOnRide };
 }
 
 /**

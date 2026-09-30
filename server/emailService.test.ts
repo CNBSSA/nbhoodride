@@ -43,6 +43,23 @@ describe("email templates", () => {
     expect(h).toContain("https://pgride.app/org/join/abc?x=1&amp;y=2");
   });
 
+  it("invite a fleet's driver to drive, not to book (2026-09-30)", async () => {
+    await mod.sendOrganizationInviteEmail({ email: "d@example.com", organizationName: "Acme <Fleet>", inviterName: "Eve", link: "https://pgride.app/org/join/abc", days: 7, role: "driver" });
+    const h = html();
+    const subject = (sendMock.mock.calls.at(-1)?.[0] as any)?.subject as string;
+    expect(subject).toBe("Acme <Fleet> invited you to drive for their fleet on PG Ride");
+    expect(h).toContain("drive one of <strong>Acme &lt;Fleet&gt;</strong>");
+    expect(h).toMatch(/PG Ride checks and approves every driver itself/);
+    expect(h).toMatch(/75% to you and 25% to the fleet, and every tip is yours/);
+    expect(h).not.toMatch(/book rides/);
+  });
+
+  it("still invite a booking account's people to book", async () => {
+    await mod.sendOrganizationInviteEmail({ email: "d@example.com", organizationName: "Clinic", inviterName: null, link: "https://pgride.app/org/join/abc", days: 7 });
+    expect((sendMock.mock.calls.at(-1)?.[0] as any)?.subject).toBe("Clinic invited you to book rides on PG Ride");
+    expect(html()).toMatch(/book rides and deliveries/);
+  });
+
   it("escape the driver's details when a ride is accepted", async () => {
     await mod.sendRideAcceptedEmail({ riderEmail: "r@example.com", riderFirstName: "Ada", driverName: "<b>Sam</b>", driverPhone: "<u>555</u>", vehicleDescription: "<i>Camry</i>", pickupAddress: "A", destinationAddress: "B", estimatedFare: "10.00", promoDiscount: null });
     const h = html();

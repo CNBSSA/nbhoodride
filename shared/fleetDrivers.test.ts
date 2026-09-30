@@ -66,3 +66,40 @@ describe("a fleet car is drivable only while it is ready", () => {
     expect(fleetCarMayDrive({ otherCars: 0, fleetCar: null, hasFleetCopy: false })).toEqual({ ok: true });
   });
 });
+
+import { fleetCarHoldProblem, fleetCarGivenNotice, fleetCarTakenBackNotice } from "./fleet";
+
+describe("who may still hold a fleet car (slice 3, finished)", () => {
+  const ok = { approvalStatus: "approved", driverSuspended: false, accountApproved: true, accountSuspended: false };
+  it("an approved, active driver may", () => { expect(fleetCarHoldProblem(ok)).toBeNull(); });
+  it("a revoked driver approval may not, naming the status", () => {
+    expect(fleetCarHoldProblem({ ...ok, approvalStatus: "rejected" })).toMatch(/Driver approval is no longer in place/);
+    expect(fleetCarHoldProblem({ ...ok, approvalStatus: "pending" })).toMatch(/Driver approval is no longer in place/);
+  });
+  it("a suspended driver, a suspended or unapproved account, or a closed account may not", () => {
+    expect(fleetCarHoldProblem({ ...ok, driverSuspended: true })).toMatch(/Driving is suspended/);
+    expect(fleetCarHoldProblem({ ...ok, accountSuspended: true })).toMatch(/account is suspended/);
+    expect(fleetCarHoldProblem({ ...ok, accountApproved: false })).toMatch(/no longer approved/);
+    expect(fleetCarHoldProblem({ ...ok, deleted: true })).toMatch(/closed/);
+  });
+  it("a missing account flag is not read as revoked", () => {
+    expect(fleetCarHoldProblem({ ...ok, accountApproved: null, accountSuspended: null, driverSuspended: null })).toBeNull();
+  });
+});
+
+describe("what the driver is told", () => {
+  it("names the fleet, the car and the split when a car is given", () => {
+    const n = fleetCarGivenNotice("Acme Fleet", "2024 Toyota Camry (ABC123)");
+    expect(n.title).toContain("Acme Fleet");
+    expect(n.body).toContain("2024 Toyota Camry (ABC123)");
+    expect(n.body).toMatch(/75% to you and 25% to Acme Fleet/);
+  });
+  it("says whether they can still drive when the car goes back", () => {
+    expect(fleetCarTakenBackNotice("Acme", "Car", { hasOtherCar: true }).body).toMatch(/own car/);
+    expect(fleetCarTakenBackNotice("Acme", "Car", { hasOtherCar: false }).body).toMatch(/cannot go online/);
+  });
+  it("gives PG Ride's reason when PG Ride took it", () => {
+    const n = fleetCarTakenBackNotice("Acme", "Car", { hasOtherCar: false, why: "Driving is suspended by PG Ride." });
+    expect(n.body).toMatch(/^PG Ride took Car back for Acme\. Reason: Driving is suspended/);
+  });
+});
