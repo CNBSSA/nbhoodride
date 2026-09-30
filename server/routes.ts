@@ -7386,6 +7386,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Fleet slice 3, finished (2026-09-30): a fleet car is only ever with a
+  // driver PG Ride approves. When PG Ride revokes, suspends or closes one who
+  // has a fleet car, the car goes back to the fleet at once (on a ride, when
+  // the ride ends: the hourly sweep). Never fails the admin's change.
+  async function releaseFleetCarAfterRevoke(userId: string): Promise<void> {
+    try {
+      const m = await import("./fleet/drivers");
+      const r = await m.releaseFleetCarIfRevoked(userId);
+      if (r === "released" || r === "on_ride") console.log(`[AUDIT] fleet_car_after_revoke userId=${userId} result=${r}`);
+    } catch (err) {
+      console.error(`[fleet] could not take the fleet car back after revoking ${userId}:`, err);
+    }
+  }
+
   app.post('/api/admin/users/:userId/revoke-approval', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const { userId } = req.params;
@@ -7398,6 +7412,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const user = await storage.adminUpdateUser(userId, { isApproved: false });
       await storage.logAdminAction(adminId, 'revoke_approval', 'user', userId, { email: targetUser.email });
+      await releaseFleetCarAfterRevoke(userId);
       res.json(user);
     } catch (error) {
       console.error("Error revoking approval:", error);
@@ -7890,6 +7905,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const user = await storage.adminUpdateUser(userId, sanitizedUpdates);
       await storage.logAdminAction(adminId, 'update_user', 'user', userId, sanitizedUpdates);
+      if (sanitizedUpdates.isSuspended === true || sanitizedUpdates.isApproved === false) await releaseFleetCarAfterRevoke(userId);
       res.json(user);
     } catch (error) {
       console.error("Error updating user:", error);
@@ -8034,6 +8050,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // driver mode away — approval status is the single source of truth.
         await storage.adminUpdateUser(userId, { isDriver: false });
         console.log(`[AUDIT] driver_mode_revoked adminId=${adminId} userId=${userId} approvalStatus=${updates.approvalStatus}`);
+      }
+      if ((updates.approvalStatus && updates.approvalStatus !== 'approved') || updates.isSuspended === true) {
+        await releaseFleetCarAfterRevoke(userId);
       }
 
       res.json(profile);
@@ -11849,6 +11868,7 @@ Generate the FAQ list.`;
       // ── Fleet cars: park a car the hour a paper lapses; warn ahead once a day ──
       if (featureFlags.fleetEnabled && now.getMinutes() === 29) {
         import("./fleet/cars").then((m) => m.runFleetCarSweep(now, { warnings: now.getUTCHours() === 13 })).catch((err) => console.error("fleet car sweep failed:", err));
+        import("./fleet/drivers").then((m) => m.sweepRevokedFleetDrivers(now)).catch((err) => console.error("fleet revoked-driver sweep failed:", err));
       }
 
       // ── Ride-risk watch: page ops before the rider finds out ──

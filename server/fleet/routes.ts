@@ -16,7 +16,7 @@ import { featureFlags } from "../featureFlags";
 import { FLEET_TERMS_SENTENCE } from "@shared/fleet";
 import { FleetError, applyForFleet, fleetDesk, myFleets, resubmitFleet, reviewFleet, saveFleetPayout } from "./accounts";
 import { createFleetCar, listFleetCars, listFleetCarsForAdmin, reviewFleetCar, runFleetCarSweep, updateFleetCar } from "./cars";
-import { assignFleetCarToDriver, inviteFleetDriver, listFleetDrivers, removeFleetDriver, takeBackFleetCarFromDriver } from "./drivers";
+import { assignFleetCarToDriver, inviteFleetDriver, listFleetDrivers, removeFleetDriver, sweepRevokedFleetDrivers, takeBackFleetCarFromDriver } from "./drivers";
 import { CommercialError } from "../commercial/organizations";
 import { resolveAppUrl } from "../appUrl";
 import { RentalError } from "../rental/cars";
@@ -127,6 +127,6 @@ export function registerFleetRoutes(app: Express, deps: FleetDeps): void {
     try { res.json(await reviewFleetCar(String(req.params.id), String(req.params.carId), req.body ?? {})); } catch (err) { fail(res, err, "Could not record the check"); }
   });
   app.post("/api/admin/analytics/fleet-car-sweep", gate, isAdminOrSessionAuth, async (req, res) => {
-    try { res.json(await runFleetCarSweep(new Date(), { warnings: !!req.body?.warnings })); } catch (err) { fail(res, err, "Could not run the fleet car sweep"); }
+    try { const now = new Date(); const cars = await runFleetCarSweep(now, { warnings: !!req.body?.warnings }); res.json({ ...cars, ...(await sweepRevokedFleetDrivers(now)) }); } catch (err) { fail(res, err, "Could not run the fleet car sweep"); }
   });
 }

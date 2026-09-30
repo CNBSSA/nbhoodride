@@ -458,3 +458,56 @@ export const FLEET_PAYOUT_STATUS_WORDS: Record<string, string> = {
   requested: "Waiting for PG Ride to send it",
   sent: "Sent by PG Ride",
 };
+
+// ── Slice 3, finished (2026-09-30): telling the driver, and approval revoked ──
+//
+// Giving a driver a car, or taking it back, used to page ops and change the
+// car riders see without a word to the driver: they found out when the app
+// would not let them go online. Now the driver is told in the app each time,
+// in the words below.
+//
+// A fleet car is only ever with a driver PG Ride has approved. Assigning
+// checks it (assignProblems); until now nothing checked it again, so a
+// driver whose approval PG Ride revoked, or who was suspended, kept the
+// fleet's car and its copy in their vehicles. `fleetCarHoldProblem` is the
+// rule for "may this person still hold a fleet car", applied when PG Ride
+// changes a driver or an account and again by the hourly sweep as a net for
+// any door that changes them some other way.
+
+export interface FleetCarHolder {
+  approvalStatus: string | null | undefined;
+  driverSuspended: boolean | null | undefined;
+  accountApproved: boolean | null | undefined;
+  accountSuspended: boolean | null | undefined;
+  deleted?: boolean | null;
+}
+
+/** Why this person may no longer hold a fleet car, or null when they still may. */
+export function fleetCarHoldProblem(h: FleetCarHolder): string | null {
+  if (h.deleted) return "The PG Ride account was closed.";
+  if (h.accountSuspended) return "The PG Ride account is suspended.";
+  if (h.accountApproved === false) return "The PG Ride account is no longer approved.";
+  if (h.approvalStatus !== "approved") return `Driver approval is no longer in place (status: ${driverApprovalWords(h.approvalStatus)}).`;
+  if (h.driverSuspended) return "Driving is suspended by PG Ride.";
+  return null;
+}
+
+/** The in-app notice a driver gets when their fleet gives them a car. */
+export function fleetCarGivenNotice(fleetName: string, carLabel: string): { title: string; body: string } {
+  return {
+    title: `${fleetName} gave you a car`,
+    body: `${carLabel} is now your car on PG Ride: riders see it when you drive. On rides in it your 85% of the fare is shared 75% to you and 25% to ${fleetName}, and every tip is yours.`,
+  };
+}
+
+/**
+ * The in-app notice when the car goes back. `why` is PG Ride's reason when
+ * PG Ride took it (approval revoked); a fleet taking its car back gives none.
+ */
+export function fleetCarTakenBackNotice(fleetName: string, carLabel: string, opts: { hasOtherCar: boolean; why?: string | null }): { title: string; body: string } {
+  const who = opts.why ? `PG Ride took ${carLabel} back for ${fleetName}. Reason: ${opts.why}` : `${fleetName} took ${carLabel} back.`;
+  const next = opts.hasOtherCar
+    ? "You can still drive in your own car."
+    : "You have no car on PG Ride now, so you cannot go online until you have one.";
+  return { title: `${carLabel} is no longer yours to drive`, body: `${who} ${next}` };
+}
