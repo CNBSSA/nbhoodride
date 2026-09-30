@@ -65,20 +65,7 @@ async function assertModalOnTop(page, label, overlayTestid) {
 async function assertPrimary(page, label, testid) {
   const loc = page.locator(`[data-testid="${testid}"]`).first();
   await loc.waitFor({ timeout: 15000 });
-  // Measure only once the element has stopped moving. On a loaded CI runner
-  // the Profile screen was still filling in above the install row (it sat at
-  // 521 there, 573 here), so the row was measured in one place and
-  // hit-tested after it had moved — "covered" by its own neighbour, while
-  // the tap that followed opened the walkthrough. Two equal boxes 150 ms
-  // apart, up to 3 s.
-  let box = await loc.boundingBox();
-  for (let i = 0; i < 20; i++) {
-    await page.waitForTimeout(150);
-    const next = await loc.boundingBox();
-    const same = !!box && !!next && Math.abs(box.x - next.x) < 1 && Math.abs(box.y - next.y) < 1 && Math.abs(box.height - next.height) < 1;
-    box = next;
-    if (same) break;
-  }
+  const box = await loc.boundingBox();
   const inside = !!box && box.y >= 0 && box.y + box.height <= VIEWPORT.height && box.x >= 0 && box.x + box.width <= VIEWPORT.width;
   check(`${label}: primary action fully on screen`, inside, box ? `top ${Math.round(box.y)} bottom ${Math.round(box.y + box.height)} of ${VIEWPORT.height}` : "no box");
   const disabled = await loc.evaluate((el) => el.hasAttribute("disabled"));

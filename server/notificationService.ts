@@ -1,6 +1,5 @@
 import { storage } from "./storage";
 import { sendPushToSubscriptions, type PushPayload } from "./pushService";
-import { quietMaySilence } from "@shared/notificationPolicy";
 
 export interface UserNotificationInput {
   type: string;
@@ -15,10 +14,9 @@ export interface UserNotificationInput {
   requireInteraction?: boolean;
   /**
    * Deliver even to users who muted routine notifications (calm ride mode /
-   * minimize notifications). Since 2026-09-29 this is decided by the type
-   * (shared/notificationPolicy.ts): anything about a ride the person holds,
-   * a message on it, or money to act on always goes through, and no send
-   * site has to remember a flag. Pass it only to override the policy.
+   * minimize notifications). Reserved for safety and compliance notices the
+   * rider genuinely needs to see — routine announcements must respect the
+   * quiet preference.
    */
   bypassQuietPreferences?: boolean;
 }
@@ -34,8 +32,7 @@ export async function deliverUserNotification(userId: string, input: UserNotific
   });
 
   let allowPush = input.push !== false;
-  const bypassQuiet = input.bypassQuietPreferences ?? !quietMaySilence(input.type);
-  if (allowPush && !bypassQuiet) {
+  if (allowPush && !input.bypassQuietPreferences && input.type !== "sos" && input.type !== "emergency") {
     try {
       const prefs = await storage.getUserRidePreferences(userId);
       if (prefs.minimizeNotifications || (prefs.calmRideMode && prefs.calmRideMode !== "off")) {

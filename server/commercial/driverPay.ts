@@ -29,7 +29,6 @@ import { splitFare } from "@shared/payoutPolicy";
 import type { Ride } from "@shared/schema";
 import type { IStorage } from "../storage";
 import { FAIRNESS_FUND_RATE } from "../rideWorkflowService";
-import { creditDriverCutOnce } from "../fleet/earnings";
 
 /** Ledger reason for the driver's share of waiting at the door. */
 export const WAITING_REASON = "commercial_waiting";
@@ -67,9 +66,7 @@ export async function payDriverForWaiting(storage: IStorage, ride: Ride, waitFee
   if (await storage.hasWalletTransaction(ride.id, WAITING_REASON)) return 0;
   const driverCut = splitFare(fee).driverFareShare;
   if (driverCut <= 0) return 0;
-  // In a fleet's car the waiting is shared 25/75 like the fare it belongs to
-  // (server/fleet/earnings.ts); otherwise credited exactly as before.
-  await creditDriverCutOnce(storage, { rideId: ride.id, driverUserId: ride.driverId, amount: driverCut, reason: WAITING_REASON, kind: "waiting" });
+  await storage.addVirtualCardBalance(ride.driverId, driverCut, WAITING_REASON, ride.id);
   console.log(`[commercial] driver paid for waiting :: ride ${ride.id.slice(0, 8)} | $${driverCut.toFixed(2)} of $${fee.toFixed(2)}`);
   return driverCut;
 }
@@ -92,8 +89,7 @@ export async function payDriverForLateCancel(storage: IStorage, ride: Ride, fee:
   if (await storage.hasWalletTransaction(ride.id, CANCEL_FEE_REASON)) return none;
   const fundCut = Number((amount * FAIRNESS_FUND_RATE).toFixed(2));
   const driverCut = Number((amount - fundCut).toFixed(2));
-  // Shared 25/75 with the fleet when the driver held the job in a fleet's car.
-  if (driverCut > 0) await creditDriverCutOnce(storage, { rideId: ride.id, driverUserId: ride.driverId, amount: driverCut, reason: CANCEL_FEE_REASON, kind: "cancel_fee" });
+  if (driverCut > 0) await storage.addVirtualCardBalance(ride.driverId, driverCut, CANCEL_FEE_REASON, ride.id);
   if (fundCut > 0) await storage.fundCommunityBonusPool(fundCut);
   console.log(`[commercial] driver paid for a late cancel :: ride ${ride.id.slice(0, 8)} | $${driverCut.toFixed(2)} of $${amount.toFixed(2)}`);
   return { driverCut, fundCut };

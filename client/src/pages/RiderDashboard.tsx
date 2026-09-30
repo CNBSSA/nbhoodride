@@ -6,7 +6,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import { useGeolocation } from "@/hooks/useGeolocation";
 import { useWebSocket } from "@/hooks/useWebSocket";
-import { DRIVER_LOCATION_STALE_MS } from "@shared/liveLocation";
 import { useLocation } from "wouter";
 import MapComponent from "@/components/MapComponent";
 import { useGeocodeSuggest, type AddressSuggestion } from "@/hooks/useGeocode";
@@ -273,22 +272,6 @@ export default function RiderDashboard() {
     refetchInterval: 5000,
   });
   activeRidesRef.current = activeRides;
-
-  // The poll carries the driver's last stored position and its stamp
-  // (shared/liveLocation.ts). When it is newer than what the socket gave,
-  // it moves the map — so a dropped socket no longer freezes the car.
-  useEffect(() => {
-    for (const ride of activeRides) {
-      const driverId = ride?.driverId ?? ride?.driver?.id;
-      const loc = ride?.driver?.currentLocation;
-      const at = ride?.driver?.locationUpdatedAt ? new Date(ride.driver.locationUpdatedAt).getTime() : NaN;
-      if (!driverId || !loc || typeof loc.lat !== 'number' || typeof loc.lng !== 'number' || Number.isNaN(at)) continue;
-      if ((driverSeenAt[driverId] ?? 0) >= at) continue;
-      setRealtimeDrivers(prev => ({ ...prev, [driverId]: { lat: loc.lat, lng: loc.lng } }));
-      setDriverSeenAt(prev => ({ ...prev, [driverId]: at }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRides]);
 
   const { data: scheduledRides = [] } = useQuery<any[]>({
     queryKey: ['/api/rides/scheduled'],
@@ -648,6 +631,7 @@ export default function RiderDashboard() {
     const t = driverId ? driverSeenAt[driverId] : undefined;
     return t ? clock - t : null;
   };
+  const DRIVER_LOCATION_STALE_MS = 45_000;
 
   const getDriverETA = (ride: any): number | null => {
     const driverId = ride.driverId || ride.driver?.id;
@@ -710,12 +694,7 @@ export default function RiderDashboard() {
       navigator.vibrate?.([200]);
     } else if (lastMessage.type === 'ride_cancelled') {
       refetchActiveRides();
-      // The server sends why (reason / message) and by whom; until
-      // 2026-09-29 both were dropped on the floor here.
-      const why = typeof lastMessage.reason === 'string' && lastMessage.reason.trim() ? lastMessage.reason.trim()
-        : typeof lastMessage.message === 'string' && lastMessage.message.trim() ? lastMessage.message.trim() : '';
-      const who = lastMessage.cancelledBy === 'driver' ? 'by your driver' : lastMessage.cancelledBy === 'admin' ? 'by PG Ride support' : '';
-      toast({ title: "Ride Cancelled", description: `Your ride has been cancelled${who ? ` ${who}` : ''}.${why ? ` ${why}` : ''}`, variant: "destructive" });
+      toast({ title: "Ride Cancelled", description: "Your ride has been cancelled.", variant: "destructive" });
     } else if (lastMessage.type === 'ride_driver_cancelled') {
       refetchActiveRides();
       queryClient.invalidateQueries({ queryKey: ['/api/rides/scheduled'] });

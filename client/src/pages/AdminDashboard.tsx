@@ -1999,7 +1999,7 @@ function FinancesPanel() {
     totalRevenue: number; totalFares: number; totalTips: number;
     totalCancellationFees: number; rideCount: number;
     platformShare?: number; platformShareCollected?: number; platformShareUncollected?: number;
-    driverShare?: number; fleetShare?: number; cashRides?: number; cashRidesUnsettled?: number;
+    driverShare?: number; cashRides?: number; cashRidesUnsettled?: number;
   }>({ queryKey: [`/api/admin/finances?year=${year}`] });
 
   if (isLoading) return <div data-testid="loading-finances">Loading finances...</div>;
@@ -2062,7 +2062,6 @@ function FinancesPanel() {
             <p className="text-sm text-muted-foreground">Drivers' Share</p>
             <p className="text-2xl font-bold">${(summary?.driverShare || 0).toFixed(2)}</p>
             <p className="text-xs text-muted-foreground mt-1">85% of fares, paid to drivers. Tips are on top.</p>
-            {(summary?.fleetShare ?? 0) > 0 && <p className="text-xs text-muted-foreground" data-testid="text-fleet-share">Of drivers' 85% on fleet cars, ${(summary?.fleetShare || 0).toFixed(2)} went to fleet owners (25%) and is not in the figure above.</p>}
           </CardContent>
         </Card>
         <Card data-testid="stat-total-fares">

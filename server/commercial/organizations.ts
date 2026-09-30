@@ -9,10 +9,9 @@
 
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../db";
-import { commercialJobs, fleetCars, organizationMembers, organizations, users, type Organization } from "@shared/schema";
+import { commercialJobs, organizationMembers, organizations, users, type Organization } from "@shared/schema";
 import { DEFAULT_FACILITY_FEE, isCategory, isFleetCategory, isOrgRole, rolesForCategory, type CommercialCategory, type OrgRole } from "@shared/commercial";
 import { orgTerms, sanitizeTermsPatch } from "@shared/commercialTerms";
-import { OTHER_FLEET_FOR_DESK } from "@shared/fleet";
 
 export class CommercialError extends Error {
   constructor(message: string, public status = 400) {
@@ -177,50 +176,13 @@ export async function addMemberByEmail(organizationId: string, email: string, ro
   if (!addr) throw new CommercialError("An email is needed.");
   const [user] = await db.select().from(users).where(eq(users.email, addr));
   if (!user || user.deletedAt) throw new CommercialError("No PG Ride account has that email. They need to sign up first.", 404);
-  if (isFleetCategory(org?.category)) {
-    // Fleet slice 3: one fleet at a time for a driver, and nobody changes role under a car they hold.
-    await db.transaction(async (tx) => {
-      await lockFleetDriver(tx, user.id);
-      if (role === "driver" && await fleetDriverElsewhere(user.id, organizationId, tx)) throw new CommercialError(OTHER_FLEET_FOR_DESK, 409);
-      if (role !== "driver" && await holdsFleetCar(user.id, organizationId, tx)) throw new CommercialError("They have one of the fleet's cars. Take it back before changing what they do in the fleet.", 409);
-      await tx.insert(organizationMembers)
-        .values({ organizationId, userId: user.id, role })
-        .onConflictDoUpdate({ target: [organizationMembers.organizationId, organizationMembers.userId], set: { role } });
-    });
-    return { userId: user.id, role, firstName: user.firstName, lastName: user.lastName, email: user.email, phone: user.phone, createdAt: new Date() };
-  }
   await db.insert(organizationMembers)
     .values({ organizationId, userId: user.id, role })
     .onConflictDoUpdate({ target: [organizationMembers.organizationId, organizationMembers.userId], set: { role } });
   return { userId: user.id, role, firstName: user.firstName, lastName: user.lastName, email: user.email, phone: user.phone, createdAt: new Date() };
 }
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-
-/** Serialize fleet-driver joins for one person, so two fleets cannot both take them at once. */
-export async function lockFleetDriver(tx: Tx, userId: string): Promise<void> {
-  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`fleet-driver:${userId}`}))`);
-}
-
-/** The other fleet this person already drives for, if any (a driver drives for one fleet at a time). */
-export async function fleetDriverElsewhere(userId: string, organizationId: string, tx: Tx | typeof db = db): Promise<{ id: string; name: string } | null> {
-  const [row] = await tx.select({ id: organizations.id, name: organizations.name }).from(organizationMembers)
-    .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
-    .where(and(eq(organizationMembers.userId, userId), eq(organizationMembers.role, "driver"), eq(organizations.category, "fleet"), sql`${organizations.id} <> ${organizationId}`))
-    .limit(1);
-  return row ?? null;
-}
-
-/** Does this person have one of this fleet's cars? */
-export async function holdsFleetCar(userId: string, organizationId: string, tx: Tx | typeof db = db): Promise<boolean> {
-  const [row] = await tx.select({ id: fleetCars.id }).from(fleetCars)
-    .where(and(eq(fleetCars.organizationId, organizationId), eq(fleetCars.driverUserId, userId))).limit(1);
-  return !!row;
-}
-
 export async function removeMember(organizationId: string, userId: string): Promise<boolean> {
-  // A fleet driver with one of the fleet's cars gives it back first (the fleet desk's Remove does both, with the ride check).
-  if (await holdsFleetCar(userId, organizationId)) throw new CommercialError("They have one of the fleet's cars. Take it back first.", 409);
   const gone = await db.delete(organizationMembers)
     .where(and(eq(organizationMembers.organizationId, organizationId), eq(organizationMembers.userId, userId)))
     .returning({ id: organizationMembers.id });
