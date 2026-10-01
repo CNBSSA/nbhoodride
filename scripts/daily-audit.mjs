@@ -87,12 +87,21 @@ if (expectSha) {
   else warnings.push(`production still serving build ${live || "unknown"} after the deploy wait (expected ${expectSha}) — probes below judge the previous build`);
 }
 
-run("smoke:production", "npm", ["run", "smoke:production"], {
-  env: { ...process.env, BASE_URL: baseUrl },
-});
+// Exit 3 from the smoke script means this environment's network policy
+// blocks production (see scripts/smoke-production.mjs): nothing was checked,
+// so it is UNVERIFIED, never RED. Every probe below is skipped for the same
+// reason rather than reported as the site failing.
+console.log("\n▶ smoke:production");
+const smoke = spawnSync("npm", ["run", "smoke:production"], { cwd: root, stdio: "inherit", shell: false, env: { ...process.env, BASE_URL: baseUrl } });
+const productionUnreachable = smoke.status === 3;
+if (productionUnreachable) {
+  console.log("\nProduction is not reachable from this environment: probes skipped, not failed.");
+} else if (smoke.status !== 0) {
+  failures.push("smoke:production");
+}
 
 console.log("\n▶ /health/ready");
-const ready = await fetchJson("/health/ready");
+const ready = productionUnreachable ? null : await fetchJson("/health/ready");
 if (ready) {
   console.log(`  ready=${ready.ready}`);
   for (const c of ready.checks ?? []) {
@@ -101,21 +110,21 @@ if (ready) {
     if (c.status === "fail") failures.push(`readiness:${c.id}`);
     if (c.status === "warn") warnings.push(`readiness:${c.id} — ${c.detail ?? c.label}`);
   }
-} else {
+} else if (!productionUnreachable) {
   warnings.push("/health/ready unavailable");
 }
 
 console.log("\n▶ /api/payment/config");
-const pay = await fetchJson("/api/payment/config");
+const pay = productionUnreachable ? null : await fetchJson("/api/payment/config");
 if (pay) {
   console.log(`  stripe enabled=${pay.enabled}`);
   if (!pay.enabled) warnings.push("Stripe not enabled on client — check Railway vars + redeploy");
-} else {
+} else if (!productionUnreachable) {
   warnings.push("/api/payment/config unavailable (merge latest or redeploy)");
 }
 
 console.log("\n▶ custom domain probe");
-for (const domain of ["https://peoplegoverned.com", "https://peoplegoverned.com/health"]) {
+for (const domain of productionUnreachable ? [] : ["https://peoplegoverned.com", "https://peoplegoverned.com/health"]) {
   try {
     const res = await fetch(domain, { redirect: "follow" });
     const isRailway = res.url.includes("railway.app") || res.url.includes("peoplegoverned.com");
@@ -141,5 +150,11 @@ if (failures.length) {
   process.exit(1);
 }
 
+if (productionUnreachable) {
+  console.log("\nAudit: UNVERIFIED — code gates passed, but production could not be reached from this environment.");
+  console.log("This is not RED: nothing about the live site was observed. Read the Production Watch and the");
+  console.log("Daily Reliability Report (both run from GitHub and reach production) for the live state.");
+  process.exit(3);
+}
 console.log("\nAudit automated gates: GREEN (review warnings above)");
 console.log("Next: run full agent prompt in docs/DAILY_AUDIT_AGENT_INVOKE.md");

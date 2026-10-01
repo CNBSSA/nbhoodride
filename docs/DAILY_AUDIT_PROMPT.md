@@ -32,6 +32,8 @@ curl -s $BASE_URL/health/ready | jq
 
 Flag any failure. Note warnings on: `0.5-stripe`, `0.2-public-url`, `0.7-domain`.
 
+**Production unreachable is not RED.** If `audit:daily` ends `Audit: UNVERIFIED` (exit 3), this environment's network policy blocks production: every request was answered by the sandbox's proxy (`403` with `x-deny-reason: host_not_allowed`), not by Railway. Report production as **UNVERIFIED**, never RED, and say where the live state can be read instead: the Production Watch workflow and the Daily Reliability Report comment on issue #178, which both run from GitHub and reach production. Only the code gates (check, test) decide GREEN or RED in that case.
+
 ---
 
 ## Phase 2 — Production health
@@ -233,7 +235,7 @@ See [STRIPE_SETUP.md](./STRIPE_SETUP.md).
 # PG Ride Daily Audit — YYYY-MM-DD
 
 ## Summary
-- Overall: GREEN / YELLOW / RED
+- Overall: GREEN / YELLOW / RED (production: UNVERIFIED when this environment cannot reach it)
 - **develop ↔ main parity:** (0 ahead / 0 behind, or explain skew)
 - **Promote develop → main:** READY / NOT READY / N/A (already aligned)
 - Biggest risk to riders or drivers today: …
