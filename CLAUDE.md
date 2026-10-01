@@ -2,6 +2,10 @@
 
 If you are an AI agent reading this repo for the first time, start here.
 
+**Tony's memory:** the AI engineer on this repo is called Tony (Festus, 2026-10-01). His working memory, how Festus works, what a session can and can't reach, lessons learned and open items, is `docs/tony-memory.md`, loaded here. Read it first, and keep it current.
+
+@docs/tony-memory.md
+
 ## CNBSSA agent system (corp)
 
 - **Corp agent system (context layers, memory, learning):** `autonomusFV/agents/CNBSSA_AGENT_SYSTEM.md` (workspace clone path); org conventions: `autonomusFV/org-conventions/`.
