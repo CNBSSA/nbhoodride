@@ -1877,7 +1877,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // does: the rider of every active ride is sent the position when they
       // have a socket, and the route is checked for deviation.
       const forwardTo = (ride: any) => {
-        if (!ride?.riderId) return;
+        // Only the ride's own driver moves its map or trips its deviation
+        // watch (Cursor Bugbot on #464): a ride id alone proves nothing.
+        if (!ride?.riderId || ride.driverId !== userId) return;
         checkRouteDeviationForRide(storage, ride.id, lat, lng).catch(() => {});
         const riderWs = activeConnections.get(ride.riderId);
         if (riderWs && riderWs.readyState === WebSocket.OPEN) {
@@ -11485,10 +11487,12 @@ Generate the FAQ list.`;
                 }
               };
               if (message.rideId) {
-                // Fast path: client did supply a rideId.
-                checkRouteDeviationForRide(storage, message.rideId, lat, lng).catch(console.error);
+                // Fast path: client did supply a rideId. Only that ride's own
+                // driver may move its map or trip its deviation watch.
                 storage.getRide(message.rideId).then(ride => {
-                  if (ride?.riderId) forwardDriverLocation(ride.id, ride.riderId);
+                  if (!ride?.riderId || ride.driverId !== driverUserId) return;
+                  checkRouteDeviationForRide(storage, ride.id, lat, lng).catch(console.error);
+                  forwardDriverLocation(ride.id, ride.riderId);
                 }).catch(() => {});
               } else {
                 // Normal path: resolve the driver's active ride and forward.

@@ -379,7 +379,7 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
         req.session.userId = result.userId;
         await storage.updateLastLogin(result.userId).catch(() => {});
       }
-      res.json({ organizationId: result.organizationId, organizationName: result.organizationName, existing: result.existing, ...(result.pendingApproval ? { pendingApproval: true } : {}) });
+      res.json({ organizationId: result.organizationId, organizationName: result.organizationName, existing: result.existing, ...(result.pendingApproval ? { pendingApproval: true } : {}), ...(result.driverApproved !== undefined ? { driverApproved: result.driverApproved } : {}) });
     } catch (err) { fail(res, err, "Could not accept the invitation"); }
   });
   app.delete("/api/org/:orgId/members/:userId", gate, isAuthenticated, requireMember(canManageMembers), async (req: any, res) => {
