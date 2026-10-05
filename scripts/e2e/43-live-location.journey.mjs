@@ -70,7 +70,11 @@ export async function run({ base, db }) {
     check("the first round pings the open sockets and drops none that answered", round1.status === 200 && round1.json?.pinged >= 1 && !liveClosed, JSON.stringify(round1.json));
     const round2 = await admin.req("POST", "/api/admin/analytics/ws-heartbeat", {});
     await wait(500);
-    check("by the second round the socket that never answered is dropped", (round1.json?.dropped ?? 0) + (round2.json?.dropped ?? 0) >= 1 && muteClosed, JSON.stringify({ r1: round1.json, r2: round2.json, muteClosed }));
+    // Whichever round drops it — the admin's or the server's own 30-second
+    // tick landing between the two (2026-10-05: round 2 then never saw the
+    // socket at all) — what must hold is that the silent socket is closed by
+    // the server and the answering one is not.
+    check("by the second round the socket that never answered is dropped", muteClosed && !liveClosed, JSON.stringify({ r1: round1.json, r2: round2.json, muteClosed }));
     check("and keeps the one that did", !liveClosed && live.readyState === WebSocket.OPEN);
     live.close();
   } finally {
