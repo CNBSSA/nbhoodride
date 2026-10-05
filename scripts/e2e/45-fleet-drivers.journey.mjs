@@ -118,6 +118,21 @@ export async function run({ base, db, server }) {
     const { rows: [twoFleets] } = await db.query("SELECT count(*)::int AS n FROM organization_members WHERE user_id=$1 AND role='driver'", [u?.id]);
     check("they are still one fleet's driver", twoFleets.n === 1, JSON.stringify(twoFleets));
 
+    section("An existing account that accepts a driver invitation starts its driver application too");
+    const existingId = `e2e-fleet-45x-${Date.now()}`, existingEmail = `${existingId}@example.com`;
+    await db.query(`INSERT INTO users (id, email, password, first_name, last_name, is_approved, registration_completed_at)
+      SELECT $1, $2, password, 'Ade', 'Hasaccount', true, NOW() FROM users WHERE id=$3`, [existingId, existingEmail, FIXTURES.rider.id]);
+    userIds.push(existingId);
+    const inv3 = await owner.req("POST", `/api/fleet/${orgId}/drivers`, { email: existingEmail });
+    const joiner3 = new Session(base);
+    await joiner3.req("GET", `/api/org/invitations/${tokenOf(inv3.json?.link)}`);
+    const acc3 = await joiner3.req("POST", `/api/org/invitations/${tokenOf(inv3.json?.link)}/accept`, {});
+    check("they are attached and told PG Ride has not approved them as a driver yet", acc3.status === 200 && acc3.json?.existing === true && acc3.json?.driverApproved === false, JSON.stringify(acc3.json));
+    const { rows: [app3] } = await db.query("SELECT approval_status FROM driver_profiles WHERE user_id=$1", [existingId]);
+    check("their driver application is started, pending PG Ride", app3?.approval_status === "pending", JSON.stringify(app3));
+    check("and ops are told", await logShows(/Existing account joined a fleet: wants to DRIVE/));
+    await db.query("DELETE FROM organization_invitations WHERE email = $1", [existingEmail]).catch(() => {});
+
     section("An edit to the car reaches the driver's copy; a parked car stops being drivable");
     await owner.req("PATCH", `/api/fleet/${orgId}/cars/${carId}`, { color: "Pearl" });
     copy = await copies(u?.id);

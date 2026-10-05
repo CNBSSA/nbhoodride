@@ -49,6 +49,20 @@ export async function run({ base, db }) {
     check("the active ride carries the driver's position and when it was written", seen?.driver?.currentLocation?.lat === 38.91 && seen?.driver?.currentLocation?.lng === -76.79 && typeof seen?.driver?.locationUpdatedAt === "string", JSON.stringify(seen?.driver));
     check("the rider is never shown the driver's ids or keys beyond the position", !("passwordResetToken" in (seen?.driver ?? {})) && !("payoutDetails" in (seen?.driver ?? {})));
 
+    section("Only the ride's own driver moves its map");
+    // Cursor Bugbot on #464: a ride id alone used to be enough to push a
+    // position to that ride's rider and trip its deviation watch.
+    const watch = await openSocket(base, rider, FIXTURES.rider.id);
+    const got = [];
+    watch.on("message", (m) => { try { const x = JSON.parse(String(m)); if (x.type === "driver_location") got.push(x); } catch { /* ignore */ } });
+    await admin.req("POST", "/api/driver/location", { lat: 1.23, lng: 4.56, rideId });
+    await wait(600);
+    check("a stranger naming the ride sends the rider nothing", !got.some((x) => x.lat === 1.23 || x.location?.lat === 1.23), JSON.stringify(got));
+    await driver.req("POST", "/api/driver/location", { lat: 38.92, lng: -76.8, rideId });
+    await wait(600);
+    check("the ride's own driver does reach the rider", got.some((x) => JSON.stringify(x).includes("38.92")), JSON.stringify(got));
+    watch.close();
+
     section("A profile edit is not a fresh position");
     await db.query("UPDATE driver_profiles SET location_updated_at = NOW() - interval '20 minutes', updated_at = NOW() WHERE user_id=$1", [FIXTURES.driver.id]);
     const { rows: [fresh] } = await db.query("SELECT COALESCE(location_updated_at, updated_at) AS at FROM driver_profiles WHERE user_id=$1", [FIXTURES.driver.id]);

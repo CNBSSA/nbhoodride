@@ -200,6 +200,17 @@ export async function run({ base, db, server }) {
     check("the year's total: what was sent, with the legal name and full EIN", yt.status === 200 && money(yt.json?.paidTotal) >= owed && yt.json?.payoutsSent >= 1 && yt.json?.legalName === "E2E Fleet Motors LLC" && yt.json?.ein === "12-3456789", JSON.stringify(yt.json));
     const nextYear = await admin.req("GET", `/api/admin/fleets/${orgId}/earnings-by-year?year=${year + 1}`);
     check("another year is its own", nextYear.status === 200 && money(nextYear.json?.paidTotal) === 0, JSON.stringify(nextYear.json?.paidTotal));
+    // What is waiting to be sent belongs to this year's record only (Cursor Bugbot on #464).
+    const waitingKey = `e2e-47-waiting-${Date.now()}`;
+    await db.query("INSERT INTO fleet_payouts (organization_id, payday_key, amount, payout_method, payout_details, status) VALUES ($1, $2, '9.00', 'zelle', 'fleet@example.com', 'requested')", [orgId, waitingKey]);
+    try {
+      const nowRec = await admin.req("GET", `/api/admin/fleets/${orgId}/earnings-by-year?year=${year}`);
+      const pastRec = await admin.req("GET", `/api/admin/fleets/${orgId}/earnings-by-year?year=${year - 1}`);
+      check("a payout waiting to be sent shows on this year's record", money(nowRec.json?.requestedNotSent) >= 9 && nowRec.json?.payoutsWaiting >= 1, JSON.stringify(nowRec.json?.requestedNotSent));
+      check("and never on a past year's", money(pastRec.json?.requestedNotSent) === 0 && pastRec.json?.payoutsWaiting === 0, JSON.stringify(pastRec.json?.requestedNotSent));
+    } finally {
+      await db.query("DELETE FROM fleet_payouts WHERE payday_key=$1", [waitingKey]).catch(() => {});
+    }
 
     section("Switch off: nothing is split");
     const off = await startServer({ FLEET_ENABLED: "false" });

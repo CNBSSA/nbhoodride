@@ -117,7 +117,7 @@ export interface AcceptInput {
  * in; otherwise the account is created, approved, attached and signed in
  * by the caller. Returns the user to sign in, or null when they already had one.
  */
-export async function acceptInvitation(token: string, input: AcceptInput, now: Date = new Date()): Promise<{ organizationId: string; organizationName: string; userId: string; existing: boolean; pendingApproval?: boolean }> {
+export async function acceptInvitation(token: string, input: AcceptInput, now: Date = new Date()): Promise<{ organizationId: string; organizationName: string; userId: string; existing: boolean; pendingApproval?: boolean; driverApproved?: boolean }> {
   const row = await byToken(token);
   if (!row) throw new CommercialError("This invitation link is not valid.", 404);
   const state = invitationState(row.inv, now);
@@ -133,6 +133,12 @@ export async function acceptInvitation(token: string, input: AcceptInput, now: D
 
   const [existing] = await db.select().from(users).where(and(eq(users.email, row.inv.email), isNull(users.deletedAt)));
   if (existing) {
+    // An existing account joining a fleet as its driver starts its driver
+    // application here too, exactly as a new account does (Cursor Bugbot on
+    // #464): without one PG Ride has nothing to approve, and the fleet can
+    // never give them a car.
+    let startedApplication = false;
+    let driverApproved = false;
     await db.transaction(async (tx) => {
       if (fleetDriver) {
         await lockFleetDriver(tx, existing.id);
@@ -141,12 +147,24 @@ export async function acceptInvitation(token: string, input: AcceptInput, now: D
         const [already] = await tx.select({ role: organizationMembers.role }).from(organizationMembers)
           .where(and(eq(organizationMembers.organizationId, row.org.id), eq(organizationMembers.userId, existing.id)));
         if (already && already.role !== "driver") throw new CommercialError(`You are already ${already.role} of ${row.org.name}. Ask PG Ride if you also want to drive for it.`, 409);
+        const [profile] = await tx.select({ approvalStatus: driverProfiles.approvalStatus }).from(driverProfiles).where(eq(driverProfiles.userId, existing.id));
+        if (!profile) {
+          await tx.insert(driverProfiles).values({ userId: existing.id } as any);
+          startedApplication = true;
+        }
+        driverApproved = profile?.approvalStatus === "approved";
       }
       await tx.insert(organizationMembers).values({ organizationId: row.org.id, userId: existing.id, role })
         .onConflictDoUpdate({ target: [organizationMembers.organizationId, organizationMembers.userId], set: { role } });
       await tx.update(organizationInvitations).set({ acceptedAt: now, acceptedUserId: existing.id }).where(eq(organizationInvitations.id, row.inv.id));
     });
-    return { organizationId: row.org.id, organizationName: row.org.name, userId: existing.id, existing: true };
+    if (startedApplication) {
+      opsAlert(formatOpsAlert("🚙 Existing account joined a fleet: wants to DRIVE (application started)", [
+        ["Name", `${existing.firstName ?? ""} ${existing.lastName ?? ""}`.trim()], ["Email", row.inv.email], ["Fleet", row.org.name],
+        ["Next", "They upload their licence on Profile; you approve the driver in Drivers. The fleet cannot approve them."],
+      ]));
+    }
+    return { organizationId: row.org.id, organizationName: row.org.name, userId: existing.id, existing: true, ...(fleetDriver ? { driverApproved } : {}) };
   }
 
   const firstName = clean(input.firstName, 50);
