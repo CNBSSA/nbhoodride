@@ -527,7 +527,12 @@ export default function DriverDashboard() {
       // cancel, support, a payment that failed, or an organization's desk.
       const why = typeof lastMessage.reason === 'string' && lastMessage.reason.trim() ? lastMessage.reason.trim()
         : typeof lastMessage.message === 'string' && lastMessage.message.trim() ? lastMessage.message.trim() : '';
-      const who = lastMessage.cancelledBy === 'admin' ? 'by PG Ride support' : lastMessage.cancelledBy === 'driver' ? '' : 'by the rider';
+      // Only a cancel the server names as the rider's reads "by the rider"
+      // (Cursor Bugbot on #464); one it made itself (a failed payment, no
+      // driver) reads "by PG Ride", and anything it did not name says no one.
+      const who = lastMessage.cancelledBy === 'admin' ? 'by PG Ride support'
+        : lastMessage.cancelledBy === 'rider' ? 'by the rider'
+        : lastMessage.cancelledBy === 'system' ? 'by PG Ride' : '';
       toast({
         title: "Ride Cancelled",
         description: `A ride has been cancelled${who ? ` ${who}` : ''}.${why ? ` ${why}` : ''}`,

@@ -212,8 +212,13 @@ export async function fleetYearTotal(orgId: string, year: number) {
   const [sent] = await db.select({ amount: sql<string>`COALESCE(SUM(${fleetPayouts.amount}), 0)`, n: sql<number>`count(*)::int` }).from(fleetPayouts)
     .where(and(eq(fleetPayouts.organizationId, orgId), eq(fleetPayouts.status, "sent"),
       sql`EXTRACT(YEAR FROM (${fleetPayouts.sentAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')) = ${year}`));
-  const [waiting] = await db.select({ amount: sql<string>`COALESCE(SUM(${fleetPayouts.amount}), 0)`, n: sql<number>`count(*)::int` }).from(fleetPayouts)
-    .where(and(eq(fleetPayouts.organizationId, orgId), eq(fleetPayouts.status, "requested")));
+  // What is requested and not yet sent belongs to the year still running
+  // only; a past year's record never shows today's queue (Cursor Bugbot on #464).
+  const thisYear = Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric" }).format(new Date()));
+  const [waiting] = year === thisYear
+    ? await db.select({ amount: sql<string>`COALESCE(SUM(${fleetPayouts.amount}), 0)`, n: sql<number>`count(*)::int` }).from(fleetPayouts)
+      .where(and(eq(fleetPayouts.organizationId, orgId), eq(fleetPayouts.status, "requested")))
+    : [{ amount: "0", n: 0 }];
   return {
     organizationId: org.id, name: org.name, year,
     legalName: org.fleetDetails?.legalName ?? "", ein: org.fleetDetails?.ein ?? "", businessType: org.fleetDetails?.businessType ?? "",

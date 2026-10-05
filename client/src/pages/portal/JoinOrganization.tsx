@@ -42,12 +42,12 @@ export default function JoinOrganization({ token }: { token: string }) {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [agreed, setAgreed] = useState(false);
-  const [joinedExisting, setJoinedExisting] = useState<{ organizationId: string; organizationName: string } | null>(null);
+  const [joinedExisting, setJoinedExisting] = useState<{ organizationId: string; organizationName: string; driverApproved?: boolean } | null>(null);
   // A fleet's driver (fleet slice 3) is approved by PG Ride like any sign-up, so is not signed straight in.
   const [waiting, setWaiting] = useState<{ organizationName: string } | null>(null);
 
   const accept = useMutation({
-    mutationFn: () => call<{ organizationId: string; organizationName: string; existing: boolean; pendingApproval?: boolean }>("POST", `/api/org/invitations/${encodeURIComponent(token)}/accept`, {
+    mutationFn: () => call<{ organizationId: string; organizationName: string; existing: boolean; pendingApproval?: boolean; driverApproved?: boolean }>("POST", `/api/org/invitations/${encodeURIComponent(token)}/accept`, {
       firstName, lastName, phone, password, termsAccepted: agreed, privacyAccepted: agreed,
     }),
     onSuccess: async (r) => {
@@ -98,7 +98,10 @@ export default function JoinOrganization({ token }: { token: string }) {
     if (asDriver) return shell(
       <div className="space-y-4 text-center text-sm">
         <p className="text-muted-foreground" data-testid="join-existing">
-          {joinedExisting ? `You now drive for ${org.organizationName}.` : `${inv.email} already has a ${BRAND.appName} account.`} A driver drives for one fleet at a time. Your fleet's car shows in the driver app once they give it to you.
+          {joinedExisting ? `You now drive for ${org.organizationName}.` : `${inv.email} already has a ${BRAND.appName} account.`} A driver drives for one fleet at a time.{" "}
+          {joinedExisting && joinedExisting.driverApproved === false
+            ? `${BRAND.appName} approves every driver: sign in and finish your driver application (your licence) on your Profile. Once ${BRAND.appName} approves you, ${org.organizationName} can give you a car.`
+            : "Your fleet's car shows in the driver app once they give it to you."}
         </p>
         {!joinedExisting && <Button className="w-full min-h-[44px]" disabled={accept.isPending} onClick={() => accept.mutate()} data-testid="button-join-attach-existing">Drive for {inv.organizationName}</Button>}
         <Link href="/login"><Button variant="outline" className="w-full min-h-[44px]" data-testid="button-join-driver-sign-in">Go to sign-in</Button></Link>
