@@ -61,8 +61,14 @@ export async function reliabilityTimeline(fromRaw: unknown, toRaw: unknown, now:
     WHERE created_at >= ${from} AND created_at < ${to}
     ORDER BY created_at LIMIT ${REPORT_MAX_EVENTS}`));
   const total = byKind.reduce((s, r) => s + Number(r.count), 0);
-  const heartbeats = events.filter((e) => e.kind === "watch_ran");
-  const lastHeartbeat = heartbeats.length ? heartbeats[heartbeats.length - 1].at : null;
+  // The last heartbeat over the WHOLE window, not over the listed events: the
+  // list stops at the first 500, and a later heartbeat must still show
+  // (Cursor Bugbot on #458).
+  const [hb] = rowsOf(await db.execute(sql`
+    SELECT to_char(max(created_at), 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at
+    FROM reliability_events
+    WHERE kind = 'watch_ran' AND created_at >= ${from} AND created_at < ${to}`));
+  const lastHeartbeat: string | null = hb?.at ?? null;
   return {
     from: from.toISOString(), to: to.toISOString(), total,
     byKind: byKind.map((r) => ({ kind: r.kind, count: Number(r.count) })),

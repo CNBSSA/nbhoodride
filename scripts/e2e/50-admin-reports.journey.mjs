@@ -34,6 +34,13 @@ export async function run({ base, db }) {
     check("only the events inside the window are counted", t.json?.total === 3, JSON.stringify(t.json?.byKind));
     check("the last heartbeat in the window is named, so a silence after it shows", t.json?.lastHeartbeat === "2031-03-10T04:10:00Z", String(t.json?.lastHeartbeat));
     check("heartbeats are counted by hour", JSON.stringify(t.json?.byHour) === JSON.stringify([{ hour: "2031-03-10T03:00Z", count: 1, heartbeats: 1 }, { hour: "2031-03-10T04:00Z", count: 2, heartbeats: 1 }]), JSON.stringify(t.json?.byHour));
+    // Past the 500 listed events, the last heartbeat must still be the real one
+    // (Cursor Bugbot on #458).
+    await db.query(`INSERT INTO reliability_events (kind, page, message, created_at)
+      SELECT 'client_crash', '/ride', 'e2e', '2031-03-11T01:00:00Z'::timestamp + (g * interval '1 second') FROM generate_series(1, 520) g`);
+    await db.query(`INSERT INTO reliability_events (kind, page, message, created_at) VALUES ('watch_ran', 'minute-sweep', 'e2e', '2031-03-11T05:00:00Z')`);
+    const busy = await admin.req("GET", "/api/admin/reports/reliability-events?from=2031-03-11T00:00Z&to=2031-03-11T06:00Z");
+    check("on a busy window the last heartbeat is found past the listed events", busy.json?.truncated === true && busy.json?.lastHeartbeat === "2031-03-11T05:00:00Z", JSON.stringify({ truncated: busy.json?.truncated, listed: busy.json?.events?.length, last: busy.json?.lastHeartbeat }));
     const bad = await admin.req("GET", "/api/admin/reports/reliability-events?from=2031-03-01T00:00Z&to=2031-03-20T00:00Z");
     check("a window longer than 7 days is refused with a reason", bad.status === 400 && /at most 7 days/.test(bad.json?.message ?? ""), JSON.stringify(bad.json));
     const backwards = await admin.req("GET", `/api/admin/reports/reliability-events?from=${encodeURIComponent(to)}&to=${encodeURIComponent(from)}`);
@@ -55,7 +62,7 @@ export async function run({ base, db }) {
     check("a driver's earnings are never counted as a rider's balance", withDriver.json?.riders === after.json?.riders && !(withDriver.json?.list ?? []).some((r) => r.userId === FIXTURES.driver.id), JSON.stringify(withDriver.json?.riders));
     await db.query("UPDATE users SET virtual_card_balance = $2 WHERE id=$1", [FIXTURES.driver.id, drv?.b ?? "0.00"]);
   } finally {
-    await db.query("DELETE FROM reliability_events WHERE created_at >= '2031-03-10' AND created_at < '2031-03-11' AND message = 'e2e'").catch(() => {});
+    await db.query("DELETE FROM reliability_events WHERE created_at >= '2031-03-10' AND created_at < '2031-03-12' AND message = 'e2e'").catch(() => {});
     // The ledger is append-only, so the test rider is closed, not deleted: a
     // zero balance and a deleted_at keep them out of every later count.
     await db.query("UPDATE users SET virtual_card_balance = '0.00', deleted_at = NOW() WHERE id=$1", [R]).catch(() => {});
