@@ -402,6 +402,9 @@
     "button-fleet-assign-car-*": "disabled until one of the fleet's approved drivers is chosen (the seed fleet has none), and it gives a car away; journey 45 assigns a car over the API",
     "button-fleet-take-back-*": "never pressed: shown only on a fleet car a driver has, and it takes the car off them; journey 45 takes a car back over the API",
     "button-fleet-remove-driver-*": "never pressed: shown only beside one of a fleet's drivers (the seed fleet has none), and it removes them and takes their car back; journey 45 removes a driver over the API",
-    "button-join-driver-sign-in": "shown only on a fleet driver's invitation link, which the audit does not hold; journey 45 accepts one over the API"
+    "button-join-driver-sign-in": "shown only on a fleet driver's invitation link, which the audit does not hold; journey 45 accepts one over the API",
+    "button-report-events-run": "inside Admin \u2192 Reports, a tab the audit does not open (it opens screens by address); the buttons only read. Journey 50 reads both reports over the API",
+    "button-report-outage-window": "inside Admin \u2192 Reports, a tab the audit does not open (it opens screens by address); the buttons only read. Journey 50 reads both reports over the API",
+    "button-report-balances-refresh": "inside Admin \u2192 Reports, a tab the audit does not open (it opens screens by address); the buttons only read. Journey 50 reads both reports over the API"
   }
 }
