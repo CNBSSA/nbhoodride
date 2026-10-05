@@ -233,6 +233,8 @@
     "button-report-issue-*",
     "button-report-issue-receipt",
     "button-report-outage-window",
+    "button-report-tax-csv",
+    "button-report-tax-run",
     "button-request-payout",
     "button-request-rental",
     "button-reset",

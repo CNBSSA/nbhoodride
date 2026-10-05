@@ -184,6 +184,7 @@ import { describeClientBuild } from "@shared/clientBuild";
 import { registerMapTileRoutes } from "./mapTiles";
 import { runWeeklyPayday } from "./payday";
 import { reliabilityTimeline, riderBalances, ReportError } from "./adminReports";
+import { yearToDatePayouts, TaxReportError } from "./taxYearToDate";
 import { creditDriverCutOnce } from "./fleet/earnings";
 import { paydayKeyOf, paydayRunDue } from "@shared/paydayCycle";
 import { BUILD_ID } from "./buildInfo";
@@ -11365,6 +11366,15 @@ Generate the FAQ list.`;
     catch (err: any) {
       if (err instanceof ReportError) return res.status(err.status).json({ message: err.message });
       console.error("reliability report failed:", err); res.status(500).json({ message: "Could not build the report" });
+    }
+  });
+  // Payouts this year (issue #33): who PG Ride paid in a tax year and who has
+  // crossed the 1099-NEC threshold (server/taxYearToDate.ts). Read-only.
+  app.get('/api/admin/tax/year-to-date', isAdminOrSessionAuth, async (req: any, res) => {
+    try { res.json(await yearToDatePayouts(req.query.year)); }
+    catch (err: any) {
+      if (err instanceof TaxReportError) return res.status(err.status).json({ message: err.message });
+      console.error("year-to-date payout report failed:", err); res.status(500).json({ message: "Could not build the report" });
     }
   });
   app.get('/api/admin/reports/rider-balances', isAdminOrSessionAuth, async (_req: any, res) => {
