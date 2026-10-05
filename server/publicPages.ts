@@ -240,9 +240,17 @@ ${PAGE_CSS}
  * week. Static, no sign-in, crawlable; the same lean/full fork as /about
  * (equity language only when the program is enabled).
  */
+/** The /drive equity card, hidden since the wallet was removed (#451); see renderDrivePage. */
+const WALLET_REMOVED_EQUITY_CARD_ON = false;
+
 function renderDrivePage(): string {
   const year = 2026;
-  const equity = featureFlags.equityProgramEnabled;
+  // The equity card showed only with the program AND the wallet on; with the
+  // wallet gone (work order #451) PG Ride is card-only, the configuration in
+  // which it never showed, so it stays hidden and /drive keeps agreeing with
+  // /about's "no investment, equity, shares, or securities" (Cursor Bugbot on
+  // #457). The card is kept; turning it back on is Festus's decision.
+  const equity = featureFlags.equityProgramEnabled && WALLET_REMOVED_EQUITY_CARD_ON;
   const exampleFare = 23.21;
   const exampleTip = 5;
   const platformShare = 0.15;

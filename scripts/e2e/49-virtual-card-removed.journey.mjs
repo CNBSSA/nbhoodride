@@ -46,6 +46,11 @@ export async function run({ base, db }) {
     const html = await about.text();
     check("the About page says there is no stored value", about.status === 200 && /No stored value or prepaid wallet/.test(html), `${about.status}`);
     check("and never offers to pre-load or top up a balance", !/pre-load|top up|prepaid in-app balance|Virtual PG Card/i.test(html));
+    // /about says "no investment, equity, shares, or securities"; /drive must
+    // agree, as it did when the wallet was off (Cursor Bugbot on #457).
+    const drive = await fetch(base + "/drive", { headers: { "X-Forwarded-Proto": "https" } });
+    const driveHtml = await drive.text();
+    check("the Drive page offers no stake in the company, agreeing with About", drive.status === 200 && !/Own a piece of it|build a stake/i.test(driveHtml), `${drive.status}`);
 
     section("Booking without a card is refused, as before");
     await db.query("UPDATE users SET stripe_payment_method_id = NULL WHERE id=$1", [FIXTURES.rider.id]);
