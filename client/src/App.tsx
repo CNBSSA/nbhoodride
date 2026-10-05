@@ -85,6 +85,11 @@ function Router() {
       {/* Opening a business account (self-serve applications, 2026-09-28): the
           page itself says "create an account first" when signed out. */}
       <Route path="/org/apply" component={OrgApplyPage} />
+      {/* Opening a fleet account (work order #452, 2026-10-05): reachable
+          signed out like /org/apply — a fleet owner tapping the registration
+          link before signing in got "404 Page Not Found". The page says
+          "create an account first" when signed out. */}
+      <Route path="/fleet/apply" component={FleetApplyPage} />
       
       {isLoading || !isAuthenticated ? (
         <>
@@ -103,7 +108,6 @@ function Router() {
           <Route path="/org" component={PortalPage} />
           <Route path="/driver/insights" component={DriverInsights} />
           <Route path="/rent" component={RentPage} />
-          <Route path="/fleet/apply" component={FleetApplyPage} />
         </>
       )}
       <Route component={NotFound} />

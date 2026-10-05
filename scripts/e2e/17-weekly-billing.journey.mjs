@@ -27,6 +27,10 @@ export async function run({ base, db, server }) {
   const lastMonday = new Date(thisMonday.getTime() - 7 * 86_400_000);
   const weekKey = `${lastMonday.getUTCFullYear()}-${String(lastMonday.getUTCMonth() + 1).padStart(2, "0")}-${String(lastMonday.getUTCDate()).padStart(2, "0")}`;
   const insideLastWeek = (dayOffset, hour = 15) => new Date(lastMonday.getTime() + dayOffset * 86_400_000 - 12 * 3_600_000 + hour * 3_600_000);
+  // A moment this week, before now. Two hours ago, but never before this
+  // week's Monday 05:00 UTC (midnight EST, 1 AM EDT): two hours ago from the
+  // first hours of a Monday Eastern is last week, and the journey failed then.
+  const insideThisWeek = () => new Date(Math.min(Date.now() - 60_000, Math.max(Date.now() - 2 * 3_600_000, thisMonday.getTime() - 7 * 3_600_000 + 60_000)));
 
   const seedJob = async (orgId, cols) => {
     const { rows: [r] } = await db.query(
@@ -51,7 +55,7 @@ export async function run({ base, db, server }) {
     const done2 = await seedJob(A.json.id, { status: "completed", driver: true, actualFare: "30.00", passenger: "Ada L.", at: insideLastWeek(3), waitFee: "2.50" });
     const cancelled = await seedJob(A.json.id, { status: "cancelled", driver: true, passenger: "Sam D.", at: insideLastWeek(4), cancellationFee: "7.00" });
     // This week's job must not appear on last week's statement.
-    const thisWeek = await seedJob(A.json.id, { status: "completed", driver: true, actualFare: "30.00", passenger: "Later", at: new Date(Date.now() - 2 * 3_600_000) });
+    const thisWeek = await seedJob(A.json.id, { status: "completed", driver: true, actualFare: "30.00", passenger: "Later", at: insideThisWeek() });
 
     const issued = await admin.req("POST", `/api/admin/organizations/${A.json.id}/statements`, { week: weekKey });
     check("last week is issued as one statement", issued.status === 200 && issued.json?.created === true && issued.json?.statement?.periodKey === weekKey, JSON.stringify(issued.json?.message ?? issued.json?.reason));
