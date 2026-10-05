@@ -95,6 +95,8 @@
     "button-fleet-add-car",
     "button-fleet-apply",
     "button-fleet-apply-back",
+    "button-fleet-apply-login",
+    "button-fleet-apply-signup",
     "button-fleet-car-doc-inspection",
     "button-fleet-car-doc-insurance",
     "button-fleet-car-doc-registration",

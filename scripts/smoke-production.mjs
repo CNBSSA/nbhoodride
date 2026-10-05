@@ -50,8 +50,35 @@ async function check(name, url, { expectStatus = 200, optional = false, expectTe
   }
 }
 
+/**
+ * A sandbox whose network policy does not allow the production host answers
+ * every request itself with 403 and `x-deny-reason: host_not_allowed` —
+ * Railway never sends that header. Before 2026-10-01 those 403s were counted
+ * as the site failing, and the daily audit reported production RED when it
+ * had not reached production at all. Now that case is named for what it is
+ * and exits with its own code, 3, which the daily audit reads as UNVERIFIED.
+ */
+export const EGRESS_BLOCKED_EXIT = 3;
+async function egressBlocked(url) {
+  try {
+    const res = await fetch(url, { redirect: "manual" });
+    return res.status === 403 && /host_not_allowed/i.test(res.headers.get("x-deny-reason") ?? "");
+  } catch (err) {
+    // A CONNECT refused by a proxy surfaces as a fetch error naming it.
+    return /CONNECT tunnel failed|host_not_allowed/i.test(`${err?.message ?? ""} ${err?.cause?.message ?? ""}`);
+  }
+}
+
 async function main() {
   console.log(`Phase 0 smoke — ${baseUrl}\n`);
+
+  if (await egressBlocked(`${baseUrl}/health`)) {
+    console.log(`UNVERIFIED: this environment's network policy does not allow ${new URL(baseUrl).host}.`);
+    console.log("Nothing was checked: the 403s come from the sandbox's proxy, not from production.");
+    console.log("Production is checked from GitHub instead (Production Watch, Daily Reliability Report),");
+    console.log("or allow the host in this environment's network settings.");
+    process.exit(EGRESS_BLOCKED_EXIT);
+  }
 
   const health = await check("GET /health", `${baseUrl}/health`);
   if (health) {
