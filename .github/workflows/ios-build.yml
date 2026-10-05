@@ -1,0 +1,151 @@
+# iOS build (work order #450): the IPA for the App Store, built on a macOS
+# runner because iOS cannot be built on Linux.
+#
+# Run it by hand: Actions → "iOS build" → Run workflow. It never runs on its
+# own (macOS minutes cost ten times Linux minutes).
+#
+# Signing comes only from repository secrets; nothing signing-related is ever
+# committed. With all five secrets present it archives and exports a signed
+# App Store IPA and uploads it as the run's artifact. With any missing it
+# still compiles the app for a generic iOS device, unsigned, so the pipeline
+# is proven before the certificates exist, and says which secrets are missing.
+#
+#   IOS_CERTIFICATE_P12_BASE64      Apple Distribution certificate + key, .p12, base64
+#   IOS_CERTIFICATE_PASSWORD        the .p12's password
+#   IOS_PROVISIONING_PROFILE_BASE64 App Store profile for com.pgride.app, base64
+#   APPLE_TEAM_ID                   the 10-character Apple Developer team id
+#   IOS_KEYCHAIN_PASSWORD           any strong string; protects the runner's temporary keychain
+#
+# The app loads the deployed web app (capacitor.config.ts server.url), so the
+# web build here only fills webDir for `cap sync`.
+name: iOS build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+      IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      IOS_KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Web build and sync into the iOS project
+        run: |
+          npm run build
+          npx cap sync ios
+
+      - name: Are the signing secrets present?
+        id: signing
+        run: |
+          missing=""
+          for s in IOS_CERTIFICATE_P12_BASE64 IOS_CERTIFICATE_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 APPLE_TEAM_ID IOS_KEYCHAIN_PASSWORD; do
+            [ -n "${!s}" ] || missing="$missing $s"
+          done
+          if [ -z "$missing" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Signing secrets present: building a signed App Store IPA."
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "Missing signing secrets:$missing"
+            echo "Building unsigned, to prove the app compiles. Add the secrets to produce a signed IPA."
+          fi
+
+      - name: Unsigned build (no certificates yet)
+        if: steps.signing.outputs.signed != 'true'
+        run: |
+          xcodebuild build \
+            -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          echo "### iOS build: compiled, unsigned" >> "$GITHUB_STEP_SUMMARY"
+          echo "The signing secrets are not set yet, so no IPA was produced." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install the certificate and profile
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/pgride-signing.keychain-db"
+          echo "$IOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+
+          security create-keychain -p "$IOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$IOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$IOS_KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychain -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
+
+          security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$RUNNER_TEMP/profile.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+
+      - name: Archive and export the signed IPA
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          # Manual signing for the App target only, in this runner's copy of
+          # the project (never committed). Passing signing settings on the
+          # xcodebuild command line would also apply them to the Swift
+          # packages, which cannot take a provisioning profile.
+          sed -i '' "s/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual; DEVELOPMENT_TEAM = $APPLE_TEAM_ID; CODE_SIGN_IDENTITY = \"Apple Distribution\"; PROVISIONING_PROFILE_SPECIFIER = \"$PROFILE_NAME\";/" ios/App/App.xcodeproj/project.pbxproj
+
+          xcodebuild archive \
+            -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/dd"
+
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict><key>com.pgride.app</key><string>$PROFILE_NAME</string></dict>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export"
+          ls -la "$RUNNER_TEMP/export"
+          echo "### iOS build: signed App Store IPA" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download it from this run's artifacts (pgride-ios-ipa) and upload with Transporter." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the IPA
+        if: steps.signing.outputs.signed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pgride-ios-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove the temporary keychain
+        if: always() && steps.signing.outputs.signed == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/pgride-signing.keychain-db" || true
