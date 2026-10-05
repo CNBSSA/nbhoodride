@@ -23,7 +23,7 @@ import {
   CheckCircle, XCircle, Eye, Ban, UserCheck, Clock,
   ChevronLeft, BarChart3, Brain, AlertCircle, BookOpen,
   RefreshCw, Loader2, ThumbsUp, ThumbsDown, Zap, Trash2, Banknote, FlaskConical, Train, Package,
-  Route, Plus, Pencil, Siren, Phone, MapPinned, Megaphone, Send
+  Route, Plus, Pencil, Siren, Phone, MapPinned, Megaphone, Send, FileBarChart
 } from "lucide-react";
 import { format } from "date-fns";
 import { useLocation } from "wouter";
@@ -31,6 +31,7 @@ import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { OrganizationsPanel } from "@/components/admin/OrganizationsPanel";
 import { RentalPanel } from "@/components/admin/RentalPanel";
 import { DriverBadges } from "@/components/admin/DriverBadges";
+import { ReportsPanel } from "@/components/admin/ReportsPanel";
 import { useFeatureFlags } from "@/hooks/useStripeConfig";
 import type { AddressSuggestion } from "@/hooks/useGeocode";
 import { DAY_NAMES, describeCircuitSchedule } from "@shared/circuitSchedule";
@@ -54,7 +55,7 @@ const QUEUE_REFRESH = { refetchInterval: 30000, refetchIntervalInBackground: fal
 const SOS_INCIDENTS_KEY = "/api/admin/emergency-incidents?limit=500";
 const AWAITING_SETTLEMENT_KEY = "/api/admin/rides/awaiting-settlement";
 
-type AdminTab = "dashboard" | "organizations" | "rentals" | "announcements" | "sos" | "reconciliation" | "pricing" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research";
+type AdminTab = "dashboard" | "organizations" | "rentals" | "announcements" | "sos" | "reconciliation" | "pricing" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research" | "reports";
 
 function useAdminNavPendingCounts() {
   const { data: pendingUsers = [] } = useQuery<any[]>({
@@ -129,6 +130,7 @@ export default function AdminDashboard() {
     { id: "profits", label: "Profits", icon: TrendingUp },
     { id: "activity", label: "Activity Log", icon: Activity },
     { id: "analytics", label: "Analytics", icon: BarChart3 },
+    { id: "reports", label: "Reports", icon: FileBarChart },
   ];
   // Commercial riders is a new surface, on per deployment (COMMERCIAL_ENABLED).
   const flags = useFeatureFlags();
@@ -227,6 +229,7 @@ export default function AdminDashboard() {
           {activeTab === "profits" && <ProfitsPanel />}
           {activeTab === "activity" && <ActivityPanel />}
           {activeTab === "analytics" && <AnalyticsPanel />}
+          {activeTab === "reports" && <ReportsPanel />}
         </main>
       </div>
     </div>

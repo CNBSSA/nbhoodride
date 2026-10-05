@@ -183,6 +183,7 @@ import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial
 import { describeClientBuild } from "@shared/clientBuild";
 import { registerMapTileRoutes } from "./mapTiles";
 import { runWeeklyPayday } from "./payday";
+import { reliabilityTimeline, riderBalances, ReportError } from "./adminReports";
 import { creditDriverCutOnce } from "./fleet/earnings";
 import { paydayKeyOf, paydayRunDue } from "@shared/paydayCycle";
 import { BUILD_ID } from "./buildInfo";
@@ -11356,6 +11357,21 @@ Generate the FAQ list.`;
   wss.on('close', () => clearInterval(heartbeatTimer));
 
   // Admin: run one heartbeat round now (journey 43 and an operator's check).
+  // Admin → Reports (server/adminReports.ts): read-only views of production
+  // data that otherwise needed SQL in Railway's console, which neither Festie
+  // nor a working session can reach. Nothing here writes.
+  app.get('/api/admin/reports/reliability-events', isAdminOrSessionAuth, async (req: any, res) => {
+    try { res.json(await reliabilityTimeline(req.query.from, req.query.to)); }
+    catch (err: any) {
+      if (err instanceof ReportError) return res.status(err.status).json({ message: err.message });
+      console.error("reliability report failed:", err); res.status(500).json({ message: "Could not build the report" });
+    }
+  });
+  app.get('/api/admin/reports/rider-balances', isAdminOrSessionAuth, async (_req: any, res) => {
+    try { res.json(await riderBalances()); }
+    catch (err) { console.error("rider balance report failed:", err); res.status(500).json({ message: "Could not build the report" }); }
+  });
+
   app.post('/api/admin/analytics/ws-heartbeat', isAdminOrSessionAuth, async (_req: any, res) => {
     res.json({ at: new Date().toISOString(), ...runHeartbeat() });
   });
