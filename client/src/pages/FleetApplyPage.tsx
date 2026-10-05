@@ -5,7 +5,7 @@
  * checks them and approves the fleet, and the fleet desk opens at /org.
  */
 import { useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useFeatureFlags, useStripeConfig } from "@/hooks/useStripeConfig";
+import { useAuth } from "@/hooks/useAuth";
 import { BUSINESS_TYPES, BUSINESS_TYPE_LABELS, FLEET_TERMS_SENTENCE } from "@shared/fleet";
 
 export default function FleetApplyPage() {
@@ -21,7 +22,8 @@ export default function FleetApplyPage() {
   const { toast } = useToast();
   const { fleetEnabled } = useFeatureFlags();
   const { isLoading: flagsLoading } = useStripeConfig();
-  const { data: mine } = useQuery<Array<{ id: string; name: string; status: string; role: string }>>({ queryKey: ["/api/fleet/mine"], enabled: fleetEnabled });
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { data: mine } = useQuery<Array<{ id: string; name: string; status: string; role: string }>>({ queryKey: ["/api/fleet/mine"], enabled: fleetEnabled && isAuthenticated, retry: false });
   const [f, setF] = useState({ name: "", legalName: "", ein: "", businessType: "llc", contactPhone: "" });
   const [problems, setProblems] = useState<string[]>([]);
   const apply = useMutation({
@@ -46,6 +48,24 @@ export default function FleetApplyPage() {
       <div className="min-h-screen bg-background p-4" data-testid="fleet-apply-off">
         <Button variant="ghost" size="sm" onClick={() => setLocation("/profile")} data-testid="button-fleet-apply-back"><ArrowLeft className="w-4 h-4 mr-1" /> Back</Button>
         <p className="mt-6 text-sm text-muted-foreground">Fleet accounts are not open yet.</p>
+      </div>
+    );
+  }
+  if (authLoading) return <div className="p-4 text-sm text-muted-foreground" data-testid="fleet-apply-loading">Loading…</div>;
+  // Signed out (work order #452): the page is reachable before sign-in, as
+  // /org/apply is, and says what to do first instead of showing a form whose
+  // submission could only fail.
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-background p-8 max-w-xl mx-auto space-y-4" data-testid="fleet-apply-signed-out">
+        <Link href="/" className="inline-flex items-center gap-1 text-sm text-muted-foreground"><ArrowLeft className="h-4 w-4" /> Back</Link>
+        <h1 className="text-2xl font-bold">Open a fleet account</h1>
+        <p className="text-sm text-muted-foreground">Put your cars on PG Ride with PG Ride drivers. {FLEET_TERMS_SENTENCE}</p>
+        <p className="text-sm">First create your own PG Ride account (a minute), then come back here to apply for the fleet.</p>
+        <div className="flex gap-2">
+          <Link href="/signup"><Button data-testid="button-fleet-apply-signup">Create an account</Button></Link>
+          <Link href="/login"><Button variant="outline" data-testid="button-fleet-apply-login">I have one: sign in</Button></Link>
+        </div>
       </div>
     );
   }
