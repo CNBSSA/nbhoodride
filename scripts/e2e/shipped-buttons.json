@@ -286,6 +286,27 @@
     "button-upload-vehicle-*",
     "button-view-receipt-*"
   ],
-  "retired": {},
+  "retired": {
+    "button-add-funds": {
+      "reason": "Virtual PG Card (stored-value wallet top-up) removed entirely; riders pay by card on file only. Work order #451.",
+      "approvedBy": "Festus (Chairman's direct order: \"Pg virtual card must go\")",
+      "date": "2026-10-03"
+    },
+    "button-topup-*": {
+      "reason": "Virtual PG Card (stored-value wallet top-up) removed entirely; riders pay by card on file only. Work order #451.",
+      "approvedBy": "Festus (Chairman's direct order: \"Pg virtual card must go\")",
+      "date": "2026-10-03"
+    },
+    "button-topup-done": {
+      "reason": "Virtual PG Card (stored-value wallet top-up) removed entirely; riders pay by card on file only. Work order #451.",
+      "approvedBy": "Festus (Chairman's direct order: \"Pg virtual card must go\")",
+      "date": "2026-10-03"
+    },
+    "button-topup-proceed": {
+      "reason": "Virtual PG Card (stored-value wallet top-up) removed entirely; riders pay by card on file only. Work order #451.",
+      "approvedBy": "Festus (Chairman's direct order: \"Pg virtual card must go\")",
+      "date": "2026-10-03"
+    }
+  },
   "note": "Every button testid that has ever shipped in client/src (templated ids end in *). Nothing here is removed from the source without an entry under retired: { reason, approvedBy, date }. Update with: node scripts/e2e/shipped-buttons.mjs --update"
 }

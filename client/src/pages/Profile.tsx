@@ -13,9 +13,8 @@ import { useToast } from "@/hooks/use-toast";
 import DocumentUploadModal from "@/components/DocumentUploadModal";
 import ProfileEditDialog from "@/components/ProfileEditDialog";
 import SafetyPrivacyModal from "@/components/SafetyPrivacyModal";
-import TopUpModal from "@/components/TopUpModal";
 import { isUnauthorizedError } from "@/lib/authUtils";
-import { Bell, BellOff, Plus, MapPin, ChevronDown, ChevronUp, CheckSquare, Square } from "lucide-react";
+import { Bell, BellOff, MapPin, ChevronDown, ChevronUp, CheckSquare, Square } from "lucide-react";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { AutonomyDial } from "@/components/AutonomyDial";
 import { TrustPreferences } from "@/components/TrustPreferences";
@@ -48,11 +47,10 @@ export default function Profile() {
     retry: false,
   });
   const { permission, isSubscribed, isSupported, isLoading: pushLoading, subscribe, unsubscribe } = usePushNotifications();
-  const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [showCountySelector, setShowCountySelector] = useState(false);
   const [localCounties, setLocalCounties] = useState<string[]>([]);
   const { user, isLoading } = useAuth();
-  const { walletEnabled, driverMarketplaceEnabled, rentalEnabled, fleetEnabled, commercialEnabled } = useFeatureFlags();
+  const { driverMarketplaceEnabled, rentalEnabled, fleetEnabled, commercialEnabled } = useFeatureFlags();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -313,56 +311,6 @@ export default function Profile() {
           </CardContent>
         </Card>
         <AddPhoneBanner onAdd={() => setIsEditProfileOpen(true)} />
-
-        {/* Virtual PG Card Balance — hidden in lean (card-only) mode. */}
-        {walletEnabled && (
-        <Card className="border-green-200 dark:border-green-900 bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-950 dark:to-emerald-950">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <div className="w-12 h-12 bg-green-600 dark:bg-green-700 rounded-full flex items-center justify-center">
-                  <i className="fas fa-credit-card text-white text-xl" />
-                </div>
-                <div>
-                  <p className="text-xs text-green-800 dark:text-green-300 font-medium">{PG_CARD.fullLabel}</p>
-                  <h3 className="text-2xl font-bold text-green-900 dark:text-green-100" data-testid="text-virtual-balance">
-                    ${parseFloat(user?.virtualCardBalance || "0").toFixed(2)}
-                  </h3>
-                  <p className="text-xs text-green-700 dark:text-green-400">Available Balance</p>
-                  {(user?.promoRidesRemaining ?? 0) > 0 && (
-                    <p className="text-xs text-orange-600 dark:text-orange-400 font-semibold mt-0.5">
-                      🎉 {user?.promoRidesRemaining} welcome ride{(user?.promoRidesRemaining ?? 0) > 1 ? "s" : ""} left (-$5 each)
-                    </p>
-                  )}
-                </div>
-              </div>
-              <div className="text-right space-y-2">
-                <Button
-                  size="sm"
-                  onClick={() => setIsTopUpOpen(true)}
-                  className="bg-green-600 hover:bg-green-700 text-white text-xs px-3"
-                  data-testid="button-add-funds"
-                >
-                  <Plus className="w-3 h-3 mr-1" />
-                  Add Funds
-                </Button>
-                <div className="inline-flex items-center space-x-1 bg-green-100 dark:bg-green-900 px-2 py-1 rounded">
-                  <i className="fas fa-check-circle text-green-600 dark:text-green-400 text-xs" />
-                  <span className="text-xs font-medium text-green-900 dark:text-green-100">Active</span>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        )}
-
-        {walletEnabled && (
-          <TopUpModal
-            isOpen={isTopUpOpen}
-            onClose={() => setIsTopUpOpen(false)}
-            currentBalance={user?.virtualCardBalance || "0"}
-          />
-        )}
 
         {/* Driver Section — three states:
             1. No application  → "Become a Driver" (starts an application)

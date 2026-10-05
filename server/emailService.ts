@@ -1,6 +1,5 @@
 import nodemailer, { type Transporter } from "nodemailer";
 import { resolveAppUrl } from "./appUrl";
-import { featureFlags } from "./featureFlags";
 
 /**
  * Outbound email leaves through Gmail SMTP (work order of 2026-09-28,
@@ -309,17 +308,10 @@ export async function sendAccountApprovedEmail(user: {
   const name = escapeHtml(user.firstName || "there");
   const promoRides = user.promoRidesRemaining ?? 4;
 
-  // Only promise a wallet balance when the wallet is actually enabled. In
-  // card-only mode no balance is granted at signup, so advertising one would
-  // promise new riders money that does not exist. The $5 promo rides are real
-  // in BOTH modes (the discount is applied to the card fare), so they stay.
-  const balanceRow = featureFlags.walletEnabled
-    ? `
-        <div class="card-row">
-          <span class="card-label">Virtual PG Card Balance</span>
-          <span class="card-value highlight">$${parseFloat(user.virtualCardBalance || "20.00").toFixed(2)}</span>
-        </div>`
-    : "";
+  // No balance row: riders pay by card only (the Virtual PG Card was removed,
+  // work order #451). The $5 promo rides are real (the discount is applied to
+  // the card fare), so they stay.
+  const balanceRow = "";
 
   await sendEmail(
     user.email,
@@ -615,11 +607,7 @@ export async function sendSignupPendingEmail(user: {
         <div class="card-row">
           <span class="card-label">What happens next?</span>
         </div>
-        <p style="font-size:14px; color:#374151; margin:8px 0 0;">Our team reviews your account to keep the PG Ride community safe.${
-          featureFlags.walletEnabled
-            ? " Once approved, you'll get $20 in Virtual PG Card credit and 4 rides with $5 off each."
-            : " Once approved, your first 4 rides each come with $5 off."
-        }</p>
+        <p style="font-size:14px; color:#374151; margin:8px 0 0;">Our team reviews your account to keep the PG Ride community safe. Once approved, your first 4 rides each come with $5 off.</p>
       </div>
       <p>Questions? Reply to this email and we'll help you out.</p>
     `)

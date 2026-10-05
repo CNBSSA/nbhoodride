@@ -3,12 +3,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Link } from "wouter";
 
 import { BRAND } from "@shared/branding";
-import { PG_CARD } from "@shared/userFacingCopy";
 import { SUPPORT_CONTACTS } from "@shared/supportContacts";
 import { useFeatureFlags } from "@/hooks/useStripeConfig";
 
 export default function Landing() {
-  const { walletEnabled, commercialEnabled } = useFeatureFlags();
+  const { commercialEnabled } = useFeatureFlags();
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-secondary/10 flex items-center justify-center p-4">
       <div className="w-full max-w-md mx-auto">
@@ -21,19 +20,17 @@ export default function Landing() {
               </div>
               <h1 className="text-2xl font-bold text-foreground">{BRAND.appName}</h1>
               <p className="text-muted-foreground text-sm">
-                {walletEnabled ? BRAND.tagline : "Rides in Prince George's County, Maryland"}
+                Rides in Prince George's County, Maryland
               </p>
             </div>
 
             {/* Welcome Message */}
             <div className="space-y-3">
               <h2 className="text-xl font-semibold text-foreground">
-                {walletEnabled ? "Community-owned mobility" : "Book a ride in minutes"}
+                Book a ride in minutes
               </h2>
               <p className="text-muted-foreground text-sm leading-relaxed">
-                {walletEnabled
-                  ? `${BRAND.shortDescription} Your ride from neighbors, by neighbors.`
-                  : "On-demand rides with background-checked local drivers. Transparent fares up front, no surge pricing. Pay securely by card."}
+                On-demand rides with background-checked local drivers. Transparent fares up front, no surge pricing. Pay securely by card.
                 <span className="block mt-2 text-xs">{BRAND.foundedNote}</span>
               </p>
             </div>
@@ -56,7 +53,7 @@ export default function Landing() {
                 <div className="w-8 h-8 bg-accent/20 rounded-full flex items-center justify-center">
                   <i className="fas fa-hand-holding-usd text-accent text-sm" />
                 </div>
-                <span className="text-sm">{walletEnabled ? PG_CARD.landingFeature : "Pay securely by card — no surge pricing"}</span>
+                <span className="text-sm">Pay securely by card — no surge pricing</span>
               </div>
               <div className="flex items-center space-x-3">
                 <div className="w-8 h-8 bg-destructive/20 rounded-full flex items-center justify-center">

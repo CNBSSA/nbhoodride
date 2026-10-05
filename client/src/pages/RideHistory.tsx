@@ -8,10 +8,8 @@ import { RideReceiptModal } from "@/components/RideReceiptModal";
 import ReportModal from "@/components/ReportModal";
 import LostFoundModal from "@/components/LostFoundModal";
 import { formatPaymentMethodLabel } from "@shared/rideReceipt";
-import { useFeatureFlags } from "@/hooks/useStripeConfig";
 
 export default function RideHistory() {
-  const { walletEnabled } = useFeatureFlags();
   const [selectedPeriod, setSelectedPeriod] = useState("30");
   const [receiptRideId, setReceiptRideId] = useState<string | null>(null);
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
@@ -159,7 +157,7 @@ export default function RideHistory() {
                         ${fareDisplay(ride)}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {formatPaymentMethodLabel(ride.paymentMethod, { walletEnabled })}
+                        {formatPaymentMethodLabel(ride.paymentMethod)}
                       </p>
                     </div>
                   </div>

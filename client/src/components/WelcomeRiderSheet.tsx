@@ -1,25 +1,20 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { PG_CARD } from "@shared/userFacingCopy";
-import { useFeatureFlags } from "@/hooks/useStripeConfig";
 
 interface WelcomeRiderSheetProps {
   open: boolean;
-  balance: string;
   promoRidesRemaining: number;
   onDismiss: () => void;
   onBook: () => void;
 }
 
-/** First login after approval — wallet intro + primary CTA (Wave A.5). */
+/** First login after approval — the welcome offer + primary CTA (Wave A.5). */
 export function WelcomeRiderSheet({
   open,
-  balance,
   promoRidesRemaining,
   onDismiss,
   onBook,
 }: WelcomeRiderSheetProps) {
-  const { walletEnabled } = useFeatureFlags();
   if (!open) return null;
 
   return (
@@ -31,28 +26,16 @@ export function WelcomeRiderSheet({
           <p className="text-sm text-muted-foreground text-center">
             On-demand rides in Prince George's County, Maryland — book a background-checked local driver in a tap.
           </p>
-          {walletEnabled ? (
+          {promoRidesRemaining > 0 && (
             <div className="bg-green-50 dark:bg-green-950/40 rounded-lg p-4 text-center">
-              <p className="text-xs text-green-800 dark:text-green-300 font-medium">{PG_CARD.fullLabel}</p>
-              <p className="text-3xl font-bold text-green-900 dark:text-green-100">${parseFloat(balance || "0").toFixed(2)}</p>
-              {promoRidesRemaining > 0 && (
-                <p className="text-xs text-orange-600 mt-1">
-                  Plus {promoRidesRemaining} welcome ride{promoRidesRemaining > 1 ? "s" : ""} with $5 off
-                </p>
-              )}
+              <p className="text-xs text-green-800 dark:text-green-300 font-medium">Welcome offer</p>
+              <p className="text-lg font-bold text-green-900 dark:text-green-100">
+                {promoRidesRemaining} ride{promoRidesRemaining > 1 ? "s" : ""} with $5 off
+              </p>
             </div>
-          ) : (
-            promoRidesRemaining > 0 && (
-              <div className="bg-green-50 dark:bg-green-950/40 rounded-lg p-4 text-center">
-                <p className="text-xs text-green-800 dark:text-green-300 font-medium">Welcome offer</p>
-                <p className="text-lg font-bold text-green-900 dark:text-green-100">
-                  {promoRidesRemaining} ride{promoRidesRemaining > 1 ? "s" : ""} with $5 off
-                </p>
-              </div>
-            )
           )}
           <p className="text-sm text-muted-foreground">
-            Rides are {walletEnabled ? PG_CARD.confirmLine.toLowerCase() : "charged to your card when you confirm"}. Tap below to book your first trip.
+            Rides are charged to your card when you confirm. Tap below to book your first trip.
           </p>
           <Button className="w-full" onClick={onBook} data-testid="welcome-book-ride">
             Book a ride

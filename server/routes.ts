@@ -916,31 +916,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         lastName,
         phone: normalizedPhone,
         isApproved: false,
-        // Only seed a wallet balance when the wallet is actually enabled. In
-        // lean (card-only) mode there is no wallet to spend it, so granting it
-        // would be dead value — and a stored balance a payment reviewer could
-        // see. The 4 promo rides work in both modes (a $5 discount applied to
-        // the card fare), so they're granted regardless.
-        virtualCardBalance: featureFlags.walletEnabled ? "20.00" : "0.00",
+        // No starting balance: the Virtual PG Card is gone (work order #451,
+        // 2026-10-05). The 4 promo rides are a $5 discount applied to the card
+        // fare, so they stay.
+        virtualCardBalance: "0.00",
         promoRidesRemaining: 4,
         termsAcceptedAt: termsAccepted ? now : undefined,
         privacyAcceptedAt: privacyAccepted ? now : undefined,
         registrationCompletedAt: now,
       });
 
-      // ── Welcome bonus ledger entry (R-M1) ────────────────────────────────
-      // Mirror the $20 starting balance set on the user row above into the
-      // wallet_transactions ledger so we have an auditable record of the
-      // credit. Without this, the balance exists but with no transaction
-      // history, which makes reconciliation impossible after the first
-      // ride/topup.
-      const startingBalance = parseFloat(user.virtualCardBalance || "20.00");
-      await storage.logWalletTransaction({
-        userId: user.id,
-        amount: startingBalance,
-        balanceAfter: startingBalance,
-        reason: "welcome_bonus",
-      }).catch((err) => console.error("Failed to log welcome bonus ledger entry:", err));
 
       // ── Audit log ────────────────────────────────────────────────────────
       console.log(`[AUDIT] signup_success ip=${ip} userId=${user.id} email=${user.email}`);
@@ -1440,16 +1425,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Money owed to the user must be resolved first. A usable wallet
-      // balance (wallet mode only — in lean mode the promo balance is not
-      // spendable money) or a pending driver payout would be silently
-      // forfeited otherwise.
-      const walletBalance = parseFloat(user.virtualCardBalance || "0");
-      if (featureFlags.walletEnabled && walletBalance > 0.009) {
-        return res.status(400).json({
-          message: `You have a $${walletBalance.toFixed(2)} balance. Use it or contact support to withdraw it before deleting your account.`,
-        });
-      }
+      // Money owed to the user must be resolved first: a pending driver
+      // payout would be silently forfeited otherwise.
       const payouts = await storage.getDriverPayoutRequests(userId).catch(() => []);
       if (payouts.some((p) => p.status === "pending" || p.status === "processing")) {
         return res.status(400).json({
@@ -2202,21 +2179,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     try {
       if (chargeAmount > 0) {
-        // With the wallet enabled: take what we can from the rider's virtual
-        // balance first, then authorize any shortfall on their card.
-        // In lean (card-only) mode there is no stored balance, so the full fare
-        // is authorized directly on the saved card — no virtual deduction.
-        if (featureFlags.walletEnabled) {
-          const split = await storage.splitDeductForRide(ride.riderId, chargeAmount, rideId);
-          virtualDeducted = split.virtualDeducted;
-          stripeAuthAmount = split.stripeAmount;
-        } else {
-          virtualDeducted = 0;
-          stripeAuthAmount = chargeAmount;
-        }
+        // The whole fare is authorized on the rider's saved card: there is no
+        // stored balance to take it from (the Virtual PG Card was removed,
+        // work order #451).
+        virtualDeducted = 0;
+        stripeAuthAmount = chargeAmount;
 
-        // Authorize whatever couldn't be covered by virtual balance (in lean
-        // mode that's the whole fare) on the rider's saved Stripe card.
+        // Authorize the fare on the rider's saved Stripe card.
         if (stripeAuthAmount > 0) {
           if (!stripeService.isEnabled) {
             throw new Error("Card payments are not configured. Please contact support.");
@@ -2241,9 +2210,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               }).catch(() => {});
             }
             throw new Error(
-              featureFlags.walletEnabled
-                ? "Insufficient virtual balance and no card on file. Please add a card or top up your wallet."
-                : "This rider doesn't have a payment card on file, so the ride can't be accepted. We've asked them to add one."
+              "This rider doesn't have a payment card on file, so the ride can't be accepted. We've asked them to add one."
             );
           }
           const intent = await stripeService.authorizeRideShortfall({
@@ -4197,7 +4164,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     "Please add a payment card before booking. Open Profile → Payment and add a card — it takes a minute.";
   function riderNeedsCardOnFile(rider: User | undefined): boolean {
     if (!stripeService.isEnabled) return false; // dev/test envs without Stripe
-    if (featureFlags.walletEnabled) return false; // wallet mode can cover fares from balance
     return !rider?.stripeCustomerId || !rider?.stripePaymentMethodId;
   }
 
@@ -5714,11 +5680,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const enabled = stripeService.isEnabled && !!process.env.VITE_STRIPE_PUBLIC_KEY;
     res.json({
       enabled,
-      // Top-up is stored value — only offered when the wallet feature is on.
-      topUpEnabled: enabled && featureFlags.walletEnabled,
       cardOnFileEnabled: enabled,
-      // Lean-mode flags so the client can hide the wallet / driver / equity UI.
-      walletEnabled: featureFlags.walletEnabled,
+      // Lean-mode flags so the client can hide the driver / equity UI.
       driverMarketplaceEnabled: featureFlags.driverMarketplaceEnabled,
       equityProgramEnabled: featureFlags.equityProgramEnabled,
       commercialEnabled: featureFlags.commercialEnabled,
@@ -5848,107 +5811,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Virtual PG Card top-up routes. Disabled in lean (card-only) mode — the
-  // stored-value wallet is the money-transmitter surface we hide from Stripe.
-  const requireWallet = (_req: any, res: any, next: any) => {
-    if (!featureFlags.walletEnabled) {
-      return res.status(403).json({ message: "The prepaid balance is not available. Pay per ride with a card instead." });
-    }
-    next();
-  };
-
-  app.post('/api/virtual-card/topup/create-intent', isAuthenticated, requireWallet, async (req: any, res) => {
-    try {
-      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const user = await storage.getUser(userId);
-      if (!user) return res.status(404).json({ message: "User not found" });
-
-      const { amount } = req.body;
-      if (!amount || typeof amount !== 'number' || amount < 5 || amount > 500) {
-        return res.status(400).json({ message: "Amount must be between $5 and $500" });
-      }
-
-      // Ensure customer exists in Stripe
-      let customerId = user.stripeCustomerId;
-      if (!customerId) {
-        customerId = await stripeService.createOrGetCustomer(
-          userId,
-          user.email || '',
-          `${user.firstName || ''} ${user.lastName || ''}`
-        );
-        await storage.updateUserStripeInfo(userId, customerId);
-      }
-
-      // Create a PaymentIntent (confirm: false so client confirms with card details)
-      const Stripe = await import("stripe");
-      const stripeInstance = new Stripe.default(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2025-09-30.clover" as any });
-      const intent = await stripeInstance.paymentIntents.create({
-        amount: Math.round(amount * 100),
-        currency: "usd",
-        customer: customerId,
-        metadata: { userId, topupAmount: amount.toString(), type: "virtual_card_topup" },
-        automatic_payment_methods: { enabled: true },
-      });
-
-      res.json({ clientSecret: intent.client_secret, amount });
-    } catch (error: any) {
-      console.error("Error creating top-up intent:", error);
-      res.status(500).json({ message: "Failed to create payment. Please try again." });
-    }
-  });
-
-  app.post('/api/virtual-card/topup/confirm', isAuthenticated, requireWallet, async (req: any, res) => {
-    try {
-      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const { paymentIntentId } = req.body;
-      if (!paymentIntentId) return res.status(400).json({ message: "paymentIntentId required" });
-
-      const Stripe = await import("stripe");
-      const stripeInstance = new Stripe.default(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2025-09-30.clover" as any });
-      const intent = await stripeInstance.paymentIntents.retrieve(paymentIntentId);
-
-      if (intent.metadata?.userId !== userId) {
-        return res.status(403).json({ message: "Unauthorized" });
-      }
-      if (intent.status !== "succeeded") {
-        return res.status(400).json({ message: `Payment not completed (status: ${intent.status})` });
-      }
-
-      const topupAmount = parseFloat(intent.metadata?.topupAmount || "0");
-      if (topupAmount <= 0) return res.status(400).json({ message: "Invalid top-up amount" });
-
-      // Idempotency: a retried/double-submitted confirm (double-click, timeout
-      // then retry) must not credit the wallet twice for one Stripe charge.
-      // Claim the PaymentIntent id via the same dedup table the Stripe webhook
-      // uses; if it's already been claimed, return the current balance without
-      // crediting again.
-      const claimed = await storage.claimWebhookEvent("virtual_card_topup_confirm", paymentIntentId);
-      if (!claimed) {
-        const balance = await storage.getVirtualCardBalance(userId);
-        return res.json({ success: true, newBalance: balance.toFixed(2), alreadyProcessed: true });
-      }
-
-      // The claim is committed before the credit, so if the credit throws the
-      // claim would otherwise persist forever — every retry (client OR the
-      // webhook fallback) would then short-circuit on the "already claimed"
-      // branch above and return a stale, uncredited balance. Release the claim
-      // on failure so exactly one path still succeeds in crediting the charge.
-      let updatedUser;
-      try {
-        updatedUser = await storage.addVirtualCardBalance(userId, topupAmount);
-      } catch (creditErr) {
-        await storage.releaseWebhookEvent("virtual_card_topup_confirm", paymentIntentId).catch((relErr) =>
-          console.error(`Failed to release top-up claim ${paymentIntentId} after credit failure:`, relErr),
-        );
-        throw creditErr;
-      }
-      res.json({ success: true, newBalance: updatedUser.virtualCardBalance });
-    } catch (error: any) {
-      console.error("Error confirming top-up:", error);
-      res.status(500).json({ message: "Failed to confirm top-up. Please try again." });
-    }
-  });
-
+  // The Virtual PG Card top-up endpoints were removed with the card (work
+  // order #451, 2026-10-05). The balance below stays: it is the ledger that
+  // holds drivers' earnings and the rider's promo-ride count.
   app.get('/api/virtual-card/balance', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -6481,7 +6346,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ? `${driverUser.firstName || ''} ${driverUser.lastName?.[0] || ''}.`.trim()
         : "Your driver";
 
-      const receipt = buildRideReceipt(ride as any, driverName, { walletEnabled: featureFlags.walletEnabled, rates: await storage.getPlatformRates() });
+      const receipt = buildRideReceipt(ride as any, driverName, { rates: await storage.getPlatformRates() });
       res.json(receipt);
     } catch (error) {
       console.error("Error fetching ride receipt:", error);
@@ -9100,13 +8965,9 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
       context += `\nRole: ${user.isDriver ? 'Driver' : 'Rider'}`;
       context += `\nRating: ${user.rating || '5.00'}/5`;
       context += `\nTotal Rides: ${user.totalRides || 0}`;
-      if (featureFlags.walletEnabled) {
-        context += `\nWallet Balance: $${user.virtualCardBalance || '0.00'}`;
-      } else {
-        // Card-only mode: balance is meaningless, but card-on-file status lets
-        // the assistant explain why booking is blocked and where to fix it.
-        context += `\nPayment card on file: ${user.stripeCustomerId && user.stripePaymentMethodId ? 'Yes' : 'No (add one under Profile before booking)'}`;
-      }
+      // Card-on-file status lets the assistant explain why booking is
+      // blocked and where to fix it (riders pay by card only).
+      context += `\nPayment card on file: ${user.stripeCustomerId && user.stripePaymentMethodId ? 'Yes' : 'No (add one under Profile before booking)'}`;
 
       if (activeRides.length > 0) {
         context += `\nActive Rides: ${activeRides.length} (statuses: ${activeRides.map(r => r.status).join(', ')})`;
@@ -11062,28 +10923,6 @@ Generate the FAQ list.`;
             // "processing" debit stayed "charging" forever (daily audit, #382).
             const { settleStatementFromIntent } = await import("./commercial/billing");
             await settleStatementFromIntent(pi).catch((e) => console.error("[commercial] statement settle failed:", e));
-          } else if (pi.metadata?.type === 'virtual_card_topup') {
-            // Server-side fallback for wallet top-ups: if the client never
-            // reaches POST /topup/confirm (app killed, network dropped after
-            // Stripe succeeded), credit the wallet here so the charge isn't
-            // lost. Shares the dedup key (pi.id under "virtual_card_topup_confirm")
-            // with the confirm endpoint, so whichever path runs first credits
-            // exactly once and the other no-ops.
-            const topupUserId = pi.metadata?.userId as string | undefined;
-            const topupAmount = parseFloat(pi.metadata?.topupAmount || '0');
-            if (topupUserId && topupAmount > 0) {
-              const claimed = await storage.claimWebhookEvent('virtual_card_topup_confirm', pi.id);
-              if (claimed) {
-                try {
-                  await storage.addVirtualCardBalance(topupUserId, topupAmount);
-                  console.log(`[STRIPE] top-up credited via webhook fallback: user=${topupUserId} amount=${topupAmount} pi=${pi.id}`);
-                } catch (creditErr) {
-                  // Release so a later client /confirm or webhook retry can credit.
-                  await storage.releaseWebhookEvent('virtual_card_topup_confirm', pi.id).catch(() => {});
-                  throw creditErr;
-                }
-              }
-            }
           }
           break;
         }
@@ -11217,8 +11056,7 @@ Generate the FAQ list.`;
       // to the "already processed" 200 branch above — the event (ride
       // paid-status sync, payment-failure cancellation) is then silently
       // dropped for good, with no other reconciliation path. Mirrors the
-      // release already done for the inner top-up claim and the settlement
-      // retry handler.
+      // settlement retry handler.
       await storage.releaseWebhookEvent('stripe', event.id).catch((relErr) =>
         console.error('Failed to release stripe webhook claim after handler error:', relErr));
       res.status(500).json({ message: 'Webhook handler error' });

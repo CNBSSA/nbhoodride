@@ -71,12 +71,6 @@ function round2(n: number): number {
 
 export interface PaymentLabelOptions {
   /**
-   * Whether the prepaid wallet is enabled. In lean (card-only) mode there is
-   * no wallet, so a card ride must not be described as one — the first real
-   * rider's history read "PG Card (virtual wallet)" for a plain card charge.
-   */
-  walletEnabled?: boolean;
-  /**
    * The live rate card the breakdown lines are priced on. Without it the
    * receipt fell back to constants that stop matching the moment an admin
    * edits a rate — the total was right but the lines did not add up to it.
@@ -85,14 +79,16 @@ export interface PaymentLabelOptions {
 }
 
 export function formatPaymentMethodLabel(method: string | null | undefined, opts: PaymentLabelOptions = {}): string {
-  if (method === "card") return opts.walletEnabled ? "PG Card (virtual wallet)" : "Card on file";
+  // A card ride is a card ride: there is no prepaid wallet (the Virtual PG
+  // Card was removed, work order #451).
+  if (method === "card") return "Card on file";
   // Cash, and a ride from before the payment method was recorded: the driver
   // took the money in hand either way (shared/paymentMethods.ts).
   if (settlesInCash(method)) return "Cash";
   // A commercial job is billed to the organization on its weekly statement;
   // the person who booked it is never charged.
   if (method === "invoice") return "Billed to the organization";
-  return method ?? (opts.walletEnabled ? "PG Card" : "Card");
+  return method ?? "Card";
 }
 
 /** Build a structured receipt from a completed ride row. */

@@ -40,7 +40,7 @@ import { rankDriversByTrustAndEta } from "@shared/trustScore";
 import { updateRideWidget, clearRideWidget } from "@/hooks/useRideWidget";
 import { useLocale } from "@/hooks/useLocale";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { PG_CARD, parseBookingErrorMessage } from "@shared/userFacingCopy";
+import { parseBookingErrorMessage } from "@shared/userFacingCopy";
 import { useToast } from "@/hooks/use-toast";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import {
@@ -176,7 +176,7 @@ export default function RiderDashboard() {
 
   // ── Hooks ──
   const { user } = useAuth();
-  const { walletEnabled, rentalEnabled } = useFeatureFlags();
+  const { rentalEnabled } = useFeatureFlags();
   const { location, error: locationError, requestLocation } = useGeolocation();
   const { lastMessage } = useWebSocket();
   const { toast } = useToast();
@@ -581,22 +581,8 @@ export default function RiderDashboard() {
       (fareEstimate?.promoDiscount ?? 0) > 0
         ? Number(fareEstimate?.totalAfterPromo ?? 0)
         : Number(fareEstimate?.total ?? 0);
-    // Wallet mode only: block booking if the prepaid balance can't cover the
-    // fare. In lean (card-only) mode there is no balance — the card is charged
-    // at accept/complete, and the server rejects the booking if no card is on
-    // file — so this pre-check is skipped.
-    if (walletEnabled) {
-      const balance = parseFloat(user?.virtualCardBalance || "0");
-      const promos = user?.promoRidesRemaining ?? 0;
-      if (fareDue > 0 && balance < fareDue && promos <= 0) {
-        toast({
-          title: PG_CARD.lowBalanceTitle,
-          description: PG_CARD.lowBalanceBody,
-          variant: "destructive",
-        });
-        return;
-      }
-    }
+    // The card is charged at accept/complete, and the server refuses a
+    // booking with no card on file (riders pay by card only, work order #451).
     bookRideMutation.mutate({
       pickupLocation: { lat: userLocation.lat, lng: userLocation.lng, address: userLocation.address },
       destinationLocation: { lat: destCoords.lat, lng: destCoords.lng, address: destinationAddress },
@@ -1669,7 +1655,7 @@ export default function RiderDashboard() {
                 )}
                 {fareEstimate && selectedDriverId && (
                   <div className="flex items-center justify-between text-xs text-gray-500 mb-2 px-1">
-                    <span>{walletEnabled ? PG_CARD.payLine : "Charged to your card"}</span>
+                    <span>Charged to your card</span>
                     <span className="font-bold text-sm text-gray-800">
                       ${(fareEstimate.promoDiscount ?? 0) > 0 ? fareEstimate.totalAfterPromo?.toFixed(2) : fareEstimate.total?.toFixed(2)}
                     </span>

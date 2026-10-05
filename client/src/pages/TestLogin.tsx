@@ -142,7 +142,6 @@ export default function TestLogin() {
 
           <div className="text-center text-sm text-muted-foreground">
             <p>Password: Fes5036tus@3</p>
-            <p className="mt-2">All test accounts have $1000 virtual card balance</p>
           </div>
         </CardContent>
       </Card>

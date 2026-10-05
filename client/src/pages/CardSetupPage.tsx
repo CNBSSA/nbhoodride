@@ -377,7 +377,7 @@ export function CardSetupPage() {
           <CardContent>
             {!stripeReady ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 dark:border-amber-900 p-4 text-sm text-amber-900 dark:text-amber-100">
-                Card payments are being activated. You can still ride using your Virtual PG Card balance.
+                Card payments are being activated. You can add a card here as soon as they are.
               </div>
             ) : stripeLoad.status === 'failed' ? (
               <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-950 dark:border-red-900 p-4 text-sm text-red-900 dark:text-red-100 space-y-3" data-testid="stripe-load-failed">

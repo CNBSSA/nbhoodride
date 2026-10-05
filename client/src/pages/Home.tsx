@@ -189,7 +189,6 @@ export default function Home() {
 
       <WelcomeRiderSheet
         open={showWelcome && currentMode === "rider"}
-        balance={user?.virtualCardBalance ?? "0"}
         promoRidesRemaining={user?.promoRidesRemaining ?? 0}
         onDismiss={dismissWelcome}
         onBook={() => {

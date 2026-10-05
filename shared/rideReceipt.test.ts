@@ -38,20 +38,15 @@ describe("buildRideReceipt", () => {
 });
 
 describe("formatPaymentMethodLabel", () => {
-  it("does not mention a wallet in card-only mode", () => {
+  it("calls a card ride a card ride: there is no wallet (work order #451)", () => {
     expect(formatPaymentMethodLabel("card")).toBe("Card on file");
-    expect(formatPaymentMethodLabel("card", { walletEnabled: false })).toBe("Card on file");
-  });
-  it("labels card as the PG Card wallet only when the wallet is enabled", () => {
-    expect(formatPaymentMethodLabel("card", { walletEnabled: true })).toBe("PG Card (virtual wallet)");
   });
   it("labels cash as Cash either way", () => {
     expect(formatPaymentMethodLabel("cash")).toBe("Cash");
-    expect(formatPaymentMethodLabel("cash", { walletEnabled: true })).toBe("Cash");
   });
   it("calls a ride from before the method was recorded Cash, because that is what the driver took", () => {
     expect(formatPaymentMethodLabel(null)).toBe("Cash");
-    expect(formatPaymentMethodLabel(undefined, { walletEnabled: true })).toBe("Cash");
+    expect(formatPaymentMethodLabel(undefined)).toBe("Cash");
   });
   it("and the receipt's own field agrees with its label", () => {
     const receipt = buildRideReceipt(

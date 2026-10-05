@@ -16,10 +16,8 @@ export function AddCardBanner() {
   const { data: stripeConfig } = useStripeConfig();
   const [, navigate] = useLocation();
 
-  // A card is REQUIRED to book only in lean (card-only) mode — with the wallet
-  // enabled a rider can pay from balance, so don't claim a card is mandatory.
-  const cardRequired =
-    stripeConfig?.enabled && stripeConfig?.cardOnFileEnabled && !stripeConfig?.walletEnabled;
+  // A card is required to book: riders pay by card only (work order #451).
+  const cardRequired = stripeConfig?.enabled && stripeConfig?.cardOnFileEnabled;
   if (!cardRequired || user?.hasCardOnFile !== false) return null;
 
   return (

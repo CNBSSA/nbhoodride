@@ -3,7 +3,6 @@ import { resolveAppUrl } from "./appUrl";
 import { checkVapidPublicKey } from "@shared/vapidKey";
 import { getEmailConfigSummary } from "./emailService";
 import { probeMapTiles } from "./mapTiles";
-import { featureFlags } from "./featureFlags";
 
 export type Phase0CheckStatus = "pass" | "warn" | "fail";
 
@@ -287,13 +286,10 @@ export async function getPhase0Readiness(): Promise<Phase0ReadinessReport> {
     label: "Stripe payments wired",
     status: stripeReady ? "pass" : "warn",
     owner: "track_b",
-    // Top-up exists only while the wallet does. Production runs card-only
-    // (WALLET_ENABLED=false), so saying "top-up available" there misled the
-    // daily audit into reporting topUpEnabled:false as a fault (2026-09-30).
+    // Riders pay by card on file only: the Virtual PG Card and its top-up
+    // were removed (work order #451, 2026-10-05).
     detail: stripeReady
-      ? featureFlags.walletEnabled
-        ? "Card top-up and ride auth available"
-        : "Riders pay by card on file. Wallet top-up is off because the wallet is switched off (WALLET_ENABLED=false), as intended"
+      ? "Riders pay by card on file"
       : "Set the Stripe keys: riders cannot pay by card until they are",
   });
 
