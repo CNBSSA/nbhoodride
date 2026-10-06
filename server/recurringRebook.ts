@@ -7,6 +7,7 @@ import {
 } from "@shared/recurringRide";
 import { isAllowedPickup, PICKUP_OUTSIDE_MD_MESSAGE } from "@shared/serviceArea";
 import type { IStorage } from "./storage";
+import { priceBooking } from "./bookingQuote";
 import type { RecurringRideSchedule } from "@shared/schema";
 
 const SCHEDULE_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -140,8 +141,17 @@ export async function executeRecurringRebook(
     return { ok: false, status: 400, message: PICKUP_OUTSIDE_MD_MESSAGE };
   }
 
+  // Every rebook is priced by the server on today's rate card, like every
+  // other booking door (shared/bookingQuote.ts). The fare the app saved with
+  // the schedule is compared, never trusted: it used to be booked as it was,
+  // "0" when the app had no estimate (review 2026-10-06).
+  const priced = await priceBooking({
+    door: `recurring_rebook:${kind}`, userId, points: [pickup, destination],
+    appFare: options.estimatedFare, appMiles: undefined, appMinutes: undefined,
+  });
+
   if (kind === "coworker_group") {
-    const estimatedFare = options.estimatedFare ?? "0";
+    const estimatedFare = priced.fare;
     const scheduleCode = await generateScheduleCode(storage);
     const group = await storage.createRideGroup({
       scheduleCode,
@@ -160,7 +170,8 @@ export async function executeRecurringRebook(
       driverId: options.driverId || null,
       pickupLocation: pickup,
       destinationLocation: destination,
-      estimatedFare: String(estimatedFare),
+      estimatedFare,
+      originalFare: estimatedFare,
       pickupInstructions: options.pickupInstructions,
       scheduledAt: departAt,
       rideType: "shared_schedule",
@@ -186,7 +197,7 @@ export async function executeRecurringRebook(
     driverId: options.driverId || null,
     pickupLocation: pickup,
     destinationLocation: destination,
-    estimatedFare: String(options.estimatedFare ?? "0"),
+    estimatedFare: priced.fare,
     pickupInstructions: options.pickupInstructions,
     scheduledAt: departAt,
     status: "pending",
