@@ -5,6 +5,7 @@ import type { Express, RequestHandler } from "express";
 import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
+import { pool } from "./db";
 
 // Replit Auth is optional — only active when REPL_ID is present (i.e. running
 // on Replit). On Railway, RAILWAY_PUBLIC_DOMAIN is set but REPL_ID is not, so
@@ -47,7 +48,14 @@ const getOidcConfig = memoize(
   { maxAge: 3600 * 1000 }
 );
 
+// One session middleware for the whole process, on the app's own pool
+// (code review 2026-10-06): the store used to open two private pools of its
+// own (one for HTTP, one for WebSockets) with no timeouts, so a stuck session
+// connection hung every signed-in request while /health stayed green.
+let sharedSession: ReturnType<typeof session> | null = null;
+
 export function getSession() {
+  if (sharedSession) return sharedSession;
   if (!process.env.SESSION_SECRET) {
     throw new Error(
       "SESSION_SECRET is required. " +
@@ -57,12 +65,12 @@ export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
   const pgStore = connectPg(session);
   const sessionStore = new pgStore({
-    conString: process.env.DATABASE_URL,
+    pool,
     createTableIfMissing: true,
     ttl: sessionTtl,
     tableName: "sessions",
   });
-  return session({
+  sharedSession = session({
     secret: process.env.SESSION_SECRET!,
     store: sessionStore,
     resave: false,
@@ -74,6 +82,7 @@ export function getSession() {
       maxAge: sessionTtl,
     },
   });
+  return sharedSession;
 }
 
 function updateUserSession(user: any, tokens: any) {

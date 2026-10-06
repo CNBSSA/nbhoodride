@@ -15,9 +15,22 @@ process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT EXCEPTION — process will exit:', err);
   process.exit(1);
 });
+// An unhandled rejection is one request's or one sweep's failure, not the
+// process's (code review 2026-10-06): exiting on it turned a database blip
+// into a crash, and after three crashes Railway stopped restarting the
+// service — production silent while the deploy read "successful". It is
+// logged and paged (at most once every 10 minutes) and the server keeps
+// serving. An uncaught exception still exits, and Railway now always
+// restarts (railway.toml).
+let lastRejectionPage = 0;
 process.on('unhandledRejection', (reason) => {
-  console.error('UNHANDLED REJECTION — process will exit:', reason);
-  process.exit(1);
+  console.error('UNHANDLED REJECTION (server keeps running):', reason);
+  if (Date.now() - lastRejectionPage > 10 * 60_000) {
+    lastRejectionPage = Date.now();
+    try {
+      riderAlert("server_error", "unhandledRejection", [["Where", "unhandled promise rejection"], ["Error", String((reason as any)?.message ?? reason).slice(0, 200)]]);
+    } catch { /* paging must never take the server down */ }
+  }
 });
 
 // Startup env-var sanity check. Fails fast on missing essentials in production
