@@ -1,10 +1,12 @@
-import type WebSocket from "ws";
 import type { RideMessagePayload } from "@shared/rideChat";
 import { buildRideMessageWsPayload } from "@shared/rideChat";
 
-let activeConnections: Map<string, WebSocket> | null = null;
+/** What the hub needs of a connection: a socket, or every tab a person has open (server/wsFanout.ts). */
+type Sendable = { readyState: number; send: (data: string) => void };
 
-export function setRideMessageConnections(map: Map<string, WebSocket>) {
+let activeConnections: Map<string, Sendable> | null = null;
+
+export function setRideMessageConnections(map: Map<string, Sendable>) {
   activeConnections = map;
 }
 

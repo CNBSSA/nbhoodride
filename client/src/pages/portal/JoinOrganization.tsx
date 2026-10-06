@@ -42,14 +42,17 @@ export default function JoinOrganization({ token }: { token: string }) {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [agreed, setAgreed] = useState(false);
-  const [joinedExisting, setJoinedExisting] = useState<{ organizationId: string; organizationName: string } | null>(null);
+  const [joinedExisting, setJoinedExisting] = useState<{ organizationId: string; organizationName: string; driverApproved?: boolean } | null>(null);
+  // A fleet's driver (fleet slice 3) is approved by PG Ride like any sign-up, so is not signed straight in.
+  const [waiting, setWaiting] = useState<{ organizationName: string } | null>(null);
 
   const accept = useMutation({
-    mutationFn: () => call<{ organizationId: string; organizationName: string; existing: boolean }>("POST", `/api/org/invitations/${encodeURIComponent(token)}/accept`, {
+    mutationFn: () => call<{ organizationId: string; organizationName: string; existing: boolean; pendingApproval?: boolean; driverApproved?: boolean }>("POST", `/api/org/invitations/${encodeURIComponent(token)}/accept`, {
       firstName, lastName, phone, password, termsAccepted: agreed, privacyAccepted: agreed,
     }),
     onSuccess: async (r) => {
       if (r.existing) { setJoinedExisting(r); return; }
+      if (r.pendingApproval) { setWaiting(r); return; }
       rememberBusinessHome();
       await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       toast({ title: `Welcome to ${r.organizationName}`, description: "Your desk is open." });
@@ -82,8 +85,27 @@ export default function JoinOrganization({ token }: { token: string }) {
       <p className="text-muted-foreground" data-testid="join-refused">{inv.refusal}</p>
       <Link href={`/org/login?next=${encodeURIComponent(`/org?org=${inv.organizationId}`)}`}><Button variant="outline" className="min-h-[44px]" data-testid="button-join-go-sign-in">Go to business sign-in</Button></Link>
     </div>, `${inv.organizationName}`);
+  const asDriver = inv.role === "driver";
+  if (waiting) return shell(
+    <div className="space-y-4 text-center text-sm">
+      <p className="text-muted-foreground" data-testid="join-driver-waiting">
+        You joined {waiting.organizationName} as a driver. {BRAND.appName} checks every new account: once yours is approved, sign in and finish your driver application (your licence) on your Profile. {BRAND.appName} approves drivers; your fleet then gives you a car.
+      </p>
+      <Link href="/login"><Button variant="outline" className="w-full min-h-[44px]" data-testid="button-join-driver-sign-in">Go to sign-in</Button></Link>
+    </div>, `Welcome to ${waiting.organizationName}`);
   if (joinedExisting || inv.hasAccount) {
     const org = joinedExisting ?? inv;
+    if (asDriver) return shell(
+      <div className="space-y-4 text-center text-sm">
+        <p className="text-muted-foreground" data-testid="join-existing">
+          {joinedExisting ? `You now drive for ${org.organizationName}.` : `${inv.email} already has a ${BRAND.appName} account.`} A driver drives for one fleet at a time.{" "}
+          {joinedExisting && joinedExisting.driverApproved === false
+            ? `${BRAND.appName} approves every driver: sign in and finish your driver application (your licence) on your Profile. Once ${BRAND.appName} approves you, ${org.organizationName} can give you a car.`
+            : "Your fleet's car shows in the driver app once they give it to you."}
+        </p>
+        {!joinedExisting && <Button className="w-full min-h-[44px]" disabled={accept.isPending} onClick={() => accept.mutate()} data-testid="button-join-attach-existing">Drive for {inv.organizationName}</Button>}
+        <Link href="/login"><Button variant="outline" className="w-full min-h-[44px]" data-testid="button-join-driver-sign-in">Go to sign-in</Button></Link>
+      </div>, `Drive for ${org.organizationName}`);
     return shell(
       <div className="space-y-4 text-center text-sm">
         <p className="text-muted-foreground" data-testid="join-existing">
@@ -96,7 +118,7 @@ export default function JoinOrganization({ token }: { token: string }) {
 
   return shell(
     <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (agreed) accept.mutate(); }}>
-      <p className="text-sm text-muted-foreground">You were invited as <strong>{inv.role}</strong> for <strong>{inv.organizationName}</strong>, at <strong>{inv.email}</strong>. Set up your sign-in and you land straight in the desk.</p>
+      <p className="text-sm text-muted-foreground">You were invited as <strong>{inv.role}</strong> for <strong>{inv.organizationName}</strong>, at <strong>{inv.email}</strong>. {asDriver ? `Set up your sign-in; ${BRAND.appName} approves your account and your driver application, as for every driver.` : "Set up your sign-in and you land straight in the desk."}</p>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-2"><Label htmlFor="join-first">First name</Label><Input id="join-first" value={firstName} onChange={(e) => setFirstName(e.target.value)} required maxLength={50} data-testid="input-join-first-name" /></div>
         <div className="space-y-2"><Label htmlFor="join-last">Last name</Label><Input id="join-last" value={lastName} onChange={(e) => setLastName(e.target.value)} required maxLength={50} data-testid="input-join-last-name" /></div>
@@ -110,5 +132,5 @@ export default function JoinOrganization({ token }: { token: string }) {
       <Button type="submit" className="w-full min-h-[44px]" disabled={!agreed || accept.isPending} data-testid="button-join-organization">
         {accept.isPending ? "Joining…" : `Join ${inv.organizationName}`}
       </Button>
-    </form>, `Join ${inv.organizationName}`, `${inv.organizationName} invited you to book on ${BRAND.appName}`);
+    </form>, `Join ${inv.organizationName}`, asDriver ? `${inv.organizationName} invited you to drive on ${BRAND.appName}` : `${inv.organizationName} invited you to book on ${BRAND.appName}`);
 }

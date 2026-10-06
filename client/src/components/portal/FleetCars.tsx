@@ -15,13 +15,14 @@ import { Input } from "@/components/ui/input";
 import { ObjectUploader } from "@/components/ObjectUploader";
 import { VEHICLE_TYPES, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
 import { MIN_PHOTOS } from "@shared/rental";
+import { refreshFleet, useFleetDrivers } from "@/components/portal/FleetDrivers";
 
 interface FleetCarRow {
   id: string; make: string; model: string; year: number; color: string; seats: number; vehicleType: string; licensePlate: string; vin: string | null;
   photos: string[]; registrationDocUrl: string | null; insuranceDocUrl: string | null; inspectionDocUrl: string | null;
   inspectionExpires: string | null; registrationExpires: string | null; insuranceExpires: string | null;
   reviewStatus: "pending" | "approved" | "rejected"; reviewNote: string | null; status: "parked" | "ready"; parkedReason: string | null;
-  driverUserId: string | null; problems: string[]; warnings: Array<{ document: string; daysLeft: number }>;
+  driverUserId: string | null; driverName?: string | null; problems: string[]; warnings: Array<{ document: string; daysLeft: number }>;
 }
 
 const day = (s: string | null) => (s ? new Date(s).toISOString().slice(0, 10) : "—");
@@ -69,13 +70,49 @@ export function FleetCarsSection({ orgId, canManage }: { orgId: string; canManag
               <Badge variant={c.status === "ready" ? "default" : "secondary"} data-testid={`badge-fleet-car-${c.id}`}>{c.status}</Badge>
               <Badge variant="outline">{c.reviewStatus === "approved" ? "papers checked" : c.reviewStatus === "rejected" ? "papers sent back" : "waiting for PG Ride"}</Badge>
             </div>
-            <p className="text-xs text-muted-foreground">Inspection {day(c.inspectionExpires)} · registration {day(c.registrationExpires)} · insurance {day(c.insuranceExpires)} · driver {c.driverUserId ? "assigned" : "none"}</p>
+            <p className="text-xs text-muted-foreground">Inspection {day(c.inspectionExpires)} · registration {day(c.registrationExpires)} · insurance {day(c.insuranceExpires)} · driver {c.driverUserId ? (c.driverName ?? "assigned") : "none"}</p>
+            {canManage && <CarDriverControl orgId={orgId} car={c} />}
             {c.reviewNote && c.reviewStatus === "rejected" && <p className="text-xs text-destructive" data-testid={`text-fleet-car-note-${c.id}`}>PG Ride's note: {c.reviewNote}</p>}
             {c.problems.length > 0 && c.reviewStatus !== "rejected" && <p className="text-xs text-muted-foreground">{c.problems.join(" ")}</p>}
             {c.warnings.map((w) => <p key={w.document} className="text-xs text-amber-700" data-testid={`text-fleet-car-warning-${c.id}`}>{w.document} expires in {w.daysLeft} days.</p>)}
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Give the car to one of the fleet's approved drivers, or take it back (slice 3). */
+function CarDriverControl({ orgId, car }: { orgId: string; car: FleetCarRow }) {
+  const { toast } = useToast();
+  const { data } = useFleetDrivers(orgId);
+  const [driverUserId, setDriverUserId] = useState("");
+  const free = (data?.drivers ?? []).filter((d) => d.approvedByPgRide && !d.car);
+  const assign = useMutation({
+    mutationFn: () => json("POST", `/api/fleet/${orgId}/cars/${car.id}/assign`, { driverUserId }),
+    onSuccess: () => { toast({ title: "Car given to the driver", description: "It shows as their car to riders and dispatch." }); setDriverUserId(""); refreshFleet(orgId); },
+    onError: (e: Error) => toast({ title: "Could not give the car", description: e.message, variant: "destructive" }),
+  });
+  const takeBack = useMutation({
+    mutationFn: () => json("POST", `/api/fleet/${orgId}/cars/${car.id}/take-back`),
+    onSuccess: () => { toast({ title: "Car taken back", description: "It is no longer the driver's car." }); refreshFleet(orgId); },
+    onError: (e: Error) => toast({ title: "Could not take the car back", description: e.message, variant: "destructive" }),
+  });
+  if (car.driverUserId) {
+    return (
+      <Button size="sm" variant="outline" disabled={takeBack.isPending}
+        onClick={() => { if (window.confirm(`Take the ${car.make} ${car.model} back from ${car.driverName ?? "the driver"}?`)) takeBack.mutate(); }}
+        data-testid={`button-fleet-take-back-${car.id}`}>Take back</Button>
+    );
+  }
+  if (car.status !== "ready") return null;
+  return (
+    <div className="flex flex-wrap gap-2 items-center" data-testid={`fleet-car-assign-${car.id}`}>
+      <select className="border rounded-md h-9 px-2 text-sm bg-background" value={driverUserId} onChange={(e) => setDriverUserId(e.target.value)} data-testid={`select-fleet-car-driver-${car.id}`}>
+        <option value="">{free.length ? "Choose a driver" : "No approved driver without a car"}</option>
+        {free.map((d) => <option key={d.userId} value={d.userId}>{d.name}</option>)}
+      </select>
+      <Button size="sm" disabled={!driverUserId || assign.isPending} onClick={() => assign.mutate()} data-testid={`button-fleet-assign-car-${car.id}`}>Give to driver</Button>
     </div>
   );
 }

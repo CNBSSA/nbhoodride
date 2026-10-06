@@ -38,6 +38,26 @@ const SMTP_PORT = Number.parseInt(process.env.SMTP_PORT || "587", 10) || 587;
 const SMTP_USER = (process.env.SMTP_USER || "thrynovainsights@gmail.com").trim();
 const SMTP_PASS = process.env.SMTP_PASS?.trim() || "";
 const FROM_ADDRESS = normalizeFromAddress(process.env.EMAIL_FROM || SMTP_USER);
+/**
+ * Where a reply goes. Several templates say "reply to this email"; without
+ * this every reply lands in the sending account's inbox. Optional; the same
+ * bare-address normalisation as EMAIL_FROM.
+ */
+const REPLY_TO = process.env.EMAIL_REPLY_TO?.trim() ? normalizeFromAddress(process.env.EMAIL_REPLY_TO) : "";
+
+/**
+ * Gmail's own daily sending limits (500 messages a day for a personal
+ * account, 2,000 for Workspace). Counted per process per UTC day — an
+ * honest floor, not the whole picture across restarts — so the admin card
+ * and the readiness report can say how close the day is.
+ */
+export const GMAIL_DAILY_LIMIT_HINT = 500;
+let sentDay = ""; let sentToday = 0;
+function countSent(): void {
+  const day = new Date().toISOString().slice(0, 10);
+  if (day !== sentDay) { sentDay = day; sentToday = 0; }
+  sentToday += 1;
+}
 const FROM_NAME = "PG Ride";
 
 /**
@@ -61,6 +81,9 @@ export function getEmailConfigSummary() {
     from: FROM_ADDRESS,
     fromDomain,
     fromMismatch: FROM_ADDRESS.toLowerCase() !== SMTP_USER.toLowerCase(),
+    replyTo: REPLY_TO || null,
+    sentToday: new Date().toISOString().slice(0, 10) === sentDay ? sentToday : 0,
+    dailyLimitHint: GMAIL_DAILY_LIMIT_HINT,
   };
 }
 
@@ -102,6 +125,13 @@ const transporter: Transporter | null = SMTP_PASS
       secure: false,
       requireTLS: true,
       auth: { user: SMTP_USER, pass: SMTP_PASS },
+      // Pooled: an announcement to every rider used to open one connection
+      // per message at once, which Gmail answers with "too many concurrent
+      // SMTP connections". A few connections, reused, and a cap per
+      // connection Gmail is comfortable with.
+      pool: true,
+      maxConnections: 3,
+      maxMessages: 100,
       connectionTimeout: 10_000,
       greetingTimeout: 10_000,
       socketTimeout: 20_000,
@@ -156,6 +186,20 @@ function reportEmailFailure(to: string, subject: string, err: unknown, attempts:
   }
 }
 
+/**
+ * Retry only a send that never got as far as handing the message over:
+ * a connection, greeting, TLS or sign-in failure. Once DATA was sent, a
+ * timeout waiting for the final 250 may mean the server accepted it, and
+ * sending again would deliver the reset link or receipt twice.
+ */
+export function isRetryableSmtpError(err: unknown): boolean {
+  const e = err as { command?: string; code?: string } | null;
+  const command = e?.command ?? "";
+  if (command === "DATA") return false;
+  if (["CONN", "EHLO", "HELO", "STARTTLS", "AUTH"].includes(command)) return true;
+  return ["ECONNECTION", "ETIMEDOUT", "ESOCKET", "ECONNREFUSED", "ECONNRESET", "EDNS", "EAI_AGAIN"].includes(e?.code ?? "");
+}
+
 export class EmailNotConfiguredError extends Error {
   constructor() {
     super("Email service is not configured. SMTP_PASS (the Gmail app password) is missing.");
@@ -185,14 +229,16 @@ async function sendEmail(to: string, subject: string, html: string): Promise<voi
       // below apply to every rejected send.
       await transporter.sendMail({
         from: `${FROM_NAME} <${FROM_ADDRESS}>`,
+        ...(REPLY_TO ? { replyTo: REPLY_TO } : {}),
         to,
         subject,
         html,
       });
+      countSent();
       return;
     } catch (err) {
-      if (attempt === 2) {
-        console.error(`[EMAIL] Failed to send to ${to} after 2 attempts:`, err);
+      if (attempt === 2 || !isRetryableSmtpError(err)) {
+        console.error(`[EMAIL] Failed to send to ${to} (attempt ${attempt}, ${isRetryableSmtpError(err) ? "retried" : "not retried"}):`, err);
         reportEmailFailure(to, subject, err, attempt);
         // Bubble the failure up so endpoints can decide whether to mark the
         // request as a soft success (fire-and-forget) or a hard failure.
@@ -260,7 +306,7 @@ export async function sendAccountApprovedEmail(user: {
   promoRidesRemaining?: number | null;
 }): Promise<void> {
   if (!user.email) return;
-  const name = user.firstName || "there";
+  const name = escapeHtml(user.firstName || "there");
   const promoRides = user.promoRidesRemaining ?? 4;
 
   // Only promise a wallet balance when the wallet is actually enabled. In
@@ -303,7 +349,7 @@ export async function sendSignupRejectedEmail(user: {
   reason: string;
 }): Promise<void> {
   if (!user.email) return;
-  const name = user.firstName || "there";
+  const name = escapeHtml(user.firstName || "there");
   // Defang the admin-supplied reason — user-controlled string, must not be
   // injected as raw HTML.
   const escapedReason = user.reason
@@ -336,7 +382,7 @@ export async function sendDriverApprovedEmail(user: {
   firstName: string | null;
 }): Promise<void> {
   if (!user.email) return;
-  const name = user.firstName || "there";
+  const name = escapeHtml(user.firstName || "there");
 
   await sendEmail(
     user.email,
@@ -373,7 +419,7 @@ export async function sendPasswordResetEmail(
   resetToken: string,
   appUrl: string
 ): Promise<void> {
-  const name = firstName || "there";
+  const name = escapeHtml(firstName || "there");
   const resetUrl = `${appUrl}/reset-password?token=${resetToken}`;
 
   await sendEmail(
@@ -382,29 +428,45 @@ export async function sendPasswordResetEmail(
     baseTemplate(`
       <p>Hi ${name},</p>
       <p>We received a request to reset the password for your PG Ride account. Click the button below to choose a new password:</p>
-      <a href="${resetUrl}" class="btn">Reset My Password</a>
+      <a href="${escapeHtml(resetUrl)}" class="btn">Reset My Password</a>
       <p>This link expires in <strong>1 hour</strong>. If you didn't request a password reset, you can safely ignore this email — your account is secure.</p>
       <p style="font-size:13px; color:#6b7280;">If the button above doesn't work, copy and paste this link into your browser:<br/>
-      <a href="${resetUrl}" style="color:#2563eb; word-break:break-all;">${resetUrl}</a></p>
+      <a href="${escapeHtml(resetUrl)}" style="color:#2563eb; word-break:break-all;">${escapeHtml(resetUrl)}</a></p>
     `)
   );
 }
 
-/** An owner invited this email to book for their organization (shared/invitations.ts). */
+/**
+ * An owner invited this email to their organization (shared/invitations.ts).
+ * A booking account's people are invited to book; a fleet's driver (fleet
+ * slice 3) is invited to drive, and is told that PG Ride still approves every
+ * driver itself, how the fare is shared, and that tips are theirs. Until
+ * 2026-09-30 a fleet's driver was told they had been invited "to book rides".
+ */
 export async function sendOrganizationInviteEmail(params: {
-  email: string; organizationName: string; inviterName: string | null; link: string; days: number;
+  email: string; organizationName: string; inviterName: string | null; link: string; days: number; role?: string;
 }): Promise<void> {
-  const who = params.inviterName ? `${params.inviterName} at ${params.organizationName}` : params.organizationName;
+  const org = escapeHtml(params.organizationName);
+  const who = params.inviterName ? `${escapeHtml(params.inviterName)} at ${org}` : org;
+  const link = escapeHtml(params.link);
+  const asDriver = params.role === "driver";
+  const subject = asDriver
+    ? `${params.organizationName} invited you to drive for their fleet on PG Ride`
+    : `${params.organizationName} invited you to book rides on PG Ride`;
+  const intro = asDriver
+    ? `<p>${who} has invited you to drive one of <strong>${org}</strong>'s cars on PG Ride.</p>
+      <p>PG Ride checks and approves every driver itself, so after you accept you finish PG Ride's driver application (your licence) and PG Ride reviews it. Once you are approved, ${org} can give you one of its cars. On rides in a fleet's car your 85% of each fare is shared 75% to you and 25% to the fleet, and every tip is yours.</p>`
+    : `<p>${who} has invited you to book rides and deliveries for <strong>${org}</strong> on PG Ride. Set up your sign-in and you land straight in their booking desk:</p>`;
   await sendEmail(
     params.email,
-    `${params.organizationName} invited you to book rides on PG Ride`,
+    subject,
     baseTemplate(`
       <p>Hi,</p>
-      <p>${who} has invited you to book rides and deliveries for <strong>${params.organizationName}</strong> on PG Ride. Set up your sign-in and you land straight in their booking desk:</p>
-      <a href="${params.link}" class="btn">Join ${params.organizationName}</a>
+      ${intro}
+      <a href="${link}" class="btn">${asDriver ? `Drive for ${org}` : `Join ${org}`}</a>
       <p>This link is for this email address only and expires in <strong>${params.days} days</strong>. If you were not expecting it, you can ignore this email.</p>
       <p style="font-size:13px; color:#6b7280;">If the button above doesn't work, copy and paste this link into your browser:<br/>
-      <a href="${params.link}" style="color:#2563eb; word-break:break-all;">${params.link}</a></p>
+      <a href="${link}" style="color:#2563eb; word-break:break-all;">${link}</a></p>
     `)
   );
 }
@@ -423,7 +485,7 @@ export async function sendRideAcceptedEmail(params: {
 }): Promise<void> {
   if (!params.riderEmail) return;
 
-  const name = params.riderFirstName || "there";
+  const name = escapeHtml(params.riderFirstName || "there");
   const fare = parseFloat(params.estimatedFare || "0");
   const promo = parseFloat(params.promoDiscount || "0");
   const finalFare = Math.max(0, fare - promo);
@@ -437,23 +499,23 @@ export async function sendRideAcceptedEmail(params: {
       <div class="card">
         <div class="card-row">
           <span class="card-label">Driver</span>
-          <span class="card-value">${params.driverName}</span>
+          <span class="card-value">${escapeHtml(params.driverName)}</span>
         </div>
         ${params.driverPhone ? `<div class="card-row">
           <span class="card-label">Driver Phone</span>
-          <span class="card-value">${params.driverPhone}</span>
+          <span class="card-value">${escapeHtml(params.driverPhone)}</span>
         </div>` : ""}
         ${params.vehicleDescription ? `<div class="card-row">
           <span class="card-label">Vehicle</span>
-          <span class="card-value">${params.vehicleDescription}</span>
+          <span class="card-value">${escapeHtml(params.vehicleDescription)}</span>
         </div>` : ""}
         <div class="card-row">
           <span class="card-label">Pickup</span>
-          <span class="card-value">${params.pickupAddress || "Your location"}</span>
+          <span class="card-value">${escapeHtml(params.pickupAddress || "Your location")}</span>
         </div>
         <div class="card-row">
           <span class="card-label">Destination</span>
-          <span class="card-value">${params.destinationAddress || "—"}</span>
+          <span class="card-value">${escapeHtml(params.destinationAddress || "—")}</span>
         </div>
         ${promo > 0 ? `<div class="card-row">
           <span class="card-label">PG Welcome Credit</span>
@@ -483,7 +545,7 @@ export async function sendRideReceiptEmail(params: {
 }): Promise<void> {
   if (!params.riderEmail) return;
 
-  const name = params.riderFirstName || "there";
+  const name = escapeHtml(params.riderFirstName || "there");
   const fare = parseFloat(params.actualFare || "0");
   const promo = parseFloat(params.promoDiscountApplied || "0");
   const charged = Math.max(0, fare - promo);
@@ -504,15 +566,15 @@ export async function sendRideReceiptEmail(params: {
         </div>
         <div class="card-row">
           <span class="card-label">Driver</span>
-          <span class="card-value">${params.driverName}</span>
+          <span class="card-value">${escapeHtml(params.driverName)}</span>
         </div>
         <div class="card-row">
           <span class="card-label">From</span>
-          <span class="card-value">${params.pickupAddress || "Pickup location"}</span>
+          <span class="card-value">${escapeHtml(params.pickupAddress || "Pickup location")}</span>
         </div>
         <div class="card-row">
           <span class="card-label">To</span>
-          <span class="card-value">${params.destinationAddress || "Destination"}</span>
+          <span class="card-value">${escapeHtml(params.destinationAddress || "Destination")}</span>
         </div>
         <div style="border-top: 1px solid #bbf7d0; margin: 12px 0;"></div>
         <div class="card-row">
@@ -528,7 +590,7 @@ export async function sendRideReceiptEmail(params: {
           <span class="card-value highlight">$${charged.toFixed(2)}</span>
         </div>
       </div>
-      <p>Charged to your Virtual PG Card. You can add funds anytime from your Profile page.</p>
+      <p>Charged to the card on file for your account. You can update it anytime from your Profile page.</p>
       <a href="${APP_URL}" class="btn">Leave a Rating</a>
     `)
   );
@@ -540,7 +602,7 @@ export async function sendSignupPendingEmail(user: {
   firstName: string | null;
 }): Promise<void> {
   if (!user.email) return;
-  const name = user.firstName || "there";
+  const name = escapeHtml(user.firstName || "there");
 
   await sendEmail(
     user.email,
@@ -575,7 +637,7 @@ export async function sendAnnouncementEmail(params: {
   title: string;
   body: string;
 }): Promise<void> {
-  const name = params.firstName || "there";
+  const name = escapeHtml(params.firstName || "there");
   const title = escapeHtml(params.title);
   // Preserve the admin's line breaks without allowing any other markup.
   const body = escapeHtml(params.body).replace(/\n/g, "<br>");
@@ -604,7 +666,7 @@ export async function sendCircuitReminderEmail(
     driverName: string | null;
   },
 ): Promise<void> {
-  const name = firstName || "there";
+  const name = escapeHtml(firstName || "there");
   await sendEmail(
     email,
     `Seat confirmed: ${run.circuitName} — ${run.runTime}`,
@@ -612,10 +674,10 @@ export async function sendCircuitReminderEmail(
       <p>Hi ${name},</p>
       <p>Booking is closed and your seat is <strong>confirmed</strong>.</p>
       <div class="card">
-        <div class="card-row"><span class="card-label">Circuit</span> ${run.circuitName}</div>
-        <div class="card-row"><span class="card-label">Departs</span> ${run.runTime}</div>
-        <div class="card-row"><span class="card-label">Pickup</span> ${run.pickupAddress}</div>
-        <div class="card-row"><span class="card-label">Driver</span> ${run.driverName ?? "Being confirmed — you'll be notified"}</div>
+        <div class="card-row"><span class="card-label">Circuit</span> ${escapeHtml(run.circuitName)}</div>
+        <div class="card-row"><span class="card-label">Departs</span> ${escapeHtml(run.runTime)}</div>
+        <div class="card-row"><span class="card-label">Pickup</span> ${escapeHtml(run.pickupAddress)}</div>
+        <div class="card-row"><span class="card-label">Driver</span> ${escapeHtml(run.driverName ?? "Being confirmed — you'll be notified")}</div>
       </div>
       <p>Please be at the pickup point about 5 minutes early. Guaranteed seat, fixed fare, no surge.</p>
     `),

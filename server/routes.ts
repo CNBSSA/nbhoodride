@@ -177,11 +177,15 @@ import { billingRunDue, previousBillingWeek } from "@shared/billingCycle";
 import { noteWatchRan } from "./watchHeartbeat";
 import { emailFailureRecorder } from "./emailFailures";
 import { DRIVER_DROP_GRACE_MS, DRIVER_DROP_WINDOW_MINUTES, DRIVER_DROP_WORDS, dropHasExpired } from "@shared/driverPresence";
+import { WS_HEARTBEAT_MS } from "@shared/liveLocation";
+import { UserSockets, socketsFor } from "./wsFanout";
 import { recordNoShowForRide, recordWaitingForCompletedRide } from "./commercial/waiting";
 import { describeClientBuild } from "@shared/clientBuild";
 import { registerMapTileRoutes } from "./mapTiles";
 import { runWeeklyPayday } from "./payday";
 import { reliabilityTimeline, riderBalances, ReportError } from "./adminReports";
+import { yearToDatePayouts, TaxReportError } from "./taxYearToDate";
+import { creditDriverCutOnce } from "./fleet/earnings";
 import { paydayKeyOf, paydayRunDue } from "@shared/paydayCycle";
 import { BUILD_ID } from "./buildInfo";
 import { payDriverForCompletedJob, payDriverForWaiting } from "./commercial/driverPay";
@@ -1204,13 +1208,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await storage.getUserByEmail(email);
       const phone = normalizePhoneE164(user?.phone);
       if (!user || user.deletedAt || !phone) return res.json(generic);
+      // A number that replied STOP gets no text from PG Ride, the code
+      // included (server/smsService.ts): the answer is the same generic
+      // line and ops are paged so a person can help. Answering differently
+      // here would tell a stranger which emails have a phone on file.
+      if (await storage.isPhoneOptedOut(phone).catch(() => false)) {
+        riderAlert("login_locked_out", user.id, [["Name", `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim()], ["Email", email], ["Phone", phone], ["Note", "asked for a reset code by text but replied STOP earlier — reach out another way"]]);
+        return res.json(generic);
+      }
       try {
         await startPhoneVerification(phone);
         console.log(`[AUDIT] password_reset_sms_sent userId=${user.id}`);
       } catch (err) {
+        // A landline or an unreachable number: the same generic answer (a
+        // different one was an existence oracle), and ops are paged.
         console.error("[verify] start failed:", err);
-        riderAlert("server_error", "POST /api/auth/forgot-password-sms", [["Route", "forgot-password-sms"], ["Error", String((err as any)?.message ?? err).slice(0, 200)]]);
-        return res.status(503).json({ message: "We couldn't send a code right now. Please try again in a minute or contact support." });
+        riderAlert("server_error", "POST /api/auth/forgot-password-sms", [["Route", "forgot-password-sms"], ["User id", user.id], ["Error", String((err as any)?.message ?? err).slice(0, 200)]]);
       }
       res.json(generic);
     } catch (error) {
@@ -1807,6 +1820,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // A driver whose only car is a fleet management account's car drives it
+      // only while it is ready (fleet slice 3, server/fleet/drivers.ts).
+      if (isOnline && featureFlags.fleetEnabled) {
+        const block = await import("./fleet/drivers").then((m) => m.fleetCarDriveBlock(userId)).catch(() => null);
+        if (block) return res.status(403).json({ message: block, fleetCar: true });
+      }
+
       // A driver whose only car is a PG Ride fleet car drives it only while
       // it is theirs and its rent is paid (server/rental/drivers.ts).
       if (isOnline && featureFlags.rentalEnabled) {
@@ -1852,22 +1872,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "lat and lng must be numbers" });
       }
       await storage.updateDriverLocation(userId, { lat, lng });
-      if (rideId) {
-        checkRouteDeviationForRide(storage, rideId, lat, lng).catch(console.error);
-        const ride = await storage.getRide(rideId);
-        if (ride?.riderId && activeConnections.has(ride.riderId)) {
-          const riderWs = activeConnections.get(ride.riderId)!;
-          if (riderWs.readyState === WebSocket.OPEN) {
-            riderWs.send(JSON.stringify(buildDriverLocationMessage({
-              rideId,
-              driverId: userId,
-              lat,
-              lng,
-            })));
-          }
+      // This is the driver app's fallback when its socket is down
+      // (shared/liveLocation.ts), so it must do everything the socket path
+      // does: the rider of every active ride is sent the position when they
+      // have a socket, and the route is checked for deviation.
+      const forwardTo = (ride: any) => {
+        // Only the ride's own driver moves its map or trips its deviation
+        // watch (Cursor Bugbot on #464): a ride id alone proves nothing.
+        if (!ride?.riderId || ride.driverId !== userId) return;
+        checkRouteDeviationForRide(storage, ride.id, lat, lng).catch(() => {});
+        const riderWs = activeConnections.get(ride.riderId);
+        if (riderWs && riderWs.readyState === WebSocket.OPEN) {
+          riderWs.send(JSON.stringify(buildDriverLocationMessage({ rideId: ride.id, driverId: userId, lat, lng })));
         }
+      };
+      if (rideId) {
+        forwardTo(await storage.getRide(rideId));
+      } else {
+        for (const ride of await storage.getActiveRidesForDriver(userId)) forwardTo(ride);
       }
-      res.json({ success: true });
+      res.json({ success: true, at: new Date().toISOString() });
     } catch (error) {
       console.error("Error updating driver location:", error);
       res.status(500).json({ message: "Failed to update location" });
@@ -2943,7 +2967,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // sorts the account's statement out afterwards (post-implementation
       // audit, 2026-09-18 — the same rule as every other commercial payment).
       const splitOn = commercialFeeUnwritten ? RIDER_NO_SHOW_FEE : (commercialNoShowFee ?? collected);
-      const split = await routeFeeWithFairnessSplit(splitOn, userId, rideId);
+      const split = await routeFeeWithFairnessSplit(splitOn, userId, rideId, "no_show_fee");
       const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
       await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
       if (ride.paymentMethod === 'invoice') {
@@ -3357,16 +3381,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // and FAIRNESS_FUND_RATE of it feeds the community bonus pool that pays
   // for goodwill credits when a driver lets a rider down (see /cancel).
   // The fee never routes anywhere when there's no driver to compensate.
+  // In a fleet's car the driver's cut is shared 25/75 with the fleet, once
+  // (server/fleet/earnings.ts); in their own car, or with fleets switched
+  // off, it is credited exactly as before. `driverCut` stays the driver's
+  // whole cut before any fleet share, as the audit log has always recorded.
   async function routeFeeWithFairnessSplit(
     fee: number,
     driverId: string | null | undefined,
     rideId: string,
+    kind: "cancel_fee" | "no_show_fee" = "cancel_fee",
   ): Promise<{ driverCut: number; fundCut: number }> {
     if (fee <= 0 || !driverId) return { driverCut: 0, fundCut: 0 };
     const fundCut = Number((fee * FAIRNESS_FUND_RATE).toFixed(2));
     const driverCut = Number((fee - fundCut).toFixed(2));
     if (driverCut > 0) {
-      await storage.addVirtualCardBalance(driverId, driverCut, "cancellation_fee", rideId);
+      await creditDriverCutOnce(storage, { rideId, driverUserId: driverId, amount: driverCut, reason: "cancellation_fee", kind });
     }
     if (fundCut > 0) {
       await storage.fundCommunityBonusPool(fundCut);
@@ -3783,6 +3812,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
 
     try {
+      // SECURITY (2026-09-29): the car must be this driver's own, as for
+      // PUT /api/vehicles/:vehicleId below. Until now any signed-in user
+      // could overwrite any driver's car photos by naming its id. A copy of
+      // a PG Ride car (rental_car_id) is the car's, not the driver's, and its
+      // photos are changed on the car itself.
+      const driverProfile = await storage.getDriverProfile(userId);
+      if (!driverProfile) {
+        return res.status(403).json({ error: "Driver profile required" });
+      }
+      const ownVehicles = await storage.getVehiclesByDriverId(driverProfile.id);
+      const target = ownVehicles.find((v: any) => v.id === req.body.vehicleId);
+      if (!target) {
+        return res.status(403).json({ error: "Not authorized to update this vehicle" });
+      }
+      if ((target as any).rentalCarId || (target as any).fleetCarId) {
+        return res.status(409).json({ error: "This car's photos are kept on the car itself, not on your copy of it." });
+      }
+
       // DB-fallback objects carry owner-or-admin ACL inherently; GCS objects
       // need the explicit ACL policy stamped here.
       let objectPath: string = req.body.photoURL;
@@ -3840,6 +3887,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const owns = existingVehicles.some((v: any) => v.id === vehicleId);
       if (!owns) {
         return res.status(403).json({ message: "Not authorized to update this vehicle" });
+      }
+      // A fleet's car given to this driver is the fleet's to change (fleet slice 3).
+      if (existingVehicles.some((v: any) => v.id === vehicleId && v.fleetCarId)) {
+        return res.status(409).json({ message: "This car belongs to your fleet. The fleet's owner changes it on the fleet desk." });
       }
       
       const vehicle = await storage.updateVehicle(vehicleId, updates);
@@ -4928,7 +4979,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         if (cancellationFee > 0) {
           const collected = await collectFeeFromRide(ride, cancellationFee);
-          await routeFeeWithFairnessSplit(collected, ride.driverId, rideId);
+          await routeFeeWithFairnessSplit(collected, ride.driverId, rideId, "cancel_fee");
           await storage.cancelRideWithFee(
             rideId, cancellationFee, reason || "Ride cancelled",
             undefined, undefined, userId, "rider",
@@ -5102,9 +5153,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ? (goodwillCredit > 0
                 ? `Your driver had to cancel — a $${goodwillCredit.toFixed(2)} credit was added to your wallet while we rematch you.`
                 : "Your driver had to cancel. We're finding you a new driver — your fare is unchanged.")
-            : cancellationFee > 0
-              ? `Ride cancelled. A $${cancellationFee.toFixed(2)} cancellation fee has been applied.`
-              : "Your ride has been cancelled.",
+            : `${cancellationFee > 0
+                ? `Ride cancelled. A $${cancellationFee.toFixed(2)} cancellation fee has been applied.`
+                : "Your ride has been cancelled."}${reason && reason.trim() && reason.trim() !== "Ride cancelled" ? ` ${reason.trim().slice(0, 120)}` : ""}`,
           tag: "ride-cancelled",
           url: "/",
           data: { rideId, cancellationFee },
@@ -5175,6 +5226,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const driverProfile = await storage.getDriverProfile(ride.driverId);
             const driverVehicles = driverProfile ? await storage.getVehiclesByDriverId(driverProfile.id) : [];
             driver = {
+              id: ride.driverId,
               firstName: driverUser.firstName,
               lastName: driverUser.lastName,
               rating: driverUser.rating,
@@ -5182,6 +5234,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
               profileImageUrl: driverUser.profileImageUrl,
               vehicle: driverVehicles[0] ? `${driverVehicles[0].year} ${driverVehicles[0].make} ${driverVehicles[0].model} - ${driverVehicles[0].color}` : null,
               licensePlate: driverVehicles[0]?.licensePlate || null,
+              // The driver's last stored position and when it was written, so
+              // the rider's 5-second poll keeps the map moving when the socket
+              // is down (shared/liveLocation.ts).
+              currentLocation: driverProfile?.currentLocation ?? null,
+              locationUpdatedAt: driverProfile?.locationUpdatedAt ?? null,
             };
           }
         }
@@ -6915,12 +6972,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       if (emailAlso) {
-        for (const user of recipients) {
-          if (!user.email) continue;
-          sendAnnouncementEmail({ email: user.email, firstName: user.firstName, title, body }).catch((err) =>
-            console.error('[announcement] email failed:', err),
-          );
-        }
+        // One at a time, in the background: firing every recipient at once
+        // opened a connection per message and Gmail refused the burst; each
+        // failure is isolated and reported by the email module itself.
+        const toEmail = recipients.filter((u) => !!u.email);
+        void (async () => {
+          for (const user of toEmail) {
+            await sendAnnouncementEmail({ email: user.email!, firstName: user.firstName, title, body }).catch((err) =>
+              console.error('[announcement] email failed:', err),
+            );
+          }
+        })();
       }
 
       const record = await storage.createAnnouncement({
@@ -7328,6 +7390,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Fleet slice 3, finished (2026-09-30): a fleet car is only ever with a
+  // driver PG Ride approves. When PG Ride revokes, suspends or closes one who
+  // has a fleet car, the car goes back to the fleet at once (on a ride, when
+  // the ride ends: the hourly sweep). Never fails the admin's change.
+  async function releaseFleetCarAfterRevoke(userId: string): Promise<void> {
+    try {
+      const m = await import("./fleet/drivers");
+      const r = await m.releaseFleetCarIfRevoked(userId);
+      if (r === "released" || r === "on_ride") console.log(`[AUDIT] fleet_car_after_revoke userId=${userId} result=${r}`);
+    } catch (err) {
+      console.error(`[fleet] could not take the fleet car back after revoking ${userId}:`, err);
+    }
+  }
+
   app.post('/api/admin/users/:userId/revoke-approval', isAdminOrSessionAuth, async (req: any, res) => {
     try {
       const { userId } = req.params;
@@ -7340,6 +7416,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const user = await storage.adminUpdateUser(userId, { isApproved: false });
       await storage.logAdminAction(adminId, 'revoke_approval', 'user', userId, { email: targetUser.email });
+      await releaseFleetCarAfterRevoke(userId);
       res.json(user);
     } catch (error) {
       console.error("Error revoking approval:", error);
@@ -7832,6 +7909,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const user = await storage.adminUpdateUser(userId, sanitizedUpdates);
       await storage.logAdminAction(adminId, 'update_user', 'user', userId, sanitizedUpdates);
+      if (sanitizedUpdates.isSuspended === true || sanitizedUpdates.isApproved === false) await releaseFleetCarAfterRevoke(userId);
       res.json(user);
     } catch (error) {
       console.error("Error updating user:", error);
@@ -7882,9 +7960,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // (Car Rental Master Plan, phase 3): an assigned or collected fleet
         // car stands in for their own insurance card and car photos. Their
         // licence is still required.
-        const fleetCar = featureFlags.rentalEnabled
+        // Likewise a driver of an open fleet management account (fleet slice
+        // 3): the fleet's cars, each checked by PG Ride with its commercial
+        // insurance, stand in for their own. The fleet never approves them;
+        // this is still PG Ride's approval, and the licence is still required.
+        const fleetCar = (featureFlags.rentalEnabled
           ? await import("./rental/drivers").then((m) => m.hasFleetCar(userId)).catch(() => false)
-          : false;
+          : false) || (featureFlags.fleetEnabled
+          ? await import("./fleet/drivers").then((m) => m.isFleetDriver(userId)).catch(() => false)
+          : false);
         if (!profile.insuranceImageUrl && !fleetCar) missing.push("insurance image");
         const stashedVehiclePhotos = (profile as any).vehiclePhotoUrls;
         const hasVehiclePhotos = Array.isArray(stashedVehiclePhotos) && stashedVehiclePhotos.length > 0;
@@ -7970,6 +8054,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // driver mode away — approval status is the single source of truth.
         await storage.adminUpdateUser(userId, { isDriver: false });
         console.log(`[AUDIT] driver_mode_revoked adminId=${adminId} userId=${userId} approvalStatus=${updates.approvalStatus}`);
+      }
+      if ((updates.approvalStatus && updates.approvalStatus !== 'approved') || updates.isSuspended === true) {
+        await releaseFleetCarAfterRevoke(userId);
       }
 
       res.json(profile);
@@ -11231,7 +11318,10 @@ Generate the FAQ list.`;
   // WebSocket server for real-time communication
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
   
-  const activeConnections = new Map<string, WebSocket>();
+  // One entry per person, every open tab inside it (server/wsFanout.ts):
+  // `get(id)?.send(...)` reaches all of them and `readyState` is OPEN while
+  // any is, so the sites below read exactly as they did with one socket.
+  const activeConnections = new Map<string, UserSockets>();
   setRideMessageConnections(activeConnections);
 
   // County preferences per connected driver (userId → acceptedCounties[])
@@ -11248,6 +11338,28 @@ Generate the FAQ list.`;
     console.error('WebSocket server error (non-fatal):', err);
   });
 
+  // Heartbeat (shared/liveLocation.ts): a socket that misses a ping is
+  // closed, so a half-open one — a phone that lost signal without a FIN —
+  // stops counting as "delivered" and the chat push fallback fires.
+  const socketAlive = new WeakMap<WebSocket, boolean>();
+  function runHeartbeat(): { pinged: number; dropped: number } {
+    let pinged = 0; let dropped = 0;
+    wss.clients.forEach((ws) => {
+      if (socketAlive.get(ws) === false) {
+        dropped++;
+        ws.terminate();
+        return;
+      }
+      socketAlive.set(ws, false);
+      pinged++;
+      try { ws.ping(); } catch { /* closing */ }
+    });
+    return { pinged, dropped };
+  }
+  const heartbeatTimer = setInterval(runHeartbeat, WS_HEARTBEAT_MS);
+  wss.on('close', () => clearInterval(heartbeatTimer));
+
+  // Admin: run one heartbeat round now (journey 43 and an operator's check).
   // Admin → Reports (server/adminReports.ts): read-only views of production
   // data that otherwise needed SQL in Railway's console, which neither Festie
   // nor a working session can reach. Nothing here writes.
@@ -11258,13 +11370,28 @@ Generate the FAQ list.`;
       console.error("reliability report failed:", err); res.status(500).json({ message: "Could not build the report" });
     }
   });
+  // Payouts this year (issue #33): who PG Ride paid in a tax year and who has
+  // crossed the 1099-NEC threshold (server/taxYearToDate.ts). Read-only.
+  app.get('/api/admin/tax/year-to-date', isAdminOrSessionAuth, async (req: any, res) => {
+    try { res.json(await yearToDatePayouts(req.query.year)); }
+    catch (err: any) {
+      if (err instanceof TaxReportError) return res.status(err.status).json({ message: err.message });
+      console.error("year-to-date payout report failed:", err); res.status(500).json({ message: "Could not build the report" });
+    }
+  });
   app.get('/api/admin/reports/rider-balances', isAdminOrSessionAuth, async (_req: any, res) => {
     try { res.json(await riderBalances()); }
     catch (err) { console.error("rider balance report failed:", err); res.status(500).json({ message: "Could not build the report" }); }
   });
 
+  app.post('/api/admin/analytics/ws-heartbeat', isAdminOrSessionAuth, async (_req: any, res) => {
+    res.json({ at: new Date().toISOString(), ...runHeartbeat() });
+  });
+
   wss.on('connection', (ws, req) => {
     console.log('WebSocket connection established');
+    socketAlive.set(ws, true);
+    ws.on('pong', () => socketAlive.set(ws, true));
     
     // Reuse the single session middleware instance initialised above.
     // The session-store lookup is async, so expose it as a promise and make
@@ -11306,7 +11433,7 @@ Generate the FAQ list.`;
                   ws.close();
                   return;
                 }
-                activeConnections.set(message.userId, ws);
+                socketsFor(activeConnections, message.userId).add(ws);
                 // The driver is back: a socket close only started a clock
                 // (shared/driverPresence.ts); a join stops it.
                 if (user.isDriver) storage.clearDriverSocketDrop(message.userId).catch(() => {});
@@ -11360,10 +11487,12 @@ Generate the FAQ list.`;
                 }
               };
               if (message.rideId) {
-                // Fast path: client did supply a rideId.
-                checkRouteDeviationForRide(storage, message.rideId, lat, lng).catch(console.error);
+                // Fast path: client did supply a rideId. Only that ride's own
+                // driver may move its map or trip its deviation watch.
                 storage.getRide(message.rideId).then(ride => {
-                  if (ride?.riderId) forwardDriverLocation(ride.id, ride.riderId);
+                  if (!ride?.riderId || ride.driverId !== driverUserId) return;
+                  checkRouteDeviationForRide(storage, ride.id, lat, lng).catch(console.error);
+                  forwardDriverLocation(ride.id, ride.riderId);
                 }).catch(() => {});
               } else {
                 // Normal path: resolve the driver's active ride and forward.
@@ -11467,7 +11596,10 @@ Generate the FAQ list.`;
       }
       // Remove from active connections and clear county cache
       for (const [userId, connection] of Array.from(activeConnections.entries())) {
-        if (connection === ws) {
+        if (connection.has(ws)) {
+          connection.delete(ws);
+          // Another tab still open: the person is still here.
+          if (connection.size > 0) break;
           activeConnections.delete(userId);
           driverCountyCache.delete(userId);
 
@@ -11766,6 +11898,7 @@ Generate the FAQ list.`;
       // ── Fleet cars: park a car the hour a paper lapses; warn ahead once a day ──
       if (featureFlags.fleetEnabled && now.getMinutes() === 29) {
         import("./fleet/cars").then((m) => m.runFleetCarSweep(now, { warnings: now.getUTCHours() === 13 })).catch((err) => console.error("fleet car sweep failed:", err));
+        import("./fleet/drivers").then((m) => m.sweepRevokedFleetDrivers(now)).catch((err) => console.error("fleet revoked-driver sweep failed:", err));
       }
 
       // ── Ride-risk watch: page ops before the rider finds out ──
