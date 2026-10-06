@@ -6839,10 +6839,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // "isSuperAdmin flag only" (still secure — the flag is admin-set in DB).
   const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL;
 
+  // Both admin guards answer 503 when the user cannot be read, instead of
+  // leaving an unhandled rejection behind (code review 2026-10-06).
   const isAdminOrSessionAuth = async (req: any, res: any, next: any) => {
     const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
-    const user = await storage.getUser(userId);
+    let user;
+    try { user = await storage.getUser(userId); }
+    catch (err) { console.error("admin guard could not read the user:", err); return res.status(503).json({ message: "Please try again in a moment." }); }
     if (!user?.isAdmin && !user?.isSuperAdmin) return res.status(403).json({ message: "Admin access required" });
     req.adminUser = user;
     next();
@@ -6851,7 +6855,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const isSuperAdminAuth = async (req: any, res: any, next: any) => {
     const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
-    const user = await storage.getUser(userId);
+    let user;
+    try { user = await storage.getUser(userId); }
+    catch (err) { console.error("super-admin guard could not read the user:", err); return res.status(503).json({ message: "Please try again in a moment." }); }
     if (!user?.isSuperAdmin) return res.status(403).json({ message: "Super admin access required" });
     // Defense in depth: if SUPER_ADMIN_EMAIL is configured, require an exact
     // match. If not configured (R-L4 made it optional), the isSuperAdmin
