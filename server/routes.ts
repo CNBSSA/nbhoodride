@@ -5069,13 +5069,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
           try {
             collected = await collectFeeFromRide(claimedRide, cancellationFee);
           } catch (feeErr) {
-            // Nothing was taken: hand the ride back as it was, so the rider
-            // can try again, exactly as before the claim existed.
-            await claimDb.update(claimRides)
-              .set({ status: ride.status as any, cancellationReason: ride.cancellationReason, cancelledBy: ride.cancelledBy, cancelledByRole: ride.cancelledByRole, updatedAt: new Date() })
-              .where(claimAnd(claimEq(claimRides.id, rideId), claimEq(claimRides.status, "cancelled")))
-              .catch((revertErr) => console.error(`[cancel] could not hand ride ${rideId} back after a failed fee:`, revertErr));
-            throw feeErr;
+            // Ask Stripe what actually happened before handing the ride back
+            // (Cursor review of #472): a capture can succeed and its answer
+            // be lost, and handing the ride back then would leave a live ride
+            // whose rider already paid the fee.
+            const piId = claimedRide.stripePaymentIntentId;
+            let capturedAmount: number | null = null;
+            let outcomeUnknown = false;
+            if (claimedRide.paymentMethod === "card" && piId && !piId.startsWith("virtual-") && stripe) {
+              try {
+                const pi = await stripe.paymentIntents.retrieve(piId);
+                if (pi.status === "succeeded") capturedAmount = (pi.amount_received ?? 0) / 100;
+              } catch { outcomeUnknown = true; }
+            }
+            if (capturedAmount !== null) {
+              // The fee was taken: the cancel stands, and is finished below.
+              collected = Number((parseFloat(claimedRide.virtualAmountAuthorized || "0") + capturedAmount).toFixed(2));
+            } else if (outcomeUnknown) {
+              // Stripe cannot say: the ride stays cancelled (never a live ride
+              // that may have been charged) and a person settles it.
+              riderAlert("server_error", `cancel-fee:${rideId}`, [["Ride", rideId], ["Problem", "cancellation fee capture failed and Stripe could not be asked whether it went through; the ride is left cancelled — check the payment in Stripe"], ["Error", String((feeErr as any)?.message ?? feeErr).slice(0, 200)]]);
+              throw feeErr;
+            } else {
+              // Nothing was taken: hand the ride back as it was, so the rider
+              // can try again, exactly as before the claim existed.
+              await claimDb.update(claimRides)
+                .set({ status: ride.status as any, cancellationReason: ride.cancellationReason, cancelledBy: ride.cancelledBy, cancelledByRole: ride.cancelledByRole, updatedAt: new Date() })
+                .where(claimAnd(claimEq(claimRides.id, rideId), claimEq(claimRides.status, "cancelled")))
+                .catch((revertErr) => console.error(`[cancel] could not hand ride ${rideId} back after a failed fee:`, revertErr));
+              throw feeErr;
+            }
           }
           await routeFeeWithFairnessSplit(collected, ride.driverId, rideId, "cancel_fee");
           await storage.cancelRideWithFee(
@@ -8699,6 +8722,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // loser never leaves an orphaned ride), joiner-route fare with the 30%
   // group price, discount activation at 2 riders, close at capacity. Shared
   // by the invite-code path and the open (published) path.
+  // One join at a time per (group, rider): the "already have a seat" check
+  // and the join run while a transaction-scoped advisory lock is held, so a
+  // second join from the same rider waits and then sees the first seat
+  // (Cursor review of #472). Different riders never wait on each other.
+  async function withGroupJoinLock<T>(groupId: string, riderId: string, fn: () => Promise<T>): Promise<T> {
+    const { db: lockDb } = await import("./db");
+    const { sql: lockSql } = await import("drizzle-orm");
+    return lockDb.transaction(async (tx) => {
+      await tx.execute(lockSql`SELECT pg_advisory_xact_lock(hashtext(${`group-join:${groupId}:${riderId}`}))`);
+      return fn();
+    });
+  }
+
   async function joinSharedGroupAsRider(
     group: RideGroup,
     userId: string,
@@ -8827,12 +8863,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (group.organizerId === userId) {
         return res.status(400).json({ message: "This is your own group." });
       }
-      const codeGroupRides = await storage.getRidesInGroup(group.id);
-      if (codeGroupRides.some((r) => r.riderId === userId && r.status !== "cancelled")) {
-        return res.status(409).json({ message: "You already have a seat in this group." });
-      }
-
-      const result = await joinSharedGroupAsRider(group, userId, pickupLocation, destinationLocation, paymentMethod, { distance: req.body.distance, duration: req.body.duration });
+      // The seat check and the join run under one lock per (group, rider)
+      // (Cursor review of #472): two joins at once both saw no seat and both
+      // took one.
+      const result = await withGroupJoinLock(group.id, userId, async () => {
+        const codeGroupRides = await storage.getRidesInGroup(group.id);
+        if (codeGroupRides.some((r) => r.riderId === userId && r.status !== "cancelled")) {
+          return { ok: false as const, status: 409, message: "You already have a seat in this group." };
+        }
+        return joinSharedGroupAsRider(group, userId, pickupLocation, destinationLocation, paymentMethod, { distance: req.body.distance, duration: req.body.duration });
+      });
       if (!result.ok) return res.status(result.status).json({ message: result.message });
 
       res.json({ ...result.ride, scheduleCode, discountApplied: true });
@@ -8892,7 +8932,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const result = await joinSharedGroupAsRider(group, userId, pickupLocation, dest);
+      // Re-checked under the join lock, so two joins at once take one seat.
+      const result = await withGroupJoinLock(group.id, userId, async () => {
+        const nowRides = await storage.getRidesInGroup(group.id);
+        if (nowRides.some((r) => r.riderId === userId && r.status !== "cancelled")) {
+          return { ok: false as const, status: 409, message: "You already have a seat in this group." };
+        }
+        return joinSharedGroupAsRider(group, userId, pickupLocation, dest);
+      });
       if (!result.ok) return res.status(result.status).json({ message: result.message });
 
       await logRideAudit({

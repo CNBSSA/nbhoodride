@@ -91,6 +91,17 @@ export async function run({ base, db }) {
       `${joined.status} ${JSON.stringify({ msg: joined.json?.message, original: joinedRide?.original_fare, miles: joinedRide?.distance })}`);
     const twice = await joiner.req("POST", "/api/rides/join-schedule", { scheduleCode: code, pickupLocation: joinerPickup, destinationLocation: DEST });
     check("the same rider cannot take a second seat", twice.status === 409 && /already have a seat/.test(twice.json?.message ?? ""), `${twice.status} ${JSON.stringify(twice.json?.message)}`);
+    // Two joins at the same moment take one seat (Cursor review of #472).
+    const created2 = await farer.req("POST", "/api/rides/create-shared-schedule", { pickupLocation: PICKUP, destinationLocation: DEST, estimatedFare: 20, scheduledAt: departAt });
+    const group2 = created2.json?.group?.id;
+    if (group2) groupIds.push(group2);
+    const both = await Promise.all([1, 2].map(() => joiner.req("POST", "/api/rides/join-schedule", { scheduleCode: created2.json?.scheduleCode, pickupLocation: joinerPickup, destinationLocation: DEST })));
+    const { rows: [seats] } = await db.query("SELECT count(*)::int AS n FROM rides WHERE group_id=$1 AND rider_id=$2 AND status <> 'cancelled'", [group2, joinerId]).catch(() => ({ rows: [{ n: -1 }] }));
+    const ok2 = both.filter((r) => r.status === 200).length;
+    check("two joins at the same moment from one rider take one seat", ok2 === 1 && both.some((r) => r.status === 409) && seats?.n === 1, JSON.stringify({ statuses: both.map((r) => r.status), seats: seats?.n }));
+    // This group was only for the race; its rides go, so they do not count
+    // against the hourly booking limit of the checks after it.
+    if (group2) await db.query("DELETE FROM rides WHERE group_id=$1", [group2]).catch(() => {});
     const farJoin = await farer.req("POST", "/api/rides/join-schedule", { scheduleCode: code, pickupLocation: joinerPickup, destinationLocation: nyStop });
     check("and a joiner's own destination is held to the area too (R7)", farJoin.status === 400 && /outside our service area/.test(farJoin.json?.message ?? ""), `${farJoin.status} ${JSON.stringify(farJoin.json?.message)}`);
 
