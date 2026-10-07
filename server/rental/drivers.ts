@@ -20,7 +20,7 @@ import {
   ASSIGNMENT_OPEN, RENT_CHARGE_LEAD_MS, WEEK_MS, driverLateFee, fleetDriverMayDrive, money, qualificationProblems, quoteDriverAssignment, rentalsOverlap, settleReturn,
   splitFromEarnings,
 } from "@shared/rental";
-import { stripeService } from "../stripeService";
+import { intentDeclined, stripeDeclined, stripeSaidNo, stripeService } from "../stripeService";
 import { storage } from "../storage";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
 import { RentalError, holdingBookings, verifiedPhotoList } from "./cars";
@@ -114,7 +114,71 @@ export async function cancelFleetRequest(driverUserId: string): Promise<DriverCa
   const [a] = await db.update(driverCarAssignments).set({ status: "cancelled", cancelReason: "Cancelled by the driver", updatedAt: new Date() })
     .where(and(eq(driverCarAssignments.driverUserId, driverUserId), inArray(driverCarAssignments.status, ["requested", "assigned"]))).returning();
   if (!a) throw new RentalError("There is no request to cancel. A car you have collected is returned at the PG Ride lot.", 409);
+  // A hand-over that failed may already have taken the first week from the
+  // driver's earnings; cancelling before collection is free, so it goes back
+  // (code review 2026-10-06). A charge still in flight is left to the
+  // hand-over, which gives it back itself when it finds the request cancelled.
+  await giveBackUnusedRent(a, "driver cancelled before collection", { skipInFlight: true });
   return a;
+}
+
+/**
+ * Give back everything taken for an assignment's rent that the driver never
+ * drove for: each week row not yet given back is claimed (status refunded)
+ * before anything moves, so two callers cannot both refund it; a paid card
+ * charge is refunded; a charge whose answer was lost is looked up on Stripe
+ * and refunded if it went through; what came from earnings is credited back
+ * once. Anything that cannot be given back is paged (code review 2026-10-06).
+ */
+async function giveBackUnusedRent(a: DriverCarAssignment, why: string, opts: { skipInFlight?: boolean } = {}): Promise<boolean> {
+  const rows = await db.select().from(driverRentCharges).where(eq(driverRentCharges.assignmentId, a.id));
+  let allBack = true;
+  for (const row of rows) {
+    if (row.status === "refunded") continue;
+    const inFlight = row.status === "charging" && !row.error && Date.now() - new Date(row.updatedAt).getTime() <= CHARGING_STALE_MS;
+    if (inFlight && opts.skipInFlight) continue;
+    const [claimed] = await db.update(driverRentCharges).set({ status: "refunded", updatedAt: new Date() })
+      .where(and(eq(driverRentCharges.id, row.id), eq(driverRentCharges.status, row.status))).returning();
+    if (!claimed) continue;
+    const problems: string[] = [];
+    let intentId = row.status === "paid" ? row.stripePaymentIntentId : null;
+    if (row.status === "charging") {
+      try {
+        const card = await driverCard(a.driverUserId);
+        const found = card && stripeService.isEnabled ? await stripeService.findRentalCharge(card.customerId, a.id, "driver_rent", String(new Date(row.periodStart).getTime())) : null;
+        if (found?.status === "succeeded") intentId = found.id;
+        else if (found && !intentDeclined(found.status)) problems.push(`the charge is ${found.status} on Stripe; refund it once it settles`);
+      } catch (err) {
+        problems.push(`could not ask Stripe whether the card was charged (${errText(err)})`);
+      }
+    }
+    if (intentId) {
+      try { await stripeService.refundPaymentIntent(intentId, why); } catch (err) { problems.push(`card refund failed (${errText(err)})`); }
+    }
+    if (Number(row.fromEarnings ?? 0) > 0) {
+      try { await creditBackOnce(a.driverUserId, Number(row.fromEarnings), row.id); } catch (err) { problems.push(`earnings not credited back (${errText(err)})`); }
+    }
+    if (problems.length) {
+      allBack = false;
+      await db.update(driverRentCharges).set({ error: `Give-back incomplete: ${problems.join("; ")}`.slice(0, 300) }).where(eq(driverRentCharges.id, row.id));
+      opsAlert(formatOpsAlert("💳 Driver car refund FAILED", [["Assignment", a.id.slice(0, 8)], ["Week from", new Date(row.periodStart).toISOString().slice(0, 10)], ["From earnings", money(row.fromEarnings ?? 0)], ["Reason", problems.join("; ")], ["Next", "Refund it by hand in Stripe and credit the driver's balance"]]));
+    }
+  }
+  return allBack;
+}
+
+/** Credit back what a week took from earnings, once: the ledger is checked under the balance's lock. */
+async function creditBackOnce(driverUserId: string, amount: number, rowId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [u] = await tx.select({ balance: users.virtualCardBalance }).from(users).where(eq(users.id, driverUserId)).for("update");
+    if (!u) throw new Error("driver not found");
+    const [done] = await tx.select({ id: walletTransactions.id }).from(walletTransactions)
+      .where(and(eq(walletTransactions.rideId, rowId), eq(walletTransactions.reason, RENT_REFUND_REASON))).limit(1);
+    if (done) return;
+    const after = (Number(u.balance ?? 0) + amount).toFixed(2);
+    await tx.update(users).set({ virtualCardBalance: after, updatedAt: new Date() }).where(eq(users.id, driverUserId));
+    await tx.insert(walletTransactions).values({ userId: driverUserId, amount: amount.toFixed(2), balanceAfter: after, reason: RENT_REFUND_REASON, rideId: rowId });
+  });
 }
 
 export async function listAssignments() {
@@ -136,7 +200,10 @@ export async function assignFleetCar(id: string): Promise<DriverCarAssignment> {
     const [a] = await tx.select().from(driverCarAssignments).where(eq(driverCarAssignments.id, id)).for("update");
     if (!a) throw new RentalError("Not found.", 404);
     if (a.status !== "requested") throw new RentalError(`This is ${a.status}; only a request can be assigned.`, 409);
-    await tx.select({ id: rentalCars.id }).from(rentalCars).where(eq(rentalCars.id, a.carId)).for("update");
+    const [car] = await tx.select().from(rentalCars).where(eq(rentalCars.id, a.carId)).for("update");
+    // A car whose papers lapsed is not promised to anyone (code review 2026-10-06).
+    const gaps = car ? qualificationProblems(car, new Date()) : ["The car is gone."];
+    if (gaps.length) throw new RentalError(`This car does not qualify to go out: ${gaps.join(" ")}`, 409, gaps);
     const held = await holdingBookings(a.carId, tx);
     if (held.some((h) => h.id !== a.id && rentalsOverlap(h, a))) throw new RentalError("The car is already out for some of those days. Decline this request.", 409);
     const [u] = await tx.update(driverCarAssignments).set({ status: "assigned", updatedAt: new Date() }).where(eq(driverCarAssignments.id, id)).returning();
@@ -191,6 +258,18 @@ async function takeFromEarnings(driverUserId: string, amount: number, reason: st
 }
 
 /**
+ * An answer from Stripe (or from us before Stripe was called): nothing was
+ * charged. `bump` only when the card itself said no: that alone makes the
+ * next try a new attempt with a new key (Bugbot on PR #474, code review 2026-10-06).
+ */
+class Declined extends Error {
+  constructor(message: string, public bump = false) { super(message); }
+}
+
+/** A charge Stripe has but has not finished (processing and the like): money may be on its way, so nothing new is sent. */
+const IN_FLIGHT = (status: string) => `Stripe has this charge as ${status}; nothing more will be charged until it settles. Try again later.`;
+
+/**
  * Charge one week of rent, at most once. The week's row is written first
  * (unique per assignment and week); a week already paid is not charged
  * again, a week whose charge is still in flight is refused, and a week
@@ -198,74 +277,120 @@ async function takeFromEarnings(driverUserId: string, amount: number, reason: st
  * week is taken from their earnings first, once, and the card is charged
  * only the rest — the same rest on every retry, so a retry is the same
  * Stripe request.
+ *
+ * `periodStart` names the week (the first week is named by the assignment's
+ * own start, so every hand-over attempt is the same week, the same row and
+ * the same Stripe key); `paidFrom` is when the paid week begins (the
+ * hand-over itself for the first week). A charge whose answer was lost stays
+ * "charging" with the reason, and the next try asks Stripe before repeating
+ * it under the same key; only a recorded decline makes the next try a new
+ * attempt with a new key (code review 2026-10-06).
  */
-export async function chargeWeek(a: DriverCarAssignment, periodStart: Date): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function chargeWeek(a: DriverCarAssignment, periodStart: Date, paidFrom: Date = periodStart): Promise<{ ok: true } | { ok: false; error: string }> {
   const amount = a.weeklyRent;
+  const keyPart = String(periodStart.getTime());
   const [fresh] = await db.insert(driverRentCharges).values({ assignmentId: a.id, periodStart, amount, status: "charging" })
     .onConflictDoNothing().returning();
   let row = fresh;
   if (!row) {
     const [existing] = await db.select().from(driverRentCharges).where(and(eq(driverRentCharges.assignmentId, a.id), eq(driverRentCharges.periodStart, periodStart)));
-    if (existing?.status === "paid") return { ok: true };
-    // A charge whose answer was lost (the process stopped mid-call) stays
-    // "charging"; after CHARGING_STALE_MS it may be taken up again, and
-    // Stripe is asked first whether the charge went through.
-    const stale = existing?.status === "charging" && Date.now() - new Date(existing.updatedAt).getTime() > CHARGING_STALE_MS;
-    if (existing?.status === "charging" && !stale) return { ok: false, error: "This week's rent is being charged right now." };
+    if (!existing) return { ok: false, error: "This week's rent could not be found. Try again." };
+    if (existing.status === "paid") return markWeekPaid(a, existing.id, existing.stripePaymentIntentId, paidFrom);
+    if (existing.status === "refunded") return { ok: false, error: "This week's rent was given back. Ask the driver to request the car again." };
+    // A charge whose answer was lost stays "charging": with the reason
+    // recorded it may be taken up at once (the same key replays it); with
+    // none (the process stopped mid-call) only after CHARGING_STALE_MS.
+    const unanswered = existing.status === "charging" && !!existing.error;
+    const stale = existing.status === "charging" && Date.now() - new Date(existing.updatedAt).getTime() > CHARGING_STALE_MS;
+    if (existing.status === "charging" && !unanswered && !stale) return { ok: false, error: "This week's rent is being charged right now." };
     const [claimed] = await db.update(driverRentCharges).set({ status: "charging", error: null, updatedAt: new Date() })
-      .where(and(eq(driverRentCharges.id, existing!.id), stale
-        ? and(eq(driverRentCharges.status, "charging"), lte(driverRentCharges.updatedAt, new Date(Date.now() - CHARGING_STALE_MS)))
-        : eq(driverRentCharges.status, "failed"))).returning();
+      .where(and(eq(driverRentCharges.id, existing.id), existing.status === "failed"
+        ? eq(driverRentCharges.status, "failed")
+        : and(eq(driverRentCharges.status, "charging"), unanswered
+          ? isNotNull(driverRentCharges.error)
+          : lte(driverRentCharges.updatedAt, new Date(Date.now() - CHARGING_STALE_MS))))).returning();
     if (!claimed) return { ok: false, error: "This week's rent is being charged right now." };
     row = claimed;
-    if (stale) {
-      try {
-        const card = await driverCard(a.driverUserId);
-        const found = card && stripeService.isEnabled ? await stripeService.findRentalCharge(card.customerId, a.id, "driver_rent", String(periodStart.getTime())) : null;
-        if (found?.status === "succeeded") return markWeekPaid(a, row.id, found.id, periodStart);
-      } catch (err) {
-        // Leave it stale so the next try asks Stripe again; nothing was charged here.
-        await db.update(driverRentCharges).set({ status: "charging", error: `Could not check Stripe: ${errText(err)}`, updatedAt: new Date(Date.now() - CHARGING_STALE_MS - 1000) }).where(eq(driverRentCharges.id, row.id));
-        return { ok: false, error: `Could not check with Stripe whether this week was already charged (${errText(err)}). Nothing was charged.` };
+    // Every retry asks Stripe first: a charge that went through is adopted, never repeated.
+    try {
+      const card = await driverCard(a.driverUserId);
+      const found = card && stripeService.isEnabled ? await stripeService.findRentalCharge(card.customerId, a.id, "driver_rent", keyPart) : null;
+      if (found?.status === "succeeded") return markWeekPaid(a, row.id, found.id, paidFrom);
+      if (found && !intentDeclined(found.status)) {
+        await db.update(driverRentCharges).set({ status: "charging", error: IN_FLIGHT(found.status), updatedAt: new Date() }).where(eq(driverRentCharges.id, row.id));
+        return { ok: false, error: IN_FLIGHT(found.status) };
       }
+    } catch (err) {
+      // Put it back as it was; nothing was charged here.
+      await db.update(driverRentCharges).set(existing.status === "failed"
+        ? { status: "failed", error: `Could not check Stripe: ${errText(err)}`, updatedAt: new Date() }
+        : { status: "charging", error: `Could not check Stripe: ${errText(err)}`, updatedAt: new Date() }).where(eq(driverRentCharges.id, row.id));
+      return { ok: false, error: `Could not check with Stripe whether this week was already charged (${errText(err)}). Nothing was charged.` };
     }
+    // The attempt was moved on when a decline was recorded, and only then;
+    // a lost answer or a charge in flight is the same attempt, replayed.
   }
+  let fromEarnings = row.fromEarnings === null ? null : Number(row.fromEarnings);
   try {
     // Earnings first, decided once per week (0 when the driver has not agreed).
-    let fromEarnings = row.fromEarnings === null ? null : Number(row.fromEarnings);
     if (fromEarnings === null) {
       const [agreed] = await db.select({ at: driverCarAssignments.rentFromEarningsAgreedAt }).from(driverCarAssignments).where(eq(driverCarAssignments.id, a.id));
       fromEarnings = agreed?.at ? await takeFromEarnings(a.driverUserId, Number(amount), RENT_FROM_EARNINGS_REASON, row.id) : 0;
       await db.update(driverRentCharges).set({ fromEarnings: fromEarnings.toFixed(2), updatedAt: new Date() }).where(eq(driverRentCharges.id, row.id));
     }
     const fromCard = Math.round((Number(amount) - fromEarnings) * 100) / 100;
-    if (fromCard <= 0) return markWeekPaid(a, row.id, null, periodStart);
-    if (!stripeService.isEnabled) throw new Error(fromEarnings > 0 ? `${money(fromEarnings)} was taken from earnings; card payments are not set up on this deployment for the other ${money(fromCard)}` : "card payments are not set up on this deployment");
+    if (fromCard <= 0) return markWeekPaid(a, row.id, null, paidFrom);
+    if (!stripeService.isEnabled) throw new Declined(fromEarnings > 0 ? `${money(fromEarnings)} was taken from earnings; card payments are not set up on this deployment for the other ${money(fromCard)}` : "card payments are not set up on this deployment");
     const card = await driverCard(a.driverUserId);
-    if (!card) throw new Error(fromEarnings > 0 ? `${money(fromEarnings)} was taken from earnings and the driver has no card on file for the other ${money(fromCard)}` : "the driver has no card on file");
-    const pi = await stripeService.chargeRental({ amount: fromCard, ...card, bookingId: a.id, renterId: a.driverUserId, purpose: "driver_rent", keyPart: String(periodStart.getTime()) });
-    if (pi.status !== "succeeded") throw new Error(`the card answered ${pi.status}`);
-    return markWeekPaid(a, row.id, pi.id, periodStart);
+    if (!card) throw new Declined(fromEarnings > 0 ? `${money(fromEarnings)} was taken from earnings and the driver has no card on file for the other ${money(fromCard)}` : "the driver has no card on file");
+    let pi;
+    try {
+      pi = await stripeService.chargeRental({ amount: fromCard, ...card, bookingId: a.id, renterId: a.driverUserId, purpose: "driver_rent", keyPart, attempt: row.attempt });
+    } catch (err: any) {
+      // An idempotency error is not a decline: the attempt may have charged. It stays open.
+      if (stripeSaidNo(err) && String(err?.type) !== "StripeIdempotencyError") throw new Declined(errText(err), stripeDeclined(err));
+      throw err;
+    }
+    if (pi.status === "succeeded") return markWeekPaid(a, row.id, pi.id, paidFrom);
+    if (intentDeclined(pi.status)) throw new Declined(`the card answered ${pi.status}`, true);
+    throw new Error(IN_FLIGHT(pi.status));
   } catch (err) {
-    await db.update(driverRentCharges).set({ status: "failed", error: errText(err), updatedAt: new Date() }).where(eq(driverRentCharges.id, row.id));
-    return { ok: false, error: errText(err) };
+    if (err instanceof Declined || fromEarnings === null) {
+      const bump = err instanceof Declined && err.bump;
+      await db.update(driverRentCharges).set({ status: "failed", error: errText(err), updatedAt: new Date(), ...(bump ? { attempt: row.attempt + 1 } : {}) }).where(eq(driverRentCharges.id, row.id));
+      return { ok: false, error: errText(err) };
+    }
+    // No verdict from Stripe: the card may have been charged. The week stays
+    // "charging" on this attempt so the next try asks Stripe and repeats it
+    // under the same key, never a second charge.
+    const reason = `No answer from Stripe (${errText(err)}). Trying again repeats this charge; it cannot charge twice.`;
+    await db.update(driverRentCharges).set({ status: "charging", error: reason.slice(0, 300), updatedAt: new Date() }).where(eq(driverRentCharges.id, row.id));
+    return { ok: false, error: reason };
   }
-}
-
-async function engineIsCutOff(carId: string): Promise<boolean> {
-  const [c] = await db.select({ off: rentalCars.engineCutOffAt, on: rentalCars.engineRestoredAt }).from(rentalCars).where(eq(rentalCars.id, carId));
-  return !!c?.off && !c?.on;
 }
 
 /** A charge row older than this in "charging" had its answer lost; it may be taken up again. */
 export const CHARGING_STALE_MS = 10 * 60 * 1000;
 
-async function markWeekPaid(a: DriverCarAssignment, chargeRowId: string, intentId: string | null, periodStart: Date): Promise<{ ok: true }> {
+async function markWeekPaid(a: DriverCarAssignment, chargeRowId: string, intentId: string | null, paidFrom: Date): Promise<{ ok: true }> {
   await db.update(driverRentCharges).set({ status: "paid", stripePaymentIntentId: intentId, error: null, updatedAt: new Date() }).where(eq(driverRentCharges.id, chargeRowId));
-  const paidThrough = new Date(periodStart.getTime() + WEEK_MS);
+  const paidThrough = new Date(paidFrom.getTime() + WEEK_MS);
   await db.update(driverCarAssignments).set({ paidThrough, paymentStatus: "paid", paymentError: null, updatedAt: new Date() })
     .where(and(eq(driverCarAssignments.id, a.id), sql`(${driverCarAssignments.paidThrough} IS NULL OR ${driverCarAssignments.paidThrough} < ${paidThrough})`));
   return { ok: true };
+}
+
+/** Why a car cannot leave the lot right now, or null. Read inside the caller's transaction when it holds the car's lock. */
+async function carIsOut(carId: string, assignmentId: string, executor: any = db): Promise<string | null> {
+  const [stillOut] = await executor.select({ id: driverCarAssignments.id }).from(driverCarAssignments)
+    .where(and(eq(driverCarAssignments.carId, carId), eq(driverCarAssignments.status, "active"))).limit(1);
+  if (stillOut && stillOut.id !== assignmentId) return "This car is still with another driver. Take it back first.";
+  const [rentedOut] = await executor.select({ id: rentalBookings.id }).from(rentalBookings)
+    .where(and(eq(rentalBookings.carId, carId), eq(rentalBookings.status, "collected"))).limit(1);
+  if (rentedOut) return "This car is still out on a rental. Take it back first.";
+  const [c] = await executor.select({ off: rentalCars.engineCutOffAt, on: rentalCars.engineRestoredAt }).from(rentalCars).where(eq(rentalCars.id, carId));
+  if (c?.off && !c?.on) return "This car's engine is recorded as cut off. Restore it before handing it over.";
+  return null;
 }
 
 /** Hand the car over: the first week is charged; the car becomes the driver's vehicle. */
@@ -278,59 +403,64 @@ export async function handOverFleetCar(id: string, actorId: string, body: any, n
   if (!Number.isInteger(odometer) || odometer < 0 || odometer > 2_000_000) throw new RentalError("Enter the odometer reading at hand-over.");
   const photos = await verifiedPhotoList(body?.photos, actorId, "hand-over photo");
   if (photos.length < 4) throw new RentalError("Take at least 4 photos of the car at hand-over: front, back and both sides.");
-  const [stillOut] = await db.select({ id: driverCarAssignments.id }).from(driverCarAssignments)
-    .where(and(eq(driverCarAssignments.carId, a.carId), eq(driverCarAssignments.status, "active"))).limit(1);
-  if (stillOut) throw new RentalError("This car is still with another driver. Take it back first.", 409);
-  if (await engineIsCutOff(a.carId)) throw new RentalError("This car's engine is recorded as cut off. Restore it before handing it over.", 409);
-  const [rentedOut] = await db.select({ id: rentalBookings.id }).from(rentalBookings)
-    .where(and(eq(rentalBookings.carId, a.carId), eq(rentalBookings.status, "collected"))).limit(1);
-  if (rentedOut) throw new RentalError("This car is still out on a rental. Take it back first.", 409);
-  const charged = await chargeWeek(a, now);
+  // A car whose papers lapsed after it was assigned does not leave the lot (code review 2026-10-06).
+  const [carNow] = await db.select().from(rentalCars).where(eq(rentalCars.id, a.carId));
+  const gaps = carNow ? qualificationProblems(carNow, now) : ["The car is gone."];
+  if (gaps.length) throw new RentalError(`This car does not qualify to go out: ${gaps.join(" ")}`, 409, gaps);
+  const out = await carIsOut(a.carId, a.id);
+  if (out) throw new RentalError(out, 409);
+  // The weeks run from the hand-over (code review 2026-10-06: an EARLY
+  // hand-over moves the end earlier too, so the weeks paid are the weeks
+  // had, and the late fee starts when they end). Early, the car must be
+  // free from now until the driver's own start.
+  const reanchored = new Date(now.getTime() + a.weeks * WEEK_MS);
+  if (now < a.startsAt) {
+    const held = await holdingBookings(a.carId);
+    if (held.some((h) => h.id !== a.id && rentalsOverlap(h, { startsAt: now, endsAt: a.startsAt }))) throw new RentalError("The car is booked before this driver's start. Hand it over at the start.", 409);
+  }
+  // The first week is named by the assignment's start, so every attempt at
+  // this hand-over is one row and one Stripe key (code review 2026-10-06).
+  const charged = await chargeWeek(a, a.startsAt, now);
   if (!charged.ok) {
     await db.update(driverCarAssignments).set({ paymentError: `First week's rent declined: ${charged.error}` }).where(eq(driverCarAssignments.id, id));
     opsAlert(formatOpsAlert("💳 Driver car rent declined at hand-over", [["Assignment", id.slice(0, 8)], ["Rent", money(a.weeklyRent)], ["Reason", charged.error], ["Effect", "Car not handed over"]]));
     throw new RentalError(`The first week's rent could not be charged (${charged.error}). The car stays here.`, 402);
   }
-  const [car] = await db.select().from(rentalCars).where(eq(rentalCars.id, a.carId));
-  const [vehicle] = await db.insert(vehicles).values({
-    driverProfileId: profile.id, make: car.make, model: car.model, year: car.year, color: car.color,
-    licensePlate: car.licensePlate, photos: car.photos ?? [], vehicleType: car.vehicleType, rentalCarId: car.id,
-  }).returning();
-  // The weeks run from the hand-over: a car handed over late still gives the
-  // driver every week they asked for, if the car is free for the extra days.
-  let endsAt = a.endsAt;
-  const reanchored = new Date(now.getTime() + a.weeks * WEEK_MS);
-  if (reanchored > a.endsAt) {
-    const held = await holdingBookings(a.carId);
-    if (!held.some((h) => h.id !== a.id && rentalsOverlap(h, { startsAt: a.endsAt, endsAt: reanchored }))) endsAt = reanchored;
-  }
-  const [u] = await db.update(driverCarAssignments).set({
-    status: "active", collectedAt: now, collectOdometer: odometer, collectPhotos: photos, vehicleId: vehicle.id, endsAt, updatedAt: now,
-  }).where(and(eq(driverCarAssignments.id, id), eq(driverCarAssignments.status, "assigned"))).returning();
-  if (!u) {
-    // Cancelled while the desk was charging: the copy goes and the week is given back.
-    await db.delete(vehicles).where(eq(vehicles.id, vehicle.id));
-    const [week] = await db.select().from(driverRentCharges).where(and(eq(driverRentCharges.assignmentId, id), eq(driverRentCharges.status, "paid"))).limit(1);
-    let refunded = !!week && !week.stripePaymentIntentId;
-    if (week?.stripePaymentIntentId) {
-      try {
-        await stripeService.refundPaymentIntent(week.stripePaymentIntentId, "driver cancelled during hand-over");
-        refunded = true;
-      } catch (err) {
-        opsAlert(formatOpsAlert("💳 Driver car refund FAILED", [["Assignment", id.slice(0, 8)], ["Reason", errText(err)], ["Next", "Refund the first week by hand in Stripe"]]));
-      }
+  // The car row is locked while "is it out?" is asked again and the hand-over
+  // written, as confirmRental does, so two desks handing over two requests
+  // for one car cannot both win (code review 2026-10-06).
+  const result = await db.transaction(async (tx) => {
+    const [cur] = await tx.select().from(driverCarAssignments).where(eq(driverCarAssignments.id, id)).for("update");
+    const [car] = await tx.select().from(rentalCars).where(eq(rentalCars.id, a.carId)).for("update");
+    if (cur.status === "active") return { kind: "already" as const, row: cur };
+    if (cur.status !== "assigned") return { kind: "gone" as const, row: cur };
+    const busy = await carIsOut(a.carId, a.id, tx);
+    if (busy) return { kind: "busy" as const, row: cur, why: busy };
+    let endsAt = reanchored;
+    if (reanchored > a.endsAt) {
+      const held = await holdingBookings(a.carId, tx);
+      if (held.some((h) => h.id !== a.id && rentalsOverlap(h, { startsAt: a.endsAt, endsAt: reanchored }))) endsAt = a.endsAt;
     }
-    // What was taken from earnings goes back to the balance, once.
-    if (week && Number(week.fromEarnings ?? 0) > 0 && !(await storage.hasWalletTransaction(week.id, RENT_REFUND_REASON))) {
-      await storage.addVirtualCardBalance(a.driverUserId, Number(week.fromEarnings), RENT_REFUND_REASON, week.id).catch((err) => {
-        refunded = false;
-        opsAlert(formatOpsAlert("💳 Driver car refund FAILED", [["Assignment", id.slice(0, 8)], ["From earnings", money(week.fromEarnings)], ["Reason", errText(err)], ["Next", "Credit it back to the driver's balance by hand"]]));
-      });
-    }
-    if (week && refunded) await db.update(driverRentCharges).set({ status: "refunded", updatedAt: new Date() }).where(eq(driverRentCharges.id, week.id));
-    throw new RentalError(refunded ? "The driver cancelled while the car was being handed over. The first week was given back." : "The driver cancelled while the car was being handed over. Refund the first week in Stripe.", 409);
+    const [vehicle] = await tx.insert(vehicles).values({
+      driverProfileId: profile.id, make: car.make, model: car.model, year: car.year, color: car.color,
+      licensePlate: car.licensePlate, photos: car.photos ?? [], vehicleType: car.vehicleType, rentalCarId: car.id,
+    }).returning();
+    const [u] = await tx.update(driverCarAssignments).set({
+      status: "active", collectedAt: now, collectOdometer: odometer, collectPhotos: photos, vehicleId: vehicle.id, endsAt, updatedAt: now,
+    }).where(eq(driverCarAssignments.id, id)).returning();
+    return { kind: "done" as const, row: u };
+  });
+  // A second hand-over of the same request got there first: the same week,
+  // the same row, the same charge. Nothing to undo.
+  if (result.kind === "done" || result.kind === "already") return result.row;
+  if (result.kind === "busy") {
+    // The week stays paid on the request: a hand-over once the car is back
+    // uses it, and a cancel gives it back.
+    throw new RentalError(`${result.why} The first week is paid and is kept for this hand-over.`, 409);
   }
-  return u;
+  // Cancelled while the desk was charging: the week is given back.
+  const refunded = await giveBackUnusedRent(a, "driver cancelled during hand-over");
+  throw new RentalError(refunded ? "The driver cancelled while the car was being handed over. The first week was given back." : "The driver cancelled while the car was being handed over. Refund the first week in Stripe.", 409);
 }
 
 /** Take the car back. Any damage is charged to the card; the car stops being the driver's vehicle. */
@@ -389,11 +519,32 @@ export async function chargeDamage(a: DriverCarAssignment): Promise<DriverCarAss
     if (!stripeService.isEnabled) throw new Error("card payments are not set up on this deployment");
     const card = await driverCard(a.driverUserId);
     if (!card) throw new Error("the driver has no card on file");
-    const pi = await stripeService.chargeRental({ amount: fromCard, ...card, bookingId: a.id, renterId: a.driverUserId, purpose: "driver_return" });
-    if (pi.status !== "succeeded") throw new Error(`the card answered ${pi.status}`);
+    // A retry after a recorded decline is a new attempt (a new key), asked of
+    // Stripe first; a lost answer is repeated under its own key (code review 2026-10-06).
+    // Asked of Stripe whenever an earlier try may have reached it (a later
+    // attempt, or one that left an error behind): what went through is
+    // adopted, what is still in flight is waited for.
+    if (a.returnAttempt > 1 || a.paymentError) {
+      const found = await stripeService.findRentalCharge(card.customerId, a.id, "driver_return");
+      if (found?.status === "succeeded") {
+        const [u] = await db.update(driverCarAssignments).set({ damageIntentId: found.id, paymentError: null }).where(eq(driverCarAssignments.id, a.id)).returning();
+        return u;
+      }
+      if (found && !intentDeclined(found.status)) throw new Error(IN_FLIGHT(found.status));
+    }
+    let pi;
+    try {
+      pi = await stripeService.chargeRental({ amount: fromCard, ...card, bookingId: a.id, renterId: a.driverUserId, purpose: "driver_return", attempt: a.returnAttempt });
+    } catch (err: any) {
+      if (stripeSaidNo(err) && String(err?.type) !== "StripeIdempotencyError") throw new Declined(errText(err), stripeDeclined(err));
+      throw err;
+    }
+    if (intentDeclined(pi.status)) throw new Declined(`the card answered ${pi.status}`, true);
+    if (pi.status !== "succeeded") throw new Error(IN_FLIGHT(pi.status));
     const [u] = await db.update(driverCarAssignments).set({ damageIntentId: pi.id, paymentError: null }).where(eq(driverCarAssignments.id, a.id)).returning();
     return u;
   } catch (err) {
+    if (err instanceof Declined && err.bump) await db.update(driverCarAssignments).set({ returnAttempt: sql`${driverCarAssignments.returnAttempt} + 1` }).where(and(eq(driverCarAssignments.id, a.id), eq(driverCarAssignments.returnAttempt, a.returnAttempt)));
     const taken = fromEarnings && fromEarnings > 0 ? ` (${money(fromEarnings)} was taken from earnings)` : "";
     const [u] = await db.update(driverCarAssignments).set({ paymentError: `Return charge failed${taken}: ${errText(err)}` }).where(eq(driverCarAssignments.id, a.id)).returning();
     opsAlert(formatOpsAlert("💳 Driver car return charge FAILED", [
@@ -426,7 +577,9 @@ export async function chargeDueWeek(id: string, now: Date = new Date()): Promise
   const a = await load(id);
   if (a.status !== "active") throw new RentalError("Only a car a driver has is charged rent.", 409);
   const periodStart = a.paidThrough ?? a.collectedAt ?? now;
-  if (periodStart.getTime() >= a.endsAt.getTime()) return a;
+  // Rent is charged by the whole week, never for a period shorter than one,
+  // and never for days past the end of the weeks (code review 2026-10-06).
+  if (periodStart.getTime() + WEEK_MS > a.endsAt.getTime()) return a;
   const r = await chargeWeek(a, periodStart);
   if (!r.ok) {
     const [u] = await db.update(driverCarAssignments).set({ paymentStatus: "due", paymentError: `Rent for the week from ${periodStart.toISOString().slice(0, 10)} failed: ${r.error}`, updatedAt: new Date() })
@@ -442,7 +595,7 @@ export async function runDriverRentSweep(now: Date = new Date()): Promise<{ char
   const due = await db.select().from(driverCarAssignments).where(and(
     eq(driverCarAssignments.status, "active"),
     lte(driverCarAssignments.paidThrough, new Date(now.getTime() + RENT_CHARGE_LEAD_MS)),
-    sql`${driverCarAssignments.paidThrough} < ${driverCarAssignments.endsAt}`,
+    sql`${driverCarAssignments.paidThrough} + interval '7 days' <= ${driverCarAssignments.endsAt}`,
   ));
   let charged = 0, failed = 0;
   for (const a of due) {
@@ -467,8 +620,13 @@ export async function fleetDriveBlock(driverUserId: string, now: Date = new Date
   const profile = await storage.getDriverProfile(driverUserId);
   if (!profile) return null;
   const cars = await storage.getVehiclesByDriverId(profile.id);
-  const ownCars = cars.filter((v: any) => !v.rentalCarId).length;
-  const fleetCars = cars.length - ownCars;
+  // A car of the driver's own counts only with the driver's own insurance on
+  // file: anyone can type a car into POST /api/vehicles, so a typed-in car
+  // alone must not let a driver whose PG Ride car's rent ran out go online
+  // (code review 2026-10-06). A fleet account's car (fleetCarId) is that
+  // fleet's, papers checked by PG Ride, and counts as it always did.
+  const fleetCars = cars.filter((v: any) => !!v.rentalCarId).length;
+  const ownCars = cars.filter((v: any) => !v.rentalCarId && (!!v.fleetCarId || !!profile.insuranceImageUrl)).length;
   const [a] = await db.select().from(driverCarAssignments)
     .where(and(eq(driverCarAssignments.driverUserId, driverUserId), eq(driverCarAssignments.status, "active"))).limit(1);
   // A driver approved on a PG Ride car alone (no insurance or car photos of

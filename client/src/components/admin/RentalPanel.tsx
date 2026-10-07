@@ -264,7 +264,11 @@ function RentalBookings() {
                 <Button size="sm" onClick={() => act.mutate({ id: b.id, action: "confirm" })} data-testid={`button-confirm-rental-${b.id}`}>Confirm</Button>
                 <Button size="sm" variant="outline" onClick={() => act.mutate({ id: b.id, action: "decline", body: { reason: "Not available" } })} data-testid={`button-decline-rental-${b.id}`}>Decline</Button>
               </>}
-              {b.status === "confirmed" && <Button size="sm" onClick={() => setHandling({ id: b.id, kind: "collect" })} data-testid={`button-handover-rental-${b.id}`}>Hand over</Button>}
+              {b.status === "confirmed" && <>
+                <Button size="sm" onClick={() => setHandling({ id: b.id, kind: "collect" })} data-testid={`button-handover-rental-${b.id}`}>Hand over</Button>
+                {/* A confirmed rental can be called off before collection: lapsed papers, a record that did not clear (code review 2026-10-06). */}
+                <Button size="sm" variant="outline" onClick={() => act.mutate({ id: b.id, action: "decline", body: { reason: "Called off by PG Ride before collection" } })} data-testid={`button-decline-rental-${b.id}`}>Decline</Button>
+              </>}
               {b.status === "collected" && <Button size="sm" onClick={() => setHandling({ id: b.id, kind: "return" })} data-testid={`button-takeback-rental-${b.id}`}>Take back</Button>}
               {b.status === "returned" && <Button size="sm" variant="outline" onClick={() => act.mutate({ id: b.id, action: "settle" })} data-testid={`button-settle-rental-${b.id}`}>Retry settlement</Button>}
             </div>

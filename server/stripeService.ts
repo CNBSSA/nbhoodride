@@ -5,8 +5,17 @@ import Stripe from "stripe";
 export let stripe: Stripe | null = null;
 
 if (process.env.STRIPE_SECRET_KEY) {
+  // STRIPE_API_BASE_FOR_TESTS points the client at a local stand-in for
+  // Stripe so a journey can make a charge succeed, decline or lose its answer
+  // (code review 2026-10-06). Never set in production; unset, nothing changes.
+  // Loopback only: the secret key travels with every request, so the hook
+  // can never send it off this machine, whatever the variable says.
+  const rawTestBase = process.env.STRIPE_API_BASE_FOR_TESTS ? new URL(process.env.STRIPE_API_BASE_FOR_TESTS) : null;
+  const testBase = rawTestBase && ["127.0.0.1", "localhost", "::1", "[::1]"].includes(rawTestBase.hostname) ? rawTestBase : null;
+  if (rawTestBase && !testBase) console.error("[stripe] STRIPE_API_BASE_FOR_TESTS ignored: only a loopback address is allowed");
   stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
     apiVersion: "2025-10-29.clover",
+    ...(testBase ? { host: testBase.hostname, port: Number(testBase.port || 80), protocol: testBase.protocol.replace(":", "") as "http" | "https" } : {}),
   });
 }
 
@@ -205,8 +214,9 @@ export class StripeService {
    * gets a real new attempt, not the old decline replayed. A card that wants the renter present is a decline:
    * these run with the renter at the desk but the card is charged off-session.
    */
-  async chargeRental(params: { amount: number; customerId: string; paymentMethodId: string; bookingId: string; renterId: string; purpose: "rental" | "extras" | "driver_rent" | "driver_damage" | "driver_return"; keyPart?: string }): Promise<Stripe.PaymentIntent> {
+  async chargeRental(params: { amount: number; customerId: string; paymentMethodId: string; bookingId: string; renterId: string; purpose: "rental" | "extras" | "driver_rent" | "driver_damage" | "driver_return"; keyPart?: string; attempt?: number }): Promise<Stripe.PaymentIntent> {
     const { amount, customerId, paymentMethodId, bookingId, renterId, purpose, keyPart } = params;
+    const attempt = rentalAttemptSuffix(params.attempt);
     return await requireStripe().paymentIntents.create({
       amount: Math.round(amount * 100),
       currency: "usd",
@@ -217,18 +227,22 @@ export class StripeService {
       off_session: true,
       error_on_requires_action: true,
       description: purpose === "rental" ? "PG Ride car rental" : purpose === "extras" ? "PG Ride car rental: extras on return" : purpose === "driver_rent" ? "PG Ride car for driving: weekly rent" : purpose === "driver_return" ? "PG Ride car for driving: damage and late return" : "PG Ride car for driving: damage on return",
-      metadata: { rentalBookingId: bookingId, renterId, type: `rental_${purpose}`, ...(keyPart ? { rentalKeyPart: keyPart } : {}) },
-    }, { idempotencyKey: `rental_${purpose}_${bookingId}${keyPart ? `_${keyPart}` : ""}_${paymentMethodId}` });
+      metadata: { rentalBookingId: bookingId, renterId, type: `rental_${purpose}`, ...(keyPart ? { rentalKeyPart: keyPart } : {}), ...(attempt ? { rentalAttempt: String(params.attempt) } : {}) },
+    }, { idempotencyKey: `rental_${purpose}_${bookingId}${keyPart ? `_${keyPart}` : ""}_${paymentMethodId}${attempt}` });
   }
 
   /** A charge already made for this booking, purpose and period, if Stripe has one (recovering a charge whose answer was lost). */
   async findRentalCharge(customerId: string, bookingId: string, purpose: string, keyPart?: string): Promise<Stripe.PaymentIntent | null> {
     const recent = await requireStripe().paymentIntents.list({ customer: customerId, limit: 100 });
-    return recent.data.find((pi) => pi.metadata?.rentalBookingId === bookingId && pi.metadata?.type === `rental_${purpose}` && (!keyPart || pi.metadata?.rentalKeyPart === keyPart)) ?? null;
+    const ours = recent.data.filter((pi) => pi.metadata?.rentalBookingId === bookingId && pi.metadata?.type === `rental_${purpose}` && (!keyPart || pi.metadata?.rentalKeyPart === keyPart));
+    // A declined attempt and a later one that went through carry the same
+    // metadata; the one that took (or holds) money is the answer (code review 2026-10-06).
+    return ours.find((pi) => ["succeeded", "requires_capture", "processing"].includes(pi.status)) ?? ours[0] ?? null;
   }
 
-  async holdRentalDeposit(params: { amount: number; customerId: string; paymentMethodId: string; bookingId: string; renterId: string }): Promise<Stripe.PaymentIntent> {
+  async holdRentalDeposit(params: { amount: number; customerId: string; paymentMethodId: string; bookingId: string; renterId: string; attempt?: number }): Promise<Stripe.PaymentIntent> {
     const { amount, customerId, paymentMethodId, bookingId, renterId } = params;
+    const attempt = rentalAttemptSuffix(params.attempt);
     return await requireStripe().paymentIntents.create({
       amount: Math.round(amount * 100),
       currency: "usd",
@@ -239,13 +253,54 @@ export class StripeService {
       off_session: true,
       error_on_requires_action: true,
       description: "PG Ride car rental deposit (held, not charged)",
-      metadata: { rentalBookingId: bookingId, renterId, type: "rental_deposit" },
-    }, { idempotencyKey: `rental_deposit_${bookingId}_${paymentMethodId}` });
+      metadata: { rentalBookingId: bookingId, renterId, type: "rental_deposit", ...(attempt ? { rentalAttempt: String(params.attempt) } : {}) },
+    }, { idempotencyKey: `rental_deposit_${bookingId}_${paymentMethodId}${attempt}` });
   }
 
   async getPaymentIntent(paymentIntentId: string): Promise<Stripe.PaymentIntent> {
     return await requireStripe().paymentIntents.retrieve(paymentIntentId);
   }
+}
+
+/**
+ * The attempt part of a rental idempotency key (code review 2026-10-06).
+ * Attempt 1 keeps the key it always had; a retry after a recorded decline is
+ * attempt 2, 3… so the same card gets a real new try instead of the old
+ * decline replayed for a day. An attempt whose answer was lost keeps its
+ * number, so repeating it replays it and never charges twice. The pattern is
+ * chargeAttemptKey in shared/billingCycle.ts.
+ */
+export function rentalAttemptSuffix(attempt?: number): string {
+  return attempt && attempt > 1 ? `_attempt_${attempt}` : "";
+}
+
+/**
+ * Did Stripe refuse this request outright, so nothing was charged by it?
+ * A card decline, a request Stripe rejected, a key it would not accept.
+ * Anything else (no connection, a 5xx, a reply we could not read) may have
+ * charged, so the attempt stays open and is repeated under the same key
+ * (code review 2026-10-06). An idempotency error is a refusal of THIS
+ * request, but not a decline: the attempt it belongs to may have charged.
+ */
+export function stripeSaidNo(err: any): boolean {
+  const type = String(err?.type ?? "");
+  return type === "StripeCardError" || type === "StripeInvalidRequestError" || type === "StripeAuthenticationError" || type === "StripePermissionError" || type === "StripeIdempotencyError";
+}
+
+/**
+ * Only the card saying no moves a rental charge to its next attempt (a new
+ * idempotency key). Bugbot on PR #474: anything else — an intent still
+ * "processing", one waiting on an action, an idempotency error, a reply
+ * that never came — may already hold the renter's money, and a new key
+ * would charge them twice (code review 2026-10-06).
+ */
+export function stripeDeclined(err: any): boolean {
+  return String(err?.type ?? "") === "StripeCardError";
+}
+
+/** An intent that holds no money and never will: the card said no. */
+export function intentDeclined(status: string | null | undefined): boolean {
+  return status === "requires_payment_method" || status === "canceled";
 }
 
 export const stripeService = new StripeService();
