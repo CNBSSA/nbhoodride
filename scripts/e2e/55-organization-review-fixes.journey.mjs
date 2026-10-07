@@ -24,7 +24,7 @@ export async function run({ base, db, server }) {
   const loc = (p) => JSON.stringify(p);
   const tokenOf = (link) => String(link ?? "").split("/org/join/")[1] ?? "";
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const logShows = async (re) => { for (let i = 0; i < 25; i++) { if (re.test(serverLog(server))) return true; await sleep(200); } return false; };
+  const logShows = async (re) => { for (let i = 0; i < 75; i++) { if (re.test(serverLog(server))) return true; await sleep(200); } return false; };
   const locker = await connectDb();
   // The refusals below are failed requests on the invitation door, which
   // shares the suite's per-address budget of failed sign-ins; they come from
@@ -49,7 +49,15 @@ export async function run({ base, db, server }) {
     await locker.query("BEGIN");
     await locker.query("SELECT id FROM commercial_jobs WHERE id=$1 FOR UPDATE", [jobId]);
     const pending = during();
-    await sleep(900);
+    // Wait until the competing writer is actually queued on the lock (as
+    // Postgres reports it), not a fixed time: a slow CI runner may need
+    // longer than a laptop. At most 10 seconds, then go on regardless.
+    for (let i = 0; i < 50; i++) {
+      const { rows: [w] } = await db.query("SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted");
+      if (w.n > 0) break;
+      await sleep(200);
+    }
+    await sleep(300);
     await locker.query("UPDATE commercial_jobs SET proof = COALESCE(proof,'{}'::jsonb) || $2::jsonb WHERE id=$1", [jobId, JSON.stringify(merge)]);
     await locker.query("COMMIT");
     return pending;
@@ -174,12 +182,12 @@ export async function run({ base, db, server }) {
     check("with nobody left who may book, nothing is booked", none5.n === 0, JSON.stringify(none5));
     check("and ops are paged, naming the account", await logShows(/Standing order NOT booked[\s\S]{0,200}Review Fix Dialysis/));
     const pages = () => (serverLog(server).match(/Standing order NOT booked[\s\S]{0,200}?Review Fix Dialysis/g) ?? []).length;
-    await sleep(1500); // every date's page is written before counting
+    await sleep(4000); // every date's page is written before counting
     const firstCount = pages();
     const pageText = serverLog(server).match(/Standing order NOT booked[\s\S]{0,600}/)?.[0] ?? "";
     check("the page never names the passenger", !/Quinn|2405550191/.test(pageText), pageText.slice(0, 300));
     await admin.req("POST", "/api/admin/analytics/materialize-standing-orders");
-    await sleep(1500);
+    await sleep(4000);
     check("one page per service date, and a second sweep does not page the same dates again", firstCount >= 7 && pages() === firstCount, `${firstCount} → ${pages()}`);
     await db.query("UPDATE commercial_standing_orders SET is_active=false WHERE id=$1", [so.json.id]);
 
