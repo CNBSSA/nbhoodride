@@ -120,16 +120,17 @@ export async function run({ base, db, server }) {
 
     section("A driver's rent from earnings first, once a week, the card for the rest");
     // A PG Ride car with the fixture driver for a week, as if handed over (Stripe is unreachable here).
+    // Its three weeks end exactly three paid weeks after the paid week began: rent is charged by the whole week only (code review 2026-10-06).
     await db.query("UPDATE users SET stripe_customer_id='cus_e2e_drv', stripe_payment_method_id='pm_e2e_drv', virtual_card_balance='100.00' WHERE id=$1", [FIXTURES.driver.id]);
     const { rows: [a] } = await db.query(`INSERT INTO driver_car_assignments (car_id, driver_user_id, status, starts_at, weeks, ends_at, weekly_rent, collected_at, collect_odometer, paid_through, payment_status)
-      VALUES ($1, $2, 'active', NOW() - interval '7 days', 3, NOW() + interval '14 days', '168.00', NOW() - interval '7 days', 1000, NOW() + interval '10 minutes', 'paid') RETURNING id`, [carId, FIXTURES.driver.id]);
+      VALUES ($1, $2, 'active', NOW() - interval '7 days', 3, NOW() + interval '14 days 10 minutes', '168.00', NOW() - interval '7 days', 1000, NOW() + interval '10 minutes', 'paid') RETURNING id`, [carId, FIXTURES.driver.id]);
     const agreed = await driver.req("POST", "/api/driver/fleet-car/rent-from-earnings", { agree: true });
     check("the driver agrees to rent from earnings", agreed.status === 200 && !!agreed.json?.rentFromEarningsAgreedAt, JSON.stringify(agreed.json?.message ?? agreed.json?.rentFromEarningsAgreedAt));
     check("another driver's agreement is theirs alone", (await rider.req("POST", "/api/driver/fleet-car/rent-from-earnings", { agree: true })).status === 404);
     const week2 = await admin.req("POST", `/api/admin/rental/assignments/${a.id}/charge-rent`);
     const { rows: [w2] } = await db.query("SELECT id, status, from_earnings FROM driver_rent_charges WHERE assignment_id=$1", [a.id]);
     const { rows: [bal1] } = await db.query("SELECT virtual_card_balance AS b FROM users WHERE id=$1", [FIXTURES.driver.id]);
-    check("the week takes the $100 in earnings, and the card is asked for the other $68", week2.status === 200 && w2?.from_earnings === "100.00" && bal1.b === "0.00" && w2?.status === "failed", JSON.stringify({ w2, b: bal1.b }));
+    check("the week takes the $100 in earnings, and the card is asked for the other $68", week2.status === 200 && w2?.from_earnings === "100.00" && bal1.b === "0.00" && ["failed", "charging"].includes(w2?.status), JSON.stringify({ w2, b: bal1.b }));
     check("the card failing leaves the rent due, said out loud", week2.json?.paymentStatus === "due" && await logShows(/Driver car rent FAILED/), JSON.stringify(week2.json?.paymentError));
     await db.query("UPDATE users SET virtual_card_balance='500.00' WHERE id=$1", [FIXTURES.driver.id]);
     await admin.req("POST", `/api/admin/rental/assignments/${a.id}/charge-rent`);

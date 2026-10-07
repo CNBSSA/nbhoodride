@@ -89,7 +89,9 @@ export async function run({ base, db, server }) {
     const handPhotos = [await upload(admin), await upload(admin), await upload(admin), await upload(admin)];
     const hand = await admin.req("POST", `/api/admin/rental/assignments/${aId}/handover`, { odometer: 20000, photos: handPhotos });
     check("when the first week cannot be charged, the car is not handed over", hand.status === 402 && /first week's rent could not be charged/.test(hand.json?.message ?? ""), `${hand.status} ${hand.json?.message}`);
-    const { rows: [afterHand] } = await db.query("SELECT a.status, a.vehicle_id, (SELECT count(*)::int FROM driver_rent_charges c WHERE c.assignment_id=a.id AND c.status='failed') AS failed FROM driver_car_assignments a WHERE a.id=$1", [aId]);
+    const { rows: [afterHand] } = await db.query("SELECT a.status, a.vehicle_id, (SELECT count(*)::int FROM driver_rent_charges c WHERE c.assignment_id=a.id AND (c.status='failed' OR (c.status='charging' AND c.error IS NOT NULL))) AS failed FROM driver_car_assignments a WHERE a.id=$1", [aId]);
+    // A decline is "failed"; an answer Stripe never gave stays "charging" with
+    // its reason, to be asked about before it is repeated (code review 2026-10-06).
     check("it stays assigned, no vehicle is made, and the failed week is recorded", afterHand.status === "assigned" && !afterHand.vehicle_id && afterHand.failed === 1, JSON.stringify(afterHand));
     check("ops are paged", await logShows(/Driver car rent declined at hand-over/));
 
@@ -121,7 +123,8 @@ export async function run({ base, db, server }) {
     await db.query("UPDATE driver_rent_charges SET status='charging', updated_at = NOW() - interval '11 minutes' WHERE assignment_id=$1 AND status='failed'", [aId]);
     const stuck = await admin.req("POST", `/api/admin/rental/assignments/${aId}/charge-rent`);
     check("a week stuck charging is taken up again, and when Stripe cannot be asked nothing is charged", stuck.status === 200 && /Could not check with Stripe whether this week was already charged/.test(stuck.json?.paymentError ?? ""), JSON.stringify(stuck.json?.paymentError));
-    await db.query("UPDATE driver_rent_charges SET status='charging', updated_at = NOW() WHERE assignment_id=$1 AND status='charging'", [aId]);
+    // In flight means charging just now with no answer recorded yet.
+    await db.query("UPDATE driver_rent_charges SET status='charging', error=NULL, updated_at = NOW() WHERE assignment_id=$1 AND status='charging'", [aId]);
     const fresh = await admin.req("POST", `/api/admin/rental/assignments/${aId}/charge-rent`);
     check("a week charging just now is left alone", /being charged right now/.test(fresh.json?.paymentError ?? ""), JSON.stringify(fresh.json?.paymentError));
 

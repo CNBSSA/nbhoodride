@@ -1711,6 +1711,8 @@ export const rentalBookings = pgTable("rental_bookings", {
   ownerShare: decimal("owner_share", { precision: 10, scale: 2 }),
   platformShare: decimal("platform_share", { precision: 10, scale: 2 }),
   ownerCreditedAt: timestamp("owner_credited_at"),
+  /** Stripe attempt per purpose (rental, deposit, extras); bumped only after a recorded decline (code review 2026-10-06). */
+  paymentAttempts: jsonb("payment_attempts").$type<Record<string, number>>().notNull().default({}),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -1757,6 +1759,8 @@ export const driverCarAssignments = pgTable("driver_car_assignments", {
   lateCharge: decimal("late_charge", { precision: 8, scale: 2 }),
   /** Of the damage and late charge, what was taken from the driver's earnings (the card is charged the rest). */
   returnFromEarnings: decimal("return_from_earnings", { precision: 8, scale: 2 }),
+  /** Stripe attempt for what is owed at return; bumped only after a recorded decline (code review 2026-10-06). */
+  returnAttempt: integer("return_attempt").notNull().default(1),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -1776,6 +1780,8 @@ export const driverRentCharges = pgTable("driver_rent_charges", {
   status: varchar("status").notNull().default("charging"),
   /** Taken from the driver's earnings, once, before the card (null = not decided yet). */
   fromEarnings: decimal("from_earnings", { precision: 8, scale: 2 }),
+  /** Stripe attempt for this week; bumped only after a recorded decline (code review 2026-10-06). */
+  attempt: integer("attempt").notNull().default(1),
   stripePaymentIntentId: varchar("stripe_payment_intent_id"),
   error: text("error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

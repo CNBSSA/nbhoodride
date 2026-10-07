@@ -144,7 +144,8 @@ export function registerRentalRoutes(app: Express, deps: RentalDeps): void {
   });
 
   app.post("/api/admin/rental/bookings/:id/decline", gate, isAdminOrSessionAuth, async (req, res) => {
-    try { res.json(await declineRental(String(req.params.id), req.body?.reason)); } catch (err) { fail(res, err, "Could not decline the rental"); }
+    // The desk may also call off a confirmed rental not yet collected (code review 2026-10-06).
+    try { res.json(await declineRental(String(req.params.id), req.body?.reason, { confirmed: true })); } catch (err) { fail(res, err, "Could not decline the rental"); }
   });
 
   app.post("/api/admin/rental/bookings/:id/collect", gate, isAdminOrSessionAuth, async (req, res) => {

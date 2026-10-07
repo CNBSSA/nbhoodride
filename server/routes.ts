@@ -3790,10 +3790,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Driver profile required" });
       }
       
-      const vehicleData = insertVehicleSchema.parse({
-        ...req.body,
-        driverProfileId: driverProfile.id
-      });
+      // Only the driver's own description of their car (code review
+      // 2026-10-06): rentalCarId / fleetCarId mark a copy of a PG Ride or
+      // fleet car and are written by the server alone; EV status and the
+      // rider-facing class have their own routes. Passing the body through
+      // let a driver dress a typed-in car as a PG Ride car or an EV.
+      const own = insertVehicleSchema.pick({ make: true, model: true, year: true, color: true, licensePlate: true, photos: true }).parse(req.body ?? {});
+      const vehicleData = { ...own, driverProfileId: driverProfile.id };
       
       const vehicle = await storage.createVehicle(vehicleData);
       res.json(vehicle);
@@ -3891,6 +3894,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // A fleet's car given to this driver is the fleet's to change (fleet slice 3).
       if (existingVehicles.some((v: any) => v.id === vehicleId && v.fleetCarId)) {
         return res.status(409).json({ message: "This car belongs to your fleet. The fleet's owner changes it on the fleet desk." });
+      }
+      // A PG Ride car the driver rents is PG Ride's to change, on the car itself (code review 2026-10-06).
+      if (existingVehicles.some((v: any) => v.id === vehicleId && v.rentalCarId)) {
+        return res.status(409).json({ message: "This is a PG Ride car. PG Ride keeps its details; ask the desk if something is wrong." });
       }
       
       const vehicle = await storage.updateVehicle(vehicleId, updates);
