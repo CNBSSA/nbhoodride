@@ -44,7 +44,10 @@ export function UpcomingRideGroupCard({ group, onConfirm, isConfirming }: Upcomi
   const anchor = rides[0];
 
   const { data: pickupOrderData } = useQuery<{ pickupOrder: string[] }>({
-    queryKey: [`/api/shared-rides/${anchor.groupId}/pickup-order`],
+    // anchor.groupId is a ride group (a coworker group), not a matched
+    // shared-ride group; the route is told which, so the two agree (code
+    // review 2026-10-06).
+    queryKey: [`/api/shared-rides/${anchor.groupId}/pickup-order?kind=ride_group`],
     enabled: isGroup && !!anchor.groupId,
   });
 

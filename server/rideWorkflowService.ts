@@ -37,12 +37,13 @@ import { storage } from "./storage";
 import { getDriverTrustContext, filterDriversByTrustPreferences } from "./agents/trust";
 import { rankDriversByTrustAndEta } from "@shared/trustScore";
 import { normalizeVehicleType, vehicleTypeMatches, vehicleFareMultiplier, formatMultiplier, VEHICLE_TYPE_LABELS } from "@shared/vehicleTypes";
+import { MAX_RIDE_ROUTE_MILES } from "@shared/bookingQuote";
 import { isAllowedPickup, isAllowedDestination, PICKUP_OUTSIDE_MD_MESSAGE, DESTINATION_OUTSIDE_AREA_MESSAGE } from "@shared/serviceArea";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 /** Maximum straight-line distance (miles) allowed for a single ride */
-export const MAX_RIDE_DISTANCE_MILES = 50;
+export const MAX_RIDE_DISTANCE_MILES = MAX_RIDE_ROUTE_MILES;
 
 /** Radius (miles) used when searching for nearby drivers */
 export const DRIVER_SEARCH_RADIUS_MILES = 5;
