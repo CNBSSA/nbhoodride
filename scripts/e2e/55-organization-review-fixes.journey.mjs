@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import { Session, check, section, serverLog, connectDb, deleteRides, deleteOrgs, tinyPng, FIXTURES, PASSWORD, PICKUP, DEST } from "./harness.mjs";
+import { Session, check, section, serverLog, connectDb, deleteRides, deleteOrgs, startServer, stopServer, tinyPng, FIXTURES, PASSWORD, PICKUP, DEST } from "./harness.mjs";
 
 /**
  * Code review of the organization doors (2026-10-06). Each section fails on
@@ -75,7 +75,16 @@ export async function run({ base, db, server }) {
     const { rows: [st] } = await db.query(
       `INSERT INTO commercial_statements (organization_id, period_key, period_label, period_start, period_end, job_count, total, status, attempts, stripe_payment_intent_id, last_error)
        VALUES ($1,'2026-01-05','Jan 5 – Jan 12',NOW() - interval '30 days',NOW() - interval '23 days',1,'50.00','failed',1,'pi_e2e_review_attempt1','Insufficient funds') RETURNING id`, [orgId]);
-    const retry = await admin.req("POST", `/api/admin/commercial-statements/${st.id}/charge`);
+    // The retry runs on a server whose Stripe is a closed local port, so
+    // Stripe never answers — here and on CI alike. With the fake key, CI's
+    // Stripe answered "Invalid API Key" (a definite no) while this sandbox
+    // got no readable answer, and the check meant the second.
+    const silent = await startServer({ STRIPE_API_BASE_FOR_TESTS: "http://127.0.0.1:9" });
+    let retry;
+    try {
+      const silentAdmin = new Session(silent.base); await silentAdmin.login(FIXTURES.admin.email);
+      retry = await silentAdmin.req("POST", `/api/admin/commercial-statements/${st.id}/charge`);
+    } finally { stopServer(silent); }
     const { rows: [open2] } = await db.query("SELECT status, attempts, stripe_payment_intent_id FROM commercial_statements WHERE id=$1", [st.id]);
     check("the retry Stripe never answered is left open on attempt 2 with no intent recorded",
       retry.status === 200 && retry.json?.charged === false && open2.status === "charging" && open2.attempts === 2 && open2.stripe_payment_intent_id === null, JSON.stringify({ reason: retry.json?.reason, open2 }));
