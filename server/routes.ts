@@ -192,8 +192,8 @@ import { payDriverForCompletedJob, payDriverForWaiting } from "./commercial/driv
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
 import { cancelJob as cancelCommercialJob } from "./commercial/cancel";
 import { commercialJobForRide, jobForRide } from "./commercial/jobs";
-import { formatJobNumber } from "@shared/commercial";
-import { CommercialError } from "./commercial/organizations";
+import { formatJobNumber, canBook as canBookForOrg } from "@shared/commercial";
+import { CommercialError, membershipRole as commercialMembershipRole } from "./commercial/organizations";
 import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadges";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
@@ -4759,6 +4759,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (role === "rider" && ride.paymentMethod === "invoice") {
         const job = await commercialJobForRide(rideId);
         if (job) {
+          // Only someone still allowed to book for the account may cancel its
+          // job (code review 2026-10-06): a requester removed from the
+          // organization, or moved to a role that does not book, still holds
+          // the ride in their history, and used to cancel it here — at the
+          // account's expense. Refused, never sent down the rider ladder.
+          const orgRole = await commercialMembershipRole(userId, job.organizationId);
+          if (!canBookForOrg(orgRole)) {
+            return res.status(403).json({ message: "This job belongs to an organization you can no longer book for. Ask the organization's desk to cancel it." });
+          }
           try {
             const result = await cancelCommercialJob(job.organizationId, job.jobId, userId, reason || "Cancelled by the organization");
             console.log(`[commercial] job cancelled from the app :: ride ${rideId} | fee ${result.cancellationFee} | ${result.reason}`);

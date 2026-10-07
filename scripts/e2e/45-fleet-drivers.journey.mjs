@@ -113,7 +113,10 @@ export async function run({ base, db, server }) {
     const byDesk = await admin.req("POST", `/api/admin/organizations/${otherFleetId}/members`, { email, role: "driver" });
     check("adding them as a second fleet's driver is refused, without naming the other fleet", byDesk.status === 409 && /already drives for another fleet/.test(byDesk.json?.message ?? "") && !/E2E Fleet Motors/.test(byDesk.json?.message ?? ""), JSON.stringify(byDesk.json));
     const inv2 = await owner.req("POST", `/api/fleet/${otherFleetId}/drivers`, { email });
-    const second2 = await joiner.req("POST", `/api/org/invitations/${tokenOf(inv2.json?.link)}/accept`, {});
+    // An existing account accepts only from its own session (code review 2026-10-06).
+    const signedOut2 = await joiner.req("POST", `/api/org/invitations/${tokenOf(inv2.json?.link)}/accept`, {}, { "Content-Type": "application/json", "X-Forwarded-For": "203.0.113.45" });
+    check("an existing account's invitation is not accepted by whoever holds the link", signedOut2.status === 401 && /Sign in as .{1,2}\*\*\*@example\.com to accept/.test(signedOut2.json?.message ?? ""), JSON.stringify(signedOut2.json));
+    const second2 = await driver.req("POST", `/api/org/invitations/${tokenOf(inv2.json?.link)}/accept`, {});
     check("and when they open a second fleet's invitation they are told which fleet they drive for", second2.status === 409 && /You already drive for E2E Fleet Motors\. A driver drives for one fleet at a time/.test(second2.json?.message ?? ""), JSON.stringify(second2.json));
     const { rows: [twoFleets] } = await db.query("SELECT count(*)::int AS n FROM organization_members WHERE user_id=$1 AND role='driver'", [u?.id]);
     check("they are still one fleet's driver", twoFleets.n === 1, JSON.stringify(twoFleets));
@@ -125,7 +128,14 @@ export async function run({ base, db, server }) {
     userIds.push(existingId);
     const inv3 = await owner.req("POST", `/api/fleet/${orgId}/drivers`, { email: existingEmail });
     const joiner3 = new Session(base);
-    await joiner3.req("GET", `/api/org/invitations/${tokenOf(inv3.json?.link)}`);
+    const before3 = await joiner3.req("GET", `/api/org/invitations/${tokenOf(inv3.json?.link)}`);
+    check("signed out, the link says the account exists and is not yet theirs to accept here", before3.json?.hasAccount === true && before3.json?.signedInAsInvitee === false, JSON.stringify(before3.json));
+    const blind3 = await joiner3.req("POST", `/api/org/invitations/${tokenOf(inv3.json?.link)}/accept`, {}, { "Content-Type": "application/json", "X-Forwarded-For": "203.0.113.45" });
+    const { rows: [notYet3] } = await db.query("SELECT count(*)::int AS n FROM organization_members WHERE organization_id=$1 AND user_id=$2", [orgId, existingId]);
+    check("accepting it signed out is refused and attaches nobody", blind3.status === 401 && notYet3.n === 0, JSON.stringify({ status: blind3.status, json: blind3.json, n: notYet3.n }));
+    await joiner3.login(existingEmail);
+    const signedIn3 = await joiner3.req("GET", `/api/org/invitations/${tokenOf(inv3.json?.link)}`);
+    check("signed in as the invited account, the link knows it", signedIn3.json?.signedInAsInvitee === true, JSON.stringify(signedIn3.json));
     const acc3 = await joiner3.req("POST", `/api/org/invitations/${tokenOf(inv3.json?.link)}/accept`, {});
     check("they are attached and told PG Ride has not approved them as a driver yet", acc3.status === 200 && acc3.json?.existing === true && acc3.json?.driverApproved === false, JSON.stringify(acc3.json));
     const { rows: [app3] } = await db.query("SELECT approval_status FROM driver_profiles WHERE user_id=$1", [existingId]);
