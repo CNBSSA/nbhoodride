@@ -3124,12 +3124,23 @@ export class DatabaseStorage implements IStorage {
         ))
         .returning({ id: rides.id });
       if (stamped.length === 0) return false;
-      await tx.update(users)
+      // Only a promo ride the rider still has (Cursor review of #472): two
+      // rides authorized at once both read "one left", and the counter used
+      // to floor at zero while both kept the discount. The loser's stamp is
+      // rolled back with the transaction.
+      const taken = await tx.update(users)
         .set({
-          promoRidesRemaining: sql`GREATEST(0, COALESCE(${users.promoRidesRemaining}, 0) - 1)`,
+          promoRidesRemaining: sql`COALESCE(${users.promoRidesRemaining}, 0) - 1`,
           updatedAt: new Date(),
         })
-        .where(eq(users.id, userId));
+        .where(and(eq(users.id, userId), sql`COALESCE(${users.promoRidesRemaining}, 0) > 0`))
+        .returning({ id: users.id });
+      if (taken.length === 0) {
+        await tx.update(rides)
+          .set({ promoDiscountApplied: "0.00", updatedAt: new Date() })
+          .where(eq(rides.id, rideId));
+        return false;
+      }
       return true;
     });
   }

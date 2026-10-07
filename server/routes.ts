@@ -2290,7 +2290,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         throw gone;
       }
       if (promoDiscount > 0 && promoAlreadyApplied <= 0 && rider) {
-        await storage.consumePromoRide(ride.riderId, promoDiscount, rideId);
+        // False when another ride took the last promo ride at the same
+        // moment: this ride carries no discount (it is not stamped), and
+        // settlement charges its full fare (Cursor review of #472).
+        const consumed = await storage.consumePromoRide(ride.riderId, promoDiscount, rideId);
+        if (!consumed) console.log(`[promo] ride ${rideId}: no promo ride left for rider ${ride.riderId}; the ride carries no discount`);
       }
 
       await logRideAudit({
