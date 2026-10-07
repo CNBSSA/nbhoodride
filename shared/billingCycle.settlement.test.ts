@@ -40,4 +40,15 @@ describe("settlementDecision", () => {
     expect(d).toMatchObject({ action: "paid", adopts: true });
     expect(settlementDecision({ status: "failed", stripePaymentIntentId: null }, { id: "pi_new", status: "processing" })).toMatchObject({ action: "undecided", adopts: true });
   });
+
+  it("never adopts an earlier attempt's failure as the answer to the open attempt (code review 2026-10-06)", () => {
+    const open = { status: "charging", stripePaymentIntentId: null, attempts: 2 };
+    expect(settlementDecision(open, { id: "pi_1", status: "requires_payment_method", metadata: { attempt: "1" } }).action).toBe("ignore");
+    expect(settlementDecision(open, { id: "pi_2", status: "processing", metadata: { attempt: "2" } })).toMatchObject({ action: "undecided", adopts: true });
+    expect(settlementDecision(open, { id: "pi_2", status: "requires_payment_method", metadata: { attempt: "2" } })).toMatchObject({ action: "failed", adopts: true });
+    // A debit that did go through is never ignored, whichever attempt raised it.
+    expect(settlementDecision(open, { id: "pi_1", status: "succeeded", metadata: { attempt: "1" } })).toMatchObject({ action: "paid" });
+    // From before attempts were numbered: no attempt on the intent, adopted as before.
+    expect(settlementDecision(open, { id: "pi_x", status: "requires_payment_method" }).action).toBe("failed");
+  });
 });
