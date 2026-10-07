@@ -548,6 +548,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     message: { message: "Too many chat messages. Please slow down." },
   });
 
+  // Uploads are stored in the database (up to 10 MB each), so one account may
+  // add at most 120 an hour (code review 2026-10-06): the general limit alone
+  // let one account write gigabytes. A driver's whole document set is a dozen.
+  const uploadLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: Number(process.env.UPLOAD_RATE_LIMIT_MAX) || 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) =>
+      req.session?.userId || req.session?.testUserId || req.user?.claims?.sub || ipKeyGenerator(req.ip),
+    message: { message: "Too many uploads in the last hour. Please try again later." },
+  });
+
   app.use('/api', generalLimiter);
   app.use('/api/auth/login', authLimiter);
   app.use('/api/auth/email-login', authLimiter);
@@ -1529,7 +1542,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // DB-backed upload target (GCS fallback). Body is the raw file (express.raw
   // is mounted for this path in server/index.ts, 10MB cap). Same id can be
   // re-PUT to replace a botched upload before it's linked anywhere.
-  app.put('/api/objects/db-upload/:id', isAuthenticated, async (req: any, res) => {
+  app.put('/api/objects/db-upload/:id', isAuthenticated, uploadLimiter, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const id = String(req.params.id);
@@ -11716,6 +11729,10 @@ Generate the FAQ list.`;
                   ws.close();
                   return;
                 }
+                // The socket may have closed while the user was read; its
+                // close handler has already run, so adding it now would leave
+                // a dead socket behind (code review 2026-10-06).
+                if (ws.readyState !== WebSocket.OPEN) return;
                 socketsFor(activeConnections, message.userId).add(ws);
                 // The driver is back: a socket close only started a clock
                 // (shared/driverPresence.ts); a join stops it.
@@ -12095,7 +12112,17 @@ Generate the FAQ list.`;
     },
   });
 
+  // One minute sweep at a time (code review 2026-10-06): a slow database made
+  // each minute start its work on top of the last one's, which only made the
+  // database slower. A tick that finds the last still running is skipped.
+  let minuteSweepRunning = false;
   setInterval(async () => {
+    if (minuteSweepRunning) {
+      console.warn("[sweep] the last minute sweep is still running; skipping this tick");
+      return;
+    }
+    minuteSweepRunning = true;
+    try {
     // Circuit run reminders (cutoff + pre-departure) — idempotent via
     // NotifiedAt stamps, so failures here just retry next minute.
     processCircuitReminders().catch((err) =>
@@ -12385,6 +12412,9 @@ Generate the FAQ list.`;
       }
     } catch (err) {
       console.error("Scheduled ride monitor error:", err);
+    }
+    } finally {
+      minuteSweepRunning = false;
     }
   }, 60 * 1000);
 
