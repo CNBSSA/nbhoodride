@@ -2993,17 +2993,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
         try {
           collected = await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE);
         } catch (collectErr) {
-          // Nothing was taken (collectFeeFromRide throws before it moves
-          // money), so the claim is given back and the driver may try again,
-          // as they could before the claim came first.
-          await storage.updateRide(rideId, {
-            status: "driver_arriving",
-            paymentStatus: ride.paymentStatus,
-            cancellationFee: ride.cancellationFee,
-            cancellationReason: ride.cancellationReason,
-            cancelledByRole: ride.cancelledByRole,
-          } as any).catch((err) => console.error(`[no-show] could not give back the claim on ride ${rideId}:`, err));
-          throw collectErr;
+          // Ask Stripe what happened before giving the claim back (Cursor
+          // review of #473): a capture can succeed and its answer be lost, and
+          // a wallet leg can already have moved. The claim is given back only
+          // when nothing can have been taken — a card hold Stripe still holds
+          // uncaptured, with no wallet amount on the ride.
+          const piId = ride.stripePaymentIntentId;
+          const realCard = ride.paymentMethod === "card" && !!piId && !piId.startsWith("virtual-");
+          const walletLeg = parseFloat(ride.virtualAmountAuthorized || "0") > 0;
+          let piStatus: string | null = null;
+          let piReceived = 0;
+          if (realCard && stripe) {
+            try {
+              const pi = await stripe.paymentIntents.retrieve(piId!);
+              piStatus = pi.status;
+              piReceived = (pi.amount_received ?? 0) / 100;
+            } catch { piStatus = null; }
+          }
+          if (piStatus === "succeeded") {
+            // The fee was taken: the no-show stands and is finished below.
+            collected = Number((parseFloat(ride.virtualAmountAuthorized || "0") + piReceived).toFixed(2));
+          } else if (realCard && !walletLeg && piStatus === "requires_capture") {
+            // Nothing moved: the claim is given back and the driver may try
+            // again, as they could before the claim came first.
+            await storage.updateRide(rideId, {
+              status: "driver_arriving",
+              paymentStatus: ride.paymentStatus,
+              cancellationFee: ride.cancellationFee,
+              cancellationReason: ride.cancellationReason,
+              cancelledByRole: ride.cancelledByRole,
+            } as any).catch((err) => console.error(`[no-show] could not give back the claim on ride ${rideId}:`, err));
+            throw collectErr;
+          } else {
+            // Cannot tell what moved: the no-show stands (never a live ride
+            // that may have been charged) and a person settles the money.
+            opsAlert(formatOpsAlert("⚠️ No-show fee: check the payment", [
+              ["Ride", rideId.slice(0, 8)],
+              ["Driver", userId],
+              ["Why", "collecting the no-show fee failed and what was taken cannot be told; the ride stays a no-show"],
+              ["Error", String((collectErr as any)?.message ?? collectErr).slice(0, 200)],
+            ]));
+            throw collectErr;
+          }
         }
       }
       // The driver drove there and waited. What they are paid does not hang on
