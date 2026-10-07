@@ -1401,6 +1401,8 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(rides.id, rideId),
           sql`${rides.driverId} IS NULL`,
+          // Only a ride still waiting: never a cancelled one.
+          eq(rides.status, "pending"),
           // A held delivery cannot be claimed, whatever board or push the
           // driver saw it on (shared/recipientApproval.ts).
           sql`NOT EXISTS (SELECT 1 FROM commercial_jobs h WHERE h.ride_id = ${rides.id} AND h.recipient_approval IN ('awaiting', 'declined'))`

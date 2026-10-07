@@ -4635,9 +4635,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Not authorized to update this ride" });
       }
 
-      // SECURITY: Whitelist fields that riders/drivers are allowed to update
-      const RIDER_ALLOWED_FIELDS = ['status', 'pickupInstructions', 'wantsSharedRide'];
-      const DRIVER_ALLOWED_FIELDS = ['status', 'pickupInstructions'];
+      // SECURITY: Whitelist fields that riders/drivers are allowed to update.
+      // Not the status (review 2026-10-06): a status set here skipped the
+      // cancellation fee, the card hold, the capture and the driver's pay.
+      // Every status has its own route that runs all of that (cancel,
+      // driver accept / confirm-arrival / start / complete / no-show); the
+      // app uses only those.
+      const RIDER_ALLOWED_FIELDS = ['pickupInstructions', 'wantsSharedRide'];
+      const DRIVER_ALLOWED_FIELDS = ['pickupInstructions'];
+      if (req.body?.status !== undefined && req.body.status !== ride.status) {
+        return res.status(400).json({ message: "A ride's status changes only through its own action (cancel, accept, start, complete)." });
+      }
       const isRider = ride.riderId === userId;
       const allowedFields = isRider ? RIDER_ALLOWED_FIELDS : DRIVER_ALLOWED_FIELDS;
       const updates: Record<string, any> = {};
@@ -5285,8 +5293,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const driverCounties = (profile?.dailyCounties?.length ? profile.dailyCounties : null)
         ?? profile?.acceptedCounties
         ?? [];
+      // Only an approved, active driver sees the open board: it names riders
+      // and their pickup addresses (review 2026-10-06). Anyone else gets an
+      // empty board, so an applicant's screen still opens.
+      const mayTake = !!profile && profile.approvalStatus === 'approved' && !profile.isSuspended;
       const [open, mine] = await Promise.all([
-        storage.getOpenScheduledRides(driverCounties.length > 0 ? driverCounties : undefined, await badgesFor(userId)),
+        mayTake ? storage.getOpenScheduledRides(driverCounties.length > 0 ? driverCounties : undefined, await badgesFor(userId)) : Promise.resolve([]),
         storage.getDriverUpcomingRides(userId),
       ]);
       res.json({ open, mine });
@@ -5312,6 +5324,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { rideId } = req.params;
+
+      // Approval gate, as for accept (review 2026-10-06): a claim by anyone
+      // but an approved, active driver took the ride off the board for good,
+      // since only an approved driver can confirm it.
+      const claimer = await storage.getDriverProfile(userId);
+      if (!claimer || claimer.approvalStatus !== 'approved' || claimer.isSuspended) {
+        return res.status(403).json({
+          message: "Your driver application is still under review. You'll be able to claim rides once an admin approves your documents.",
+        });
+      }
 
       const existing = await storage.getRide(rideId);
       if (!existing) return res.status(404).json({ message: "Ride not found" });
@@ -6817,10 +6839,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // "isSuperAdmin flag only" (still secure — the flag is admin-set in DB).
   const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL;
 
+  // Both admin guards answer 503 when the user cannot be read, instead of
+  // leaving an unhandled rejection behind (code review 2026-10-06).
   const isAdminOrSessionAuth = async (req: any, res: any, next: any) => {
     const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
-    const user = await storage.getUser(userId);
+    let user;
+    try { user = await storage.getUser(userId); }
+    catch (err) { console.error("admin guard could not read the user:", err); return res.status(503).json({ message: "Please try again in a moment." }); }
     if (!user?.isAdmin && !user?.isSuperAdmin) return res.status(403).json({ message: "Admin access required" });
     req.adminUser = user;
     next();
@@ -6829,7 +6855,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const isSuperAdminAuth = async (req: any, res: any, next: any) => {
     const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
-    const user = await storage.getUser(userId);
+    let user;
+    try { user = await storage.getUser(userId); }
+    catch (err) { console.error("super-admin guard could not read the user:", err); return res.status(503).json({ message: "Please try again in a moment." }); }
     if (!user?.isSuperAdmin) return res.status(403).json({ message: "Super admin access required" });
     // Defense in depth: if SUPER_ADMIN_EMAIL is configured, require an exact
     // match. If not configured (R-L4 made it optional), the isSuperAdmin

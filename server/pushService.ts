@@ -73,13 +73,27 @@ export async function sendPushNotification(
   subscription: PushSubscriptionRecord,
   payload: PushPayload
 ): Promise<boolean> {
-  if (!vapidReady) return false;
+  return (await sendPushOutcome(subscription, payload)) === "sent";
+}
+
+/**
+ * Sent, expired (the push service says the subscription is gone: 404/410)
+ * or failed (anything else — a 5xx, a timeout). Only an expired one is
+ * removed (code review 2026-10-06): a passing outage used to delete the
+ * rider's subscription for good, ride-critical pushes included.
+ */
+export async function sendPushOutcome(
+  subscription: PushSubscriptionRecord,
+  payload: PushPayload
+): Promise<"sent" | "expired" | "failed"> {
+  if (!vapidReady) return "failed";
   try {
     await webpush.sendNotification(
       { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
-      JSON.stringify(payload)
+      JSON.stringify(payload),
+      { timeout: 10_000 },
     );
-    return true;
+    return "sent";
   } catch (err: any) {
     // Every failure is written down (reliability audit 2026-09-29): a pruned
     // subscription and a send error used to leave no trace, so nobody could
@@ -91,7 +105,7 @@ export async function sendPushNotification(
     import("./reliabilityEvents")
       .then((m) => m.recordReliabilityEvent({ kind: expired ? "push_pruned" : "push_failed", page: payload.tag ?? null, message }))
       .catch(() => {});
-    return false; // Expired: the caller removes the subscription
+    return expired ? "expired" : "failed";
   }
 }
 
@@ -102,8 +116,8 @@ export async function sendPushToSubscriptions(
 ): Promise<void> {
   await Promise.allSettled(
     subscriptions.map(async (sub) => {
-      const ok = await sendPushNotification(sub, payload);
-      if (!ok && onExpired) onExpired(sub.endpoint);
+      const outcome = await sendPushOutcome(sub, payload);
+      if (outcome === "expired" && onExpired) onExpired(sub.endpoint);
     })
   );
 }
