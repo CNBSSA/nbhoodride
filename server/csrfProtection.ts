@@ -26,7 +26,11 @@ function readCookie(req: Request, name: string): string | undefined {
     const eq = segment.indexOf("=");
     if (eq < 0) continue;
     const k = segment.slice(0, eq).trim();
-    if (k === name) return decodeURIComponent(segment.slice(eq + 1).trim());
+    if (k === name) {
+      // A malformed cookie is no token (a 403), not a server error (code
+      // review 2026-10-06: it paged ops as a 500).
+      try { return decodeURIComponent(segment.slice(eq + 1).trim()); } catch { return undefined; }
+    }
   }
   return undefined;
 }
