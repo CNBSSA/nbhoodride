@@ -264,7 +264,12 @@ export async function chargeStatement(statementId: string, now: Date = new Date(
     let existing: { id: string; status: string; metadata?: Record<string, string> | null; last_payment_error?: { message?: string } | null } | undefined;
     try {
       const recent = await stripe.paymentIntents.list({ customer: org.stripeCustomerId, limit: 100 });
-      existing = recent.data.find((pi) => pi.metadata?.statementId === statement.id);
+      // An earlier attempt that Stripe already failed is not this attempt's
+      // answer (code review 2026-10-06): skip it, so a new attempt that never
+      // reached Stripe is repeated under its own key, not marked failed by
+      // the old one. Anything else raised for the statement is adopted.
+      existing = recent.data.find((pi) => pi.metadata?.statementId === statement.id
+        && settlementDecision({ status: "charging", stripePaymentIntentId: null, attempts: statement.attempts }, pi).action !== "ignore");
     } catch (err: any) {
       const reason = `Could not ask Stripe whether a debit already exists for this statement (${String(err?.message ?? err).slice(0, 160)}). Nothing was charged; try again when Stripe answers.`;
       const [left] = await db.update(commercialStatements).set({ lastError: reason.slice(0, 500) }).where(eq(commercialStatements.id, statementId)).returning();
@@ -288,8 +293,14 @@ export async function chargeStatement(statementId: string, now: Date = new Date(
   // debit exists for the statement, so a new key can never double-charge.
   const resumingUnanswered = statement.status === "charging" && !statement.stripePaymentIntentId && statement.attempts > 0;
   const attempt = resumingUnanswered ? statement.attempts : statement.attempts + 1;
+  // The intent id is cleared as the attempt starts (code review 2026-10-06):
+  // keeping the previous attempt's failed id made an unanswered new attempt
+  // look settled-as-failed — its own Stripe events were ignored as "not
+  // current", the next retry re-read the old failure, and the retry after
+  // that raised a second real debit. With no id, an unanswered attempt
+  // always goes through the search-Stripe-and-adopt path above.
   await db.update(commercialStatements)
-    .set({ status: "charging", attempts: attempt, lastError: null })
+    .set({ status: "charging", attempts: attempt, lastError: null, stripePaymentIntentId: null })
     .where(eq(commercialStatements.id, statementId));
   try {
     const intent = await stripe.paymentIntents.create({

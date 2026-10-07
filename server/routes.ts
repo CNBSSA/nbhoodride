@@ -193,8 +193,8 @@ import { payDriverForCompletedJob, payDriverForWaiting } from "./commercial/driv
 import { assertDriverMayTakeRide, badgesFor, recordProof, setBadges, textPassengerTrackingLink } from "./commercial/badges";
 import { cancelJob as cancelCommercialJob } from "./commercial/cancel";
 import { commercialJobForRide, jobForRide } from "./commercial/jobs";
-import { formatJobNumber } from "@shared/commercial";
-import { CommercialError } from "./commercial/organizations";
+import { formatJobNumber, canBook as canBookForOrg } from "@shared/commercial";
+import { CommercialError, membershipRole as commercialMembershipRole } from "./commercial/organizations";
 import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadges";
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
@@ -3871,10 +3871,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Driver profile required" });
       }
       
-      const vehicleData = insertVehicleSchema.parse({
-        ...req.body,
-        driverProfileId: driverProfile.id
-      });
+      // Only the driver's own description of their car (code review
+      // 2026-10-06): rentalCarId / fleetCarId mark a copy of a PG Ride or
+      // fleet car and are written by the server alone; EV status and the
+      // rider-facing class have their own routes. Passing the body through
+      // let a driver dress a typed-in car as a PG Ride car or an EV.
+      const own = insertVehicleSchema.pick({ make: true, model: true, year: true, color: true, licensePlate: true, photos: true }).parse(req.body ?? {});
+      const vehicleData = { ...own, driverProfileId: driverProfile.id };
       
       const vehicle = await storage.createVehicle(vehicleData);
       res.json(vehicle);
@@ -3972,6 +3975,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // A fleet's car given to this driver is the fleet's to change (fleet slice 3).
       if (existingVehicles.some((v: any) => v.id === vehicleId && v.fleetCarId)) {
         return res.status(409).json({ message: "This car belongs to your fleet. The fleet's owner changes it on the fleet desk." });
+      }
+      // A PG Ride car the driver rents is PG Ride's to change, on the car itself (code review 2026-10-06).
+      if (existingVehicles.some((v: any) => v.id === vehicleId && v.rentalCarId)) {
+        return res.status(409).json({ message: "This is a PG Ride car. PG Ride keeps its details; ask the desk if something is wrong." });
       }
       
       const vehicle = await storage.updateVehicle(vehicleId, updates);
@@ -4840,6 +4847,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (role === "rider" && ride.paymentMethod === "invoice") {
         const job = await commercialJobForRide(rideId);
         if (job) {
+          // Only someone still allowed to book for the account may cancel its
+          // job (code review 2026-10-06): a requester removed from the
+          // organization, or moved to a role that does not book, still holds
+          // the ride in their history, and used to cancel it here — at the
+          // account's expense. Refused, never sent down the rider ladder.
+          const orgRole = await commercialMembershipRole(userId, job.organizationId);
+          if (!canBookForOrg(orgRole)) {
+            return res.status(403).json({ message: "This job belongs to an organization you can no longer book for. Ask the organization's desk to cancel it." });
+          }
           try {
             const result = await cancelCommercialJob(job.organizationId, job.jobId, userId, reason || "Cancelled by the organization");
             console.log(`[commercial] job cancelled from the app :: ride ${rideId} | fee ${result.cancellationFee} | ${result.reason}`);

@@ -42,3 +42,32 @@ export function safePortalNext(next: string | null | undefined): string {
   if (next.startsWith("//") || /[\r\n\\]/.test(next)) return "/org";
   return next.slice(0, 200);
 }
+
+/**
+ * An email shown to someone who may not be its owner: enough to recognise,
+ * not enough to read (code review 2026-10-06). "festus@gmail.com" reads
+ * "fe***@gmail.com".
+ */
+export function maskEmail(email: string | null | undefined): string {
+  const addr = String(email ?? "").trim();
+  const at = addr.lastIndexOf("@");
+  if (at <= 0) return "***";
+  const local = addr.slice(0, at);
+  return `${local.slice(0, Math.min(2, Math.max(1, local.length - 1)))}***${addr.slice(at)}`;
+}
+
+/** Why an invitation to an organization that is not open cannot be made or used (code review 2026-10-06). */
+export function organizationNotOpenForInvitations(organizationName: string, status: string | null | undefined, side: "invite" | "accept"): string | null {
+  if (status === "active") return null;
+  if (side === "invite") {
+    return status === "paused"
+      ? `${organizationName} is paused. People can be invited again once PG Ride resumes the account.`
+      : `PG Ride has not approved ${organizationName} yet. People can be invited once the account is approved.`;
+  }
+  return `${organizationName} is not open for new members right now. Ask whoever invited you to try again once the account is approved.`;
+}
+
+/** What an existing account's invitee who is not signed in as that account is told (code review 2026-10-06). */
+export function signInToAcceptText(email: string): string {
+  return `Sign in as ${maskEmail(email)} to accept this invitation.`;
+}

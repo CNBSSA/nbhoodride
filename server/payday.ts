@@ -53,6 +53,15 @@ export interface PaydayResult {
  * Pay everyone who is owed. `now` decides which payday this is; the caller
  * is responsible for only running it when one is due and for claiming it.
  */
+/**
+ * Is this person paid through their driver row? Only an approved driver with
+ * a payout method on file: the one row that can actually send them money.
+ */
+function paysAsDriver(userId: ReturnType<typeof sql>) {
+  return sql`EXISTS (SELECT 1 FROM driver_profiles dp WHERE dp.user_id = ${userId} AND dp.approval_status = 'approved'
+    AND COALESCE(dp.payout_method, '') <> '' AND COALESCE(dp.payout_details, '') <> '')`;
+}
+
 export async function runWeeklyPayday(now: Date = new Date()): Promise<PaydayResult> {
   const paydayKey = paydayKeyOf(now);
   const label = paydayLabel(paydayKey);
@@ -78,12 +87,19 @@ export async function runWeeklyPayday(now: Date = new Date()): Promise<PaydayRes
       // NULL today; this makes sure a future one cannot hide money.
       sql`COALESCE(${driverProfiles.isSuspended}, false) = false`,
       sql`CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) > 0`,
+      // A car owner is paid through the driver row only when that row can
+      // actually pay them; otherwise through the owner row below (code review 2026-10-06).
+      sql`NOT (EXISTS (SELECT 1 FROM rental_owner_profiles rop WHERE rop.user_id = ${users.id}) AND NOT ${paysAsDriver(sql`${users.id}`)})`,
     ));
 
   // Private car owners are paid weekly too (Festus, 2026-09-27): everyone
-  // with a car owner's payout method, a balance, and no driver profile (a
-  // driver who also owns a listed car is paid once, through the driver row
-  // above — the balance is one balance).
+  // with a car owner's payout method and a balance. A driver who also owns a
+  // listed car is paid once, through the driver row above (the balance is
+  // one balance), but only when that row can pay: an approved driver with a
+  // payout method. Before (code review 2026-10-06) ANY driver profile —
+  // an application still pending, one with no payout method — sent an
+  // owner's earnings to a driver row that skipped them, and they were never
+  // paid at all.
   // An owner is paid only what their cars earned and has not been paid yet
   // — never a refund or credit that happens to sit in the same balance.
   // A rejected request gave its money back to the balance, so it was not a
@@ -108,11 +124,13 @@ export async function runWeeklyPayday(now: Date = new Date()): Promise<PaydayRes
     .from(rentalOwnerProfiles)
     .innerJoin(users, eq(users.id, rentalOwnerProfiles.userId))
     .where(and(
-      sql`NOT EXISTS (SELECT 1 FROM driver_profiles dp WHERE dp.user_id = ${users.id})`,
+      sql`NOT ${paysAsDriver(sql`${users.id}`)}`,
       sql`COALESCE(${users.isSuspended}, false) = false`,
       sql`${ownerOwed} > 0`,
     ));
-  rows.push(...owners);
+  // One row per person, whatever the two queries say: nobody is paid twice in one payday.
+  const seen = new Set(rows.map((r) => r.userId));
+  rows.push(...owners.filter((o) => !seen.has(o.userId)));
 
   const paid: PaydayLine[] = [];
   const skipped: PaydayLine[] = [];
