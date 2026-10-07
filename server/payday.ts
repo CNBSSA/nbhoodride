@@ -86,10 +86,14 @@ export async function runWeeklyPayday(now: Date = new Date()): Promise<PaydayRes
   // above — the balance is one balance).
   // An owner is paid only what their cars earned and has not been paid yet
   // — never a refund or credit that happens to sit in the same balance.
+  // A rejected request gave its money back to the balance, so it was not a
+  // payment and does not count against what the cars earned (code review
+  // 2026-10-06: it used to, and an owner whose payout was rejected was
+  // never paid that amount again).
   const ownerOwed = sql<string>`GREATEST(0, LEAST(
       CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)),
       COALESCE((SELECT SUM(CAST(wt.amount AS DECIMAL(10,2))) FROM wallet_transactions wt WHERE wt.user_id = ${users.id} AND wt.reason = 'rental_owner_earnings'), 0)
-      - COALESCE((SELECT SUM(CAST(pr.amount AS DECIMAL(10,2))) FROM payout_requests pr WHERE pr.driver_id = ${users.id}), 0)
+      - COALESCE((SELECT SUM(CAST(pr.amount AS DECIMAL(10,2))) FROM payout_requests pr WHERE pr.driver_id = ${users.id} AND COALESCE(pr.status, 'pending') <> 'rejected'), 0)
     ))`;
   const owners = await db
     .select({
