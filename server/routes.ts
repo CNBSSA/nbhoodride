@@ -199,7 +199,7 @@ import { BADGE_LABELS, DRIVER_BADGES, describeBadges } from "@shared/driverBadge
 import { normalizeDisputeIssueType } from "@shared/supportPolicy";
 import { estimateRoute, roadFiguresPlausible, MAX_RIDE_STOPS } from "@shared/routeEstimate";
 import { judgeUpload, safeServeHeaders } from "@shared/uploadTypes";
-import { validateRoutePoints } from "@shared/bookingQuote";
+import { validateRoutePoints, routeAreaProblem } from "@shared/bookingQuote";
 import { priceBooking } from "./bookingQuote";
 import { splitFare } from "@shared/payoutPolicy";
 import { TIP_MAX, TIP_MIN, describeTipRefusal, normalizeTip, tipRefusal } from "@shared/tipPolicy";
@@ -2204,14 +2204,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     rider: User | undefined,
     actorUserId: string,
     opts?: { onFailure?: "cancel" | "revert" },
-  ): Promise<{ ok: true } | { ok: false; message: string }> {
+  ): Promise<{ ok: true } | { ok: false; message: string; rideGone?: boolean }> {
     if (ride.paymentMethod !== 'card') return { ok: true };
 
     const rawFare = parseFloat(ride.estimatedFare || "0");
 
     // Welcome credit (shared/farePolicy.ts): $5 off while promo rides remain;
-    // never on a weekly-plan ride, which already carries the plan rate.
-    const promoDiscount = welcomeCreditFor(rawFare, rider?.promoRidesRemaining, { planRide: !!ride.planId });
+    // never on a weekly-plan ride, which already carries the plan rate. A
+    // ride that already carries its promo keeps that figure and takes no
+    // second promo ride (code review 2026-10-06).
+    const promoAlreadyApplied = parseFloat(ride.promoDiscountApplied || "0");
+    const promoDiscount = promoAlreadyApplied > 0
+      ? Math.min(promoAlreadyApplied, rawFare)
+      : welcomeCreditFor(rawFare, rider?.promoRidesRemaining, { planRide: !!ride.planId });
     const chargeAmount = Math.max(0, rawFare - promoDiscount);
 
     let virtualDeducted = 0;
@@ -2275,10 +2280,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      if (promoDiscount > 0 && rider) {
-        await storage.consumePromoRide(ride.riderId, promoDiscount, rideId);
+      // The authorization is written only while the ride is still with its
+      // driver; a rider who cancelled while the hold was being placed gets
+      // the hold voided and the wallet leg back in the catch below, and the
+      // driver is told the ride is gone (code review 2026-10-06).
+      const authorizedRide = await storage.setRidePaymentAuthorization(rideId, stripeIntentId, virtualDeducted, stripeAuthAmount);
+      if (!authorizedRide) {
+        const gone: any = new Error("This ride was cancelled before it could be confirmed.");
+        gone.rideGone = true;
+        throw gone;
       }
-      await storage.setRidePaymentAuthorization(rideId, stripeIntentId, virtualDeducted, stripeAuthAmount);
+      if (promoDiscount > 0 && promoAlreadyApplied <= 0 && rider) {
+        // False when another ride took the last promo ride at the same
+        // moment: this ride carries no discount (it is not stamped), and
+        // settlement charges its full fare (Cursor review of #472).
+        const consumed = await storage.consumePromoRide(ride.riderId, promoDiscount, rideId);
+        if (!consumed) console.log(`[promo] ride ${rideId}: no promo ride left for rider ${ride.riderId}; the ride carries no discount`);
+      }
 
       await logRideAudit({
         rideId,
@@ -2404,7 +2422,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      return { ok: false, message: failMessage };
+      return { ok: false, message: failMessage, rideGone: error?.rideGone === true };
     }
   }
 
@@ -2459,6 +2477,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Immediate accept: on a payment failure, cancel the ride and notify the
       // rider (their card is the problem) rather than leaving it stranded.
       const paymentResult = await authorizeCardPaymentForRide(rideId, ride, rider, userId, { onFailure: "cancel" });
+      if (!paymentResult.ok && paymentResult.rideGone) {
+        // The rider cancelled while the accept was under way: nothing is held
+        // and nobody's card is at fault (code review 2026-10-06).
+        return res.status(409).json({ message: paymentResult.message });
+      }
       if (!paymentResult.ok) {
         riderAlert("payment_auth_failed", rideId, [["Rider", `${rider?.firstName ?? ""} ${rider?.lastName ?? ""}`.trim() || ride.riderId], ["Phone", rider?.phone], ["Ride", rideId.slice(0, 8)], ["Reason", paymentResult.message], ["Effect", "Ride cancelled — rider needs to fix their card"]]);
         return res.status(402).json({ message: paymentResult.message });
@@ -3506,6 +3529,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try { await stripeService.cancelPaymentIntent(ride.stripePaymentIntentId!); }
       catch (err) { console.error(`Failed to void Stripe auth on refund for ride ${ride.id}:`, err); }
     }
+    // The promo ride the authorization took goes back with it: every caller
+    // here is releasing a ride nobody drove (a cancel, a requeue, a rolled
+    // back confirm), and a re-authorization consumes afresh. Read from the
+    // row, not the caller's copy, and cleared atomically, so it is given back
+    // once (code review 2026-10-06).
+    try { await storage.restorePromoRide(ride.id); }
+    catch (err) { console.error(`Failed to restore the promo ride on refund for ride ${ride.id}:`, err); }
   }
 
   // Charge a fee against the ride's existing card authorization, refunding
@@ -4390,6 +4420,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: stopsCheck.error });
       }
       const stops = stopsCheck.points;
+      // Every stop is somewhere the car goes: the same area and 50-mile
+      // limit as the destination, over the whole route (code review 2026-10-06).
+      const rideRouteProblem = routeAreaProblem([pickup, ...stops, destination]);
+      if (rideRouteProblem) {
+        return res.status(400).json({ message: rideRouteProblem });
+      }
 
       // The fare is the quote, and at completion the quote is what is
       // charged — so the quote is the server's, never the app's number
@@ -4921,7 +4957,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // as on the ordinary Complete (rates audit, 2026-09-18).
           await payCommercialDriverForCompletedRide(completed);
         }
-        await settleCardPaymentForCompletedRide(completed, undefined, 0);
+        // An early end is a completion, so a settlement that fails is handled
+        // exactly as Complete handles it: the ride stays ended, the failure is
+        // paged and marked settlement_failed for the reconciliation queue. It
+        // used to throw out of this route as a 500 after the ride had already
+        // completed, unmarked, so nobody was told (code review 2026-10-06).
+        try {
+          await settleCardPaymentForCompletedRide(completed, undefined, 0);
+        } catch (settleErr) {
+          console.error(`[end-early] PAYMENT SETTLEMENT FAILED for ride ${rideId} — ride ended, needs manual reconciliation:`, settleErr);
+          riderAlert("settlement_failed", rideId, [["Ride", rideId.slice(0, 8)], ["Fare", `$${Number(completed.actualFare ?? 0).toFixed(2)}`], ["Reason", String((settleErr as any)?.message ?? settleErr).slice(0, 200)], ["Where", "Admin → Reconciliation"]]);
+          try {
+            await storage.updateRide(rideId, { paymentStatus: "settlement_failed" });
+          } catch (markErr) {
+            console.error(`[end-early] could not mark ride ${rideId} settlement_failed:`, markErr);
+          }
+        }
         await storage.updateRide(rideId, {
           cancellationReason: reason || `Ride ended early by ${role}`,
           cancelledBy: userId,
@@ -5082,17 +5133,83 @@ export async function registerRoutes(app: Express): Promise<Server> {
         cancellationFee = feeResult.fee;
         feeReason = feeResult.reason;
 
+        // Claim the ride before any money moves: one conditional write from
+        // the status this request read to cancelled. A second cancel (a double
+        // tap) or a driver's accept landing in between finds the ride already
+        // moved and changes nothing; before, both cancels collected the fee
+        // and a cancel racing an accept left the accept's fresh hold on a
+        // cancelled ride (code review 2026-10-06). The money is then settled
+        // from the row as claimed, which carries any authorization the accept
+        // wrote first; one written after the claim is refused and voided by
+        // the accept itself (setRidePaymentAuthorization).
+        const { db: claimDb } = await import("./db");
+        const { rides: claimRides } = await import("@shared/schema");
+        const { eq: claimEq, and: claimAnd } = await import("drizzle-orm");
+        const [claimedRide] = ride.status
+          ? await claimDb.update(claimRides)
+              .set({
+                status: "cancelled",
+                cancellationReason: reason || "Ride cancelled",
+                cancelledBy: userId,
+                cancelledByRole: "rider",
+                updatedAt: new Date(),
+              })
+              .where(claimAnd(claimEq(claimRides.id, rideId), claimEq(claimRides.status, ride.status)))
+              .returning()
+          : [];
+        if (!claimedRide) {
+          const now = await storage.getRide(rideId);
+          if (now && ["completed", "cancelled", "no_show"].includes(now.status ?? "")) {
+            return res.status(400).json({ message: `Ride is already ${now.status} and can't be cancelled.` });
+          }
+          return res.status(409).json({ message: "Your ride just changed (a driver may have accepted it). Check it and try again." });
+        }
+
         console.log(`Processing rider cancellation for ride ${rideId}: fee $${cancellationFee} (${feeReason})`);
 
         if (cancellationFee > 0) {
-          const collected = await collectFeeFromRide(ride, cancellationFee);
+          let collected: number;
+          try {
+            collected = await collectFeeFromRide(claimedRide, cancellationFee);
+          } catch (feeErr) {
+            // Ask Stripe what actually happened before handing the ride back
+            // (Cursor review of #472): a capture can succeed and its answer
+            // be lost, and handing the ride back then would leave a live ride
+            // whose rider already paid the fee.
+            const piId = claimedRide.stripePaymentIntentId;
+            let capturedAmount: number | null = null;
+            let outcomeUnknown = false;
+            if (claimedRide.paymentMethod === "card" && piId && !piId.startsWith("virtual-") && stripe) {
+              try {
+                const pi = await stripe.paymentIntents.retrieve(piId);
+                if (pi.status === "succeeded") capturedAmount = (pi.amount_received ?? 0) / 100;
+              } catch { outcomeUnknown = true; }
+            }
+            if (capturedAmount !== null) {
+              // The fee was taken: the cancel stands, and is finished below.
+              collected = Number((parseFloat(claimedRide.virtualAmountAuthorized || "0") + capturedAmount).toFixed(2));
+            } else if (outcomeUnknown) {
+              // Stripe cannot say: the ride stays cancelled (never a live ride
+              // that may have been charged) and a person settles it.
+              riderAlert("server_error", `cancel-fee:${rideId}`, [["Ride", rideId], ["Problem", "cancellation fee capture failed and Stripe could not be asked whether it went through; the ride is left cancelled — check the payment in Stripe"], ["Error", String((feeErr as any)?.message ?? feeErr).slice(0, 200)]]);
+              throw feeErr;
+            } else {
+              // Nothing was taken: hand the ride back as it was, so the rider
+              // can try again, exactly as before the claim existed.
+              await claimDb.update(claimRides)
+                .set({ status: ride.status as any, cancellationReason: ride.cancellationReason, cancelledBy: ride.cancelledBy, cancelledByRole: ride.cancelledByRole, updatedAt: new Date() })
+                .where(claimAnd(claimEq(claimRides.id, rideId), claimEq(claimRides.status, "cancelled")))
+                .catch((revertErr) => console.error(`[cancel] could not hand ride ${rideId} back after a failed fee:`, revertErr));
+              throw feeErr;
+            }
+          }
           await routeFeeWithFairnessSplit(collected, ride.driverId, rideId, "cancel_fee");
           await storage.cancelRideWithFee(
             rideId, cancellationFee, reason || "Ride cancelled",
             undefined, undefined, userId, "rider",
           );
         } else {
-          await refundRideAuthorizationInFull(ride);
+          await refundRideAuthorizationInFull(claimedRide);
           await storage.updateRide(rideId, {
             status: "cancelled",
             cancellationReason: reason || "Ride cancelled",
@@ -5764,6 +5881,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized to rate this ride" });
       }
       
+      // Only a ride that happened is rated: a cancelled or still-running ride
+      // used to take a rating and move the other party's average (code
+      // review 2026-10-06).
+      if (ride.status !== "completed") {
+        return res.status(400).json({ message: "Only a completed ride can be rated." });
+      }
+
       // Check if rating already exists to prevent double-rating
       const isRider = ride.riderId === userId;
       const existingRating = isRider ? ride.driverRating : ride.riderRating;
@@ -5772,7 +5896,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(409).json({ message: "You have already rated this ride" });
       }
       
-      await storage.updateRideRating(rideId, userId, rating, review);
+      // The write itself is conditional on the rating being empty, so two
+      // submissions at once rate the ride once.
+      const rated = await storage.updateRideRating(rideId, userId, rating, review);
+      if (!rated) {
+        return res.status(409).json({ message: "You have already rated this ride" });
+      }
 
       // Update the OTHER party's overall rating (not the rater's rating)
       const ratedUserId = isRider ? ride.driverId : ride.riderId;
@@ -6617,11 +6746,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ── Shared ride pickup order optimization ─────────────────────────────────
   app.get('/api/shared-rides/:groupId/pickup-order', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
       const { groupId } = req.params;
-      const groupRides = await getSharedGroupRides(groupId);
+      // A matched shared ride is keyed by its shared-ride group; a coworker
+      // group (what the driver's upcoming card shows) by its ride group. The
+      // card asked with the ride-group id and always met a 404, so the order
+      // was never shown (code review 2026-10-06): both are served here.
+      let groupRides = req.query.kind === "ride_group" ? [] : await getSharedGroupRides(groupId);
+      if (!groupRides.length) {
+        groupRides = (await storage.getRidesInGroup(groupId)).filter((r) => r.status !== "cancelled");
+      }
 
       if (!groupRides.length) {
         return res.status(404).json({ message: "Shared ride group not found" });
+      }
+      // Riders' pickup addresses and fares are for the people in the car:
+      // a rider or the driver of this group, or an admin. Anyone signed in
+      // could read them before (code review 2026-10-06).
+      const inGroup = groupRides.some((r) => r.riderId === userId || r.driverId === userId);
+      if (!inGroup) {
+        const caller = await storage.getUser(userId);
+        if (!caller?.isAdmin && !caller?.isSuperAdmin) {
+          return res.status(404).json({ message: "Shared ride group not found" });
+        }
       }
 
       const pickups = groupRides
@@ -8342,6 +8489,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: multiStopsCheck.error });
       }
       const multiStops = multiStopsCheck.points;
+      // The pickups are checked as origins above; the destination and the
+      // whole route are held to the ordinary door's area and 50-mile limit
+      // (code review 2026-10-06).
+      const multiRouteProblem = routeAreaProblem([pickupLocation, ...multiStops, destinationLocation]);
+      if (multiRouteProblem) {
+        return res.status(400).json({ message: multiRouteProblem });
+      }
       const multiPriced = await priceBooking({
         door: "multi-stop",
         userId,
@@ -8531,6 +8685,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!isAllowedPickup(pickupLocation.lat, pickupLocation.lng)) {
         return res.status(400).json({ message: PICKUP_OUTSIDE_MD_MESSAGE });
       }
+      // The destination and the route are held to the ordinary door's area
+      // and 50-mile limit (code review 2026-10-06).
+      const groupRouteProblem = routeAreaProblem([pickupLocation, destinationLocation]);
+      if (groupRouteProblem) {
+        return res.status(400).json({ message: groupRouteProblem });
+      }
 
       // Card-only mode: the organizer's fare can only be charged to a saved
       // card, so require one before the group ride is created.
@@ -8665,6 +8825,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // loser never leaves an orphaned ride), joiner-route fare with the 30%
   // group price, discount activation at 2 riders, close at capacity. Shared
   // by the invite-code path and the open (published) path.
+  // One join at a time per (group, rider): the "already have a seat" check
+  // and the join run while a transaction-scoped advisory lock is held, so a
+  // second join from the same rider waits and then sees the first seat
+  // (Cursor review of #472). Different riders never wait on each other.
+  async function withGroupJoinLock<T>(groupId: string, riderId: string, fn: () => Promise<T>): Promise<T> {
+    const { db: lockDb } = await import("./db");
+    const { sql: lockSql } = await import("drizzle-orm");
+    return lockDb.transaction(async (tx) => {
+      await tx.execute(lockSql`SELECT pg_advisory_xact_lock(hashtext(${`group-join:${groupId}:${riderId}`}))`);
+      return fn();
+    });
+  }
+
   async function joinSharedGroupAsRider(
     group: RideGroup,
     userId: string,
@@ -8678,6 +8851,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Regulatory service area: every trip ORIGIN must be in Maryland.
     if (!isAllowedPickup(pickupLocation.lat, pickupLocation.lng)) {
       return { ok: false, status: 400, message: PICKUP_OUTSIDE_MD_MESSAGE };
+    }
+    // A joiner by code names their own destination: the same area and
+    // 50-mile limit as every other booking (code review 2026-10-06).
+    const joinRouteProblem = routeAreaProblem([pickupLocation, destinationLocation]);
+    if (joinRouteProblem) {
+      return { ok: false, status: 400, message: joinRouteProblem };
     }
 
     // Card-only mode: the joiner's fare can only be charged to a saved card.
@@ -8695,11 +8874,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // quote every other ride gets. (This used to carry a tariff of its own:
     // $2.50 + $1.50/mi + $0.30/min, min $5, which no longer matched the
     // rate card and ignored admin changes to it.)
-    const joinRoute = estimateRoute([pickupLocation, destinationLocation]);
-    const hintDistance = Number(routeHint?.distance), hintDuration = Number(routeHint?.duration);
-    const dist = Number.isFinite(hintDistance) && hintDistance > 0 && hintDistance < 500 ? hintDistance : joinRoute.miles;
-    const duration = Number.isFinite(hintDuration) && hintDuration > 0 && hintDuration < 1440 ? Math.round(hintDuration) : joinRoute.minutes;
-    const fullFare = estimateFare(dist, duration, { rates: await storage.getPlatformRates() }).total;
+    // The app's road figures price it only when they could be true for
+    // this route, as at every other door (shared/bookingQuote.ts): until
+    // the code review of 2026-10-06 any figures under 500 miles were taken,
+    // so a joiner could price a one-mile trip at the fare cap, or at nothing.
+    let joinPriced;
+    try {
+      joinPriced = await priceBooking({
+        door: "coworker-join",
+        userId,
+        points: [pickupLocation, destinationLocation],
+        appFare: undefined,
+        appMiles: routeHint?.distance,
+        appMinutes: routeHint?.duration,
+      });
+    } catch (priceErr) {
+      await storage.releaseScheduleSlot(group.id).catch(() => {});
+      throw priceErr;
+    }
+    const dist = joinPriced.miles;
+    const duration = joinPriced.minutes;
+    const fullFare = Number(joinPriced.fare);
     const discountedFare = Math.round(fullFare * 0.7 * 100) / 100;
 
     // Only pre-apply the 30% discount here if the group discount is ALREADY
@@ -8765,8 +8960,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const group = await storage.getRideGroupByCode(scheduleCode.toUpperCase());
       if (!group) return res.status(404).json({ message: "Schedule code not found" });
-
-      const result = await joinSharedGroupAsRider(group, userId, pickupLocation, destinationLocation, paymentMethod, { distance: req.body.distance, duration: req.body.duration });
+      // The same guardrails as the open-group door: an organizer joining
+      // their own group took a second seat and turned on the group rate for
+      // themselves, and a rider could take every seat (code review 2026-10-06).
+      if (group.organizerId === userId) {
+        return res.status(400).json({ message: "This is your own group." });
+      }
+      // The seat check and the join run under one lock per (group, rider)
+      // (Cursor review of #472): two joins at once both saw no seat and both
+      // took one.
+      const result = await withGroupJoinLock(group.id, userId, async () => {
+        const codeGroupRides = await storage.getRidesInGroup(group.id);
+        if (codeGroupRides.some((r) => r.riderId === userId && r.status !== "cancelled")) {
+          return { ok: false as const, status: 409, message: "You already have a seat in this group." };
+        }
+        return joinSharedGroupAsRider(group, userId, pickupLocation, destinationLocation, paymentMethod, { distance: req.body.distance, duration: req.body.duration });
+      });
       if (!result.ok) return res.status(result.status).json({ message: result.message });
 
       res.json({ ...result.ride, scheduleCode, discountApplied: true });
@@ -8826,7 +9035,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const result = await joinSharedGroupAsRider(group, userId, pickupLocation, dest);
+      // Re-checked under the join lock, so two joins at once take one seat.
+      const result = await withGroupJoinLock(group.id, userId, async () => {
+        const nowRides = await storage.getRidesInGroup(group.id);
+        if (nowRides.some((r) => r.riderId === userId && r.status !== "cancelled")) {
+          return { ok: false as const, status: 409, message: "You already have a seat in this group." };
+        }
+        return joinSharedGroupAsRider(group, userId, pickupLocation, dest);
+      });
       if (!result.ok) return res.status(result.status).json({ message: result.message });
 
       await logRideAudit({
@@ -9909,6 +10125,8 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
     }
   });
 
+  const AI_MESSAGE_MAX_CHARS = 2000;
+  const AI_HISTORY_MESSAGES = 20;
   app.post('/api/ai/conversations/:id/messages', sessionOrOidcAuth, async (req: any, res) => {
     try {
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
@@ -9917,6 +10135,12 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
 
       if (!content || typeof content !== 'string') {
         return res.status(400).json({ message: "Message content is required" });
+      }
+      // A message is a question, not a document: every word is sent to the
+      // model and kept, so an unbounded one was an unbounded bill (code
+      // review 2026-10-06).
+      if (content.length > AI_MESSAGE_MAX_CHARS) {
+        return res.status(400).json({ message: `Please keep your message under ${AI_MESSAGE_MAX_CHARS.toLocaleString("en-US")} characters.` });
       }
 
       const convo = await storage.getConversation(id, userId);
@@ -9959,8 +10183,14 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
-      const anthropicMessages = chatHistory
+      // Only the recent conversation goes to the model, starting on a
+      // rider's message as the API requires; the whole of a long one was sent
+      // on every turn (code review 2026-10-06).
+      const recent = chatHistory
         .filter((m) => m.role !== "system")
+        .slice(-AI_HISTORY_MESSAGES);
+      while (recent.length > 1 && recent[0].role !== "user") recent.shift();
+      const anthropicMessages = recent
         .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
       const anthropicStream = getAnthropicClient().messages.stream({
@@ -10266,18 +10496,28 @@ FORMATTING: Your replies render as plain text in a small phone chat window — m
         return res.status(400).json({ message: validation.error });
       }
 
-      // Lock the quote: the same arithmetic as /api/rides/calculate-fare.
-      const routeEstimate = stops.length > 0 ? estimateRoute([pickup, ...stops, destination]) : null;
-      const clientDistance = Number(req.body.distance);
-      const clientDuration = Number(req.body.duration);
-      const quotedMiles = Number.isFinite(clientDistance) && clientDistance > 0 && clientDistance < 500
-        ? clientDistance
-        : routeEstimate?.miles ?? validation.distanceMiles ?? 0;
-      const quotedMinutes = Number.isFinite(clientDuration) && clientDuration > 0 && clientDuration < 1440
-        ? Math.round(clientDuration)
-        : routeEstimate?.minutes ?? validation.durationMinutes ?? 0;
-      const rates = await storage.getPlatformRates();
-      const quote = estimateFare(quotedMiles, quotedMinutes, { rates });
+      // Stops too: the area and the 50-mile limit hold over the whole route
+      // (code review 2026-10-06).
+      const planRouteProblem = routeAreaProblem([pickup, ...stops, destination]);
+      if (planRouteProblem) {
+        return res.status(400).json({ message: planRouteProblem });
+      }
+
+      // Lock the quote: the server's, on road figures that could be true for
+      // this route, as at every booking door (shared/bookingQuote.ts). Until
+      // the code review of 2026-10-06 any figures under 500 miles were taken,
+      // and every ride of every week was booked at that price.
+      const planPriced = await priceBooking({
+        door: "weekly-plan",
+        userId,
+        points: [pickup, ...stops, destination],
+        appFare: req.body.estimatedFare,
+        appMiles: req.body.distance,
+        appMinutes: req.body.duration,
+      });
+      const quotedMiles = planPriced.miles;
+      const quotedMinutes = planPriced.minutes;
+      const quote = { total: Number(planPriced.fare) };
       const { perRide, savings } = planFare(quote.total);
 
       const preferredDriverId = typeof req.body.driverId === "string" && req.body.driverId ? req.body.driverId : undefined;
@@ -11180,9 +11420,28 @@ Generate the FAQ list.`;
               await storage.releaseWebhookEvent("ride_tip", rideId).catch(() => {});
             }
           } else if (rideId) {
-            const ride = await storage.getRide(rideId);
-            if (ride && ride.paymentStatus !== 'paid_card') {
-              await storage.updateRide(rideId, { paymentStatus: 'paid_card' });
+            // Stripe's word only promotes a completed ride still waiting on
+            // its money (pending or authorized) to paid. It used to write
+            // paid_card over anything, so the capture of a cancellation fee
+            // turned cancelled_with_fee into a "paid ride", and a late event
+            // could paper over settlement_failed, a refund or a dispute (code
+            // review 2026-10-06). One conditional write, so it cannot race the
+            // settlement that is writing the same ride.
+            const { db: dbInstance } = await import("./db");
+            const { rides: ridesTable } = await import("@shared/schema");
+            const { eq, and, or, isNull, inArray } = await import("drizzle-orm");
+            const promoted = await dbInstance.update(ridesTable)
+              .set({ paymentStatus: 'paid_card', updatedAt: new Date() })
+              .where(and(
+                eq(ridesTable.id, rideId),
+                eq(ridesTable.status, 'completed'),
+                or(isNull(ridesTable.paymentStatus), inArray(ridesTable.paymentStatus, ['pending_payment', 'authorized'])),
+              ));
+            if ((promoted.rowCount ?? 0) === 0) {
+              const current = await storage.getRide(rideId);
+              if (current && current.paymentStatus !== 'paid_card') {
+                console.log(`[STRIPE] ${pi.id} succeeded for ride ${rideId}; left at ${current.status}/${current.paymentStatus}`);
+              }
             }
           } else if (pi.metadata?.statementId) {
             // A commercial bank debit that cleared days after the charge.

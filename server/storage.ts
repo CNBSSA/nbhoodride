@@ -141,7 +141,7 @@ import { parseReferralCreditAmount, REFERRAL_CREDIT_REASONS } from "@shared/refe
 import { isPayoutTarget, payoutFromStatuses } from "@shared/payoutRequestStatus";
 import { db } from "./db";
 import { isUniqueViolation } from "./pgErrors";
-import { eq, and, desc, asc, sql, or, isNull, isNotNull, gt, like, inArray, count, sum, gte, lte, lt } from "drizzle-orm";
+import { eq, and, desc, asc, sql, or, isNull, isNotNull, gt, like, inArray, notInArray, count, sum, gte, lte, lt } from "drizzle-orm";
 import { hashResetToken } from "./resetTokens";
 import { alias } from "drizzle-orm/pg-core";
 
@@ -279,7 +279,7 @@ export interface IStorage {
   getScheduledRides(userId: string): Promise<Ride[]>;
   
   // Rating operations
-  updateRideRating(rideId: string, raterId: string, rating: number, review?: string): Promise<void>;
+  updateRideRating(rideId: string, raterId: string, rating: number, review?: string): Promise<boolean>;
   getRidesForRating(userId: string): Promise<any[]>;
   updateUserRating(userId: string): Promise<void>;
   
@@ -288,7 +288,7 @@ export interface IStorage {
   getRidesAwaitingPayment(userId: string): Promise<any[]>;
   getRidesAwaitingSettlement(): Promise<any[]>;
   updateUserStripeInfo(userId: string, stripeCustomerId?: string, stripePaymentMethodId?: string): Promise<User>;
-  setRidePaymentAuthorization(rideId: string, paymentIntentId: string, virtualAmount?: number, stripeAmount?: number): Promise<Ride>;
+  setRidePaymentAuthorization(rideId: string, paymentIntentId: string, virtualAmount?: number, stripeAmount?: number): Promise<Ride | undefined>;
   captureRidePayment(rideId: string, capturedAmount?: number, tipAmount?: number): Promise<Ride>;
   cancelRideWithFee(rideId: string, cancellationFee: number, reason: string, traveledDistance?: number, traveledTime?: number, cancelledBy?: string, cancelledByRole?: string): Promise<Ride>;
   markRideNoShow(rideId: string, fee: number, reason: string, driverId?: string): Promise<Ride>;
@@ -306,7 +306,8 @@ export interface IStorage {
   recordRideTipOnce(rideId: string, driverId: string, amount: number): Promise<boolean>;
   splitDeductForRide(userId: string, totalAmount: number, rideId: string): Promise<{ virtualDeducted: number; stripeAmount: number }>;
   getVirtualCardBalance(userId: string): Promise<number>;
-  consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void>;
+  consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<boolean>;
+  restorePromoRide(rideId: string): Promise<boolean>;
   logWalletTransaction(data: { userId: string; amount: number; balanceAfter: number; reason: string; rideId?: string; disputeId?: string; performedBy?: string }): Promise<WalletTransaction>;
   getWalletTransactions(userId: string, limit?: number): Promise<WalletTransaction[]>;
   // Idempotency probe for settlement retries: has a ledger entry with this
@@ -1518,29 +1519,37 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Rating operations
-  async updateRideRating(rideId: string, raterId: string, rating: number, review?: string): Promise<void> {
+  // True when this call wrote the rating. The write only lands on a
+  // completed ride whose rating is still empty, so two taps at once rate it
+  // once (code review 2026-10-06).
+  async updateRideRating(rideId: string, raterId: string, rating: number, review?: string): Promise<boolean> {
     const ride = await this.getRide(rideId);
     if (!ride) throw new Error("Ride not found");
 
     if (ride.riderId === raterId) {
-      await db
+      const written = await db
         .update(rides)
         .set({ 
           driverRating: rating,
           driverReview: review,
           updatedAt: new Date()
         })
-        .where(eq(rides.id, rideId));
+        .where(and(eq(rides.id, rideId), eq(rides.status, "completed"), isNull(rides.driverRating)))
+        .returning({ id: rides.id });
+      return written.length > 0;
     } else if (ride.driverId === raterId) {
-      await db
+      const written = await db
         .update(rides)
         .set({ 
           riderRating: rating,
           riderReview: review,
           updatedAt: new Date()
         })
-        .where(eq(rides.id, rideId));
+        .where(and(eq(rides.id, rideId), eq(rides.status, "completed"), isNull(rides.riderRating)))
+        .returning({ id: rides.id });
+      return written.length > 0;
     }
+    return false;
   }
 
   // Push subscription operations
@@ -2755,7 +2764,7 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async setRidePaymentAuthorization(rideId: string, paymentIntentId: string, virtualAmount?: number, stripeAmount?: number): Promise<Ride> {
+  async setRidePaymentAuthorization(rideId: string, paymentIntentId: string, virtualAmount?: number, stripeAmount?: number): Promise<Ride | undefined> {
     const updates: any = {
       stripePaymentIntentId: paymentIntentId,
       paymentStatus: "authorized",
@@ -2768,10 +2777,15 @@ export class DatabaseStorage implements IStorage {
       updates.stripeAuthorizedAmount = stripeAmount.toFixed(2);
     }
 
+    // Only a ride still with its driver takes an authorization. A rider who
+    // cancelled while the accept was placing the hold has already moved the
+    // ride on; writing "authorized" over that left a live hold on a cancelled
+    // ride. Undefined tells the caller to void what it just placed (code
+    // review 2026-10-06).
     const [ride] = await db
       .update(rides)
       .set(updates)
-      .where(eq(rides.id, rideId))
+      .where(and(eq(rides.id, rideId), inArray(rides.status, ["accepted", "driver_arriving"])))
       .returning();
 
     return ride;
@@ -3231,19 +3245,64 @@ export class DatabaseStorage implements IStorage {
       ));
   }
 
-  async consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<void> {
-    // Decrement promoRidesRemaining by 1 (floor at 0) and record discount on the ride
-    await db.update(users)
-      .set({
-        promoRidesRemaining: sql`GREATEST(0, COALESCE(${users.promoRidesRemaining}, 0) - 1)`,
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, userId));
+  // One promo ride per ride, however often it is authorized. The ride is
+  // stamped first, only if it carries no promo yet and is still with its
+  // driver, and the rider's count drops only when that stamp landed: a
+  // requeue after a driver cancel, a scheduled confirm rolled back and
+  // retried, or a re-accept used to take a promo ride each time (code review
+  // 2026-10-06). True when this call consumed one.
+  async consumePromoRide(userId: string, discountAmount: number, rideId: string): Promise<boolean> {
+    return await db.transaction(async (tx) => {
+      const stamped = await tx.update(rides)
+        .set({ promoDiscountApplied: discountAmount.toFixed(2), updatedAt: new Date() })
+        .where(and(
+          eq(rides.id, rideId),
+          sql`COALESCE(${rides.promoDiscountApplied}, 0) = 0`,
+          inArray(rides.status, ["accepted", "driver_arriving"]),
+        ))
+        .returning({ id: rides.id });
+      if (stamped.length === 0) return false;
+      // Only a promo ride the rider still has (Cursor review of #472): two
+      // rides authorized at once both read "one left", and the counter used
+      // to floor at zero while both kept the discount. The loser's stamp is
+      // rolled back with the transaction.
+      const taken = await tx.update(users)
+        .set({
+          promoRidesRemaining: sql`COALESCE(${users.promoRidesRemaining}, 0) - 1`,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(users.id, userId), sql`COALESCE(${users.promoRidesRemaining}, 0) > 0`))
+        .returning({ id: users.id });
+      if (taken.length === 0) {
+        await tx.update(rides)
+          .set({ promoDiscountApplied: "0.00", updatedAt: new Date() })
+          .where(eq(rides.id, rideId));
+        return false;
+      }
+      return true;
+    });
+  }
 
-    // Record the promo discount on the ride
-    await db.update(rides)
-      .set({ promoDiscountApplied: discountAmount.toString(), updatedAt: new Date() })
-      .where(eq(rides.id, rideId));
+  // The undo of consumePromoRide, for an authorization released in full
+  // before the ride was driven: the stamp is cleared only if one is there,
+  // and the rider gets the promo ride back only when it was (code review
+  // 2026-10-06). A ride re-authorized later consumes afresh.
+  async restorePromoRide(rideId: string): Promise<boolean> {
+    return await db.transaction(async (tx) => {
+      const cleared = await tx.update(rides)
+        .set({ promoDiscountApplied: "0.00", updatedAt: new Date() })
+        .where(and(
+          eq(rides.id, rideId),
+          sql`COALESCE(${rides.promoDiscountApplied}, 0) > 0`,
+          notInArray(rides.status, ["in_progress", "completed"]),
+        ))
+        .returning({ riderId: rides.riderId });
+      if (cleared.length === 0) return false;
+      await tx.update(users)
+        .set({ promoRidesRemaining: sql`COALESCE(${users.promoRidesRemaining}, 0) + 1`, updatedAt: new Date() })
+        .where(eq(users.id, cleared[0].riderId));
+      return true;
+    });
   }
 
   // GPS tracking operations
