@@ -12,7 +12,7 @@
  *   - record who received the passenger at the far end.
  */
 
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
 import { haversineMiles } from "../rideWorkflowService";
@@ -156,7 +156,18 @@ export interface ProofInput {
  * never rewritten; a photo, once recorded, is not replaced.
  */
 export async function recordProof(rideId: string, driverUserId: string, input: ProofInput, now: Date = new Date()): Promise<DeliveryProof> {
-  const [row] = await db.select({ job: commercialJobs, ride: rides }).from(commercialJobs)
+  // The proof is read and written under the job's row lock (code review
+  // 2026-10-06): the handover, the late photo, the delivered-text stamp and
+  // the pending-photo sweep all write this one JSON value, and a write built
+  // on a stale read used to drop whatever another writer had just added.
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT id FROM commercial_jobs WHERE ride_id = ${rideId} FOR UPDATE`);
+    return recordProofLocked(tx, rideId, driverUserId, input, now);
+  });
+}
+
+async function recordProofLocked(tx: Pick<typeof db, "select" | "update">, rideId: string, driverUserId: string, input: ProofInput, now: Date): Promise<DeliveryProof> {
+  const [row] = await tx.select({ job: commercialJobs, ride: rides }).from(commercialJobs)
     .innerJoin(rides, eq(rides.id, commercialJobs.rideId))
     .where(eq(commercialJobs.rideId, rideId));
   if (!row) throw new CommercialError("This trip is not a commercial job.", 404);
@@ -208,7 +219,7 @@ export async function recordProof(rideId: string, driverUserId: string, input: P
     if (need.needsName && !receivedBy) throw new CommercialError(row.job.parcelSize ? "Type who received the parcel." : "Type who received the passenger.");
     throw new CommercialError(`This handover needs ${verdict.missing}.`);
   }
-  await db.update(commercialJobs).set({ proof: proof as Record<string, unknown> }).where(eq(commercialJobs.id, row.job.id));
+  await tx.update(commercialJobs).set({ proof: proof as Record<string, unknown> }).where(eq(commercialJobs.id, row.job.id));
   console.log(`[commercial] proof recorded :: job ${row.job.jobNumber} | ${handover} | ${receivedBy ?? "nobody signed"} | ${photoUrl ? "photo" : photoPending ? "photo pending" : "no photo"}${proof.farFromDrop ? ` | ${distanceFromDropMeters} m from the drop` : ""}`);
   return proof;
 }
@@ -256,12 +267,24 @@ export async function sweepPendingProofPhotos(now: Date = new Date()): Promise<{
     if (!Number.isFinite(signed)) continue;
     const hours = (now.getTime() - signed) / 3_600_000;
     const fields: Array<[string, string]> = [["Account", org.name], ["Job", formatJobNumber(job.jobNumber)], ["Handover", proof.signedAt ?? ""]];
+    // Each change is merged into the proof in SQL and only while the photo is
+    // still pending (code review 2026-10-06): writing back the proof read
+    // above could erase a photo the driver's phone delivered in between, or
+    // the delivered-text stamp, and then call that photo "never arrived".
     if (hours >= 24) {
-      await db.update(commercialJobs).set({ proof: { ...proof, photoPending: false, photoNeverArrived: true } as Record<string, unknown> }).where(eq(commercialJobs.id, job.id));
+      const [done] = await db.update(commercialJobs)
+        .set({ proof: sql`COALESCE(${commercialJobs.proof}, '{}'::jsonb) || jsonb_build_object('photoPending', false, 'photoNeverArrived', true)` })
+        .where(and(eq(commercialJobs.id, job.id), sql`${commercialJobs.proof}->>'photoPending' = 'true'`))
+        .returning({ id: commercialJobs.id });
+      if (!done) continue;
       opsAlert(formatOpsAlert("📷 Proof photo never arrived", [...fields, ["Effect", "The job reads 'photo never arrived'; ask the driver"]]));
       out.expired += 1;
     } else if (hours >= 6 && !proof.photoPendingPagedAt) {
-      await db.update(commercialJobs).set({ proof: { ...proof, photoPendingPagedAt: now.toISOString() } as Record<string, unknown> }).where(eq(commercialJobs.id, job.id));
+      const [done] = await db.update(commercialJobs)
+        .set({ proof: sql`COALESCE(${commercialJobs.proof}, '{}'::jsonb) || jsonb_build_object('photoPendingPagedAt', ${now.toISOString()}::text)` })
+        .where(and(eq(commercialJobs.id, job.id), sql`${commercialJobs.proof}->>'photoPending' = 'true'`, sql`${commercialJobs.proof}->>'photoPendingPagedAt' IS NULL`))
+        .returning({ id: commercialJobs.id });
+      if (!done) continue;
       opsAlert(formatOpsAlert("📷 Proof photo still on the driver's phone", [...fields, ["Since", `${Math.floor(hours)} h`]]));
       out.paged += 1;
     }

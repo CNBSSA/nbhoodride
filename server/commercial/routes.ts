@@ -368,12 +368,12 @@ export function registerCommercialRoutes(app: Express, deps: CommercialDeps): vo
     } catch (err) { fail(res, err, "Could not read the invitation"); }
   };
   app.get("/api/org/invitations/:token", orgGate, invitationOn, async (req, res) => {
-    try { res.json(await describeInvitation(String(req.params.token))); }
+    try { res.json(await describeInvitation(String(req.params.token), new Date(), userIdOf(req) ?? null)); }
     catch (err) { fail(res, err, "Could not read the invitation"); }
   });
   app.post("/api/org/invitations/:token/accept", orgGate, invitationOn, async (req: any, res) => {
     try {
-      const result = await acceptInvitation(String(req.params.token), req.body ?? {});
+      const result = await acceptInvitation(String(req.params.token), req.body ?? {}, new Date(), userIdOf(req) ?? null);
       // A fleet's new driver waits for PG Ride's approval like any sign-up, so is not signed in here.
       if (!result.existing && !result.pendingApproval) {
         req.session.userId = result.userId;

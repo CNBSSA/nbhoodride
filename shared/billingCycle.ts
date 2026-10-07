@@ -160,8 +160,8 @@ export interface SettlementDecision {
  * event's metadata proves it was raised for this statement.
  */
 export function settlementDecision(
-  statement: { status: string; stripePaymentIntentId: string | null },
-  intent: { id: string; status: string },
+  statement: { status: string; stripePaymentIntentId: string | null; attempts?: number | null },
+  intent: { id: string; status: string; metadata?: Record<string, string> | null },
 ): SettlementDecision {
   if (statement.status === "paid" || statement.status === "void") {
     return { action: "ignore", reason: `statement already ${statement.status}`, adopts: false };
@@ -172,6 +172,14 @@ export function settlementDecision(
   }
   const adopts = !current;
   const next = statementStatusFromIntent(intent.status);
+  // A new attempt starts with no intent recorded (code review 2026-10-06),
+  // so a late failure about an EARLIER attempt must not be adopted as the
+  // answer to the open one: that attempt was already decided, and adopting
+  // it would mark the statement failed while the new debit may be in flight.
+  const intentAttempt = Number(intent.metadata?.attempt);
+  if (adopts && next === "failed" && Number.isFinite(intentAttempt) && intentAttempt > 0 && Number(statement.attempts ?? 0) > intentAttempt) {
+    return { action: "ignore", reason: `event is about attempt ${intentAttempt} (${intent.id}), already decided; the statement is on attempt ${statement.attempts}`, adopts: false };
+  }
   if (next === "paid") return { action: "paid", reason: "Paid", adopts };
   if (next === "failed") return { action: "failed", reason: `Bank debit ${intent.status}`, adopts };
   return { action: "undecided", reason: `Bank debit ${intent.status}; nothing to do yet`, adopts };

@@ -11,12 +11,12 @@
  * strands the car or the renter: collection refuses and says why; a return
  * is recorded whatever the card does, and the settlement is retried by hand.
  */
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { driverCarAssignments, rentalBookings, rentalCars, rentalRenters, type RentalBooking } from "@shared/schema";
-import { HOLDS_THE_CAR, RENTER_MAY_CANCEL, ageOn, drivingRecordCurrent, money, quoteRental, rentalsOverlap, renterProblems, settleReturn } from "@shared/rental";
+import { HOLDS_THE_CAR, RENTER_MAY_CANCEL, ageOn, drivingRecordCurrent, money, qualificationProblems, quoteRental, rentalsOverlap, renterProblems, settleReturn } from "@shared/rental";
 import { saveRenterFacts } from "./renters";
-import { stripeService } from "../stripeService";
+import { intentDeclined, stripeDeclined, stripeService } from "../stripeService";
 import { storage } from "../storage";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
 import { riderBookingBlock } from "../rideWorkflowService";
@@ -119,7 +119,10 @@ export async function confirmRental(bookingId: string): Promise<RentalBooking> {
         ? "This renter's driving record did not clear. Decline the request."
         : "PG Ride has not cleared this renter's driving record yet. It is checked in Admin, Car rental, Renters; confirm once it is cleared.", 409);
     }
-    await tx.select({ id: rentalCars.id }).from(rentalCars).where(eq(rentalCars.id, b.carId)).for("update");
+    const [car] = await tx.select().from(rentalCars).where(eq(rentalCars.id, b.carId)).for("update");
+    // A car whose papers lapsed since the request is not promised to anyone (code review 2026-10-06).
+    const gaps = car ? qualificationProblems(car, new Date()) : ["The car is gone."];
+    if (gaps.length) throw new RentalError(`This car does not qualify to go out: ${gaps.join(" ")}`, 409, gaps);
     const held = await holdingBookings(b.carId, tx);
     if (held.some((h: any) => h.id !== b.id && rentalsOverlap(h, b))) throw new RentalError("The car is already confirmed for some of those days. Decline this request.", 409);
     const [updated] = await tx.update(rentalBookings).set({ status: "confirmed", updatedAt: new Date() }).where(eq(rentalBookings.id, bookingId)).returning();
@@ -127,11 +130,19 @@ export async function confirmRental(bookingId: string): Promise<RentalBooking> {
   });
 }
 
-export async function declineRental(bookingId: string, reason: unknown): Promise<RentalBooking> {
+/**
+ * Decline a request. The desk (`opts.confirmed`) may also call off a
+ * CONFIRMED rental before collection — a car whose papers lapsed, a renter
+ * whose record did not clear — and anything a failed hand-over charged is
+ * given back (code review 2026-10-06). An owner declines requests only.
+ */
+export async function declineRental(bookingId: string, reason: unknown, opts: { confirmed?: boolean } = {}): Promise<RentalBooking> {
+  const may = opts.confirmed ? ["requested", "confirmed"] : ["requested"];
   const [updated] = await db.update(rentalBookings).set({ status: "declined", cancelReason: clean(reason, 200) || "Not available", updatedAt: new Date() })
-    .where(and(eq(rentalBookings.id, bookingId), eq(rentalBookings.status, "requested"))).returning();
-  if (!updated) throw new RentalError("Only a request can be declined.", 409);
-  return updated;
+    .where(and(eq(rentalBookings.id, bookingId), inArray(rentalBookings.status, may))).returning();
+  if (!updated) throw new RentalError(opts.confirmed ? "Only a request or a confirmed rental not yet collected can be declined." : "Only a request can be declined.", 409);
+  await undoBookingMoney(updated, "rental declined before collection");
+  return load(updated.id);
 }
 
 /**
@@ -146,16 +157,135 @@ export async function cancelRental(bookingId: string, renterId: string, reason: 
   const [updated] = await db.update(rentalBookings).set({ status: "cancelled", cancelReason: clean(reason, 200) || "Cancelled by the renter", updatedAt: new Date() })
     .where(and(eq(rentalBookings.id, bookingId), inArray(rentalBookings.status, [...RENTER_MAY_CANCEL]))).returning();
   if (!updated) throw new RentalError("This rental changed just now. Refresh and try again.", 409);
-  if (updated.chargeIntentId) {
+  // What the hand-over took is given back, including a charge whose answer was lost (code review 2026-10-06).
+  if (await undoBookingMoney(updated, "rental cancelled before collection")) return load(updated.id);
+  return updated;
+}
+
+/** Why this car cannot leave the lot for this booking right now, or null. Read inside the caller's transaction when it holds the car's lock. */
+async function carIsOutFor(b: RentalBooking, executor: any = db): Promise<string | null> {
+  // The car is only one car: a rental that came back late on paper is still
+  // out in fact until it is taken back.
+  const [stillOut] = await executor.select({ id: rentalBookings.id }).from(rentalBookings)
+    .where(and(eq(rentalBookings.carId, b.carId), eq(rentalBookings.status, "collected"))).limit(1);
+  if (stillOut && stillOut.id !== b.id) return "This car is still out on the previous rental. Take it back first.";
+  const [withDriver] = await executor.select({ id: driverCarAssignments.id }).from(driverCarAssignments)
+    .where(and(eq(driverCarAssignments.carId, b.carId), eq(driverCarAssignments.status, "active"))).limit(1);
+  if (withDriver) return "This car is still with a PG Ride driver. Take it back from them first.";
+  const [engine] = await executor.select({ off: rentalCars.engineCutOffAt, on: rentalCars.engineRestoredAt }).from(rentalCars).where(eq(rentalCars.id, b.carId));
+  if (engine?.off && !engine?.on) return "This car's engine is recorded as cut off. Restore it before handing it over.";
+  return null;
+}
+
+/** The attempt number Stripe's key carries for one purpose on a booking (code review 2026-10-06). */
+const attemptOf = (b: RentalBooking, purpose: string): number => Number((b.paymentAttempts as Record<string, number> | null)?.[purpose] ?? 1) || 1;
+
+/** After a recorded decline, the next try is a new attempt with a new key. Conditional, so two failures bump it once. */
+async function nextAttempt(b: RentalBooking, purpose: string): Promise<void> {
+  const n = attemptOf(b, purpose);
+  await db.update(rentalBookings).set({ paymentAttempts: sql`jsonb_set(COALESCE(${rentalBookings.paymentAttempts}, '{}'::jsonb), ${`{${purpose}}`}::text[], to_jsonb(${n + 1}::int))` })
+    .where(and(eq(rentalBookings.id, b.id), sql`COALESCE((${rentalBookings.paymentAttempts}->>${purpose})::int, 1) = ${n}`));
+}
+
+/**
+ * Mark a charge or hold as sent to Stripe and not yet answered
+ * (`<purpose>_open` in payment_attempts), or clear the mark. Set BEFORE
+ * Stripe is called, so a hand-over whose answer is lost still says money
+ * may be out there, and every retry, decline or cancel asks Stripe first
+ * (Bugbot on PR #474, code review 2026-10-06).
+ */
+async function markOpen(bookingId: string, purpose: string, open: boolean): Promise<void> {
+  const key = `${purpose}_open`;
+  await db.update(rentalBookings).set({ paymentAttempts: open
+    ? sql`jsonb_set(COALESCE(${rentalBookings.paymentAttempts}, '{}'::jsonb), ${`{${key}}`}::text[], '1'::jsonb)`
+    : sql`COALESCE(${rentalBookings.paymentAttempts}, '{}'::jsonb) - ${key}::text` }).where(eq(rentalBookings.id, bookingId));
+}
+
+const isOpen = (b: Pick<RentalBooking, "paymentAttempts">, purpose: string): boolean => !!(b.paymentAttempts as Record<string, number> | null)?.[`${purpose}_open`];
+
+/** What Stripe holds for a booking and purpose, as a decision: take it, wait for it, or nothing there. */
+function judgeFound(found: { id: string; status: string } | null, wanted: string): { take: string } | { wait: string } | null {
+  if (!found) return null;
+  if (found.status === wanted) return { take: found.id };
+  if (intentDeclined(found.status)) return null;
+  // processing, requires_action, requires_confirmation: money may be on its way.
+  return { wait: `Stripe has this payment as ${found.status}. Nothing more was charged; try again once it settles.` };
+}
+
+/**
+ * One rental charge or hold under the booking's current attempt. Before
+ * anything is sent, a retry (a later attempt, or one whose answer was lost)
+ * asks Stripe and adopts what went through or waits for what is still in
+ * flight. Only the card saying no moves the booking to its next attempt (a
+ * new key); a lost answer, a "processing" intent or an idempotency error
+ * keeps the attempt open, so the next try asks Stripe and, if it has to,
+ * replays the same key — it can never charge twice (code review 2026-10-06).
+ */
+async function rentalPayment(b: RentalBooking, purpose: "rental" | "deposit" | "extras", card: { customerId: string; paymentMethodId: string }, amount: number): Promise<string> {
+  const [fresh] = await db.select({ paymentAttempts: rentalBookings.paymentAttempts }).from(rentalBookings).where(eq(rentalBookings.id, b.id));
+  const now = { ...b, paymentAttempts: fresh?.paymentAttempts ?? b.paymentAttempts };
+  const attempt = attemptOf(now, purpose);
+  const wanted = purpose === "deposit" ? "requires_capture" : "succeeded";
+  if (attempt > 1 || isOpen(now, purpose)) {
+    const verdict = judgeFound(await stripeService.findRentalCharge(card.customerId, b.id, purpose), wanted);
+    if (verdict && "take" in verdict) { await markOpen(b.id, purpose, false); return verdict.take; }
+    if (verdict && "wait" in verdict) throw new Error(verdict.wait);
+  }
+  await markOpen(b.id, purpose, true);
+  let pi;
+  try {
+    pi = purpose === "deposit"
+      ? await stripeService.holdRentalDeposit({ amount, ...card, bookingId: b.id, renterId: b.renterId, attempt })
+      : await stripeService.chargeRental({ amount, ...card, bookingId: b.id, renterId: b.renterId, purpose, attempt });
+  } catch (err: any) {
+    if (stripeDeclined(err)) { await nextAttempt(now, purpose); await markOpen(b.id, purpose, false); throw err; }
+    if (String(err?.type ?? "") === "StripeIdempotencyError") throw new Error(`Stripe would not repeat this payment because it changed since it was first sent (was the card changed?). Nothing more was charged; PG Ride checks with Stripe before the next try.`);
+    throw err;
+  }
+  if (pi.status === wanted) { await markOpen(b.id, purpose, false); return pi.id; }
+  if (intentDeclined(pi.status)) { await nextAttempt(now, purpose); await markOpen(b.id, purpose, false); throw new Error(`the card answered ${pi.status}`); }
+  // Still in flight (processing and the like): the attempt stays open.
+  throw new Error(`the card answered ${pi.status}; nothing more will be charged until it settles`);
+}
+
+/**
+ * Give back everything a booking's hand-over took: what is recorded on it,
+ * and — when a charge or hold was sent and its answer never came — what
+ * Stripe holds for it (Bugbot on PR #474, code review 2026-10-06).
+ */
+async function undoBookingMoney(b: RentalBooking, why: string): Promise<boolean> {
+  let chargeId = b.chargeIntentId, depositId = b.depositIntentId;
+  const problems: string[] = [];
+  if (isOpen(b, "rental") || isOpen(b, "deposit")) {
     try {
-      await stripeService.refundPaymentIntent(updated.chargeIntentId, "rental cancelled before collection");
-      await db.update(rentalBookings).set({ paymentStatus: "refunded", paymentError: null }).where(eq(rentalBookings.id, bookingId));
+      const card = await renterCard(b.renterId);
+      if (!card || !stripeService.isEnabled) throw new Error("no card or Stripe to ask");
+      if (!chargeId && isOpen(b, "rental")) {
+        const f = await stripeService.findRentalCharge(card.customerId, b.id, "rental");
+        if (f?.status === "succeeded") chargeId = f.id; else if (f && !intentDeclined(f.status)) problems.push(`the rental charge is ${f.status} on Stripe`);
+      }
+      if (!depositId && isOpen(b, "deposit")) {
+        const f = await stripeService.findRentalCharge(card.customerId, b.id, "deposit");
+        if (f?.status === "requires_capture") depositId = f.id; else if (f && !intentDeclined(f.status)) problems.push(`the deposit is ${f.status} on Stripe`);
+      }
     } catch (err) {
-      await db.update(rentalBookings).set({ paymentStatus: "failed", paymentError: `Refund failed: ${errText(err)}` }).where(eq(rentalBookings.id, bookingId));
-      opsAlert(formatOpsAlert("💳 Rental refund FAILED", [["Booking", bookingId.slice(0, 8)], ["Amount", money(b.rentalTotal)], ["Reason", errText(err)], ["Next", "Refund it by hand in Stripe"]]));
+      problems.push(`could not ask Stripe what was charged (${errText(err)})`);
     }
   }
-  return updated;
+  if (!chargeId && !depositId && !problems.length) return false;
+  try {
+    if (depositId) await stripeService.cancelPaymentIntent(depositId);
+    if (chargeId) await stripeService.refundPaymentIntent(chargeId, why);
+  } catch (err) {
+    problems.push(errText(err));
+  }
+  if (problems.length) {
+    await db.update(rentalBookings).set({ paymentStatus: "failed", paymentError: `Refund failed: ${problems.join("; ")}` }).where(eq(rentalBookings.id, b.id));
+    opsAlert(formatOpsAlert("💳 Rental refund FAILED", [["Booking", b.id.slice(0, 8)], ["Amount", money(b.rentalTotal)], ["Reason", problems.join("; ")], ["Next", "Refund the rental and release the deposit by hand in Stripe"]]));
+    return true;
+  }
+  await db.update(rentalBookings).set({ paymentStatus: "refunded", paymentError: null, chargeIntentId: chargeId, depositIntentId: depositId }).where(eq(rentalBookings.id, b.id));
+  return true;
 }
 
 /**
@@ -169,16 +299,19 @@ export async function collectRental(bookingId: string, actorId: string, body: an
   if (!Number.isInteger(odometer) || odometer < 0 || odometer > 2_000_000) throw new RentalError("Enter the odometer reading at collection.");
   const photos = await verifiedPhotoList(body?.photos, actorId, "collection photo");
   if (photos.length < 4) throw new RentalError("Take at least 4 photos of the car at collection: front, back and both sides.");
-  // The car is only one car: a rental that came back late on paper is still
-  // out in fact until it is taken back.
-  const [stillOut] = await db.select({ id: rentalBookings.id }).from(rentalBookings)
-    .where(and(eq(rentalBookings.carId, b.carId), eq(rentalBookings.status, "collected"))).limit(1);
-  if (stillOut && stillOut.id !== b.id) throw new RentalError("This car is still out on the previous rental. Take it back first.", 409);
-  const [withDriver] = await db.select({ id: driverCarAssignments.id }).from(driverCarAssignments)
-    .where(and(eq(driverCarAssignments.carId, b.carId), eq(driverCarAssignments.status, "active"))).limit(1);
-  if (withDriver) throw new RentalError("This car is still with a PG Ride driver. Take it back from them first.", 409);
-  const [engine] = await db.select({ off: rentalCars.engineCutOffAt, on: rentalCars.engineRestoredAt }).from(rentalCars).where(eq(rentalCars.id, b.carId));
-  if (engine?.off && !engine?.on) throw new RentalError("This car's engine is recorded as cut off. Restore it before handing it over.", 409);
+  // A car whose papers lapsed after it was confirmed does not leave the lot,
+  // and nor does a renter whose driving record is no longer cleared (code review 2026-10-06).
+  const [carNow] = await db.select().from(rentalCars).where(eq(rentalCars.id, b.carId));
+  const gaps = carNow ? qualificationProblems(carNow, now) : ["The car is gone."];
+  if (gaps.length) throw new RentalError(`This car does not qualify to go out: ${gaps.join(" ")} Fix it, or decline the rental.`, 409, gaps);
+  const [renter] = await db.select().from(rentalRenters).where(eq(rentalRenters.userId, b.renterId));
+  if (!drivingRecordCurrent(renter, now)) {
+    throw new RentalError(renter?.recordStatus === "refused"
+      ? "This renter's driving record did not clear. The car cannot be handed over; decline the rental."
+      : "This renter's driving record is not currently cleared by PG Ride. Check it in Admin, Car rental, Renters before handing the car over.", 409);
+  }
+  const out = await carIsOutFor(b);
+  if (out) throw new RentalError(out, 409);
   if (!stripeService.isEnabled) throw new RentalError("Card payments are not set up on this deployment, so the deposit cannot be held. The car cannot be handed over.", 503);
   const card = await renterCard(b.renterId);
   if (!card) throw new RentalError("The renter has no card on file. They add one in Profile, then try again.", 409);
@@ -186,9 +319,7 @@ export async function collectRental(bookingId: string, actorId: string, body: an
   let chargeIntentId = b.chargeIntentId;
   try {
     if (!chargeIntentId) {
-      const pi = await stripeService.chargeRental({ amount: Number(b.rentalTotal), ...card, bookingId: b.id, renterId: b.renterId, purpose: "rental" });
-      if (pi.status !== "succeeded") throw new Error(`the card answered ${pi.status}`);
-      chargeIntentId = pi.id;
+      chargeIntentId = await rentalPayment(b, "rental", card, Number(b.rentalTotal));
       await db.update(rentalBookings).set({ chargeIntentId, paymentStatus: "charged", paymentError: null }).where(eq(rentalBookings.id, b.id));
     }
   } catch (err) {
@@ -200,9 +331,9 @@ export async function collectRental(bookingId: string, actorId: string, body: an
   let depositIntentId = b.depositIntentId;
   if (Number(b.deposit) > 0 && !depositIntentId) {
     try {
-      const pi = await stripeService.holdRentalDeposit({ amount: Number(b.deposit), ...card, bookingId: b.id, renterId: b.renterId });
-      if (pi.status !== "requires_capture") throw new Error(`the card answered ${pi.status}`);
-      depositIntentId = pi.id;
+      depositIntentId = await rentalPayment(b, "deposit", card, Number(b.deposit));
+      // Recorded at once, so a hand-over that cannot finish keeps it and a cancel releases it.
+      await db.update(rentalBookings).set({ depositIntentId }).where(eq(rentalBookings.id, b.id));
     } catch (err) {
       await db.update(rentalBookings).set({ paymentError: `Deposit hold declined: ${errText(err)}` }).where(eq(rentalBookings.id, b.id));
       opsAlert(formatOpsAlert("💳 Rental deposit hold declined", [["Booking", b.id.slice(0, 8)], ["Deposit", money(b.deposit)], ["Reason", errText(err)], ["Effect", "Rental charged, car not handed over. The renter can retry with another card, or cancel for a refund"]]));
@@ -210,25 +341,37 @@ export async function collectRental(bookingId: string, actorId: string, body: an
     }
   }
 
-  const [updated] = await db.update(rentalBookings).set({
-    status: "collected", collectedAt: now, collectOdometer: odometer, collectPhotos: photos,
-    depositIntentId, paymentStatus: "charged", paymentError: null, updatedAt: now,
-  }).where(and(eq(rentalBookings.id, b.id), eq(rentalBookings.status, "confirmed"))).returning();
-  if (!updated) {
-    const now2 = await load(b.id);
-    // A second hand-over of the same booking (a double press, two desks, a
-    // retried request) got there first: it charged the same card under the
-    // same keys, so these are the same payments. Nothing to undo.
-    if (now2.status === "collected") return now2;
-    // The renter cancelled while the desk was charging: nothing charged here
-    // may stay charged. Give the rental back and let the deposit go.
-    if (now2.status === "cancelled" || now2.status === "declined") {
-      await undoCollectionMoney(b.id, chargeIntentId, depositIntentId);
-      throw new RentalError("The renter cancelled this rental while it was being handed over. The charge and the deposit were given back.", 409);
-    }
-    throw new RentalError(`This booking is now ${now2.status}. Refresh and check it before doing anything else.`, 409);
+  // The car row is locked while "is it out?" is asked again and the
+  // hand-over written, as confirmRental does, so two desks handing over two
+  // rentals of one car cannot both win (code review 2026-10-06).
+  const result = await db.transaction(async (tx) => {
+    const [cur] = await tx.select().from(rentalBookings).where(eq(rentalBookings.id, b.id)).for("update");
+    await tx.select({ id: rentalCars.id }).from(rentalCars).where(eq(rentalCars.id, b.carId)).for("update");
+    if (cur.status !== "confirmed") return { kind: "changed" as const, row: cur };
+    const busy = await carIsOutFor(b, tx);
+    if (busy) return { kind: "busy" as const, row: cur, why: busy };
+    const [updated] = await tx.update(rentalBookings).set({
+      status: "collected", collectedAt: now, collectOdometer: odometer, collectPhotos: photos,
+      depositIntentId, paymentStatus: "charged", paymentError: null, updatedAt: now,
+    }).where(eq(rentalBookings.id, b.id)).returning();
+    return { kind: "done" as const, row: updated };
+  });
+  if (result.kind === "done") return result.row;
+  if (result.kind === "busy") {
+    throw new RentalError(`${result.why} The rental is charged and the deposit held on this booking; hand it over once the car is back, or decline it to give them back.`, 409);
   }
-  return updated;
+  const now2 = result.row;
+  // A second hand-over of the same booking (a double press, two desks, a
+  // retried request) got there first: it charged the same card under the
+  // same keys, so these are the same payments. Nothing to undo.
+  if (now2.status === "collected") return now2;
+  // The renter cancelled while the desk was charging: nothing charged here
+  // may stay charged. Give the rental back and let the deposit go.
+  if (now2.status === "cancelled" || now2.status === "declined") {
+    await undoCollectionMoney(b.id, chargeIntentId, depositIntentId);
+    throw new RentalError("The renter cancelled this rental while it was being handed over. The charge and the deposit were given back.", 409);
+  }
+  throw new RentalError(`This booking is now ${now2.status}. Refresh and check it before doing anything else.`, 409);
 }
 
 async function undoCollectionMoney(bookingId: string, chargeIntentId: string | null, depositIntentId: string | null): Promise<void> {
@@ -296,12 +439,15 @@ export async function settleRental(bookingId: string): Promise<RentalBooking> {
     if (beyond > 0 && !b.beyondDepositIntentId) {
       const card = await renterCard(b.renterId);
       if (!card) throw new Error("the renter has no card on file");
-      const pi = await stripeService.chargeRental({ amount: beyond, ...card, bookingId: b.id, renterId: b.renterId, purpose: "extras" });
-      if (pi.status !== "succeeded") throw new Error(`the card answered ${pi.status}`);
-      await db.update(rentalBookings).set({ beyondDepositIntentId: pi.id }).where(eq(rentalBookings.id, b.id));
+      const intentId = await rentalPayment(b, "extras", card, beyond);
+      await db.update(rentalBookings).set({ beyondDepositIntentId: intentId }).where(eq(rentalBookings.id, b.id));
     }
   } catch (err) {
-    const [failed] = await db.update(rentalBookings).set({ paymentStatus: "failed", paymentError: `Settlement failed: ${errText(err)}`, updatedAt: new Date() }).where(eq(rentalBookings.id, b.id)).returning();
+    // Only a booking still waiting to settle is marked failed: a second
+    // settlement that already closed it is never overwritten (code review 2026-10-06).
+    const [failed] = await db.update(rentalBookings).set({ paymentStatus: "failed", paymentError: `Settlement failed: ${errText(err)}`, updatedAt: new Date() })
+      .where(and(eq(rentalBookings.id, b.id), eq(rentalBookings.status, "returned"))).returning();
+    if (!failed) return load(b.id);
     opsAlert(formatOpsAlert("💳 Rental settlement FAILED", [["Booking", b.id.slice(0, 8)], ["From deposit", money(fromDeposit)], ["Beyond deposit", money(s.beyondDeposit ?? 0)], ["Reason", errText(err)], ["Next", "Retry from Admin, Car rental; the car is back"]]));
     return failed;
   }

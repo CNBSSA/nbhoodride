@@ -1030,7 +1030,13 @@ function PayoutsPanel() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/payout-requests"] });
       toast({ title: `Payout marked as ${vars.status}` });
     },
-    onError: () => toast({ title: "Failed to update payout", variant: "destructive" }),
+    // The server names why a move was refused (a paid or rejected payout
+    // never changes; code review 2026-10-06), so say it, and show where the
+    // request really stands.
+    onError: (err: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/payout-requests"] });
+      toast({ title: "Failed to update payout", description: err?.message, variant: "destructive" });
+    },
   });
 
   const STATUS_COLOR: Record<string, string> = {

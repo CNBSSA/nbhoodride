@@ -102,11 +102,12 @@ export interface FeeCreditStorage {
 
 /**
  * Credit a driver their cut of a fee (waiting, a late cancel, a no-show).
- * In their own car — or with fleets switched off — it is credited exactly as
- * it always was. In a fleet's car the cut is shared 25/75: the driver is
- * credited their 75% and the fleet's 25% is written to fleet_earnings, in
- * one transaction under a lock on (reason, ride), checked against the
- * ledger first, so a retried fee is credited and shared once.
+ * In their own car — or with fleets switched off — the whole cut is the
+ * driver's. In a fleet's car the cut is shared 25/75: the driver is
+ * credited their 75% and the fleet's 25% is written to fleet_earnings.
+ * Either way it is one transaction under a lock on (reason, ride), checked
+ * against the ledger first, so a retried fee is credited (and shared) once.
+ * `storage` is no longer used; it stays so no caller changes.
  * Returns what the driver was credited.
  */
 export async function creditDriverCutOnce(storage: FeeCreditStorage, input: {
@@ -115,11 +116,11 @@ export async function creditDriverCutOnce(storage: FeeCreditStorage, input: {
   const { rideId, driverUserId, amount, reason, kind } = input;
   if (!(amount > 0)) return { driverCredited: 0, fleetShare: 0 };
   const stamp = featureFlags.fleetEnabled ? await fleetStampForRide(rideId, driverUserId) : null;
-  if (!stamp) {
-    await storage.addVirtualCardBalance(driverUserId, amount, reason, rideId);
-    return { driverCredited: amount, fleetShare: 0 };
-  }
-  const split = fleetFeeSplit(amount);
+  // In their own car the cut is credited whole — and now once, under the same
+  // lock and ledger check as a fleet car's (code review 2026-10-06). It used
+  // to be a bare credit, so a fee door that ran twice for one ride (a double
+  // tapped no-show) paid the driver twice.
+  const split = stamp ? fleetFeeSplit(amount) : { gross: amount, fleetShare: 0, driverKeeps: amount };
   return await db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${reason}:${rideId}`}))`);
     const already = await tx.select({ id: walletTransactions.id }).from(walletTransactions)
@@ -135,6 +136,7 @@ export async function creditDriverCutOnce(storage: FeeCreditStorage, input: {
         userId: driverUserId, amount: split.driverKeeps.toFixed(2), balanceAfter: parseFloat(u.balance || "0").toFixed(2), reason, rideId,
       });
     }
+    if (!stamp) return { driverCredited: split.driverKeeps, fleetShare: 0 };
     await writeFleetEarning(tx, { stamp, driverUserId, rideId, kind, gross: split.gross, fleetShare: split.fleetShare, driverKeeps: split.driverKeeps });
     console.log(`[fleet] ${kind} shared :: ride ${rideId.slice(0, 8)} | driver $${split.driverKeeps.toFixed(2)} | fleet $${split.fleetShare.toFixed(2)} of $${split.gross.toFixed(2)}`);
     return { driverCredited: split.driverKeeps, fleetShare: split.fleetShare };
