@@ -64,6 +64,14 @@ async function stripeStub() {
       const done = byKey.get(key);
       if (done) return send(res, done.code, done.body);
       const pi = { id: `pi_stub_${++n}`, object: "payment_intent", amount: Number(body.amount), currency: "usd", customer: body.customer, metadata: body.metadata ?? {}, created: n };
+      if (state.mode === "idem") {
+        // Stripe refusing to replay a key whose request changed: nothing raised by THIS request.
+        return send(res, 400, { error: { type: "idempotency_error", message: "Keys for idempotent requests can only be used with the same parameters they were first used with." } });
+      }
+      if (state.mode === "processing") {
+        pi.status = "processing"; intents.set(pi.id, pi); byKey.set(key, { code: 200, body: { ...pi } }); state.creates.push({ key, pi, outcome: "processing" });
+        return send(res, 200, pi);
+      }
       if (state.mode === "decline") {
         pi.status = "requires_payment_method"; intents.set(pi.id, pi);
         const err = { error: { type: "card_error", code: "card_declined", decline_code: "insufficient_funds", message: "Your card has insufficient funds.", payment_intent: pi } };
@@ -102,7 +110,9 @@ async function stripeStub() {
   const url = `http://127.0.0.1:${server.address().port}`;
   /** Charges that took money for one booking or assignment and purpose. */
   const charged = (refId, type) => state.creates.filter((c) => c.pi.metadata.rentalBookingId === refId && c.pi.metadata.type === type && c.outcome !== "declined");
-  return { url, state, charged, close: () => new Promise((r) => server.close(r)) };
+  /** A "processing" charge settles. */
+  const settle = (id) => { const pi = intents.get(id); if (pi) pi.status = "succeeded"; };
+  return { url, state, charged, settle, close: () => new Promise((r) => server.close(r)) };
 }
 
 export async function run({ db }) {
@@ -286,6 +296,49 @@ export async function run({ db }) {
     const { rows: [s9] } = await db.query("SELECT status, payment_status, payment_error FROM rental_bookings WHERE id=$1", [b8]);
     check("the deposit is captured once and the rental is closed and settled", !!dep9.deposit_intent_id && s9.status === "closed" && s9.payment_status === "settled", JSON.stringify(s9));
 
+    section("Bugbot #474: a charge still processing is waited for, never charged again under a new key");
+    const car11 = await fleetCar(`PG56L${tag.slice(-2)}`);
+    const b11 = await confirmedRental(car11, FIXTURES.rider.id, 2);
+    stub.state.mode = "processing";
+    const p11 = await collect(b11);
+    check("a rental charge that comes back processing keeps the car here and says why", p11.status === 402 && /processing/.test(p11.json?.message ?? ""), `${p11.status} ${p11.json?.message}`);
+    stub.state.mode = "succeed";
+    const q11 = await collect(b11);
+    check("pressed again while it is still processing, nothing new is sent to the card", q11.status === 402 && stub.charged(b11, "rental_rental").length === 1, `${q11.status} ${q11.json?.message} charges ${stub.charged(b11, "rental_rental").length}`);
+    stub.settle(stub.charged(b11, "rental_rental")[0]?.pi.id);
+    const r11 = await collect(b11);
+    check("once it settles, the hand-over adopts that charge: one charge in all", r11.status === 200 && r11.json?.status === "collected" && stub.charged(b11, "rental_rental").length === 1, `${r11.status} ${r11.json?.message} charges ${stub.charged(b11, "rental_rental").length}`);
+    const car12 = await fleetCar(`PG56M${tag.slice(-2)}`);
+    const d12 = await newDriver("processing");
+    const a12 = await assigned(car12, d12.id, inDays(1));
+    stub.state.mode = "processing";
+    await handOver(a12);
+    stub.state.mode = "succeed";
+    const h12 = await handOver(a12);
+    check("a driver's first week still processing is not charged again on a second press", h12.status === 402 && stub.charged(a12, "rental_driver_rent").length === 1, `${h12.status} ${h12.json?.message} charges ${stub.charged(a12, "rental_driver_rent").length}`);
+    const car13 = await fleetCar(`PG56N${tag.slice(-2)}`);
+    const d13 = await newDriver("idem");
+    const a13 = await assigned(car13, d13.id, inDays(1));
+    stub.state.mode = "idem";
+    const i13 = await handOver(a13);
+    stub.state.mode = "succeed";
+    const { rows: [w13] } = await db.query("SELECT status, attempt, error FROM driver_rent_charges WHERE assignment_id=$1", [a13]);
+    check("an idempotency error is not a decline: the week stays open on the same attempt, and the desk is told", i13.status === 402 && w13?.status === "charging" && w13?.attempt === 1, JSON.stringify(w13));
+
+    section("Bugbot #474: a hand-over whose answer was lost, then declined or cancelled, gives the money back");
+    const car14 = await fleetCar(`PG56P${tag.slice(-2)}`);
+    const b14 = await confirmedRental(car14, FIXTURES.rider.id, 2);
+    const b15 = await confirmedRental(car14, FIXTURES.rider.id, 5);
+    stub.state.mode = "lose";
+    await collect(b14);
+    await collect(b15);
+    stub.state.mode = "succeed";
+    const lost14 = stub.charged(b14, "rental_rental")[0]?.pi.id, lost15 = stub.charged(b15, "rental_rental")[0]?.pi.id;
+    const off14 = await admin.req("POST", `/api/admin/rental/bookings/${b14}/decline`, { reason: "Called off" });
+    check("the desk declines: the charge Stripe took without answering is refunded", off14.status === 200 && !!lost14 && stub.state.refunds.includes(lost14), `${off14.status} refunds ${JSON.stringify(stub.state.refunds)} lost ${lost14}`);
+    const off15 = await rider.req("POST", `/api/rent/bookings/${b15}/cancel`, { reason: "Plans changed" });
+    check("the renter cancels: the same, and the booking says refunded", off15.status === 200 && !!lost15 && stub.state.refunds.includes(lost15) && off15.json?.paymentStatus === "refunded", `${off15.status} ${off15.json?.paymentStatus} lost ${lost15}`);
+
     section("RN5: a car owner with a pending driver application is paid on payday, once");
     const ownerId = `e2e-56-owner-${tag}`; const bothId = `e2e-56-both-${tag}`; userIds.push(ownerId, bothId);
     for (const [id, bal] of [[ownerId, "90.00"], [bothId, "120.00"]]) {
@@ -303,7 +356,7 @@ export async function run({ db }) {
 
     section("RN6: a booking marked credited with no credit on the ledger is paid by the catch-up, once");
     const { rows: [pcar] } = await db.query(`INSERT INTO rental_cars (owner_kind, owner_user_id, make, model, year, color, license_plate, daily_price, status, review_status)
-      VALUES ('private', $1, 'Honda', 'Fit', 2022, 'Blue', $2, 40, 'hidden', 'approved') RETURNING id`, [ownerId, `PG56P${tag.slice(-2)}`]);
+      VALUES ('private', $1, 'Honda', 'Fit', 2022, 'Blue', $2, 40, 'hidden', 'approved') RETURNING id`, [ownerId, `PG56Q${tag.slice(-2)}`]);
     carIds.push(pcar.id);
     const { rows: [pb] } = await db.query(`INSERT INTO rental_bookings (car_id, renter_id, starts_at, ends_at, days, daily_price, rental_total, deposit, status, licence_number, licence_image_url, owner_credited_at, owner_share, platform_share)
       VALUES ($1, $2, NOW() - interval '3 days', NOW() - interval '1 day', 2, 40, 80, 200, 'closed', 'M123456789', '/api/objects/db-upload/00000000-0000-4000-8000-0000000000c5', NOW() - interval '2 hours', 72.00, 8.00) RETURNING id`, [pcar.id, FIXTURES.rider.id]);

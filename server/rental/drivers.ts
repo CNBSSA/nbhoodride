@@ -20,7 +20,7 @@ import {
   ASSIGNMENT_OPEN, RENT_CHARGE_LEAD_MS, WEEK_MS, driverLateFee, fleetDriverMayDrive, money, qualificationProblems, quoteDriverAssignment, rentalsOverlap, settleReturn,
   splitFromEarnings,
 } from "@shared/rental";
-import { stripeService, stripeSaidNo } from "../stripeService";
+import { intentDeclined, stripeDeclined, stripeSaidNo, stripeService } from "../stripeService";
 import { storage } from "../storage";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
 import { RentalError, holdingBookings, verifiedPhotoList } from "./cars";
@@ -147,6 +147,7 @@ async function giveBackUnusedRent(a: DriverCarAssignment, why: string, opts: { s
         const card = await driverCard(a.driverUserId);
         const found = card && stripeService.isEnabled ? await stripeService.findRentalCharge(card.customerId, a.id, "driver_rent", String(new Date(row.periodStart).getTime())) : null;
         if (found?.status === "succeeded") intentId = found.id;
+        else if (found && !intentDeclined(found.status)) problems.push(`the charge is ${found.status} on Stripe; refund it once it settles`);
       } catch (err) {
         problems.push(`could not ask Stripe whether the card was charged (${errText(err)})`);
       }
@@ -256,8 +257,17 @@ async function takeFromEarnings(driverUserId: string, amount: number, reason: st
   });
 }
 
-/** An answer from Stripe (or from us before Stripe was called): nothing was charged, and the next try is a new attempt. */
-class Declined extends Error {}
+/**
+ * An answer from Stripe (or from us before Stripe was called): nothing was
+ * charged. `bump` only when the card itself said no: that alone makes the
+ * next try a new attempt with a new key (Bugbot on PR #474, code review 2026-10-06).
+ */
+class Declined extends Error {
+  constructor(message: string, public bump = false) { super(message); }
+}
+
+/** A charge Stripe has but has not finished (processing and the like): money may be on its way, so nothing new is sent. */
+const IN_FLIGHT = (status: string) => `Stripe has this charge as ${status}; nothing more will be charged until it settles. Try again later.`;
 
 /**
  * Charge one week of rent, at most once. The week's row is written first
@@ -306,6 +316,10 @@ export async function chargeWeek(a: DriverCarAssignment, periodStart: Date, paid
       const card = await driverCard(a.driverUserId);
       const found = card && stripeService.isEnabled ? await stripeService.findRentalCharge(card.customerId, a.id, "driver_rent", keyPart) : null;
       if (found?.status === "succeeded") return markWeekPaid(a, row.id, found.id, paidFrom);
+      if (found && !intentDeclined(found.status)) {
+        await db.update(driverRentCharges).set({ status: "charging", error: IN_FLIGHT(found.status), updatedAt: new Date() }).where(eq(driverRentCharges.id, row.id));
+        return { ok: false, error: IN_FLIGHT(found.status) };
+      }
     } catch (err) {
       // Put it back as it was; nothing was charged here.
       await db.update(driverRentCharges).set(existing.status === "failed"
@@ -313,12 +327,8 @@ export async function chargeWeek(a: DriverCarAssignment, periodStart: Date, paid
         : { status: "charging", error: `Could not check Stripe: ${errText(err)}`, updatedAt: new Date() }).where(eq(driverRentCharges.id, row.id));
       return { ok: false, error: `Could not check with Stripe whether this week was already charged (${errText(err)}). Nothing was charged.` };
     }
-    // After a recorded decline the next try is a new attempt (a new key);
-    // after a lost answer it is the same attempt, replayed.
-    if (existing.status === "failed") {
-      const [bumped] = await db.update(driverRentCharges).set({ attempt: existing.attempt + 1 }).where(eq(driverRentCharges.id, row.id)).returning();
-      row = bumped;
-    }
+    // The attempt was moved on when a decline was recorded, and only then;
+    // a lost answer or a charge in flight is the same attempt, replayed.
   }
   let fromEarnings = row.fromEarnings === null ? null : Number(row.fromEarnings);
   try {
@@ -336,15 +346,18 @@ export async function chargeWeek(a: DriverCarAssignment, periodStart: Date, paid
     let pi;
     try {
       pi = await stripeService.chargeRental({ amount: fromCard, ...card, bookingId: a.id, renterId: a.driverUserId, purpose: "driver_rent", keyPart, attempt: row.attempt });
-    } catch (err) {
-      if (stripeSaidNo(err)) throw new Declined(errText(err));
+    } catch (err: any) {
+      // An idempotency error is not a decline: the attempt may have charged. It stays open.
+      if (stripeSaidNo(err) && String(err?.type) !== "StripeIdempotencyError") throw new Declined(errText(err), stripeDeclined(err));
       throw err;
     }
-    if (pi.status !== "succeeded") throw new Declined(`the card answered ${pi.status}`);
-    return markWeekPaid(a, row.id, pi.id, paidFrom);
+    if (pi.status === "succeeded") return markWeekPaid(a, row.id, pi.id, paidFrom);
+    if (intentDeclined(pi.status)) throw new Declined(`the card answered ${pi.status}`, true);
+    throw new Error(IN_FLIGHT(pi.status));
   } catch (err) {
     if (err instanceof Declined || fromEarnings === null) {
-      await db.update(driverRentCharges).set({ status: "failed", error: errText(err), updatedAt: new Date() }).where(eq(driverRentCharges.id, row.id));
+      const bump = err instanceof Declined && err.bump;
+      await db.update(driverRentCharges).set({ status: "failed", error: errText(err), updatedAt: new Date(), ...(bump ? { attempt: row.attempt + 1 } : {}) }).where(eq(driverRentCharges.id, row.id));
       return { ok: false, error: errText(err) };
     }
     // No verdict from Stripe: the card may have been charged. The week stays
@@ -508,25 +521,30 @@ export async function chargeDamage(a: DriverCarAssignment): Promise<DriverCarAss
     if (!card) throw new Error("the driver has no card on file");
     // A retry after a recorded decline is a new attempt (a new key), asked of
     // Stripe first; a lost answer is repeated under its own key (code review 2026-10-06).
-    if (a.returnAttempt > 1) {
+    // Asked of Stripe whenever an earlier try may have reached it (a later
+    // attempt, or one that left an error behind): what went through is
+    // adopted, what is still in flight is waited for.
+    if (a.returnAttempt > 1 || a.paymentError) {
       const found = await stripeService.findRentalCharge(card.customerId, a.id, "driver_return");
       if (found?.status === "succeeded") {
         const [u] = await db.update(driverCarAssignments).set({ damageIntentId: found.id, paymentError: null }).where(eq(driverCarAssignments.id, a.id)).returning();
         return u;
       }
+      if (found && !intentDeclined(found.status)) throw new Error(IN_FLIGHT(found.status));
     }
     let pi;
     try {
       pi = await stripeService.chargeRental({ amount: fromCard, ...card, bookingId: a.id, renterId: a.driverUserId, purpose: "driver_return", attempt: a.returnAttempt });
-    } catch (err) {
-      if (stripeSaidNo(err)) throw new Declined(errText(err));
+    } catch (err: any) {
+      if (stripeSaidNo(err) && String(err?.type) !== "StripeIdempotencyError") throw new Declined(errText(err), stripeDeclined(err));
       throw err;
     }
-    if (pi.status !== "succeeded") throw new Declined(`the card answered ${pi.status}`);
+    if (intentDeclined(pi.status)) throw new Declined(`the card answered ${pi.status}`, true);
+    if (pi.status !== "succeeded") throw new Error(IN_FLIGHT(pi.status));
     const [u] = await db.update(driverCarAssignments).set({ damageIntentId: pi.id, paymentError: null }).where(eq(driverCarAssignments.id, a.id)).returning();
     return u;
   } catch (err) {
-    if (err instanceof Declined) await db.update(driverCarAssignments).set({ returnAttempt: sql`${driverCarAssignments.returnAttempt} + 1` }).where(and(eq(driverCarAssignments.id, a.id), eq(driverCarAssignments.returnAttempt, a.returnAttempt)));
+    if (err instanceof Declined && err.bump) await db.update(driverCarAssignments).set({ returnAttempt: sql`${driverCarAssignments.returnAttempt} + 1` }).where(and(eq(driverCarAssignments.id, a.id), eq(driverCarAssignments.returnAttempt, a.returnAttempt)));
     const taken = fromEarnings && fromEarnings > 0 ? ` (${money(fromEarnings)} was taken from earnings)` : "";
     const [u] = await db.update(driverCarAssignments).set({ paymentError: `Return charge failed${taken}: ${errText(err)}` }).where(eq(driverCarAssignments.id, a.id)).returning();
     opsAlert(formatOpsAlert("💳 Driver car return charge FAILED", [

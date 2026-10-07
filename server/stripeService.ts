@@ -275,14 +275,32 @@ export function rentalAttemptSuffix(attempt?: number): string {
 }
 
 /**
- * Did Stripe give a verdict? A card decline, a request Stripe refused, or a
- * key it would not accept is an answer: nothing was charged. Anything else
- * (no connection, a 5xx, a reply we could not read) may have charged, so the
- * attempt stays open and is repeated under the same key (code review 2026-10-06).
+ * Did Stripe refuse this request outright, so nothing was charged by it?
+ * A card decline, a request Stripe rejected, a key it would not accept.
+ * Anything else (no connection, a 5xx, a reply we could not read) may have
+ * charged, so the attempt stays open and is repeated under the same key
+ * (code review 2026-10-06). An idempotency error is a refusal of THIS
+ * request, but not a decline: the attempt it belongs to may have charged.
  */
 export function stripeSaidNo(err: any): boolean {
   const type = String(err?.type ?? "");
   return type === "StripeCardError" || type === "StripeInvalidRequestError" || type === "StripeAuthenticationError" || type === "StripePermissionError" || type === "StripeIdempotencyError";
+}
+
+/**
+ * Only the card saying no moves a rental charge to its next attempt (a new
+ * idempotency key). Bugbot on PR #474: anything else — an intent still
+ * "processing", one waiting on an action, an idempotency error, a reply
+ * that never came — may already hold the renter's money, and a new key
+ * would charge them twice (code review 2026-10-06).
+ */
+export function stripeDeclined(err: any): boolean {
+  return String(err?.type ?? "") === "StripeCardError";
+}
+
+/** An intent that holds no money and never will: the card said no. */
+export function intentDeclined(status: string | null | undefined): boolean {
+  return status === "requires_payment_method" || status === "canceled";
 }
 
 export const stripeService = new StripeService();
