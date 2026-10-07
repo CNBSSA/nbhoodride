@@ -8,7 +8,11 @@ if (process.env.STRIPE_SECRET_KEY) {
   // STRIPE_API_BASE_FOR_TESTS points the client at a local stand-in for
   // Stripe so a journey can make a charge succeed, decline or lose its answer
   // (code review 2026-10-06). Never set in production; unset, nothing changes.
-  const testBase = process.env.STRIPE_API_BASE_FOR_TESTS ? new URL(process.env.STRIPE_API_BASE_FOR_TESTS) : null;
+  // Loopback only: the secret key travels with every request, so the hook
+  // can never send it off this machine, whatever the variable says.
+  const rawTestBase = process.env.STRIPE_API_BASE_FOR_TESTS ? new URL(process.env.STRIPE_API_BASE_FOR_TESTS) : null;
+  const testBase = rawTestBase && ["127.0.0.1", "localhost", "::1", "[::1]"].includes(rawTestBase.hostname) ? rawTestBase : null;
+  if (rawTestBase && !testBase) console.error("[stripe] STRIPE_API_BASE_FOR_TESTS ignored: only a loopback address is allowed");
   stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
     apiVersion: "2025-10-29.clover",
     ...(testBase ? { host: testBase.hostname, port: Number(testBase.port || 80), protocol: testBase.protocol.replace(":", "") as "http" | "https" } : {}),
