@@ -1745,6 +1745,12 @@ async function migrate() {
     } catch (err) {
       if (err.code !== '42704') throw err;
     }
+    // The batch runs as one transaction while the old server is still
+    // serving, and every ALTER TABLE takes its table's lock. Waiting behind a
+    // long transaction queued every rider's query behind the migration; now
+    // a lock not granted in 10 seconds fails the deploy (the old server keeps
+    // serving, nothing is half-applied) instead (code review 2026-10-06).
+    await client.query(`SET lock_timeout = '10s'`);
     await client.query(SQL);
     console.log('Migration complete — all tables ready.');
   } catch (err) {
