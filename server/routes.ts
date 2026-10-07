@@ -186,6 +186,7 @@ import { runWeeklyPayday } from "./payday";
 import { reliabilityTimeline, riderBalances, ReportError } from "./adminReports";
 import { yearToDatePayouts, TaxReportError } from "./taxYearToDate";
 import { creditDriverCutOnce } from "./fleet/earnings";
+import { payoutTransitionRefusal } from "@shared/payoutRequestStatus";
 import { paydayKeyOf, paydayRunDue } from "@shared/paydayCycle";
 import { BUILD_ID } from "./buildInfo";
 import { payDriverForCompletedJob, payDriverForWaiting } from "./commercial/driverPay";
@@ -2947,6 +2948,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "You must be at the pickup location to report a no-show." });
       }
 
+      // Claim the no-show before any money moves (code review 2026-10-06).
+      // The fee used to be collected and the driver credited first and the
+      // ride marked after, so a double tap (or a retry racing the first
+      // request) charged the rider and paid the driver twice before the
+      // second mark failed. Now one conditional UPDATE from driver_arriving
+      // decides it, and only the request that won it goes on.
+      const noShowReason = "Rider did not appear at pickup";
+      const claimed = await storage.markRideNoShowIfWaiting(
+        rideId, ride.paymentMethod === 'invoice' ? 0 : RIDER_NO_SHOW_FEE, noShowReason, userId,
+      );
+      if (!claimed) {
+        return res.status(409).json({ message: "This no-show was already reported, or the ride is no longer waiting at pickup." });
+      }
+
       // Collect the flat no-show fee from the rider's authorization (or
       // wallet on cash rides) and split it with the fairness fund.
       // A commercial job's no-show costs the ORGANIZATION what its agreement
@@ -2973,7 +2988,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ]));
       }
       const noShowFee = commercialNoShowFee ?? (ride.paymentMethod === 'invoice' ? 0 : RIDER_NO_SHOW_FEE);
-      const collected = ride.paymentMethod === 'invoice' ? 0 : await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE);
+      let collected = 0;
+      if (ride.paymentMethod !== 'invoice') {
+        try {
+          collected = await collectFeeFromRide(ride, RIDER_NO_SHOW_FEE);
+        } catch (collectErr) {
+          // Ask Stripe what happened before giving the claim back (Cursor
+          // review of #473): a capture can succeed and its answer be lost, and
+          // a wallet leg can already have moved. The claim is given back only
+          // when nothing can have been taken — a card hold Stripe still holds
+          // uncaptured, with no wallet amount on the ride.
+          const piId = ride.stripePaymentIntentId;
+          const realCard = ride.paymentMethod === "card" && !!piId && !piId.startsWith("virtual-");
+          const walletLeg = parseFloat(ride.virtualAmountAuthorized || "0") > 0;
+          let piStatus: string | null = null;
+          let piReceived = 0;
+          if (realCard && stripe) {
+            try {
+              const pi = await stripe.paymentIntents.retrieve(piId!);
+              piStatus = pi.status;
+              piReceived = (pi.amount_received ?? 0) / 100;
+            } catch { piStatus = null; }
+          }
+          if (piStatus === "succeeded") {
+            // The fee was taken: the no-show stands and is finished below.
+            collected = Number((parseFloat(ride.virtualAmountAuthorized || "0") + piReceived).toFixed(2));
+          } else if (realCard && !walletLeg && piStatus === "requires_capture") {
+            // Nothing moved: the claim is given back and the driver may try
+            // again, as they could before the claim came first.
+            await storage.updateRide(rideId, {
+              status: "driver_arriving",
+              paymentStatus: ride.paymentStatus,
+              cancellationFee: ride.cancellationFee,
+              cancellationReason: ride.cancellationReason,
+              cancelledByRole: ride.cancelledByRole,
+            } as any).catch((err) => console.error(`[no-show] could not give back the claim on ride ${rideId}:`, err));
+            throw collectErr;
+          } else {
+            // Cannot tell what moved: the no-show stands (never a live ride
+            // that may have been charged) and a person settles the money.
+            opsAlert(formatOpsAlert("⚠️ No-show fee: check the payment", [
+              ["Ride", rideId.slice(0, 8)],
+              ["Driver", userId],
+              ["Why", "collecting the no-show fee failed and what was taken cannot be told; the ride stays a no-show"],
+              ["Error", String((collectErr as any)?.message ?? collectErr).slice(0, 200)],
+            ]));
+            throw collectErr;
+          }
+        }
+      }
       // The driver drove there and waited. What they are paid does not hang on
       // a billing write succeeding: when the account's fee could not be
       // recorded, PG Ride carries the ordinary cut out of its own float and
@@ -2981,8 +3044,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // audit, 2026-09-18 — the same rule as every other commercial payment).
       const splitOn = commercialFeeUnwritten ? RIDER_NO_SHOW_FEE : (commercialNoShowFee ?? collected);
       const split = await routeFeeWithFairnessSplit(splitOn, userId, rideId, "no_show_fee");
-      const updated = await storage.markRideNoShow(rideId, noShowFee, "Rider did not appear at pickup");
-      await storage.updateRide(rideId, { cancelledBy: ride.riderId } as any);
+      // The claim carried the rider ladder's fee; the fee that applied (an
+      // organization's own, or none when it could not be written) is set now.
+      const updated = await storage.updateRide(rideId, {
+        cancelledBy: ride.riderId,
+        cancellationFee: noShowFee.toString(),
+        paymentStatus: noShowFee > 0 ? "cancelled_with_fee" : "cancelled",
+      } as any);
       if (ride.paymentMethod === 'invoice') {
         const { onCommercialRideEnded } = await import("./commercial/recipientApproval");
         await onCommercialRideEnded(rideId, "the recipient was not there").catch((err) => console.error("[recipient-approval] no-show hook failed:", err));
@@ -4896,6 +4964,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // ── Driver-initiated: the rider never pays for a driver's bail. ──
         feeReason = "Driver-initiated cancellation — no charge to rider";
 
+        // Claim the cancel before any money moves (code review 2026-10-06).
+        // The goodwill credit and the refund used to run first and the ride
+        // was reset after, unconditionally, so a double tap refunded the
+        // rider's hold twice and paid the goodwill twice. The claim takes
+        // the ride off this driver under a row lock and hands back the row
+        // as it was, so the refund is of the authorization really on it, and
+        // only the request that won goes on.
+        const claimedRide = await storage.claimDriverCancel(rideId, userId);
+        if (!claimedRide) {
+          return res.status(409).json({ message: "This ride was already cancelled or has moved on." });
+        }
+        const ride = claimedRide;
+
         // Goodwill credit when the driver bails after the rider was told
         // "your driver has arrived" — funded by the fairness pool, so it
         // only pays out while the pool has money. Never let a credit hiccup
@@ -4939,29 +5020,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
               }));
             }
           }
-          await storage.updateRide(rideId, {
-            status: "pending", driverId: null, acceptedAt: null, arrivedAt: null,
-            virtualAmountAuthorized: "0.00", stripeAuthorizedAmount: "0.00",
-            stripePaymentIntentId: null, paymentStatus: "pending_payment",
-          } as any);
+          // The ride itself was reset by the claim above; writing it again here
+          // could wipe a new driver's claim made since.
           await storage.updateRideGroup(ride.groupId, { driverId: null, status: "open" } as any);
           requeued = true;
         } else if (isScheduledFuture) {
-          // Scheduled solo ride: back onto the claim board unassigned.
-          await storage.updateRide(rideId, {
-            status: "pending", driverId: null, acceptedAt: null, arrivedAt: null,
-            virtualAmountAuthorized: "0.00", stripeAuthorizedAmount: "0.00",
-            stripePaymentIntentId: null, paymentStatus: "pending_payment",
-          } as any);
+          // Scheduled solo ride: back onto the claim board unassigned — the
+          // claim above already put it there.
           requeued = true;
         } else {
           // Immediate ride: try to hand it straight to the next best driver
-          // so the rider often never has to rebook at all.
-          await storage.updateRide(rideId, {
-            status: "pending", driverId: null, acceptedAt: null, arrivedAt: null,
-            virtualAmountAuthorized: "0.00", stripeAuthorizedAmount: "0.00",
-            stripePaymentIntentId: null, paymentStatus: "pending_payment",
-          } as any);
+          // so the rider often never has to rebook at all. (The claim above
+          // already took it off the cancelling driver.)
 
           const pickup = ride.pickupLocation as { lat: number; lng: number; address: string };
           // Exclude the cancelling driver AND anyone who previously declined
@@ -8933,24 +9003,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!['processing', 'paid', 'rejected'].includes(status)) {
         return res.status(400).json({ message: "status must be processing, paid, or rejected" });
       }
-      // Rejecting refunds the held amount back to the driver's balance. The
-      // refund must happen EXACTLY once: do the pending→rejected transition
-      // atomically and credit only if THIS call won it, so a double-reject
-      // (admin double-click / two admins) can't refund twice. If it wasn't
-      // pending, fall through to a plain status update without crediting
-      // (preserves the prior behavior of letting an admin mark an
-      // already-processing request rejected, just with no double refund).
-      if (status === 'rejected') {
-        const rejected = await storage.rejectPayoutRequestIfPending(id, adminId, adminNote);
-        if (rejected) {
-          await storage.addVirtualCardBalance(rejected.driverId, parseFloat(rejected.amount));
-          await storage.logAdminAction(adminId, 'payout_rejected', 'payout_request', id, { adminNote });
-          return res.json(rejected);
-        }
+      // One conditional move decides it (code review 2026-10-06): pending →
+      // processing | paid | rejected, processing → paid | rejected, never out
+      // of paid or rejected. Before this only pending → rejected was guarded:
+      // a rejected request (money back on the balance) could later be marked
+      // paid and the driver paid twice, and processing → rejected fell
+      // through to a plain update that never gave the held money back. A move
+      // into rejected now refunds from pending or processing, in the same
+      // transaction as the move, so only the call that won it refunds.
+      const moved = await storage.movePayoutRequest(id, status, adminId, adminNote);
+      if (!moved.found) return res.status(404).json({ message: "Payout request not found" });
+      if (!moved.request) {
+        return res.status(409).json({ message: payoutTransitionRefusal(moved.from, status), status: moved.from });
       }
-      const updated = await storage.updatePayoutRequest(id, { status, adminNote, processedBy: adminId });
       await storage.logAdminAction(adminId, `payout_${status}`, 'payout_request', id, { adminNote });
-      res.json(updated);
+      res.json(moved.request);
     } catch (error) {
       console.error("Error updating payout request:", error);
       res.status(500).json({ message: "Failed to update payout request" });
@@ -11687,7 +11754,10 @@ Generate the FAQ list.`;
   }
 
   /**
-   * Release every scheduled ride this driver holds for the next two hours:
+   * Release every scheduled ride this driver has claimed and not yet
+   * confirmed (still `pending`) for the next two hours; an accepted ride
+   * holds the rider's authorization and stays with its driver (code review
+   * 2026-10-06):
    * the rider is told and the ride is offered again (as before), and now the
    * driver and ops are told too. Returns the rides released.
    */
@@ -11697,7 +11767,10 @@ Generate the FAQ list.`;
     const minutesGone = Math.max(1, Math.round((now.getTime() - droppedAt.getTime()) / 60000));
     for (const ride of claimedRides) {
       try {
-        const unclaimed = await storage.unclaimScheduledRide(ride.id);
+        // Conditional on the ride still being this driver's unconfirmed claim
+        // (code review 2026-10-06): one the driver started in the meantime is
+        // left alone, and nobody is told it was released.
+        const unclaimed = await storage.unclaimScheduledRide(ride.id, userId);
         if (!unclaimed) continue;
         released.push(ride.id);
         const pickupAddress = (ride.pickupLocation as any)?.address || '';

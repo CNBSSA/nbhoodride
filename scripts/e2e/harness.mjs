@@ -6,6 +6,7 @@
  * fails the whole run — this is the regression net for "it worked yesterday".
  */
 import { spawn } from "node:child_process";
+import { createServer as createNetServer } from "node:net";
 import { createHash } from "node:crypto";
 import { createWriteStream, readFileSync } from "node:fs";
 import pg from "pg";
@@ -161,8 +162,23 @@ export async function seedFixtures(db) {
     [FIXTURES.rider.id, FIXTURES.driver.id]).catch((e) => console.log("  (renter seed) " + String(e?.message ?? e).split("\n")[0]));
 }
 
+/** A port the operating system says is free right now. */
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = createNetServer();
+    probe.unref();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => { const { port } = probe.address(); probe.close(() => resolve(port)); });
+  });
+}
+
 export async function startServer(env = {}) {
-  const port = 5700 + Math.floor(Math.random() * 200);
+  // A free port from the OS, not a random one: journeys start second servers
+  // (flags off, test hooks) beside the main one, and a random pick that
+  // collided left the second server dead while the main one answered its
+  // health check — so "fleet off" requests ran on a fleet-on server
+  // (journey 47 in CI, 2026-10-07).
+  const port = await freePort();
   const logPath = `/tmp/pgride-e2e-${port}.log`;
   const out = createWriteStream(logPath);
   // Absolute path so the harness works from any cwd (CI, scripts, ad-hoc checks).
@@ -194,7 +210,10 @@ export async function startServer(env = {}) {
   child.stdout.pipe(out); child.stderr.pipe(out);
   const base = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 60; i++) {
-    try { const r = await fetch(base + "/health"); if (r.ok) return { base, child, logPath }; } catch {}
+    // Only our own child counts: if it has exited, whatever answers on this
+    // port is not the server these flags were meant for.
+    if (child.exitCode !== null) break;
+    try { const r = await fetch(base + "/health"); if (r.ok && child.exitCode === null) return { base, child, logPath }; } catch {}
     await new Promise((r) => setTimeout(r, 500));
   }
   child.kill();
