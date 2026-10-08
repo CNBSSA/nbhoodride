@@ -9,9 +9,9 @@
  * it collected is credited to their balance once, and the Friday payday
  * pays it out with the drivers'. Private cars are never offered to drivers.
  */
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
-import { rentalBookings, rentalCars, rentalOwnerProfiles, rentalRenters, type RentalBooking } from "@shared/schema";
+import { rentalBookings, rentalCars, rentalOwnerProfiles, rentalRenters, users, walletTransactions, type RentalBooking } from "@shared/schema";
 import { OWNER_PAYOUT_METHODS, drivingRecordCurrent, money, ownerSplit, qualificationProblems } from "@shared/rental";
 import { storage } from "../storage";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
@@ -125,27 +125,48 @@ export async function reviewOwnerCar(carId: string, body: any) {
 }
 
 /**
- * Credit the owner their 90% of a closed rental, once. The booking is
- * stamped first (conditional on not being stamped), then the balance is
- * credited; the ledger reason is checked too, so neither a retried close nor
- * the catch-up sweep can pay twice. A credit that fails un-stamps the booking
- * so the sweep tries again, and pages ops.
+ * Credit the owner their 90% of a closed rental, once. The stamp on the
+ * booking, the owner's balance and the ledger row are written in ONE
+ * transaction with the booking locked (code review 2026-10-06): before, the
+ * stamp was written first and the credit after, so a process that stopped
+ * between them left a booking marked paid that no owner was ever paid for,
+ * and the catch-up sweep (which looks for unstamped bookings) never saw it
+ * again. Now either all three are written or none is, and a credit that
+ * fails pages ops and is retried by the hourly rental sweep.
  */
-export async function creditOwnerForClosedRental(bookingId: string): Promise<number> {
+export async function creditOwnerForClosedRental(bookingId: string, opts: { repair?: boolean } = {}): Promise<number> {
   const [row] = await db.select({ b: rentalBookings, c: rentalCars }).from(rentalBookings)
     .innerJoin(rentalCars, eq(rentalCars.id, rentalBookings.carId)).where(eq(rentalBookings.id, bookingId));
-  if (!row || row.c.ownerKind !== "private" || !row.c.ownerUserId || row.b.status !== "closed" || row.b.ownerCreditedAt) return 0;
+  if (!row || row.c.ownerKind !== "private" || !row.c.ownerUserId || row.b.status !== "closed") return 0;
+  if (row.b.ownerCreditedAt && !opts.repair) return 0;
+  const ownerId = row.c.ownerUserId;
   const split = ownerSplit(row.b.rentalTotal, row.b.settlement as any, row.b.youngRenterFee);
-  const [stamped] = await db.update(rentalBookings).set({ ownerCreditedAt: new Date(), ownerShare: split.ownerShare.toFixed(2), platformShare: split.platformShare.toFixed(2) })
-    .where(and(eq(rentalBookings.id, bookingId), isNull(rentalBookings.ownerCreditedAt))).returning({ id: rentalBookings.id });
-  if (!stamped) return 0;
   try {
-    if (await storage.hasWalletTransaction(bookingId, OWNER_EARNINGS_REASON)) return 0;
-    if (split.ownerShare > 0) await storage.addVirtualCardBalance(row.c.ownerUserId, split.ownerShare, OWNER_EARNINGS_REASON, bookingId);
-    console.log(`[rental] owner credited :: booking ${bookingId.slice(0, 8)} | ${money(split.ownerShare)} of ${money(split.collected)}`);
-    return split.ownerShare;
+    const credited = await db.transaction(async (tx) => {
+      const [b] = await tx.select({ stamped: rentalBookings.ownerCreditedAt, ownerShare: rentalBookings.ownerShare }).from(rentalBookings).where(eq(rentalBookings.id, bookingId)).for("update");
+      if (!b || (b.stamped && !opts.repair)) return 0;
+      const [done] = await tx.select({ id: walletTransactions.id }).from(walletTransactions)
+        .where(and(eq(walletTransactions.rideId, bookingId), eq(walletTransactions.reason, OWNER_EARNINGS_REASON))).limit(1);
+      if (done) return 0;
+      // A booking stamped by the code before this fix but never credited is
+      // paid what its stamp recorded.
+      const share = b.stamped ? Number(b.ownerShare ?? 0) : split.ownerShare;
+      if (!b.stamped) {
+        await tx.update(rentalBookings).set({ ownerCreditedAt: new Date(), ownerShare: split.ownerShare.toFixed(2), platformShare: split.platformShare.toFixed(2) })
+          .where(eq(rentalBookings.id, bookingId));
+      }
+      if (!(share > 0)) return 0;
+      split.ownerShare = share;
+      const [u] = await tx.update(users).set({
+        virtualCardBalance: sql`(CAST(COALESCE(${users.virtualCardBalance}, '0') AS DECIMAL(10,2)) + ${split.ownerShare})`, updatedAt: new Date(),
+      }).where(eq(users.id, ownerId)).returning({ balance: users.virtualCardBalance });
+      if (!u) throw new Error("owner not found");
+      await tx.insert(walletTransactions).values({ userId: ownerId, amount: split.ownerShare.toFixed(2), balanceAfter: Number(u.balance ?? 0).toFixed(2), reason: OWNER_EARNINGS_REASON, rideId: bookingId });
+      return split.ownerShare;
+    });
+    if (credited > 0) console.log(`[rental] owner credited :: booking ${bookingId.slice(0, 8)} | ${money(split.ownerShare)} of ${money(split.collected)}`);
+    return credited;
   } catch (err) {
-    await db.update(rentalBookings).set({ ownerCreditedAt: null }).where(eq(rentalBookings.id, bookingId));
     opsAlert(formatOpsAlert("💳 Car owner credit FAILED", [["Booking", bookingId.slice(0, 8)], ["Owner's share", money(split.ownerShare)], ["Reason", String((err as any)?.message ?? err).slice(0, 200)], ["Next", "The rental sweep retries it within the hour"]]));
     return 0;
   }
@@ -158,6 +179,15 @@ export async function creditOwedOwners(): Promise<number> {
     .where(and(eq(rentalCars.ownerKind, "private"), eq(rentalBookings.status, "closed"), isNull(rentalBookings.ownerCreditedAt)));
   let n = 0;
   for (const o of owed) if ((await creditOwnerForClosedRental(o.id)) > 0) n++;
+  // And every booking stamped as credited with no credit on the ledger: the
+  // state a stop between the stamp and the credit left before the two were
+  // one transaction (code review 2026-10-06).
+  const stranded = await db.select({ id: rentalBookings.id }).from(rentalBookings)
+    .innerJoin(rentalCars, eq(rentalCars.id, rentalBookings.carId))
+    .where(and(eq(rentalCars.ownerKind, "private"), eq(rentalBookings.status, "closed"), isNotNull(rentalBookings.ownerCreditedAt),
+      sql`CAST(COALESCE(${rentalBookings.ownerShare}, '0') AS DECIMAL(10,2)) > 0`,
+      sql`NOT EXISTS (SELECT 1 FROM wallet_transactions wt WHERE wt.ride_id = ${rentalBookings.id} AND wt.reason = ${OWNER_EARNINGS_REASON})`));
+  for (const o of stranded) if ((await creditOwnerForClosedRental(o.id, { repair: true })) > 0) n++;
   return n;
 }
 

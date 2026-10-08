@@ -11,10 +11,11 @@
  * drivers are told at once.
  */
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { bookingRefusal } from "@shared/orgApplication";
 import { db } from "../db";
-import { commercialJobs, commercialStandingOrders, organizations, rides, type CommercialStandingOrder } from "@shared/schema";
+import { commercialJobs, commercialStandingOrders, organizationMembers, organizations, rides, users, type CommercialStandingOrder } from "@shared/schema";
+import { opsAlert, formatOpsAlert } from "../telegramOps";
 import { normalizePlanDays } from "@shared/weeklyPlan";
 import { STANDING_ORDER_BOOK_AHEAD_DAYS, isReturnMode, orgTerms, standingOccurrences, validateStandingSchedule, type ReturnMode } from "@shared/commercialTerms";
 import { VEHICLE_TYPES } from "@shared/vehicleTypes";
@@ -136,6 +137,45 @@ export async function setStandingOrderActive(organizationId: string, id: string,
 }
 
 /**
+ * Who a standing order's jobs are booked as (code review 2026-10-06). The
+ * person who created the order, while they may still book for the account;
+ * once they have left it, lost booking rights, or been suspended or
+ * un-approved, a current booking member of the account instead — an owner
+ * first — so the order keeps running for the facility and nobody outside it
+ * keeps receiving its passengers' details. Null when the account has nobody
+ * who may book.
+ */
+export async function standingOrderBooker(order: { organizationId: string; createdBy: string }): Promise<string | null> {
+  const rows = await db.select({ userId: organizationMembers.userId, role: organizationMembers.role, createdAt: organizationMembers.createdAt, isApproved: users.isApproved, isAdmin: users.isAdmin, isSuperAdmin: users.isSuperAdmin, isSuspended: users.isSuspended })
+    .from(organizationMembers)
+    .innerJoin(users, eq(users.id, organizationMembers.userId))
+    .where(and(eq(organizationMembers.organizationId, order.organizationId), inArray(organizationMembers.role, ["owner", "requester"]), isNull(users.deletedAt)));
+  const able = rows.filter((r) => !r.isSuspended && (r.isApproved || r.isAdmin || r.isSuperAdmin));
+  if (able.some((r) => r.userId === order.createdBy)) return order.createdBy;
+  able.sort((a, b) => (a.role === b.role ? a.createdAt.getTime() - b.createdAt.getTime() : a.role === "owner" ? -1 : 1));
+  return able[0]?.userId ?? null;
+}
+
+/**
+ * Tell ops once per (order, service date) that a standing order's job was
+ * not booked (code review 2026-10-06): before this it was a console line
+ * only, and a facility's dialysis run simply did not happen. Names the
+ * account and the order, never the passenger.
+ */
+async function pageUnbooked(storage: IStorage, order: CommercialStandingOrder, serviceDate: string, reason: string): Promise<void> {
+  try {
+    if (!(await storage.claimWebhookEvent("standing_order_unbooked", `${order.id}:${serviceDate}`, "page"))) return;
+    const org = await getOrganization(order.organizationId);
+    opsAlert(formatOpsAlert("🏢 Standing order NOT booked", [
+      ["Account", org?.name ?? order.organizationId], ["Order", order.id.slice(0, 8)], ["Service date", serviceDate],
+      ["Why", reason.slice(0, 200)], ["Next", "Book it by hand for the account, and fix the order or its people on the desk"],
+    ]));
+  } catch (err: any) {
+    console.error(`[commercial] standing order ${order.id} ${serviceDate} could not be paged:`, err?.message ?? err);
+  }
+}
+
+/**
  * Book every job a standing order is due between now and the horizon that
  * is not booked yet. Safe to call from any number of sweeps: the
  * (order, service date, leg) unique index makes a duplicate a no-op.
@@ -150,14 +190,23 @@ export async function materializeStandingOrder(storage: IStorage, order: Commerc
     now, STANDING_ORDER_BOOK_AHEAD_DAYS,
   );
   let booked = 0;
-  for (const occ of due) {
-    if (have.has(`${occ.serviceDate}:${occ.leg}`)) continue;
+  const pending = due.filter((occ) => !have.has(`${occ.serviceDate}:${occ.leg}`));
+  if (!pending.length) return 0;
+  const requesterId = await standingOrderBooker(order);
+  if (!requesterId) {
+    const reason = "Nobody on the account may book any more (the person who set up the order left or was suspended, and no owner or requester remains).";
+    console.error(`[commercial] standing order ${order.id} not booked :: ${reason}`);
+    for (const date of Array.from(new Set(pending.map((occ) => occ.serviceDate)))) await pageUnbooked(storage, order, date, reason);
+    return 0;
+  }
+  if (requesterId !== order.createdBy) console.log(`[commercial] standing order ${order.id} booked as ${requesterId}: its creator may no longer book for the account`);
+  for (const occ of pending) {
     const outbound = occ.leg === "out";
     try {
       if (order.kind === "delivery" && order.parcelSize) {
         const b = await bookDelivery(storage, {
           organizationId: order.organizationId,
-          requesterId: order.createdBy,
+          requesterId,
           parcelSize: order.parcelSize,
           handover: order.handover,
           pickupContact: order.pickupContact ?? { name: "Pickup" },
@@ -177,7 +226,7 @@ export async function materializeStandingOrder(storage: IStorage, order: Commerc
       }
       const b = await bookJob(storage, {
         organizationId: order.organizationId,
-        requesterId: order.createdBy,
+        requesterId,
         passengerName: order.passengerName,
         passengerPhone: order.passengerPhone,
         pickup: outbound ? order.pickup : order.destination,
@@ -194,6 +243,7 @@ export async function materializeStandingOrder(storage: IStorage, order: Commerc
       // 23505 = another sweep booked the same (order, date, leg) first.
       if (err?.code === "23505" || err?.cause?.code === "23505") continue;
       console.error(`[commercial] standing order ${order.id} ${occ.serviceDate} ${occ.leg} not booked:`, err?.message ?? err);
+      await pageUnbooked(storage, order, occ.serviceDate, String(err?.message ?? err));
     }
   }
   return booked;

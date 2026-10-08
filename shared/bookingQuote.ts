@@ -32,6 +32,7 @@
  */
 
 import { estimateRoute, roadFiguresPlausible, type RoutePoint } from "./routeEstimate";
+import { isAllowedDestination, DESTINATION_OUTSIDE_AREA_MESSAGE } from "./serviceArea";
 
 /** The app's number this far under the server's quote was not measured, it was typed. */
 export const LOWBALL_RATIO = 0.8;
@@ -115,4 +116,35 @@ export function validateRoutePoints(raw: unknown, max: number): { ok: true; poin
     points.push({ lat, lng, address });
   }
   return { ok: true, points };
+}
+
+/** The longest straight-line route any booking may carry (the ordinary door's 50-mile limit). */
+export const MAX_RIDE_ROUTE_MILES = 50;
+
+export const STOP_OUTSIDE_AREA_MESSAGE =
+  "A stop on this ride is outside our service area (Maryland, Washington DC, and northern Virginia).";
+
+/**
+ * Why a route may not be booked, or null. The ordinary door checked the
+ * destination's area and the 50-mile limit; its stops, the multi-stop door,
+ * the coworker group and its joiners checked neither, so a stop in New York
+ * or a destination at the beach was booked and priced (code review
+ * 2026-10-06). Every point after the first is a place the car goes, so each
+ * must be in the destination area, and the whole route pickup → stops →
+ * destination, in straight lines, is held to the same 50 miles as a single
+ * leg. Pickup rules (Maryland only) stay with each door, because the
+ * multi-stop door's stops are pickups.
+ */
+export function routeAreaProblem(points: RoutePoint[], maxMiles: number = MAX_RIDE_ROUTE_MILES): string | null {
+  for (let i = 1; i < points.length; i++) {
+    const p = points[i];
+    if (!p || !isAllowedDestination(Number(p.lat), Number(p.lng))) {
+      return i === points.length - 1 ? DESTINATION_OUTSIDE_AREA_MESSAGE : STOP_OUTSIDE_AREA_MESSAGE;
+    }
+  }
+  const straight = estimateRoute(points).straightLineMiles;
+  if (straight > maxMiles) {
+    return `Ride distance (${straight.toFixed(1)} mi) exceeds the ${maxMiles}-mile limit`;
+  }
+  return null;
 }

@@ -16,10 +16,13 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient, getCsrfToken } from "@/lib/queryClient";
 import { rememberBusinessHome } from "@/lib/businessHome";
 import { BRAND } from "@shared/branding";
+import { signInToAcceptText } from "@shared/invitations";
 
 interface Invitation {
   organizationId: string; organizationName: string; email: string; role: string;
   state: "open" | "accepted" | "expired"; refusal: string | null; days: number; hasAccount: boolean;
+  /** The session is the invited account's own; only then may it accept (code review 2026-10-06). */
+  signedInAsInvitee?: boolean;
 }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -36,7 +39,7 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
 export default function JoinOrganization({ token }: { token: string }) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const { data: inv, isLoading, error } = useQuery<Invitation>({ queryKey: ["/api/org/invitations", token], queryFn: () => call<Invitation>("GET", `/api/org/invitations/${encodeURIComponent(token)}`), retry: false });
+  const { data: inv, isLoading, error } = useQuery<Invitation>({ queryKey: ["/api/org/invitations", token], queryFn: () => call<Invitation>("GET", `/api/org/invitations/${encodeURIComponent(token)}`), retry: false, refetchOnMount: "always" });
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
@@ -95,6 +98,16 @@ export default function JoinOrganization({ token }: { token: string }) {
     </div>, `Welcome to ${waiting.organizationName}`);
   if (joinedExisting || inv.hasAccount) {
     const org = joinedExisting ?? inv;
+    // An existing account accepts from its own session (code review
+    // 2026-10-06): signed out, or signed in as someone else, the invitee is
+    // sent to sign in and comes straight back to this link.
+    const mustSignIn = !joinedExisting && !inv.signedInAsInvitee;
+    const signInToAccept = mustSignIn && (
+      <>
+        <p className="text-muted-foreground" data-testid="join-sign-in-to-accept">{signInToAcceptText(inv.email)} You come straight back here.</p>
+        <Link href={`/org/login?next=${encodeURIComponent(`/org/join/${token}`)}`}><Button className="w-full min-h-[44px]" data-testid="button-join-sign-in-to-accept">Sign in to accept</Button></Link>
+      </>
+    );
     if (asDriver) return shell(
       <div className="space-y-4 text-center text-sm">
         <p className="text-muted-foreground" data-testid="join-existing">
@@ -103,7 +116,8 @@ export default function JoinOrganization({ token }: { token: string }) {
             ? `${BRAND.appName} approves every driver: sign in and finish your driver application (your licence) on your Profile. Once ${BRAND.appName} approves you, ${org.organizationName} can give you a car.`
             : "Your fleet's car shows in the driver app once they give it to you."}
         </p>
-        {!joinedExisting && <Button className="w-full min-h-[44px]" disabled={accept.isPending} onClick={() => accept.mutate()} data-testid="button-join-attach-existing">Drive for {inv.organizationName}</Button>}
+        {signInToAccept}
+        {!joinedExisting && !mustSignIn && <Button className="w-full min-h-[44px]" disabled={accept.isPending} onClick={() => accept.mutate()} data-testid="button-join-attach-existing">Drive for {inv.organizationName}</Button>}
         <Link href="/login"><Button variant="outline" className="w-full min-h-[44px]" data-testid="button-join-driver-sign-in">Go to sign-in</Button></Link>
       </div>, `Drive for ${org.organizationName}`);
     return shell(
@@ -111,7 +125,8 @@ export default function JoinOrganization({ token }: { token: string }) {
         <p className="text-muted-foreground" data-testid="join-existing">
           {joinedExisting ? `You are now a member of ${org.organizationName}.` : `${inv.email} already has a ${BRAND.appName} account.`} Sign in with your usual password to open the desk.
         </p>
-        {!joinedExisting && <Button className="w-full min-h-[44px]" disabled={accept.isPending} onClick={() => accept.mutate()} data-testid="button-join-attach-existing">Add me to {inv.organizationName}</Button>}
+        {signInToAccept}
+        {!joinedExisting && !mustSignIn && <Button className="w-full min-h-[44px]" disabled={accept.isPending} onClick={() => accept.mutate()} data-testid="button-join-attach-existing">Add me to {inv.organizationName}</Button>}
         <Link href={`/org/login?next=${encodeURIComponent(`/org?org=${org.organizationId}`)}`}><Button variant="outline" className="w-full min-h-[44px]" data-testid="button-join-go-sign-in">Go to business sign-in</Button></Link>
       </div>, `Join ${org.organizationName}`);
   }

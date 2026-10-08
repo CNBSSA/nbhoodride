@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INVITATION_DAYS, invitationExpiresAt, invitationRefusal, invitationState, safePortalNext } from "./invitations";
+import { INVITATION_DAYS, invitationExpiresAt, invitationRefusal, invitationState, maskEmail, organizationNotOpenForInvitations, safePortalNext, signInToAcceptText } from "./invitations";
 
 describe("an organization invitation", () => {
   const now = new Date("2026-09-16T12:00:00Z");
@@ -25,5 +25,19 @@ describe("where a business sign-in may land", () => {
     expect(safePortalNext("/admin")).toBe("/org");
     expect(safePortalNext("//evil.example")).toBe("/org");
     expect(safePortalNext(null)).toBe("/org");
+  });
+
+  it("is made and honoured only while the organization is open (code review 2026-10-06)", () => {
+    expect(organizationNotOpenForInvitations("Clinic", "active", "invite")).toBeNull();
+    expect(organizationNotOpenForInvitations("Clinic", "pending", "invite")).toMatch(/not approved Clinic yet/);
+    expect(organizationNotOpenForInvitations("Clinic", "paused", "invite")).toMatch(/paused/);
+    expect(organizationNotOpenForInvitations("Clinic", "rejected", "accept")).toMatch(/not open for new members/);
+  });
+
+  it("asks an existing account to sign in, the email masked", () => {
+    expect(maskEmail("festus@gmail.com")).toBe("fe***@gmail.com");
+    expect(maskEmail("a@b.co")).toBe("a***@b.co");
+    expect(maskEmail("nonsense")).toBe("***");
+    expect(signInToAcceptText("festus@gmail.com")).toBe("Sign in as fe***@gmail.com to accept this invitation.");
   });
 });

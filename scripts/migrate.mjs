@@ -1627,6 +1627,11 @@ ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS late_hours INTEGER;
 ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS late_charge DECIMAL(8,2);
 ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS return_from_earnings DECIMAL(8,2);
 ALTER TABLE driver_rent_charges ADD COLUMN IF NOT EXISTS from_earnings DECIMAL(8,2);
+-- Attempt numbers for rental charges (code review 2026-10-06): a retry after a
+-- recorded decline is a new attempt and a new Stripe key; a lost answer keeps its own.
+ALTER TABLE driver_rent_charges ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE driver_car_assignments ADD COLUMN IF NOT EXISTS return_attempt INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE rental_bookings ADD COLUMN IF NOT EXISTS payment_attempts JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE TABLE IF NOT EXISTS rental_renters (
   user_id VARCHAR PRIMARY KEY REFERENCES users(id),
   date_of_birth VARCHAR(10) NOT NULL,
@@ -1745,6 +1750,12 @@ async function migrate() {
     } catch (err) {
       if (err.code !== '42704') throw err;
     }
+    // The batch runs as one transaction while the old server is still
+    // serving, and every ALTER TABLE takes its table's lock. Waiting behind a
+    // long transaction queued every rider's query behind the migration; now
+    // a lock not granted in 10 seconds fails the deploy (the old server keeps
+    // serving, nothing is half-applied) instead (code review 2026-10-06).
+    await client.query(`SET lock_timeout = '10s'`);
     await client.query(SQL);
     console.log('Migration complete — all tables ready.');
   } catch (err) {

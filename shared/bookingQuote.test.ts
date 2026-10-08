@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bookingRouteFigures, judgeBookingFare, validateRoutePoints, LOWBALL_RATIO, STALE_ABOVE_RATIO } from "./bookingQuote";
+import { bookingRouteFigures, judgeBookingFare, validateRoutePoints, routeAreaProblem, LOWBALL_RATIO, STALE_ABOVE_RATIO } from "./bookingQuote";
 
 const A = { lat: 38.98, lng: -76.94 };
 const B = { lat: 38.90, lng: -76.85 };
@@ -94,5 +94,20 @@ describe("validateRoutePoints", () => {
     const r = validateRoutePoints(undefined, 3);
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.points).toEqual([]);
+  });
+});
+
+describe("routeAreaProblem (code review 2026-10-06)", () => {
+  it("passes a local route with a stop", () => {
+    expect(routeAreaProblem([A, { lat: 38.95, lng: -76.9 }, B])).toBeNull();
+  });
+  it("refuses a stop outside the area, naming the stop", () => {
+    expect(routeAreaProblem([A, { lat: 40.71, lng: -74.0 }, B])).toMatch(/A stop on this ride is outside/);
+  });
+  it("refuses a destination outside the area", () => {
+    expect(routeAreaProblem([A, { lat: 40.71, lng: -74.0 }])).toMatch(/That destination is outside/);
+  });
+  it("holds the whole route to the 50-mile limit", () => {
+    expect(routeAreaProblem([A, { lat: 38.3365, lng: -75.0849 }, B])).toMatch(/exceeds the 50-mile limit/);
   });
 });

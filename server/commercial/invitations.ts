@@ -17,7 +17,7 @@ import { driverProfiles, organizationInvitations, organizationMembers, organizat
 import { isFleetCategory, isOrgRole, rolesForCategory, type OrgRole } from "@shared/commercial";
 import { otherFleetForDriver } from "@shared/fleet";
 import { opsAlert, formatOpsAlert } from "../telegramOps";
-import { invitationExpiresAt, invitationRefusal, invitationState, INVITATION_DAYS, type InvitationState } from "@shared/invitations";
+import { invitationExpiresAt, invitationRefusal, invitationState, INVITATION_DAYS, organizationNotOpenForInvitations, signInToAcceptText, type InvitationState } from "@shared/invitations";
 import { normalizePhone } from "@shared/smsMessages";
 import { validatePasswordComplexity } from "../passwordPolicy";
 import { CommercialError, fleetDriverElsewhere, lockFleetDriver } from "./organizations";
@@ -49,6 +49,13 @@ export async function inviteByEmail(organizationId: string, email: string, role:
   if (!isOrgRole(role) || !allowed.includes(role)) throw new CommercialError(`Role must be ${allowed.slice(0, -1).join(", ")} or ${allowed[allowed.length - 1]}.`);
   if (!addr || !addr.includes("@")) throw new CommercialError("An email is needed.");
   if (!org) throw new CommercialError("Organization not found.", 404);
+  // Only an approved, open account invites (code review 2026-10-06): an
+  // invited desk user is approved on acceptance because the owner vouched
+  // for them, and the owner of an account PG Ride has not approved (or has
+  // paused or sent back) has no standing to vouch — before this, they could
+  // mint approved, signed-in accounts for any email by opening the links.
+  const closed = organizationNotOpenForInvitations(org.name, org.status, "invite");
+  if (closed) throw new CommercialError(closed, 409);
   const token = randomBytes(24).toString("hex");
   const expiresAt = invitationExpiresAt(now);
   const [row] = await db.insert(organizationInvitations)
@@ -95,15 +102,19 @@ export async function invitationCategory(token: string): Promise<string | null> 
 }
 
 /** What the join page shows: who invited, for what, and whether the link still works. */
-export async function describeInvitation(token: string, now: Date = new Date()) {
+export async function describeInvitation(token: string, now: Date = new Date(), sessionUserId?: string | null) {
   const row = await byToken(token);
   if (!row) throw new CommercialError("This invitation link is not valid.", 404);
   const state = invitationState(row.inv, now);
   const [existing] = await db.select({ id: users.id }).from(users).where(and(eq(users.email, row.inv.email), isNull(users.deletedAt)));
+  // An organization that is no longer open turns the link away like a used one (code review 2026-10-06).
+  const refusal = invitationRefusal(state, row.org.name) ?? (state === "open" ? organizationNotOpenForInvitations(row.org.name, row.org.status, "accept") : null);
   return {
     organizationId: row.org.id, organizationName: row.org.name, email: row.inv.email, role: row.inv.role as OrgRole,
-    state, refusal: invitationRefusal(state, row.org.name), expiresAt: row.inv.expiresAt, days: INVITATION_DAYS,
+    state, refusal, expiresAt: row.inv.expiresAt, days: INVITATION_DAYS,
     hasAccount: !!existing,
+    // An existing account joins only from its own session (code review 2026-10-06).
+    signedInAsInvitee: !!existing && !!sessionUserId && existing.id === sessionUserId,
   };
 }
 
@@ -117,12 +128,17 @@ export interface AcceptInput {
  * in; otherwise the account is created, approved, attached and signed in
  * by the caller. Returns the user to sign in, or null when they already had one.
  */
-export async function acceptInvitation(token: string, input: AcceptInput, now: Date = new Date()): Promise<{ organizationId: string; organizationName: string; userId: string; existing: boolean; pendingApproval?: boolean; driverApproved?: boolean }> {
+export async function acceptInvitation(token: string, input: AcceptInput, now: Date = new Date(), sessionUserId?: string | null): Promise<{ organizationId: string; organizationName: string; userId: string; existing: boolean; pendingApproval?: boolean; driverApproved?: boolean }> {
   const row = await byToken(token);
   if (!row) throw new CommercialError("This invitation link is not valid.", 404);
   const state = invitationState(row.inv, now);
   const refusal = invitationRefusal(state, row.org.name);
   if (refusal) throw new CommercialError(refusal, 410);
+  // A link made while the account was open is not honoured once it is not
+  // (code review 2026-10-06): paused, sent back or never approved, nobody
+  // joins it and no approved account is created on its word.
+  const closed = organizationNotOpenForInvitations(row.org.name, row.org.status, "accept");
+  if (closed) throw new CommercialError(closed, 409);
   const fits = rolesForCategory(row.org.category);
   // An unknown role falls back to the least a member of that kind of organization may do.
   const role: OrgRole = isOrgRole(row.inv.role) && fits.includes(row.inv.role) ? row.inv.role : (fits === rolesForCategory("fleet") ? "viewer" : "requester");
@@ -133,6 +149,13 @@ export async function acceptInvitation(token: string, input: AcceptInput, now: D
 
   const [existing] = await db.select().from(users).where(and(eq(users.email, row.inv.email), isNull(users.deletedAt)));
   if (existing) {
+    // The link alone does not speak for an account that already exists
+    // (code review 2026-10-06): whoever held it could attach that person to
+    // a fleet as its driver, or to a desk, without them ever signing in.
+    // They accept from their own session, or not at all.
+    if (!sessionUserId || sessionUserId !== existing.id) {
+      throw new CommercialError(signInToAcceptText(row.inv.email), sessionUserId ? 403 : 401);
+    }
     // An existing account joining a fleet as its driver starts its driver
     // application here too, exactly as a new account does (Cursor Bugbot on
     // #464): without one PG Ride has nothing to approve, and the fleet can

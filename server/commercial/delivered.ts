@@ -42,10 +42,15 @@ export async function notifyDelivered(rideId: string, appUrl: string, now: Date 
   const row = await load(eq(commercialJobs.rideId, rideId));
   if (!row || !row.job.parcelSize) return null;
   // Once: the stamp lives in the proof, so a retry of the complete route or a
-  // second caller never texts the receiver twice.
-  const stamped = (row.job.proof ?? {}) as Record<string, unknown>;
-  if (stamped.deliveredTextedAt) return null;
-  await db.update(commercialJobs).set({ proof: { ...stamped, deliveredTextedAt: now.toISOString() } as Record<string, unknown> }).where(eq(commercialJobs.id, row.job.id));
+  // second caller never texts the receiver twice. The stamp is merged into
+  // the proof in SQL and claimed in the same statement (code review
+  // 2026-10-06): a read-modify-write here could put back a proof the driver's
+  // late photo had just replaced, and two callers could both see no stamp.
+  const [claimed] = await db.update(commercialJobs)
+    .set({ proof: sql`COALESCE(${commercialJobs.proof}, '{}'::jsonb) || jsonb_build_object('deliveredTextedAt', ${now.toISOString()}::text)` })
+    .where(and(eq(commercialJobs.id, row.job.id), sql`${commercialJobs.proof}->>'deliveredTextedAt' IS NULL`))
+    .returning({ id: commercialJobs.id });
+  if (!claimed) return null;
   let token = row.job.proofShareToken;
   if (!token) {
     token = randomBytes(24).toString("hex");
@@ -110,7 +115,8 @@ export async function retireOldProofPhotos(now: Date = new Date(), days: number 
           const [shared] = await tx.select({ id: commercialJobs.id }).from(commercialJobs).where(and(sql`${commercialJobs.id} <> ${row.id}`, sql`${commercialJobs.proof}->>'photoUrl' = ${proof.photoUrl}`)).limit(1);
           if (!shared) await tx.delete(storedObjects).where(eq(storedObjects.id, m[1]));
         }
-        await tx.update(commercialJobs).set({ proof: { ...proof, photoUrl: null, photoRetired: true, photoRetiredAt: now.toISOString() } as Record<string, unknown> }).where(eq(commercialJobs.id, row.id));
+        // Merged in SQL, so a field another writer added since the read stays (code review 2026-10-06).
+        await tx.update(commercialJobs).set({ proof: sql`COALESCE(${commercialJobs.proof}, '{}'::jsonb) || jsonb_build_object('photoUrl', NULL::text, 'photoRetired', true, 'photoRetiredAt', ${now.toISOString()}::text)` }).where(eq(commercialJobs.id, row.id));
       });
       retired += 1;
       console.log(`[delivered] ${formatJobNumber(row.jobNumber)}: proof photo retired after ${days} days; the record stays`);
