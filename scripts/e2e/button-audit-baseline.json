@@ -408,6 +408,7 @@
     "button-report-outage-window": "inside Admin → Reports, a tab the audit does not open (it opens screens by address); the buttons only read. Journey 50 reads both reports over the API",
     "button-report-balances-refresh": "inside Admin → Reports, a tab the audit does not open (it opens screens by address); the buttons only read. Journey 50 reads both reports over the API",
     "button-report-tax-run": "inside Admin → Reports, a tab the audit does not open (it opens screens by address); the buttons only read. Journey 51 reads the report over the API",
-    "button-report-tax-csv": "inside Admin → Reports, a tab the audit does not open (it opens screens by address); the buttons only read. Journey 51 reads the report over the API"
+    "button-report-tax-csv": "inside Admin → Reports, a tab the audit does not open (it opens screens by address); the buttons only read. Journey 51 reads the report over the API",
+    "button-report-sentry-test": "inside Admin → Reports, a tab the audit does not open (it opens screens by address); it sends a harmless test event only when error reporting is on. Journey 58 sends one over the API"
   }
 }
