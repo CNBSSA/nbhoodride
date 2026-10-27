@@ -164,6 +164,7 @@ import {
 } from "./rideWorkflowService";
 import { opsAlert, formatOpsAlert } from "./telegramOps";
 import { riderAlert, setRiderAlertRecorder } from "./riderAlerts";
+import { reportError, errorReportingEnabled, flushErrorReports, droppedReports } from "./errorReporting";
 import { reliabilityEventRecorder } from "./reliabilityEvents";
 import { pageAtRiskRides } from "./rideRiskWatch";
 import { runDependencyWatch, dependencyCheckDue } from "./dependencyWatch";
@@ -412,6 +413,15 @@ async function notifyRideMessageRecipient(
       tag: `ride-message-${message.rideId}`,
     });
   }
+}
+
+/**
+ * A background sweep failed: it is logged as it always was and, when error
+ * reporting is on, sent with its stack trace (server/errorReporting.ts).
+ */
+function sweepFailed(job: string, err: unknown): void {
+  console.error(`${job}:`, err);
+  reportError(err, { kind: "sweep", job });
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -11753,6 +11763,22 @@ Generate the FAQ list.`;
       console.error("reliability report failed:", err); res.status(500).json({ message: "Could not build the report" });
     }
   });
+  // Error reporting (server/errorReporting.ts): whether it is on, and a test
+  // event so the operator can see the wiring work end to end after turning it
+  // on. The test message is scrubbed like any other report.
+  app.get('/api/admin/analytics/error-reporting', isAdminOrSessionAuth, (_req: any, res) => {
+    res.json({ enabled: errorReportingEnabled(), droppedReports: droppedReports() });
+  });
+  app.post('/api/admin/analytics/error-reporting/test', isAdminOrSessionAuth, async (req: any, res) => {
+    if (!errorReportingEnabled()) {
+      return res.json({ enabled: false, sent: false, message: "Error reporting is off. Set SENTRY_ENABLED=true (with SENTRY_DSN) on the service, restart, and try again." });
+    }
+    const note = typeof req.body?.note === "string" ? req.body.note.slice(0, 200) : "";
+    const sent = reportError(new Error(`PG Ride test event, safe to ignore${note ? `: ${note}` : ""}`), { kind: "test", source: "admin" });
+    await flushErrorReports(3000);
+    res.json({ enabled: true, sent, message: sent ? "A test event was sent. It should appear in Sentry within a minute." : "The test event was not sent (rate limit)." });
+  });
+
   // Payouts this year (issue #33): who PG Ride paid in a tax year and who has
   // crossed the 1099-NEC threshold (server/taxYearToDate.ts). Read-only.
   app.get('/api/admin/tax/year-to-date', isAdminOrSessionAuth, async (req: any, res) => {
@@ -12219,7 +12245,7 @@ Generate the FAQ list.`;
     // Circuit run reminders (cutoff + pre-departure) — idempotent via
     // NotifiedAt stamps, so failures here just retry next minute.
     processCircuitReminders().catch((err) =>
-      console.error("circuit reminders sweep failed:", err),
+      sweepFailed("circuit reminders sweep failed", err),
     );
     try {
       const { db: dbInst } = await import("./db");
@@ -12230,17 +12256,17 @@ Generate the FAQ list.`;
 
       // ── Weekly plans: keep every active plan booked 7 days ahead ──
       if (now.getMinutes() % 15 === 0) {
-        materializeAllWeeklyPlans(storage, now).catch((err) => console.error("weekly plan sweep failed:", err));
+        materializeAllWeeklyPlans(storage, now).catch((err) => sweepFailed("weekly plan sweep failed", err));
       }
 
       // ── Heartbeats: prove to tomorrow's review that these ran ──
       noteWatchRan("minute-sweep", now);
 
       // ── Drivers whose socket has been gone past the grace: release their claims ──
-      releaseRidesOfDroppedDrivers(now).catch((err) => console.error("driver drop sweep failed:", err));
+      releaseRidesOfDroppedDrivers(now).catch((err) => sweepFailed("driver drop sweep failed", err));
 
       // ── Rider Promise Review: 4:00 AM Eastern, once a day, to Telegram ──
-      maybeSendRiderPromiseReview(storage, now).catch((err) => console.error("rider promise review failed:", err));
+      maybeSendRiderPromiseReview(storage, now).catch((err) => sweepFailed("rider promise review failed", err));
 
       // ── Weekly billing: last week's jobs, debited Monday morning ──
       // Claimed once per week through the same claim-once table the daily
@@ -12252,63 +12278,63 @@ Generate the FAQ list.`;
         const paydayKey = paydayKeyOf(now);
         storage.claimWebhookEvent("weekly_payday", paydayKey, "payday")
           .then((claimed) => claimed ? runWeeklyPayday(now) : null)
-          .catch((err) => console.error("payday run failed:", err));
+          .catch((err) => sweepFailed("payday run failed", err));
       }
 
       if (featureFlags.commercialEnabled && billingRunDue(now)) {
         const weekKey = previousBillingWeek(now).weekKey;
         storage.claimWebhookEvent("commercial_weekly_billing", weekKey, "weekly")
           .then((claimed) => claimed ? runWeeklyBilling(now, weekKey) : null)
-          .catch((err) => console.error("weekly billing failed:", err));
+          .catch((err) => sweepFailed("weekly billing failed", err));
       }
 
       // ── Standing orders: book the next week's commercial jobs ──
       // Every 5 minutes; booking is idempotent per (order, service date, leg).
       if (featureFlags.commercialEnabled && now.getMinutes() % 5 === 0) {
-        materializeAllStandingOrders(storage, now).catch((err) => console.error("standing order sweep failed:", err));
+        materializeAllStandingOrders(storage, now).catch((err) => sweepFailed("standing order sweep failed", err));
       }
 
       // ── Recipient approval: nudge, ask the shop, give up (shared/recipientApproval.ts) ──
       if (featureFlags.commercialEnabled) {
-        import("./commercial/recipientApproval").then((m) => m.sweepRecipientApproval(now, resolveAppUrl())).catch((err) => console.error("recipient-approval sweep failed:", err));
+        import("./commercial/recipientApproval").then((m) => m.sweepRecipientApproval(now, resolveAppUrl())).catch((err) => sweepFailed("recipient-approval sweep failed", err));
       }
 
       // ── Proof photos are kept 90 days, the record forever (standard practice, 2026-09-17) ──
       if (featureFlags.commercialEnabled && now.getMinutes() === 41) {
-        import("./commercial/delivered").then((m) => m.retireOldProofPhotos(now)).catch((err) => console.error("proof photo retention failed:", err));
+        import("./commercial/delivered").then((m) => m.retireOldProofPhotos(now)).catch((err) => sweepFailed("proof photo retention failed", err));
       }
 
       // ── Proof photos still on a phone: page ops at 6 h, give up at 24 h ──
       if (featureFlags.commercialEnabled && now.getMinutes() === 7) {
-        import("./commercial/badges").then((m) => m.sweepPendingProofPhotos(now)).catch((err) => console.error("pending proof photo sweep failed:", err));
+        import("./commercial/badges").then((m) => m.sweepPendingProofPhotos(now)).catch((err) => sweepFailed("pending proof photo sweep failed", err));
       }
 
       // ── Overdue rental cars: page ops to cut off the engine, the minute a car is late ──
       if (featureFlags.rentalEnabled) {
-        import("./rental/overdue").then((m) => m.runOverdueWatch(now)).catch((err) => console.error("rental overdue watch failed:", err));
+        import("./rental/overdue").then((m) => m.runOverdueWatch(now)).catch((err) => sweepFailed("rental overdue watch failed", err));
       }
 
       // ── Fleet cars for drivers: charge next week's rent an hour before the paid week ends ──
       if (featureFlags.rentalEnabled && now.getMinutes() === 37) {
-        import("./rental/drivers").then((m) => m.runDriverRentSweep(now)).catch((err) => console.error("driver rent sweep failed:", err));
+        import("./rental/drivers").then((m) => m.runDriverRentSweep(now)).catch((err) => sweepFailed("driver rent sweep failed", err));
       }
 
       // ── Car rental: hide a car the hour a document lapses; warn ahead once a day ──
       if (featureFlags.rentalEnabled && now.getMinutes() === 23) {
-        import("./rental/sweep").then((m) => m.runRentalSweep(now, { warnings: now.getUTCHours() === 13 })).catch((err) => console.error("rental sweep failed:", err));
+        import("./rental/sweep").then((m) => m.runRentalSweep(now, { warnings: now.getUTCHours() === 13 })).catch((err) => sweepFailed("rental sweep failed", err));
       }
 
       // ── Fleet cars: park a car the hour a paper lapses; warn ahead once a day ──
       if (featureFlags.fleetEnabled && now.getMinutes() === 29) {
-        import("./fleet/cars").then((m) => m.runFleetCarSweep(now, { warnings: now.getUTCHours() === 13 })).catch((err) => console.error("fleet car sweep failed:", err));
-        import("./fleet/drivers").then((m) => m.sweepRevokedFleetDrivers(now)).catch((err) => console.error("fleet revoked-driver sweep failed:", err));
+        import("./fleet/cars").then((m) => m.runFleetCarSweep(now, { warnings: now.getUTCHours() === 13 })).catch((err) => sweepFailed("fleet car sweep failed", err));
+        import("./fleet/drivers").then((m) => m.sweepRevokedFleetDrivers(now)).catch((err) => sweepFailed("fleet revoked-driver sweep failed", err));
       }
 
       // ── Ride-risk watch: page ops before the rider finds out ──
-      pageAtRiskRides(now).catch((err) => console.error("ride risk watch failed:", err));
+      pageAtRiskRides(now).catch((err) => sweepFailed("ride risk watch failed", err));
 
       // ── Dependency watch: database and Stripe, every 10 minutes ──
-      if (dependencyCheckDue(now)) runDependencyWatch(now).catch((err) => console.error("dependency watch failed:", err));
+      if (dependencyCheckDue(now)) runDependencyWatch(now).catch((err) => sweepFailed("dependency watch failed", err));
 
       // ── Midnight cleanup ──
       if (now.getHours() === 0 && now.getMinutes() === 0) {
@@ -12504,7 +12530,7 @@ Generate the FAQ list.`;
         }
       }
     } catch (err) {
-      console.error("Scheduled ride monitor error:", err);
+      sweepFailed("Scheduled ride monitor error", err);
     }
     } finally {
       minuteSweepRunning = false;
