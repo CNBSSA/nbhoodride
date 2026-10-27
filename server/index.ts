@@ -8,12 +8,19 @@ import { csrfMiddleware } from "./csrfProtection";
 import { resolveAppUrl } from "./appUrl";
 import { opsAlert, telegramOpsEnabled } from "./telegramOps";
 import { riderAlert } from "./riderAlerts";
+import { initErrorReporting, reportError, flushErrorReports } from "./errorReporting";
 import { readFileSync } from "node:fs";
 
 // Ensure crashes are always visible in Railway logs
 process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT EXCEPTION — process will exit:', err);
-  process.exit(1);
+  reportError(err, { kind: "uncaughtException" });
+  // Give the report two seconds to leave (when error reporting is on), then
+  // exit; the timer is the backstop that makes sure a stuck flush cannot keep
+  // a crashed server alive.
+  const leave = () => process.exit(1);
+  flushErrorReports(2000).then(leave, leave);
+  setTimeout(leave, 3000);
 });
 // An unhandled rejection is one request's or one sweep's failure, not the
 // process's (code review 2026-10-06): exiting on it turned a database blip
@@ -25,6 +32,7 @@ process.on('uncaughtException', (err) => {
 let lastRejectionPage = 0;
 process.on('unhandledRejection', (reason) => {
   console.error('UNHANDLED REJECTION (server keeps running):', reason);
+  reportError(reason, { kind: "unhandledRejection" });
   if (Date.now() - lastRejectionPage > 10 * 60_000) {
     lastRejectionPage = Date.now();
     try {
@@ -170,6 +178,9 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Opt-in (SENTRY_ENABLED=true plus SENTRY_DSN); a no-op otherwise, and it
+  // never throws (server/errorReporting.ts).
+  await initErrorReporting();
   const server = await registerRoutes(app);
 
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
@@ -178,6 +189,10 @@ app.use((req, res, next) => {
 
     res.status(status).json({ message });
     console.error("Unhandled error:", err.stack || err);
+    if (status >= 500) {
+      // The route's pattern ("/api/rides/:rideId"), never the address with real ids in it.
+      reportError(err, { kind: "express", route: `${req.method} ${req.baseUrl || ""}${req.route?.path ?? "unmatched"}`, userId: (req as any).session?.userId });
+    }
     if (status >= 500 && req.path.startsWith("/api/")) {
       riderAlert("server_error", `${req.method} ${req.path}`, [["Route", `${req.method} ${req.path}`], ["User id", (req as any).session?.userId], ["Error", String(message).slice(0, 200)]]);
     }
