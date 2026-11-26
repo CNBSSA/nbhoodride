@@ -21,7 +21,7 @@ import { money, MIN_PHOTOS } from "@shared/rental";
 interface AdminCar {
   id: string; make: string; model: string; year: number; color: string; seats: number; vehicleType: string; licensePlate: string; vin: string | null;
   photos: string[]; dailyPrice: string; deposit: string; milesPerDay: number; extraMileFee: string; lateHourFee: string;
-  pickupLocation: { address: string } | null; inspectionExpires: string | null; registrationExpires: string | null; insuranceExpires: string | null;
+  pickupLocation: { lat: number; lng: number; address: string } | null; inspectionExpires: string | null; registrationExpires: string | null; insuranceExpires: string | null;
   status: "listed" | "hidden"; hiddenReason: string | null; problems: string[]; weeklyDriverRent: string | null;
   ownerKind: string; reviewStatus: string; reviewNote: string | null;
   engineCutOffAt: string | null; engineRestoredAt: string | null;
@@ -73,12 +73,16 @@ function EngineControl({ car }: { car: AdminCar }) {
     onSuccess: (r: any) => { toast({ title: r?.car?.engineRestoredAt ? "Engine restored — recorded" : "Engine cut off — recorded", description: r?.tracker?.sent ? "The command went to the tracker." : r?.tracker?.reason }); queryClient.invalidateQueries({ queryKey: ["/api/admin/rental/cars"] }); },
     onError: (e: Error) => toast({ title: "Could not record it", description: e.message, variant: "destructive" }),
   });
+  const confirmCutOff = () => {
+    if (!window.confirm(`Record engine cut off for ${car.year} ${car.make} ${car.model} (${car.licensePlate})? This is for an overdue rental; restore it when the car is back.`)) return;
+    act.mutate("engine-cut-off");
+  };
   return (
     <div className="flex items-center gap-2 text-xs">
       {cutOff && <Badge variant="destructive">engine cut off {when(car.engineCutOffAt!)}</Badge>}
       {cutOff
         ? <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate("engine-restored")} data-testid={`button-engine-restored-${car.id}`}>Engine restored</Button>
-        : <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate("engine-cut-off")} data-testid={`button-engine-cut-off-${car.id}`}>Engine cut off</Button>}
+        : <Button size="sm" variant="outline" disabled={act.isPending} onClick={confirmCutOff} data-testid={`button-engine-cut-off-${car.id}`}>Engine cut off</Button>}
     </div>
   );
 }
@@ -157,6 +161,7 @@ function FleetCars() {
   const { toast } = useToast();
   const { data: cars } = useQuery<AdminCar[]>({ queryKey: ["/api/admin/rental/cars"], ...REFRESH });
   const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const setStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: "listed" | "hidden" }) => (await apiRequest("PATCH", `/api/admin/rental/cars/${id}`, { status })).json(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/rental/cars"] }),
@@ -166,12 +171,13 @@ function FleetCars() {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <div><CardTitle>Cars</CardTitle><CardDescription>{cars?.filter((c) => c.status === "listed").length ?? 0} listed of {cars?.length ?? 0}</CardDescription></div>
-        <Button size="sm" onClick={() => setAdding((v) => !v)} data-testid="button-add-fleet-car">{adding ? "Close" : "Add a car"}</Button>
+        <Button size="sm" onClick={() => { setEditingId(null); setAdding((v) => !v); }} data-testid="button-add-fleet-car">{adding ? "Close" : "Add a car"}</Button>
       </CardHeader>
       <CardContent className="space-y-3">
         {adding && <CarForm onDone={() => setAdding(false)} />}
         {cars?.map((car) => (
           <div key={car.id} className="border rounded-md p-3 space-y-1" data-testid={`row-fleet-car-${car.id}`}>
+            {editingId === car.id && car.ownerKind === "fleet" && <CarForm car={car} onDone={() => setEditingId(null)} />}
             <div className="flex justify-between items-center">
               <p className="font-medium">{car.year} {car.make} {car.model} · {car.licensePlate}</p>
               <div className="flex gap-1">{car.ownerKind === "private" && <Badge variant="outline">private · {car.reviewStatus}</Badge>}<Badge variant={car.status === "listed" ? "default" : "secondary"}>{car.status}</Badge></div>
@@ -187,9 +193,14 @@ function FleetCars() {
             <p className="text-xs text-muted-foreground">{money(car.dailyPrice)}/day · deposit {money(car.deposit)} · {car.weeklyDriverRent ? `drivers ${money(car.weeklyDriverRent)}/week` : "not offered to drivers"} · {car.photos.length} photos · inspection {day(car.inspectionExpires) || "—"} · registration {day(car.registrationExpires) || "—"} · insurance {day(car.insuranceExpires) || "—"}</p>
             {car.problems.length > 0 && <ul className="text-xs text-destructive list-disc pl-4">{car.problems.map((p) => <li key={p}>{p}</li>)}</ul>}
             {car.status === "hidden" && car.hiddenReason && car.problems.length === 0 && <p className="text-xs text-muted-foreground">{car.hiddenReason}</p>}
-            {car.status === "listed"
-              ? <Button size="sm" variant="outline" onClick={() => setStatus.mutate({ id: car.id, status: "hidden" })} data-testid={`button-hide-car-${car.id}`}>Take off the list</Button>
-              : <Button size="sm" disabled={car.problems.length > 0} onClick={() => setStatus.mutate({ id: car.id, status: "listed" })} data-testid={`button-list-car-${car.id}`}>List for rent</Button>}
+            <div className="flex flex-wrap gap-2 pt-1">
+              {car.ownerKind === "fleet" && editingId !== car.id && (
+                <Button size="sm" variant="outline" onClick={() => { setAdding(false); setEditingId(car.id); }} data-testid={`button-edit-fleet-car-${car.id}`}>Edit</Button>
+              )}
+              {car.status === "listed"
+                ? <Button size="sm" variant="outline" onClick={() => setStatus.mutate({ id: car.id, status: "hidden" })} data-testid={`button-hide-car-${car.id}`}>Take off the list</Button>
+                : <Button size="sm" disabled={car.problems.length > 0} onClick={() => setStatus.mutate({ id: car.id, status: "listed" })} data-testid={`button-list-car-${car.id}`}>List for rent</Button>}
+            </div>
           </div>
         ))}
       </CardContent>
@@ -197,27 +208,53 @@ function FleetCars() {
   );
 }
 
-function CarForm({ onDone }: { onDone: () => void }) {
+const emptyFleetForm = () => ({ make: "", model: "", year: "", color: "", seats: "5", vehicleType: "standard", licensePlate: "", vin: "", dailyPrice: "", deposit: "", milesPerDay: "150", extraMileFee: "0.40", lateHourFee: "15", weeklyDriverRent: "", inspectionExpires: "", registrationExpires: "", insuranceExpires: "" });
+
+function fleetFormFromCar(car: AdminCar) {
+  return {
+    make: car.make, model: car.model, year: String(car.year), color: car.color, seats: String(car.seats), vehicleType: car.vehicleType,
+    licensePlate: car.licensePlate, vin: car.vin ?? "", dailyPrice: car.dailyPrice, deposit: car.deposit, milesPerDay: String(car.milesPerDay),
+    extraMileFee: car.extraMileFee, lateHourFee: car.lateHourFee, weeklyDriverRent: car.weeklyDriverRent ?? "",
+    inspectionExpires: day(car.inspectionExpires), registrationExpires: day(car.registrationExpires), insuranceExpires: day(car.insuranceExpires),
+  };
+}
+
+function CarForm({ onDone, car }: { onDone: () => void; car?: AdminCar }) {
   const { toast } = useToast();
-  const [f, setF] = useState({ make: "", model: "", year: "", color: "", seats: "5", vehicleType: "standard", licensePlate: "", vin: "", dailyPrice: "", deposit: "", milesPerDay: "150", extraMileFee: "0.40", lateHourFee: "15", weeklyDriverRent: "", inspectionExpires: "", registrationExpires: "", insuranceExpires: "" });
-  const [photos, setPhotos] = useState<string[]>([]);
-  const [address, setAddress] = useState("");
-  const [pickup, setPickup] = useState<{ lat: number; lng: number; address: string } | null>(null);
+  const isEdit = !!car;
+  const [f, setF] = useState(() => (car ? fleetFormFromCar(car) : emptyFleetForm()));
+  const [photos, setPhotos] = useState<string[]>(() => car?.photos ?? []);
+  const [address, setAddress] = useState(() => car?.pickupLocation?.address ?? "");
+  const [pickup, setPickup] = useState<{ lat: number; lng: number; address: string } | null>(() => car?.pickupLocation ?? null);
+  const pickupForSave = (): { lat: number; lng: number; address: string } | null => {
+    if (pickup) return pickup;
+    if (car?.pickupLocation && address.trim() === car.pickupLocation.address) return car.pickupLocation;
+    if (!address.trim()) return null;
+    return null;
+  };
   const save = useMutation({
-    mutationFn: async () => (await apiRequest("POST", "/api/admin/rental/cars", { ...f, year: Number(f.year), seats: Number(f.seats), milesPerDay: Number(f.milesPerDay), photos, pickupLocation: pickup })).json(),
-    onSuccess: () => { toast({ title: "Car added", description: "It is hidden until you list it." }); queryClient.invalidateQueries({ queryKey: ["/api/admin/rental/cars"] }); onDone(); },
-    onError: (e: Error) => toast({ title: "Could not add the car", description: e.message, variant: "destructive" }),
+    mutationFn: async () => {
+      const body = { ...f, year: Number(f.year), seats: Number(f.seats), milesPerDay: Number(f.milesPerDay), photos, pickupLocation: pickupForSave() };
+      const res = await apiRequest(isEdit ? "PATCH" : "POST", isEdit ? `/api/admin/rental/cars/${car!.id}` : "/api/admin/rental/cars", body);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: isEdit ? "Car saved" : "Car added", description: isEdit ? "Its details are updated." : "It is hidden until you list it." });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/rental/cars"] });
+      onDone();
+    },
+    onError: (e: Error) => toast({ title: isEdit ? "Could not save the car" : "Could not add the car", description: e.message, variant: "destructive" }),
   });
-  const field = (k: keyof typeof f, label: string, type = "text") => (
-    <label className="text-xs text-muted-foreground">{label}<Input type={type} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} data-testid={`input-fleet-${k}`} /></label>
+  const field = (k: keyof ReturnType<typeof emptyFleetForm>, label: string, type = "text") => (
+    <label className="text-xs text-muted-foreground">{label}<Input type={type} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} data-testid={isEdit ? `input-edit-fleet-${k}-${car!.id}` : `input-fleet-${k}`} /></label>
   );
   return (
-    <div className="border rounded-md p-3 space-y-2 bg-muted/30" data-testid="form-fleet-car">
+    <div className="border rounded-md p-3 space-y-2 bg-muted/30 mb-2" data-testid={isEdit ? `form-edit-fleet-car-${car!.id}` : "form-fleet-car"}>
       <div className="grid grid-cols-2 gap-2">
         {field("make", "Make")}{field("model", "Model")}{field("year", "Model year", "number")}{field("color", "Colour")}
         {field("seats", "Seats incl. driver", "number")}
         <label className="text-xs text-muted-foreground">Class
-          <select className="w-full border rounded-md h-9 px-2 text-sm bg-background" value={f.vehicleType} onChange={(e) => setF({ ...f, vehicleType: e.target.value })} data-testid="select-fleet-class">
+          <select className="w-full border rounded-md h-9 px-2 text-sm bg-background" value={f.vehicleType} onChange={(e) => setF({ ...f, vehicleType: e.target.value })} data-testid={isEdit ? `select-edit-fleet-class-${car!.id}` : "select-fleet-class"}>
             {VEHICLE_TYPES.map((t) => <option key={t} value={t}>{VEHICLE_TYPE_LABELS[t]}</option>)}
           </select>
         </label>
@@ -227,9 +264,22 @@ function CarForm({ onDone }: { onDone: () => void }) {
         {field("lateHourFee", "Per late hour ($)", "number")}{field("weeklyDriverRent", "Weekly rent for a driver ($, blank = not offered)", "number")}
         {field("inspectionExpires", "Inspection expires", "date")}{field("registrationExpires", "Registration expires", "date")}{field("insuranceExpires", "Insurance expires", "date")}
       </div>
-      <AddressAutocomplete value={address} onChange={(v) => { setAddress(v); setPickup(null); }} onSelect={(s) => { setAddress(s.label); setPickup({ lat: s.lat, lng: s.lng, address: s.label }); }} placeholder="Pick-up place" data-testid="input-fleet-pickup" />
-      <PhotoPicker photos={photos} setPhotos={setPhotos}><span data-testid="button-fleet-photos">Add photos of the car (at least {MIN_PHOTOS}) ({photos.length} added)</span></PhotoPicker>
-      <Button className="w-full" disabled={save.isPending} onClick={() => save.mutate()} data-testid="button-save-fleet-car">{save.isPending ? "Saving…" : "Save car (hidden until listed)"}</Button>
+      <AddressAutocomplete value={address} onChange={(v) => { setAddress(v); setPickup(null); }} onSelect={(s) => { setAddress(s.label); setPickup({ lat: s.lat, lng: s.lng, address: s.label }); }} placeholder="Pick-up place" data-testid={isEdit ? `input-edit-fleet-pickup-${car!.id}` : "input-fleet-pickup"} />
+      {photos.length > 0 && (
+        <ul className="text-xs space-y-1" data-testid={isEdit ? `list-edit-fleet-photos-${car!.id}` : undefined}>
+          {photos.map((p, i) => (
+            <li key={`${p}-${i}`} className="flex items-center gap-2">
+              <a className="underline truncate" href={p} target="_blank" rel="noreferrer">Photo {i + 1}</a>
+              <Button type="button" size="sm" variant="ghost" className="h-7 px-2" onClick={() => setPhotos(photos.filter((_, j) => j !== i))} data-testid={isEdit ? `button-remove-edit-fleet-photo-${car!.id}-${i}` : `button-remove-fleet-photo-${i}`}>Remove</Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <PhotoPicker photos={photos} setPhotos={setPhotos}><span data-testid={isEdit ? `button-edit-fleet-photos-${car!.id}` : "button-fleet-photos"}>Add photos of the car (at least {MIN_PHOTOS}) ({photos.length} added)</span></PhotoPicker>
+      <div className="flex gap-2">
+        {isEdit && <Button type="button" variant="outline" className="flex-1" onClick={onDone} data-testid={`button-cancel-edit-fleet-car-${car!.id}`}>Cancel</Button>}
+        <Button className={isEdit ? "flex-1" : "w-full"} disabled={save.isPending} onClick={() => save.mutate()} data-testid={isEdit ? `button-save-edit-fleet-car-${car!.id}` : "button-save-fleet-car"}>{save.isPending ? "Saving…" : isEdit ? "Save changes" : "Save car (hidden until listed)"}</Button>
+      </div>
     </div>
   );
 }
