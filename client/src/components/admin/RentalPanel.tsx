@@ -162,6 +162,11 @@ function FleetCars() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/admin/rental/cars"] }),
     onError: (e: Error) => toast({ title: "Could not change the listing", description: e.message, variant: "destructive" }),
   });
+  const remove = useMutation({
+    mutationFn: async (id: string) => (await apiRequest("DELETE", `/api/admin/rental/cars/${id}`)).json(),
+    onSuccess: () => { toast({ title: "Car deleted", description: "It is gone from the fleet list." }); queryClient.invalidateQueries({ queryKey: ["/api/admin/rental/cars"] }); },
+    onError: (e: Error) => toast({ title: "Could not delete the car", description: e.message, variant: "destructive" }),
+  });
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -187,9 +192,25 @@ function FleetCars() {
             <p className="text-xs text-muted-foreground">{money(car.dailyPrice)}/day · deposit {money(car.deposit)} · {car.weeklyDriverRent ? `drivers ${money(car.weeklyDriverRent)}/week` : "not offered to drivers"} · {car.photos.length} photos · inspection {day(car.inspectionExpires) || "—"} · registration {day(car.registrationExpires) || "—"} · insurance {day(car.insuranceExpires) || "—"}</p>
             {car.problems.length > 0 && <ul className="text-xs text-destructive list-disc pl-4">{car.problems.map((p) => <li key={p}>{p}</li>)}</ul>}
             {car.status === "hidden" && car.hiddenReason && car.problems.length === 0 && <p className="text-xs text-muted-foreground">{car.hiddenReason}</p>}
-            {car.status === "listed"
-              ? <Button size="sm" variant="outline" onClick={() => setStatus.mutate({ id: car.id, status: "hidden" })} data-testid={`button-hide-car-${car.id}`}>Take off the list</Button>
-              : <Button size="sm" disabled={car.problems.length > 0} onClick={() => setStatus.mutate({ id: car.id, status: "listed" })} data-testid={`button-list-car-${car.id}`}>List for rent</Button>}
+            <div className="flex flex-wrap gap-2">
+              {car.status === "listed"
+                ? <Button size="sm" variant="outline" onClick={() => setStatus.mutate({ id: car.id, status: "hidden" })} data-testid={`button-hide-car-${car.id}`}>Take off the list</Button>
+                : <Button size="sm" disabled={car.problems.length > 0} onClick={() => setStatus.mutate({ id: car.id, status: "listed" })} data-testid={`button-list-car-${car.id}`}>List for rent</Button>}
+              {car.ownerKind === "fleet" && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={remove.isPending}
+                  onClick={() => {
+                    if (!window.confirm(`Delete the ${car.year} ${car.make} ${car.model} (${car.licensePlate})? This is permanent.`)) return;
+                    remove.mutate(car.id);
+                  }}
+                  data-testid={`button-delete-fleet-car-${car.id}`}
+                >
+                  Delete
+                </Button>
+              )}
+            </div>
           </div>
         ))}
       </CardContent>

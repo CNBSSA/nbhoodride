@@ -2,7 +2,7 @@
  * Rental cars: what PG Ride lists, whether each one qualifies, and what a
  * renter is shown. Rules in shared/rental.ts; nothing here decides a rule.
  */
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { driverCarAssignments, rentalBookings, rentalCars, storedObjects, users, vehicles, type RentalCar } from "@shared/schema";
 import { ASSIGNMENT_HOLDS_THE_CAR, DEPOSIT_DEFAULT, HOLDS_THE_CAR, REVIEWED_FIELDS, depositProblem, qualificationProblems, rentalsOverlap } from "@shared/rental";
@@ -141,6 +141,28 @@ export async function createFleetCar(body: any, actorId: string): Promise<Rental
 /** Edit a car; `status: "listed"` lists it only if it qualifies. Any edit that breaks a listed car hides it. */
 export async function updateFleetCar(carId: string, body: any, actorId: string, now: Date = new Date()): Promise<RentalCar> {
   return updateCar(carId, body, actorId, {}, now);
+}
+
+/** Remove a fleet car that was added by mistake. Private cars and any car with rental history stay. */
+export async function deleteFleetCar(carId: string): Promise<{ deleted: true }> {
+  const [car] = await db.select().from(rentalCars).where(eq(rentalCars.id, carId));
+  if (!car) throw new RentalError("Car not found.", 404);
+  if (car.ownerKind !== "fleet") {
+    throw new RentalError(
+      "Only PG Ride fleet cars can be deleted here. Private cars belong to their owners and are handled through the papers review flow.",
+      403,
+    );
+  }
+  const [row] = await db.select({ n: count() }).from(rentalBookings).where(eq(rentalBookings.carId, carId));
+  const n = Number(row?.n ?? 0);
+  if (n > 0) {
+    throw new RentalError(
+      `This car has ${n} rental booking${n === 1 ? "" : "s"} on record and cannot be deleted.`,
+      409,
+    );
+  }
+  await db.delete(rentalCars).where(eq(rentalCars.id, carId));
+  return { deleted: true };
 }
 
 /**

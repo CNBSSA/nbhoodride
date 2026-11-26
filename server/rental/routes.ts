@@ -11,7 +11,7 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import { featureFlags } from "../featureFlags";
-import { RentalError, createFleetCar, listAllCars, listAvailableCars, updateFleetCar } from "./cars";
+import { RentalError, createFleetCar, deleteFleetCar, listAllCars, listAvailableCars, updateFleetCar } from "./cars";
 import {
   cancelRental, collectRental, confirmRental, declineRental, listAllBookings, listRenterBookings,
   quoteFor, renterView, requestRental, returnRental, settleRental,
@@ -125,6 +125,10 @@ export function registerRentalRoutes(app: Express, deps: RentalDeps): void {
 
   app.patch("/api/admin/rental/cars/:id", gate, isAdminOrSessionAuth, async (req, res) => {
     try { res.json(await updateFleetCar(String(req.params.id), req.body ?? {}, userIdOf(req))); } catch (err) { fail(res, err, "Could not update the car"); }
+  });
+
+  app.delete("/api/admin/rental/cars/:id", gate, isAdminOrSessionAuth, async (req, res) => {
+    try { res.json(await deleteFleetCar(String(req.params.id))); } catch (err) { fail(res, err, "Could not delete the car"); }
   });
 
   // The driving-record check (industry practice, 2026-09-28): PG Ride records it; no rental is confirmed without it.
