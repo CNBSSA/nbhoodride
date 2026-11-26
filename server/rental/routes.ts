@@ -1,9 +1,9 @@
 /**
  * Car rental routes — one door (PG Ride Car Rental Master Plan, phase 1).
  *
- *   /api/rent/*          a signed-in renter: find a car, quote, request, see
- *                        and cancel their own rentals. Nothing reads across
- *                        renters.
+ *   /api/rent/*          browse listed cars without signing in; quote, book and
+ *                        see your own rentals require a session. Nothing reads
+ *                        across renters.
  *   /api/admin/rental/*  the operator: fleet cars, confirm and decline,
  *                        hand over, take back, settle, run the sweep.
  *
@@ -61,7 +61,7 @@ export function registerRentalRoutes(app: Express, deps: RentalDeps): void {
     res.json({ terms: RENTAL_TERMS_SENTENCE, maxDays: MAX_RENTAL_DAYS, rules: RENTER_RULES_SENTENCE });
   });
 
-  app.get("/api/rent/cars", gate, isAuthenticated, async (req, res) => {
+  app.get("/api/rent/cars", gate, async (req, res) => {
     try { res.json(await listAvailableCars(windowOf(req.query))); } catch (err) { fail(res, err, "Could not load cars"); }
   });
 

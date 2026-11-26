@@ -1594,21 +1594,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Serve DB-stored objects: the uploader (owner) and admins (document
   // reviewers) only.
-  app.get('/api/objects/db-upload/:id', isAuthenticated, async (req: any, res) => {
+  app.get('/api/objects/db-upload/:id', async (req: any, res) => {
     try {
+      const objectId = String(req.params.id);
       const userId = req.session?.userId || req.session?.testUserId || req.user?.claims?.sub;
-      const obj = await storage.getStoredObject(String(req.params.id));
+      const obj = await storage.getStoredObject(objectId);
       if (!obj) return res.status(404).json({ message: "Not found" });
-      const user = await storage.getUser(userId);
+      const user = userId ? await storage.getUser(userId) : undefined;
+      const publicListedPhoto = featureFlags.rentalEnabled
+        ? await import("./rental/cars").then((m) => m.isListedRentalCarPhoto(objectId)).catch(() => false)
+        : false;
+      if (!publicListedPhoto && !userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
       if (obj.ownerUserId !== userId && !user?.isAdmin && !user?.isSuperAdmin) {
         // A proof-of-delivery photo belongs to the organization that booked
         // the job: its members may see it (2026-09-17).
         const { userMaySeeProofPhoto } = await import("./commercial/badges");
         // A listed rental car's photos are for every signed-in renter, and a
         // rental's licence and handover photos are for its renter.
-        const mayRental = featureFlags.rentalEnabled
+        const mayRental = publicListedPhoto || (featureFlags.rentalEnabled
           ? await import("./rental/cars").then((m) => m.rentalPhotoVisibleTo(userId, obj.id)).catch(() => false)
-          : false;
+          : false);
         // A fleet car's photos and papers are for the fleet's own desk.
         const mayFleet = !mayRental && featureFlags.fleetEnabled
           ? await import("./fleet/cars").then((m) => m.fleetPhotoVisibleTo(userId, obj.id)).catch(() => false)

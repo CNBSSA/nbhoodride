@@ -240,11 +240,17 @@ export async function getListedCar(carId: string, now: Date = new Date()): Promi
  * listed car's photos are for every signed-in renter; a booking's licence
  * and handover photos are for its renter (admins see everything already).
  */
-export async function rentalPhotoVisibleTo(userId: string, objectId: string): Promise<boolean> {
+/** A listed car's marketing photos — visible without signing in (WO #11107). */
+export async function isListedRentalCarPhoto(objectId: string): Promise<boolean> {
   const path = `/api/objects/db-upload/${objectId}`;
   const [car] = await db.select({ id: rentalCars.id }).from(rentalCars)
     .where(and(eq(rentalCars.status, "listed"), sql`${rentalCars.photos} @> ${JSON.stringify([path])}::jsonb`)).limit(1);
-  if (car) return true;
+  return !!car;
+}
+
+export async function rentalPhotoVisibleTo(userId: string, objectId: string): Promise<boolean> {
+  if (await isListedRentalCarPhoto(objectId)) return true;
+  const path = `/api/objects/db-upload/${objectId}`;
   const [booking] = await db.select({ id: rentalBookings.id }).from(rentalBookings)
     .where(and(eq(rentalBookings.renterId, userId), sql`(${rentalBookings.licenceImageUrl} = ${path} OR COALESCE(${rentalBookings.collectPhotos}, '[]'::jsonb) @> ${JSON.stringify([path])}::jsonb OR COALESCE(${rentalBookings.returnPhotos}, '[]'::jsonb) @> ${JSON.stringify([path])}::jsonb)`)).limit(1);
   if (booking) return true;

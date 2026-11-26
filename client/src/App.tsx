@@ -90,6 +90,14 @@ function Router() {
           link before signing in got "404 Page Not Found". The page says
           "create an account first" when signed out. */}
       <Route path="/fleet/apply" component={FleetApplyPage} />
+      {/* Car rental (WO #11107): the page is public; sign-in is only for
+          renting or listing. Aliases that marketing links may use. */}
+      <Route path="/rent" component={RentPage} />
+      <Route path="/rent-a-car">{() => <Redirect to="/rent" />}</Route>
+      <Route path="/car-rental">{() => <Redirect to="/rent" />}</Route>
+      {/* Admin direct load (WO #11153): the dashboard's own check gates access;
+          a bookmark must not 404 while the session is still resolving. */}
+      <Route path="/admin" component={AdminDashboard} />
       
       {isLoading || !isAuthenticated ? (
         <>
@@ -104,10 +112,8 @@ function Router() {
           <Route path="/ratings" component={RatingsPage} />
           <Route path="/payments" component={PaymentsPage} />
           <Route path="/card-setup" component={CardSetupPage} />
-          <Route path="/admin" component={AdminDashboard} />
           <Route path="/org" component={PortalPage} />
           <Route path="/driver/insights" component={DriverInsights} />
-          <Route path="/rent" component={RentPage} />
         </>
       )}
       <Route component={NotFound} />

@@ -5,7 +5,7 @@
  * come from the server (shared/rental.ts); this page only asks and shows.
  */
 import { useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Car, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,9 @@ import { ObjectUploader } from "@/components/ObjectUploader";
 import { MyCars } from "@/components/rental/MyCars";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 import { useFeatureFlags, useStripeConfig } from "@/hooks/useStripeConfig";
+import { BRAND } from "@shared/branding";
 import { RENTAL_STATUS_WORDS, RENTAL_TERMS_SENTENCE, money, type RentalBookingStatus } from "@shared/rental";
 
 interface PublicCar {
@@ -38,8 +40,22 @@ async function uploadTarget() {
   return { method: "PUT" as const, url: uploadURL };
 }
 
+function RentSignInPrompt({ action }: { action: "rent" | "list" }) {
+  const verb = action === "rent" ? "rent a car" : "list your car";
+  return (
+    <div className="px-4 pt-6 space-y-3" data-testid={action === "rent" ? "rent-sign-in-prompt" : "rent-list-sign-in-prompt"}>
+      <p className="text-sm text-muted-foreground">Sign in to your {BRAND.appName} account to {verb}. Browsing what is on offer does not need an account.</p>
+      <div className="flex gap-2">
+        <Link href="/login"><Button data-testid="button-rent-sign-in">Sign in</Button></Link>
+        <Link href="/signup"><Button variant="outline" data-testid="button-rent-sign-up">Create an account</Button></Link>
+      </div>
+    </div>
+  );
+}
+
 export default function RentPage() {
   const [, setLocation] = useLocation();
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
   const { rentalEnabled } = useFeatureFlags();
   const { isLoading: flagsLoading } = useStripeConfig();
   const [tab, setTab] = useState<"find" | "mine" | "cars">("find");
@@ -47,7 +63,7 @@ export default function RentPage() {
   const [from, setFrom] = useState(localInput(start));
   const [to, setTo] = useState(localInput(new Date(start.getTime() + 2 * 86400_000)));
 
-  if (flagsLoading) {
+  if (flagsLoading || authLoading) {
     return <div className="min-h-screen bg-background p-4" data-testid="rent-page-loading"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>;
   }
   if (!rentalEnabled) {
@@ -70,14 +86,14 @@ export default function RentPage() {
         <Button variant={tab === "mine" ? "default" : "outline"} size="sm" onClick={() => setTab("mine")} data-testid="button-rent-tab-mine">My rentals</Button>
         <Button variant={tab === "cars" ? "default" : "outline"} size="sm" onClick={() => setTab("cars")} data-testid="button-rent-tab-cars">My cars</Button>
       </div>
-      {tab === "find" && <FindCars from={from} to={to} setFrom={setFrom} setTo={setTo} onBooked={() => setTab("mine")} />}
-      {tab === "mine" && <MyRentals />}
-      {tab === "cars" && <MyCars />}
+      {tab === "find" && <FindCars from={from} to={to} setFrom={setFrom} setTo={setTo} signedIn={isAuthenticated} onBooked={() => setTab("mine")} />}
+      {tab === "mine" && (isAuthenticated ? <MyRentals /> : <RentSignInPrompt action="rent" />)}
+      {tab === "cars" && (isAuthenticated ? <MyCars /> : <RentSignInPrompt action="list" />)}
     </div>
   );
 }
 
-function FindCars({ from, to, setFrom, setTo, onBooked }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void; onBooked: () => void }) {
+function FindCars({ from, to, setFrom, setTo, signedIn, onBooked }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void; signedIn: boolean; onBooked: () => void }) {
   const fromIso = from ? new Date(from).toISOString() : "";
   const toIso = to ? new Date(to).toISOString() : "";
   const { data: cars, isLoading } = useQuery<PublicCar[]>({
@@ -113,7 +129,9 @@ function FindCars({ from, to, setFrom, setTo, onBooked }: { from: string; to: st
             </div>
             <p className="text-xs text-muted-foreground">Deposit {money(car.deposit)} held · {car.milesPerDay > 0 ? `${car.milesPerDay} miles a day, then ${money(car.extraMileFee)} a mile` : "unlimited miles"} · pick up at {car.pickupAddress ?? "the PG Ride lot"}</p>
             {open === car.id
-              ? <RequestForm car={car} startsAt={from ? new Date(from).toISOString() : ""} endsAt={to ? new Date(to).toISOString() : ""} onDone={() => { setOpen(null); onBooked(); }} />
+              ? (signedIn
+                ? <RequestForm car={car} startsAt={from ? new Date(from).toISOString() : ""} endsAt={to ? new Date(to).toISOString() : ""} onDone={() => { setOpen(null); onBooked(); }} />
+                : <RentSignInPrompt action="rent" />)
               : <Button className="w-full" onClick={() => setOpen(car.id)} data-testid={`button-rent-car-${car.id}`}>Rent this car</Button>}
           </CardContent>
         </Card>

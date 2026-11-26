@@ -26,7 +26,7 @@ import {
   Route, Plus, Pencil, Siren, Phone, MapPinned, Megaphone, Send, FileBarChart
 } from "lucide-react";
 import { format } from "date-fns";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { OrganizationsPanel } from "@/components/admin/OrganizationsPanel";
 import { RentalPanel } from "@/components/admin/RentalPanel";
@@ -57,14 +57,16 @@ const AWAITING_SETTLEMENT_KEY = "/api/admin/rides/awaiting-settlement";
 
 type AdminTab = "dashboard" | "organizations" | "rentals" | "announcements" | "sos" | "reconciliation" | "pricing" | "users" | "drivers" | "rides" | "circuits" | "disputes" | "lostfound" | "agents" | "payouts" | "finances" | "ownership" | "profits" | "activity" | "analytics" | "research" | "reports";
 
-function useAdminNavPendingCounts() {
+function useAdminNavPendingCounts(enabled: boolean) {
   const { data: pendingUsers = [] } = useQuery<any[]>({
     queryKey: ["/api/admin/users/pending"],
     ...QUEUE_REFRESH,
+    enabled,
   });
   const { data: drivers = [] } = useQuery<any[]>({
     queryKey: ["/api/admin/drivers"],
     ...QUEUE_REFRESH,
+    enabled,
   });
   const pendingDrivers = drivers.filter(
     (d) => !d.approvalStatus || d.approvalStatus === "pending",
@@ -75,6 +77,7 @@ function useAdminNavPendingCounts() {
   const { data: sos } = useQuery<{ incidents: any[] }>({
     queryKey: [SOS_INCIDENTS_KEY],
     refetchInterval: 20000,
+    enabled,
   });
   const openSos = (sos?.incidents ?? []).filter((i) => i.status !== "resolved").length;
   // Poll the settlement-failure queue so a driver who did the work but wasn't
@@ -82,18 +85,46 @@ function useAdminNavPendingCounts() {
   const { data: settlement } = useQuery<{ rides: any[] }>({
     queryKey: [AWAITING_SETTLEMENT_KEY],
     refetchInterval: 30000,
+    enabled,
   });
   const stuckSettlements = (settlement?.rides ?? []).length;
   return { users: pendingUsers.length, drivers: pendingDrivers, sos: openSos, reconciliation: stuckSettlements };
 }
 
 export default function AdminDashboard() {
-  const { user } = useAuth();
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<AdminTab>("dashboard");
   const [, setLocation] = useLocation();
-  const pendingNav = useAdminNavPendingCounts();
+  const isAdmin = !!(user?.isAdmin || user?.isSuperAdmin);
+  const pendingNav = useAdminNavPendingCounts(isAdmin);
 
-  if (!user?.isAdmin && !user?.isSuperAdmin) {
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen" data-testid="admin-loading">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex items-center justify-center min-h-screen p-4" data-testid="admin-sign-in-prompt">
+        <Card className="w-96">
+          <CardContent className="pt-6 text-center space-y-3">
+            <Shield className="w-16 h-16 mx-auto mb-2 text-muted-foreground" />
+            <h2 className="text-xl font-bold">Admin sign-in</h2>
+            <p className="text-muted-foreground text-sm">Sign in with an operator account to open the admin dashboard.</p>
+            <div className="flex flex-col gap-2 pt-2">
+              <Link href="/login"><Button className="w-full" data-testid="button-admin-sign-in">Sign in</Button></Link>
+              <Button variant="outline" className="w-full" onClick={() => setLocation("/")} data-testid="btn-back-home">Go Home</Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
     return (
       <div className="flex items-center justify-center min-h-screen" data-testid="admin-access-denied">
         <Card className="w-96">
